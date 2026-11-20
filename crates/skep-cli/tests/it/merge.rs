@@ -790,7 +790,8 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     let forker = rig.forker();
     let fork = rig.fork(&forker, &base);
     let forked_at = rig.board.health().unwrap().log_position();
-    Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
+    let deleted = Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
+    let deleted_at = acked_at(&deleted).expect("the delete's position");
     let meta = rig.read(&token, &frames::doc_metadata(&fork.to_string()));
     assert_eq!(meta["source"].as_str(), Some(base.to_string().as_str()), "the premise — the board serves the fork's source: {meta}");
     let (d_s, fork_s, head_s) = (d.to_string(), fork.to_string(), head.to_string());
@@ -802,7 +803,7 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert_eq!(v["head"].as_str(), Some(head_s.as_str()), "the head off the feed walk");
     assert_eq!(v["base"].as_str(), Some(base.to_string().as_str()), "the fork's served source");
     assert_eq!(runs_of(&v), vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "3".into())], "the big cat");
-    assert_eq!(v["sides"], json!([{"at": head_s, "role": "head"}, {"at": fork_s, "role": "fork"}]));
+    assert_eq!(v["sides"], json!([{"at": head_s, "role": "head"}, {"at": fork_s, "role": "fork", "arranged": deleted_at}]), "the fork with its state, the forker's delete");
     assert_eq!(v["gaps"], json!([]));
     assert!(v["landed"].is_null(), "{v}");
     assert_eq!(rig.board.health().unwrap().log_position(), before, "composing writes nothing");
@@ -819,6 +820,10 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
     assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &fork_s))["addrs"], json!([link]), "the record is found FROM the fork");
     assert!(r.err.contains(&format!("published {member} at position")), "{}", r.err);
+    // Composed again, the fork unedited: the prior is that record, its key's
+    // states naming the fork's.
+    let v = report(&rig.merge(&["--doc", &d_s, "--fork", &fork_s, "--kind", &kind, "--head", &head_s]));
+    assert_eq!((v["prior"]["link"].as_str(), v["prior"]["key"]["states"].clone()), (Some(link.as_str()), json!([{"at": fork_s, "arranged": deleted_at}])), "{v}");
 
     // A FORK OF THE BARE DOCUMENT — a second document, forked before its
     // first version — composes once the document has a head to merge with,
@@ -836,6 +841,65 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
     assert!(r.err.contains(&format!("composed over the base {d2}: ")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// A fork edited since its landing lands over the draft it landed in.
+///
+/// It names what it replaced (skep #770; the owner's ruling of 2026-11-20). The
+/// forker's fork of `D.1`, " sat" removed, is merged `--new` into a fresh draft
+/// L, "the big cat"; the person writes "zz " into L, and the forker writes "
+/// now" into the fork in place. The merge's key is then another, its fork's
+/// state moved, and `skep merge --fork … --new` lands in L, never a fresh draft
+/// — `landed.fresh` false — its `landed.replaced` the person's insertion,
+/// ordinal 1 and width 3, the talk naming the stretch and the `--undo` that
+/// puts it back; `skep merge --undo L` then puts it back, L holding "zz the big
+/// cat" again (the mutants that land `--new` by the library's key alone, and
+/// that say nothing of what was replaced).
+#[test]
+fn a_fork_edited_since_its_landing_lands_over_the_draft_naming_what_it_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let d = rig.document(&session);
+    let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+    rig.shot(&session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let forker = rig.forker();
+    let fork = rig.fork(&forker, &base);
+    let forked_at = rig.board.health().unwrap().log_position();
+    let deleted = Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
+    let (d_s, fork_s) = (d.to_string(), fork.to_string());
+    let new = ["--doc", d_s.as_str(), "--fork", fork_s.as_str(), "--kind", kind.as_str(), "--new"];
+
+    // THE FIRST LANDING, in a fresh draft L.
+    let first = report(&rig.merge(&new));
+    assert_eq!(first["landed"]["fresh"], json!(true), "{first}");
+    assert!(first["landed"].get("replaced").is_none(), "a fresh landing replaces nothing: {first}");
+    let l = first["landed"]["draft"].as_str().expect("the fresh draft").to_string();
+    assert_eq!(rig.image(&token, &addr(&l), 11), runs_of(&first), "L holds the big cat");
+    // The person writes into L; the forker writes into the fork.
+    let at = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["zz "], "as_of": at})));
+    let typed = acked_at(&deleted).expect("the forker's last ack");
+    Rig::acked(rig.board.op(Some(&forker), &json!({"op": "insert", "doc": fork_s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" now"], "as_of": typed})));
+    let held = rig.image(&token, &addr(&l), 14);
+
+    // `--new` again: landed over L, naming the person's insertion.
+    let r = rig.merge(&new);
+    let v = report(&r);
+    assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(l.as_str()), json!(false)), "landed in L, never a fresh draft: {v}");
+    assert_eq!(v["landed"]["replaced"], json!([{"ordinal": 1, "width": 3, "origin": l, "i_start": 1}]), "the person's insertion: {v}");
+    assert!(r.err.contains(&format!("this landing replaced 1 stretch of {l} as it stood at position {}", v["as_of"])), "{}", r.err);
+    assert!(r.err.contains(&format!("ordinals 1–3; skep merge --undo {l} --kind {kind} puts them back")), "{}", r.err);
+    assert_eq!(rig.image(&token, &addr(&l), 15), runs_of(&v), "L holds the new M: the big cat now");
+    assert_ne!(v["record"]["sides"][1]["arranged"], first["record"]["sides"][1]["arranged"], "the fork's state moved: {v}");
+
+    // `--undo L` puts the insertion back.
+    let undone = report(&rig.merge(&["--undo", &l, "--kind", &kind]));
+    assert_eq!(undone["draft"].as_str(), Some(l.as_str()), "{undone}");
+    assert_eq!(rig.image(&token, &addr(&l), 14), held, "L as it stood before the landing, \"zz \" and all");
     session.close().expect("close");
 }
 

@@ -2104,7 +2104,12 @@ mod scripted {
                     let staged = d.staged.range(..=position).next_back().map(|(_, s)| s);
                     let marker = d.markers.range(..=position).next_back().and_then(|(_, m)| m.clone());
                     let merge = marker.map(|m| json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.to_string(), "at": m.at}));
-                    let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next()});
+                    // The position its arrangement last changed at as of
+                    // `position`, `null` for one the world never arranged
+                    // since it planted it at its start (wire.md §The
+                    // response envelope, `arranged_at`).
+                    let arranged_at = d.history.range(..=position).next_back().map(|(at, _)| *at).filter(|at| *at > 0);
+                    let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next(), "arranged_at": arranged_at});
                     // The address named's own content count, never floated —
                     // absent on an older board.
                     if !self.no_own_count {
@@ -3080,9 +3085,11 @@ mod scripted {
             RecordKey::new(
                 a(D),
                 a(&format!("{D}.1")),
-                [a(&format!("{D}.2")), a(&format!("{D}.1.1"))]
+                [a(&format!("{D}.2")), a(&format!("{D}.1.1"))],
+                []
             )
         );
+        assert_eq!(merged.key, merged.record.key(), "the key is the record's own");
         assert_eq!(
             merged.key.sides,
             vec![a(&format!("{D}.1.1")), a(&format!("{D}.2"))],
@@ -3674,7 +3681,9 @@ mod scripted {
         let past = Inputs { sides: daughters(MAX_SIDES + 1), ..race_inputs() };
         refused(compose(&board, Some(&token()), &past).expect_err("refused"));
         let mut record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
-        record.sides.extend(daughters(MAX_SIDES + 1).iter().skip(1).map(SideAt::of));
+        record
+            .sides
+            .extend(daughters(MAX_SIDES + 1).iter().skip(1).map(|side| SideAt::of(side, 0, None)));
         dialer.clear();
         refused(verify(&board, Some(&token()), &record).expect_err("refused"));
         let foreign = Side::Member(a(&format!("{Z}.1")));
@@ -4098,8 +4107,8 @@ mod scripted {
         assert_eq!(merged.as_of, at, "the one position the reads were taken at");
         assert_eq!(
             merged.record.sides[1],
-            SideAt::Draft { at: a(S), position: Some(at) },
-            "the record's side names the position named"
+            SideAt::Draft { at: a(S), position: Some(at), arranged: SideState::At(at) },
+            "the record's side names the position named, and the draft's state there — its last change the world's last commit"
         );
         dialer.world().busy = 10;
         assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::HistoryBusy));
@@ -4128,8 +4137,8 @@ mod scripted {
         let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
         assert_eq!(
             merged.record.sides[1],
-            SideAt::Draft { at: a(S), position: Some(read_at) },
-            "the position the first read answered"
+            SideAt::Draft { at: a(S), position: Some(read_at), arranged: SideState::At(read_at) },
+            "the position the first read answered, and the draft's state there"
         );
         assert_eq!(merged.inputs, inputs, "the inputs as given");
         let ops = dialer.ops();
@@ -4146,7 +4155,10 @@ mod scripted {
         let record = current(&board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
             .expect("the record");
-        assert_eq!(record.sides[1], SideAt::Draft { at: a(S), position: Some(read_at) });
+        assert_eq!(
+            record.sides[1],
+            SideAt::Draft { at: a(S), position: Some(read_at), arranged: SideState::At(read_at) }
+        );
         let base_as_of = |at: Option<u64>| -> Option<String> {
             let frame = frames::doc_metadata(S);
             let v = match at {
@@ -4200,7 +4212,10 @@ mod scripted {
         assert_eq!(dialer.world().docs.get(S).unwrap().runs, vec![run(D, 1, 11)]);
         assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
         let mut headless = record.clone();
-        headless.sides[1] = SideAt::Draft { at: a(S), position: None };
+        let SideAt::Draft { position, .. } = &mut headless.sides[1] else {
+            panic!("the draft side")
+        };
+        *position = None;
         assert_eq!(
             verify(&board, Some(&token()), &headless),
             Err(Refusal::DraftBaseDisagrees {
@@ -5252,7 +5267,11 @@ mod scripted {
         assert_eq!(dialer.world().docs.get(S).unwrap().runs, vec![run(D, 1, 11)], "the draft as the other hand left it");
         assert_eq!(m_runs(&merged), draft_m(), "M as of the one position: the \"!!!\" the edit removed is in it");
         assert_eq!(merged.as_of, p, "the first read's position, not the edit's");
-        assert_eq!(merged.record.sides[1], SideAt::Draft { at: a(S), position: Some(p) });
+        assert_eq!(
+            merged.record.sides[1],
+            SideAt::Draft { at: a(S), position: Some(p), arranged: SideState::At(p) },
+            "the draft's state as of the one position, not the edit's"
+        );
         for op in ["doc_metadata", "retrieve_doc_v_span_set", "image"] {
             let positions = dialer.positions(op);
             assert!(!positions.is_empty() && positions.iter().all(|at| *at == p), "`{op}`: {positions:?}");
@@ -5350,7 +5369,10 @@ mod scripted {
         let record = current(board, Some(&token()), &a(K), &merged.key)
             .expect("the lookup")
             .expect("the record");
-        assert_eq!(record.sides[1], SideAt::Draft { at: a(S), position: Some(read_at) });
+        assert_eq!(
+            record.sides[1],
+            SideAt::Draft { at: a(S), position: Some(read_at), arranged: SideState::At(read_at) }
+        );
         (record, read_at)
     }
 
@@ -5494,7 +5516,8 @@ mod scripted {
         let head = dialer.world().position;
         let naming = |p: u64| {
             let mut r = record.clone();
-            r.sides[1] = SideAt::Draft { at: a(S), position: Some(p) };
+            let SideAt::Draft { position, .. } = &mut r.sides[1] else { panic!("the draft side") };
+            *position = Some(p);
             r
         };
         dialer.clear();
@@ -5660,16 +5683,21 @@ mod scripted {
         assert_eq!(dialer.world().standing(fresh), (None, None), "no base, no marker gained");
     }
 
-    /// A RECORD NAMES NO POSITION FOR ITS FORK SIDE (skep #1106): the
-    /// merger's draft `Y`, staged from `T.1` of another account's trunk `T`
-    /// — a fork from `T`'s side — composes over its recorded base `T.1` and
-    /// is landed into itself, the landing moving its recorded base to the
-    /// head `T.2` in the same commit and keeping its source. `verify` reads
-    /// the fork as it stands, so the base its record names is no longer the
-    /// one the board's records derive: the record is faced, naming both
-    /// bases and that a record names no position for a fork side, never
-    /// verified — where the mutant that reads the fork's source first
-    /// derives `T.1` again and answers `Equal`.
+    /// A record whose fork a landing has moved since answers `SideMoved`.
+    ///
+    /// The merger's draft `Y`, staged from `T.1` of another account's trunk
+    /// `T` — a fork from `T`'s side, never arranged since the world planted
+    /// it — composes over its recorded base `T.1`, its state `Unarranged`,
+    /// and is landed into itself, the landing moving its recorded base to the
+    /// head `T.2` and its `arranged_at` to the landing's position in the same
+    /// commit. `verify` answers `SideMoved` naming `Y`, before any read of
+    /// the recomputation (skep #770). The same record with its fork's
+    /// `arranged` stripped — a record written before the states were kept —
+    /// meets a fork arranged at the landing's position, not after it, so it
+    /// is read as it stands and faced, naming both bases and that
+    /// the record names no state for its fork, never verified; the mutant
+    /// that reads the fork's source first derives `T.1` again and answers
+    /// `Equal`.
     #[test]
     fn verify_faces_a_record_whose_fork_a_landing_has_moved_since() {
         let (t, y) = ("1.0.2.0.64", "1.0.1.0.69");
@@ -5691,9 +5719,14 @@ mod scripted {
         let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
         assert_eq!(merged.key.base, a(&v1), "the base the board records for the fork");
         assert_eq!(m_runs(&merged), vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 3)], "the big cat");
+        assert_eq!(
+            merged.record.sides[1],
+            SideAt::Fork { at: a(y), arranged: SideState::Unarranged },
+            "never arranged since its mint"
+        );
         let landed =
             land(&board, &merged, draft_landing(&session, &signer, Some(a(y)))).expect("landed");
-        let Landed::Draft { into, .. } = &landed else { panic!("{landed:?}") };
+        let Landed::Draft { into, position, .. } = &landed else { panic!("{landed:?}") };
         assert_eq!(into, &a(y), "landed into the fork itself");
         let world = dialer.world();
         assert_eq!(
@@ -5706,15 +5739,395 @@ mod scripted {
             .expect("the lookup")
             .expect("a current record");
         assert_eq!(record.base, a(&v1));
-        let err = verify(&board, Some(&token()), &record).expect_err("faced");
+        dialer.clear();
+        assert_eq!(
+            verify(&board, Some(&token()), &record),
+            Ok(Verdict::SideMoved {
+                side: a(y),
+                recorded: SideState::Unarranged,
+                now: Some(*position)
+            })
+        );
+        assert_eq!(dialer.ops(), ["doc_metadata"], "the fork's state alone, read at the head");
+        let mut body = record.to_value();
+        body["sides"][1].as_object_mut().expect("the fork side").remove("arranged");
+        let stripped = Record::from_value(&body).expect("a record");
+        assert_eq!(stripped.sides[1], SideAt::Fork { at: a(y), arranged: SideState::Unrecorded });
+        let err = verify(&board, Some(&token()), &stripped).expect_err("faced");
         let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
         assert!(
             face.state.contains(&format!("names the base {v1}"))
                 && face.state.contains(&format!("now derive {v2}")),
             "{face:?}"
         );
-        assert!(face.cause.contains("a record names no position for a fork side"), "{face:?}");
+        assert!(
+            face.cause.contains("written before a fork side's state was kept, names none"),
+            "{face:?}"
+        );
         assert!(face.act.contains("cannot be checked against its fork as it stands"), "{face:?}");
+    }
+
+    /// A side's state round-trips through the record's JSON (skep #770).
+    ///
+    /// A fork side's and a draft side's `"arranged": 7`, `"arranged": null`
+    /// and no member read as `At(7)`, `Unarranged` and `Unrecorded`, and are
+    /// written back the same: no member for a state never recorded. An
+    /// `arranged` of another kind is no record.
+    #[test]
+    fn a_sides_state_reads_and_writes_back_as_the_record_spells_it() {
+        let (_, board, _) = open(World::race());
+        let mut record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
+        let fork = |n: u64| a(&format!("1.0.2.0.{n}"));
+        record.sides.extend([
+            SideAt::Fork { at: fork(70), arranged: SideState::At(7) },
+            SideAt::Fork { at: fork(71), arranged: SideState::Unarranged },
+            SideAt::Fork { at: fork(72), arranged: SideState::Unrecorded },
+            SideAt::Draft { at: a(S), position: Some(7), arranged: SideState::Unarranged },
+        ]);
+        let v = record.to_value();
+        assert_eq!(v["sides"][2], json!({"at": "1.0.2.0.70", "role": "fork", "arranged": 7}));
+        assert_eq!(v["sides"][3], json!({"at": "1.0.2.0.71", "role": "fork", "arranged": null}));
+        assert_eq!(
+            v["sides"][4],
+            json!({"at": "1.0.2.0.72", "role": "fork"}),
+            "no member for a state never recorded"
+        );
+        assert_eq!(
+            v["sides"][5],
+            json!({"at": {"draft": S, "position": 7}, "role": "draft", "arranged": null})
+        );
+        assert_eq!(
+            v["sides"][1],
+            json!({"at": format!("{D}.1.1"), "role": "alternative"}),
+            "a member carries no state"
+        );
+        let back = Record::from_value(&v).expect("a record");
+        assert_eq!(back.sides, record.sides);
+        assert_eq!(back.to_value(), v, "written back the same");
+        let mut odd = v.clone();
+        odd["sides"][2]["arranged"] = json!("7");
+        assert_eq!(Record::from_value(&odd), None, "a state of another kind");
+    }
+
+    /// The key's text spells each state, and its equality is exact.
+    ///
+    /// `RecordKey::text` appends `:<side>@<q>` per state in address order,
+    /// `@null` for `Unarranged`, and leaves an `Unrecorded` state out, so a
+    /// record written before the states were kept spells today's text. A key
+    /// with an `Unrecorded` state equals none with `Unarranged` or `At`, and
+    /// `stateless` drops the states (skep #770).
+    #[test]
+    fn the_keys_text_spells_each_state_and_an_unrecorded_one_equals_no_other() {
+        let key = |states: Vec<(Address, SideState)>| {
+            RecordKey::new(a(D), a(&format!("{D}.1")), [a(F), a(S), a(&format!("{D}.2"))], states)
+        };
+        let bare = format!("merge:{D}:{D}.1:{D}.2+{S}+{F}");
+        assert_eq!(key(vec![]).text(), bare, "the sides in address order");
+        assert_eq!(
+            key(vec![(a(F), SideState::At(7)), (a(S), SideState::Unarranged)]).text(),
+            format!("{bare}:{S}@null:{F}@7"),
+            "each state in address order"
+        );
+        let unrecorded = key(vec![(a(F), SideState::Unrecorded)]);
+        assert_eq!(unrecorded.text(), bare, "an unrecorded state spells nothing");
+        assert_ne!(unrecorded, key(vec![(a(F), SideState::Unarranged)]));
+        assert_ne!(unrecorded, key(vec![(a(F), SideState::At(7))]));
+        assert_eq!(unrecorded.stateless(), key(vec![(a(F), SideState::At(7))]).stateless());
+        assert_eq!(unrecorded.stateless(), key(vec![]));
+    }
+
+    /// A fork recorded `Unarranged` answers `SideMoved` once it is arranged.
+    ///
+    /// Case (j)'s fork `F`, never arranged since the world planted it,
+    /// composes as `Unarranged` and lands as the shot: its record verifies
+    /// `Equal` while the board still serves `null`. Re-arranged in place,
+    /// its words unchanged, the record answers `SideMoved` naming the fork,
+    /// the recorded `Unarranged` and the position served now — the mutant
+    /// matching `Unarranged` to any position answers `Equal` — and so does
+    /// the record with its fork's `arranged` stripped, `Unrecorded`, the
+    /// fork arranged after its landing, where before it verified `Equal`. A
+    /// record composed over the fork in that state, `At` its position,
+    /// answers `SideMoved` once the forker edits it again, never `Differs`.
+    #[test]
+    fn a_fork_recorded_unarranged_answers_side_moved_once_it_is_arranged() {
+        let mut w = World::race();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs = Inputs { sides: vec![Side::Fork(a(F))], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert_eq!(
+            merged.record.sides[1],
+            SideAt::Fork { at: a(F), arranged: SideState::Unarranged }
+        );
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(
+            verify(&board, Some(&token()), &record),
+            Ok(Verdict::Equal),
+            "still served null"
+        );
+        let mut body = record.to_value();
+        body["sides"][1].as_object_mut().expect("the fork side").remove("arranged");
+        let stripped = Record::from_value(&body).expect("a record");
+        assert_eq!(
+            verify(&board, Some(&token()), &stripped),
+            Ok(Verdict::Equal),
+            "a record before the states, the fork unarranged since"
+        );
+        let arranged = dialer.world().change(F, vec![run(D, 1, 7)]);
+        assert_eq!(
+            verify(&board, Some(&token()), &record),
+            Ok(Verdict::SideMoved {
+                side: a(F),
+                recorded: SideState::Unarranged,
+                now: Some(arranged)
+            })
+        );
+        assert_eq!(
+            verify(&board, Some(&token()), &stripped),
+            Ok(Verdict::SideMoved {
+                side: a(F),
+                recorded: SideState::Unrecorded,
+                now: Some(arranged)
+            }),
+            "arranged after the landing"
+        );
+        // Composed over the fork as it stands now, and landed again.
+        let head = format!("{D}.3");
+        let again = compose(
+            &board,
+            Some(session.token()),
+            &Inputs { head: a(&head), sides: vec![Side::Fork(a(F))], ..race_inputs() },
+        )
+        .expect("composed again");
+        assert_eq!(
+            again.record.sides[1],
+            SideAt::Fork { at: a(F), arranged: SideState::At(arranged) }
+        );
+        land(&board, &again, shot(&session, &signer)).expect("landed again");
+        let second = current(&board, Some(&token()), &a(K), &again.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(verify(&board, Some(&token()), &second), Ok(Verdict::Equal));
+        let edited = dialer.world().change(F, vec![run(D, 1, 4)]);
+        assert_eq!(
+            verify(&board, Some(&token()), &second),
+            Ok(Verdict::SideMoved {
+                side: a(F),
+                recorded: SideState::At(arranged),
+                now: Some(edited)
+            }),
+            "the fork's text changed: never `Differs`"
+        );
+    }
+
+    /// A fork edited after its state's check answers `SideMoved`.
+    ///
+    /// Case (j)'s fork, landed as the shot, its record `Unarranged`: another
+    /// hand's edit of the fork lands after `verify`'s first read, the fork's
+    /// state checked at the head, and before the recomputation's first, so
+    /// the recomputation reads the fork at a position past the edit. The
+    /// fork's state the readings carry is compared again: `SideMoved`, never
+    /// the `Differs` the mutant without that second comparison answers.
+    #[test]
+    fn a_fork_edited_between_the_state_check_and_the_recomputation_answers_side_moved() {
+        let mut w = World::race();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs = Inputs { sides: vec![Side::Fork(a(F))], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        dialer.clear();
+        dialer.world().interleave = Some((2, F.to_string(), vec![run(D, 1, 4)]));
+        let verdict = verify(&board, Some(&token()), &record);
+        let w = dialer.world();
+        assert!(w.interleave.is_none(), "the premise: the edit landed after the state check");
+        let edited = *w.docs[F].history.keys().next_back().expect("the edit");
+        drop(w);
+        assert_eq!(
+            verdict,
+            Ok(Verdict::SideMoved {
+                side: a(F),
+                recorded: SideState::Unarranged,
+                now: Some(edited)
+            })
+        );
+        assert_eq!(dialer.frames("doc_metadata")[0]["doc"], F, "the state checked first");
+    }
+
+    /// A fork beside a draft side is read at the draft side's position.
+    ///
+    /// The draft `S` and another account's version fork `F` compose and land
+    /// in a fresh draft, the record naming `S`'s position. The forker then
+    /// re-arranges `F`: `verify` reads the fork's state at that position, as
+    /// every read of the recomputation is made, so the record verifies
+    /// `Equal` — the mutant reading the fork's state at the head answers
+    /// `SideMoved` for a record the board can still check.
+    #[test]
+    fn a_forks_state_beside_a_draft_side_is_read_at_the_draft_sides_position() {
+        let mut w = draft_landing_world();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 11)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs = Inputs {
+            sides: vec![Side::Draft { at: a(S), position: None }, Side::Fork(a(F))],
+            ..race_inputs()
+        };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert_eq!(m_runs(&merged), draft_m(), "the big cat sat!!!, the fork unchanged");
+        land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(record.sides[2], SideAt::Fork { at: a(F), arranged: SideState::Unarranged });
+        dialer.world().change(F, vec![run(D, 1, 7)]);
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        let read = dialer
+            .frames("doc_metadata")
+            .into_iter()
+            .position(|f| f["doc"] == F)
+            .expect("the fork's state read");
+        assert_eq!(
+            dialer.positions("doc_metadata")[read],
+            merged.as_of,
+            "the fork's state read at the record's position"
+        );
+    }
+
+    /// What a landing replaces is each stretch M does not carry.
+    ///
+    /// The pure comparison: a draft holding words M does not carry at two
+    /// places answers two stretches, in order, with their ordinals and
+    /// widths; words M carries at another place are not replaced; two
+    /// stretches meeting across a run boundary are one; a run M carries in
+    /// part answers the rest; an image M carries whole answers none.
+    #[test]
+    fn what_a_landing_replaces_is_each_stretch_m_does_not_carry() {
+        use crate::merge::land::replaced_stretches;
+        let l = "1.0.1.0.72";
+        let x = "1.0.1.0.73";
+        // "zz the yy cat sat!!!": L·1–3 and L·4–5 M does not carry; S·1–3
+        // M carries after "the ".
+        let held = vec![run(l, 1, 3), run(D, 1, 4), run(l, 4, 2), run(D, 5, 7), run(S, 1, 3)];
+        let m = vec![run(D, 1, 4), run(S, 1, 3), run(D, 5, 7)];
+        let stretch = |ordinal, width, origin: &str, i_start| Replaced {
+            ordinal,
+            width,
+            origin: a(origin),
+            i_start,
+        };
+        assert_eq!(replaced_stretches(&held, &m), vec![stretch(1, 3, l, 1), stretch(8, 2, l, 4)]);
+        assert_eq!(
+            replaced_stretches(&[run(l, 1, 2), run(x, 5, 3)], &m),
+            vec![stretch(1, 5, l, 1)],
+            "one stretch across the boundary"
+        );
+        assert_eq!(
+            replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 4), run(D, 8, 4)]),
+            vec![stretch(5, 3, D, 5)],
+            "the run's middle"
+        );
+        assert_eq!(
+            replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 11)]),
+            Vec::<Replaced>::new(),
+            "carried whole"
+        );
+        assert_eq!(replaced_stretches(&[], &m), Vec::<Replaced>::new(), "an empty draft");
+    }
+
+    /// A fork arranged since its draft landing is another key.
+    ///
+    /// Case (j)'s fork `F` composes and lands in a fresh draft `L`. The
+    /// forker edits the fork, and the merge composed again differs from the
+    /// first in its key's states alone, no record of it standing; the
+    /// person's own landing is found by `landed_draft`, the states ignored —
+    /// the mutant matching the key exactly finds none — and `replaced` names
+    /// the stretch of `L` the new M does not carry. Landed in `L`, the merge
+    /// writes a record of its own replacing none, never the same landing
+    /// (skep #790); it verifies `Equal`, and the first `SideMoved`. Taken
+    /// back by an undo, the key is open again: `landed_draft` answers none.
+    #[test]
+    fn a_fork_arranged_since_its_draft_landing_is_another_key_landed_with_a_record_of_its_own() {
+        let mut w = World::race();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs = Inputs { sides: vec![Side::Fork(a(F))], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        let first = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+        let Landed::Draft { into: l, record: first_link, .. } = first else { panic!("{first:?}") };
+        let first_record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(
+            dialer.world().docs[&l.to_string()].runs,
+            vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)],
+            "L holds the big cat"
+        );
+        // The forker removes "the " too.
+        let edited = dialer.world().change(F, vec![run(D, 5, 3)]);
+        let again = compose(&board, Some(session.token()), &inputs).expect("composed again");
+        assert_eq!(again.key.stateless(), merged.key.stateless(), "the same composition");
+        assert_eq!(
+            (merged.key.states.clone(), again.key.states.clone()),
+            (vec![(a(F), SideState::Unarranged)], vec![(a(F), SideState::At(edited))]),
+            "its states alone differ"
+        );
+        assert_eq!(again.prior, None, "no record of the new key");
+        assert_eq!(m_runs(&again), vec![run(D, 12, 4), run(D, 5, 3)], "big cat");
+        let found = landed_draft(&board, Some(session.token()), &a(K), &again.key, ACCOUNT)
+            .expect("the lookup");
+        assert_eq!(
+            found.map(|r| r.link),
+            Some(Some(first_link.clone())),
+            "the person's own landing, the states ignored"
+        );
+        assert_eq!(
+            replaced(&board, Some(session.token()), &l, &again),
+            Ok(vec![Replaced { ordinal: 1, width: 4, origin: a(D), i_start: 1 }]),
+            "\"the \", which the new M does not carry"
+        );
+        dialer.clear();
+        let second = land(&board, &again, draft_landing(&session, &signer, Some(l.clone())))
+            .expect("landed again");
+        let Landed::Draft { into, record: second_link, .. } = second else { panic!("{second:?}") };
+        assert_eq!(into, l);
+        assert_ne!(second_link, first_link, "a record of its own, never the same landing");
+        assert_eq!(appended_record(&dialer)["replaces"], Value::Null, "replacing none");
+        let second_record = current(&board, Some(&token()), &a(K), &again.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(second_record.link, Some(second_link.clone()));
+        assert_eq!(verify(&board, Some(&token()), &second_record), Ok(Verdict::Equal));
+        assert_eq!(
+            verify(&board, Some(&token()), &first_record),
+            Ok(Verdict::SideMoved {
+                side: a(F),
+                recorded: SideState::Unarranged,
+                now: Some(edited)
+            })
+        );
+        assert_eq!(
+            landed_draft(&board, Some(session.token()), &a(K), &merged.key, ACCOUNT)
+                .expect("the lookup")
+                .and_then(|r| r.link),
+            Some(second_link),
+            "the newest, whatever key it is looked up by"
+        );
+        undo(&board, merger(&session, &signer), &l, &a(K), None, None).expect("undone");
+        assert_eq!(
+            landed_draft(&board, Some(session.token()), &a(K), &again.key, ACCOUNT),
+            Ok(None),
+            "a take-back leaves the key open"
+        );
     }
 
     /// The scripted board judges `set_arrangement` in the store's order.
@@ -8397,18 +8810,21 @@ mod scripted {
         assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
     }
 
-    /// A LANDING AFTER A TAKE-BACK WRITES ITS OWN RECORD (the merge record's
-    /// §1.5 (ii) and §4's currency, newest per key): a merge landed in `S`
-    /// and undone is composed again — the undo restored the base, so the key
-    /// is the first landing's and its prior the undo's record — and landed in
-    /// `S` in a fresh session, the memo cleared. The undo's record stands
-    /// newest for the key, so the landing writes one record of its own:
-    /// `landed` the draft at the write's position, `replaces` the undo's
-    /// link, linked to the draft, current for the key. A re-run and a
-    /// `resume` over that composition write nothing, and the next undo
-    /// replaces the new record. The same holds after a withdrawal, over the
-    /// race shape landed in a staged draft `T`, whose key of member sides
-    /// outlives the withdrawal.
+    /// A landing after a take-back writes its own record.
+    ///
+    /// The merge record's §1.5 (ii) and §4's currency, newest per key: a
+    /// merge of the draft side `S` landed in `S` and undone is composed
+    /// again: the undo restored the base, but the landing and the undo each
+    /// arranged `S`, so the draft side's state, a term of the key, is
+    /// another, and no record of that key stands (skep #770). Landed in `S`
+    /// in a fresh session, the memo cleared, it writes one record of its
+    /// own: `landed` the draft at the write's position, replacing none,
+    /// linked to the draft, current for its key, the undo's record current
+    /// for the first. A re-run and a `resume` over that composition write
+    /// nothing, and the next undo replaces the new record. After a
+    /// withdrawal, over the race shape landed in a staged draft `T`, the key
+    /// of member sides outlives the withdrawal, and the landing's record
+    /// replaces the withdrawal's.
     #[test]
     fn a_landing_after_a_take_back_writes_its_own_record() {
         // The undo.
@@ -8420,20 +8836,39 @@ mod scripted {
         let (_, first) = landing_of(&landed);
         let undone = undo(&board, m, &a(S), &a(K), None, None).expect("undone").record.expect("the undo's record");
         dialer.world().memo.clear();
-        let again = compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
-        assert_eq!(again.key, merged.key, "the premise: the undo restored the base, so the key is the first landing's");
-        assert_eq!(again.prior.as_ref().and_then(|p| p.link.clone()), Some(undone.clone()), "the premise: the undo's record is the prior");
+        let again =
+            compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+        assert_eq!(
+            again.key.stateless(),
+            merged.key.stateless(),
+            "the premise: the undo restored the base, so the composition is the first landing's"
+        );
+        assert_ne!(
+            again.key, merged.key,
+            "the premise: the landing and the undo arranged S, so its state is another"
+        );
+        assert_eq!(again.prior, None, "the premise: no record of that key stands");
         dialer.clear();
         let relanded = land(&board, &again, into_s()).expect("landed again");
         let (at, link) = landing_of(&relanded);
         assert!(link != first && link != undone, "a record of its own: {link}");
         let atom = appended_record(&dialer);
         assert_eq!(atom["landed"], json!({"draft": S, "position": at}));
-        assert_eq!(atom["replaces"].as_str(), Some(undone.to_string().as_str()), "the undo's record replaced");
+        assert_eq!(atom["replaces"], Value::Null, "a key of its own replaces nothing");
         assert_eq!(dialer.frames("make_link")[0]["to"]["addrs"], json!([S]));
         assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "S holds M again");
-        let found = current(&board, Some(session.token()), &a(K), &merged.key).expect("the lookup").expect("a record");
-        assert_eq!(found.link, Some(link.clone()), "the landing's record is current for the key");
+        let found = current(&board, Some(session.token()), &a(K), &again.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(found.link, Some(link.clone()), "the landing's record is current for its key");
+        let first_key = current(&board, Some(session.token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a record");
+        assert_eq!(
+            first_key.link,
+            Some(undone.clone()),
+            "the undo's record current for the first key"
+        );
         // A re-run and a resume over the composition: nothing written.
         let rows = dialer.world().rows.len();
         dialer.clear();
@@ -8476,40 +8911,90 @@ mod scripted {
         assert_eq!(found.link, Some(link), "the landing's record is current for the key");
     }
 
-    /// A LANDING AFTER A TAKE-BACK IN ONE SESSION IS A WRITE OF ITS OWN:
-    /// the draft landing's ids are spelled over the key, the draft, the
+    /// A landing after a take-back in one session is a write of its own.
+    ///
+    /// The draft landing's ids are spelled over the key, the draft, the
     /// position its write is typed against and the record it follows — the
     /// undo's — so a merge composed again after an undo, the same key at a
     /// later position, is never answered by the board's memo with the first
-    /// landing's acknowledgment. The write commits, `S` holds M again with
-    /// the marker at the new position, and the record's two writes carry ids
-    /// of the same stem.
+    /// landing's acknowledgment. The race shape landed in a staged draft
+    /// `T`, its key of member sides, keeps its key across the undo. The
+    /// write commits, `T` holds M again with the marker at the new position,
+    /// and the record's two writes carry ids of the same stem. The draft
+    /// side `S` landed in itself and undone is another key (skep #770), its
+    /// ids spelled over the draft's new state and following no record.
     #[test]
     fn a_landing_after_a_take_back_in_one_session_is_a_write_of_its_own() {
-        let (dialer, board, signer) = open(draft_landing_world());
+        let t = "1.0.1.0.67";
+        let mut w = World::race();
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(t, &format!("{D}.1"), 11);
+        let (dialer, board, signer) = open(w);
         let session = sign_in(&board, &signer);
-        let (merged, landed) = landed_in_s(&board, &session, &signer);
-        let (first_at, _) = landing_of(&landed);
-        let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None)
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (first_at, _) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let undone = undo(&board, merger(&session, &signer), &a(t), &a(K), None, None)
             .expect("undone")
             .record
             .expect("the undo's record");
-        let again = compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
         assert_eq!(again.key, merged.key, "the premise: the same key");
         assert!(again.as_of > merged.as_of, "the premise: a later position");
         let rows = dialer.world().rows.len();
         dialer.clear();
-        let relanded = land(&board, &again, draft_landing(&session, &signer, Some(a(S)))).expect("landed again");
+        let relanded = land(&board, &again, into_t()).expect("landed again");
         let (at, _) = landing_of(&relanded);
         assert!(at > first_at, "a commit of its own, never the first landing's acknowledgment: {relanded:?}");
-        let stem = Stem::of(&format!("{}:{S}@{}~{undone}", again.key.text(), again.as_of));
+        let stem = Stem::of(&format!("{}:{t}@{}~{undone}", again.key.text(), again.as_of));
         assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(stem.id("draft").as_str()));
         assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(stem.id("record").as_str()));
         assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(stem.id("link").as_str()));
-        let w = dialer.world();
-        assert!(w.rows.len() > rows, "committed");
-        assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "S holds M again");
-        assert_eq!(w.standing(S).1.map(|m| m.at), Some(at), "the marker at the new landing");
+        {
+            let w = dialer.world();
+            assert!(w.rows.len() > rows, "committed");
+            assert_eq!(
+                w.docs.get(t).unwrap().runs,
+                vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)],
+                "T holds M again: the big cat"
+            );
+            assert_eq!(w.standing(t).1.map(|m| m.at), Some(at), "the marker at the new landing");
+        }
+
+        // The draft side landed in itself: another key after the undo.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (first_at, _) = landing_of(&landed);
+        undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+        let again =
+            compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+        assert_eq!(
+            again.key.stateless(),
+            merged.key.stateless(),
+            "the premise: the same composition"
+        );
+        assert_ne!(again.key, merged.key, "the premise: S, the draft side, arranged since");
+        dialer.clear();
+        let relanded = land(&board, &again, draft_landing(&session, &signer, Some(a(S))))
+            .expect("landed again");
+        let (at, _) = landing_of(&relanded);
+        assert!(at > first_at, "a commit of its own: {relanded:?}");
+        let stem = Stem::of(&format!("{}:{S}@{}", again.key.text(), again.as_of));
+        let SideAt::Draft { arranged: SideState::At(state), .. } = again.record.sides[1] else {
+            panic!("{:?}", again.record.sides)
+        };
+        assert!(state > first_at, "the undo arranged S after the landing: {state}");
+        assert!(
+            again.key.text().ends_with(&format!(":{S}@{state}")),
+            "the key's text spells S's state: {}",
+            again.key.text()
+        );
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["id"].as_str(),
+            Some(stem.id("draft").as_str())
+        );
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "S holds M again");
     }
 
     /// THE SAME COMPOSITION LANDED AGAIN INTO ITS DRAFT AFTER A TAKE-BACK IS
@@ -10916,7 +11401,11 @@ mod scripted {
     fn the_record_round_trips_and_names_its_type() {
         let (_, board, _) = open(World::race());
         let mut merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
-        merged.record.sides.push(SideAt::Draft { at: a(S), position: Some(7) });
+        merged.record.sides.push(SideAt::Draft {
+            at: a(S),
+            position: Some(7),
+            arranged: SideState::At(7),
+        });
         merged.record.landed = Some(RecordLanding::Draft { draft: a(S), position: 9 });
         merged.record.claims = vec![a(&format!("{DOC1}.0.2.4"))];
         merged.record.replaces = Some(a(&format!("{DOC1}.0.2.2")));
@@ -10971,7 +11460,10 @@ mod scripted {
             (json!([1, 0]), json!("omitted"), json!("before"))
         );
         assert_eq!(v["gaps"][1]["resolved_by"], format!("answer:{DOC1}.0.1.7"));
-        assert_eq!(v["sides"][2], json!({"at": {"draft": S, "position": 7}, "role": "draft"}));
+        assert_eq!(
+            v["sides"][2],
+            json!({"at": {"draft": S, "position": 7}, "role": "draft", "arranged": 7})
+        );
         assert_eq!(v["landed"], json!({"draft": S, "position": 9}));
         assert!(v.get("link").is_none(), "the link is no member of the body");
         let back = Record::from_value(&v).expect("a record");

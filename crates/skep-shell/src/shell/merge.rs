@@ -67,20 +67,30 @@
 //! own arrangement from before that version, the report's `base` `doc`
 //! itself, and the texts written apart meet in an `order` gap.
 //! THE RE-OPEN: where the marker on `into` names this daughter — or, at
-//! the draft side, this draft, at the fork side this fork — the draft
-//! already carries this merge: the report with NOTHING LANDED, composed on
-//! the marker's head, the side read as compose read it — a daughter being
-//! immutable, and a draft side at the marker's position where a write under
-//! it landed since (by `/op-at`), else its image as it stands, which is the
-//! same; a fork is read as it stands, the library's fork side naming no
-//! position, so a re-open after the fork changed composes another M than
-//! the one landed (skep #770) — and each unsettled gap's state read off
-//! the draft as it stands, settled by the merger where the draft no longer
-//! arranges the gap's default as M placed it: its runs removed whole, or
-//! reordered; an edit inside a run's words settles nothing. The merger is
-//! the one composing, `person` at the editor and `agent` with no person
-//! present ([`Surface`]), since the re-open reads the draft and not the
-//! hand that edited it. THE MERGED ARM:
+//! the draft side, this draft, at the fork side this fork, or no side where
+//! `into` is the fork itself, landed in itself — the draft already carries
+//! this merge: the report with NOTHING LANDED, composed on the marker's
+//! head, the side read as compose read it — a daughter being immutable, a
+//! draft side at the marker's position where a write under it landed since
+//! (by `/op-at`), else its image as it stands, which is the same, and a
+//! fork as it stands, in the state the draft's landing composed it from —
+//! and each unsettled gap's state read off the draft as it stands, settled
+//! by the merger where the draft no longer arranges the gap's default as M
+//! placed it: its runs removed whole, or reordered; an edit inside a run's
+//! words settles nothing. The merger is the one composing, `person` at the
+//! editor and `agent` with no person present ([`Surface`]), since the
+//! re-open reads the draft and not the hand that edited it. A fork arranged
+//! since the landing is no re-open (the owner's rulings of 2026-11-20; skep
+//! #770): the fork's state as composed — its `arranged_at` — is tested
+//! against the state the person's own record of the merge keeps, its states
+//! ignored, where that record names `into` as landed in, else against the
+//! marker's `at`, and a fork that moved is composed again on the trunk's
+//! head as it stands and landed over `into`, `outcome` `landed`, replacing
+//! the earlier landing's words and any edits made in `into` since: the
+//! report's `replaced` names each stretch it replaced, positions of `into`
+//! as of the report's `as_of`, which `merge.undo` puts back. At a fork
+//! landed in itself the fork's changes are edits in the draft landed in,
+//! and it re-opens. THE MERGED ARM:
 //! a daughter an active supersession claim of the person's own already
 //! names, read by one `in_claims` at the daughter, is answered `merged`,
 //! naming the member the claim's `new` names, NOTHING LANDED, and where no
@@ -88,14 +98,21 @@
 //! the kind naming it stands for none — the record is written then through
 //! the library's `record_published`, the resume of a stop between the shot
 //! and its record (P14). A standing record of the person's own naming a
-//! draft landing of the key is read before a fresh draft is asked for, as
-//! the library's landing reads it — the newest record of their own account,
-//! never the composition's `prior`, which can be another account's: that draft
-//! is read as `into` is, refused `not_owner` where it is published or
-//! another account's; its marker naming this merge is the re-open; else
-//! the landing goes into that draft, the library's same-landing rule
-//! (skep #790), and the library is handed `into` none only where no such
-//! record stood at that read (the survey §5 item 2). A landing of the
+//! draft landing of the merge is read before a fresh draft is asked for, as
+//! the library's landing reads it — the newest record of their own account
+//! for the key, never the composition's `prior`, which can be another
+//! account's, else, where a fork or a draft side moved since that landing
+//! so the key is another, their newest record of the merge with the states
+//! ignored (`skep_client::merge::landed_draft`): that draft is read as
+//! `into` is, refused `not_owner` where it is published or another
+//! account's. Found by the key, its marker naming this merge is the
+//! re-open, else the landing goes into that draft, the library's
+//! same-landing rule (skep #790); found with the states ignored, the call
+//! goes on as one naming that draft as `into` — the re-open where its
+//! marker names the side, or at a fork moved since the landing over it,
+//! with what it replaced — else the landing goes into it, a record of its
+//! own written. The library is handed `into` none only where neither read
+//! found a record (the survey §5 item 2). A landing of the
 //! person's own made between that read and the landing — on another
 //! device, or by `skep merge --new` naming the same kind — is the library's
 //! answer, found standing with nothing staged: `fresh` is the library's
@@ -284,7 +301,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_client::address::{account_of, doc_1_of, document_of};
 use skep_client::board::{frames, merge_marker, ChangesAnswer, ChangesQuery, MergeMarker, Rejection};
 use skep_client::halt::Halt;
-use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, WindowPart};
+use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, SideState, WindowPart};
 use skep_client::publication::{Run as SelectionRun, Standing};
 use skep_client::sheet::render_inert;
 
@@ -420,18 +437,47 @@ impl Composition {
     /// Returns whether `marker`, read on `draft`, marks this merge.
     ///
     /// It does where `draft` is the one the composition stands in and the
-    /// marker names its side and its head — no side where the side is the
-    /// draft itself, a fork landed in itself, since a landing marks every
-    /// side but the draft it lands in. It is the test by which
+    /// marker names its side ([`names_side`]) and its head — no side where
+    /// the side is the draft itself, a fork landed in itself, since a
+    /// landing marks every side but the draft it lands in. It is the test by
+    /// which
     /// `merge.land` lands only over a draft that still carries this merge
     /// (`Shell::carried`; skep #992), by which `merge.undo` takes back only
     /// a landing of this merge (skep #1050), and by which a later landing in
     /// the draft sets this composition aside (`Merges::stand_over`).
     fn marks(&self, draft: &Address, marker: &MergeMarker) -> bool {
-        let side = self.form.side();
-        let named = if side == draft { marker.sides.is_empty() } else { marker.sides.contains(&side.to_string()) };
-        self.into == *draft && named && marker.head == self.merged.inputs.head.to_string()
+        self.into == *draft && names_side(self.form.side(), draft, marker) && marker.head == self.merged.inputs.head.to_string()
     }
+}
+
+/// Returns whether `marker`, read on `draft`, names `side` among its sides.
+///
+/// It names it where its sides hold it, or holds none where `side` is
+/// `draft` itself — a fork landed in itself, since a landing marks every
+/// side but the draft it lands in. It is the one test of a marker's side:
+/// THE RE-OPEN's (`reopening`) and [`Composition::marks`]'.
+fn names_side(side: &Address, draft: &Address, marker: &MergeMarker) -> bool {
+    if side == draft {
+        marker.sides.is_empty()
+    } else {
+        marker.sides.contains(&side.to_string())
+    }
+}
+
+/// Returns the marker THE RE-OPEN goes on from.
+///
+/// It is `marker`, read on `draft`, where it names `side` (`names_side`)
+/// and a head that is a trunk member of `doc`.
+fn reopening(doc: &Address, side: &Address, draft: &Address, marker: Option<&MergeMarker>) -> Option<MergeMarker> {
+    marker.filter(|m| names_side(side, draft, m) && bounded_address(&m.head).is_some_and(|h| is_trunk_member(doc, &h))).cloned()
+}
+
+/// Returns a record's fork side's state, `None` where it names no fork.
+fn fork_state(record: &lib::Record) -> Option<SideState> {
+    record.sides.iter().find_map(|s| match s {
+        SideAt::Fork { arranged, .. } => Some(*arranged),
+        SideAt::Member { .. } | SideAt::Draft { .. } => None,
+    })
 }
 
 /// The key of a composition set aside.
@@ -1014,8 +1060,9 @@ impl Shell {
     ///    not read it, and `base_unknown` with `reason` `base_unknown` where
     ///    the board records it neither a base nor a source, or where its
     ///    recorded base, else its source, lies in no member of `doc`'s chain
-    ///    (`fork_start`); then, where no re-open stands, the head read's
-    ///    (`trunk_head`): `unreadable`, `busy`, `session_died`, the board's
+    ///    (`fork_start`); then, where no re-open stands or the fork moved
+    ///    since the landing re-opened, the head read's (`trunk_head`):
+    ///    `unreadable`, `busy`, `session_died`, the board's
     ///    verdicts, `unreachable`, and `shape` naming `doc_metadata` for an
     ///    answer it cannot read or where the board answers every member the
     ///    read asks; and, for a draft or a fork begun from `doc` itself while
@@ -1030,12 +1077,23 @@ impl Shell {
     ///    board serves no count of the document's arrangement from before
     ///    its first version (an older board), `base_unknown` —
     ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
-    ///    with its arm, the board's verdicts verbatim; then `over_cap` where
-    ///    M passes the cap, nothing landed;
+    ///    with its arm, the board's verdicts verbatim; at a re-open at the
+    ///    fork side, the read of the person's own record of the merge, its
+    ///    states ignored (`skep_client::merge::landed_draft`): a halt's
+    ///    face, `session_died`; where the fork moved since, the composition
+    ///    again, as above, then the read of what the landing replaces
+    ///    (`skep_client::merge::replaced`): `unreadable`,
+    ///    `no_such_document`, `merge_refused` with its arm, a halt's face,
+    ///    `session_died`; then `over_cap` where M passes the cap, nothing
+    ///    landed;
     /// 6. where no `into` is named, the read of the person's own standing
-    ///    record of the key (`skep_client::merge::resume`): a halt's face,
-    ///    `session_died`; where it names a draft landing, that draft's read,
-    ///    as `into`'s in step 4, `not_owner` among them; where the landing
+    ///    record of the key (`skep_client::merge::resume`), then, where none
+    ///    stands, of the merge with the states ignored (`landed_draft`): a
+    ///    halt's face, `session_died`; where either names a draft landing,
+    ///    that draft's read, as `into`'s in step 4, `not_owner` among them,
+    ///    and, where the record found with the states ignored names it and
+    ///    its marker names the side, the composition on the marker's head
+    ///    and the re-open's reads as in step 5; where the landing
     ///    goes into that draft in a fresh one's place, the write door's again
     ///    for it, `held_lines` among them, nothing landed; then the landing's
     ///    (`skep_client::merge::land`): the board's
@@ -1121,51 +1179,52 @@ impl Shell {
             }
         };
         let start = start.map_err(|r| self.merge_refusal(&session, r))?;
-        // THE RE-OPEN: the marker on `into` naming this side, composed on
-        // the head the marker names; else the trunk's head as it stands.
-        let side_text = form.side().to_string();
-        let reopen = target.as_ref().and_then(|t| t.marker.clone()).filter(|m| m.sides.iter().any(|s| *s == side_text)).filter(|m| bounded_address(&m.head).is_some_and(|h| is_trunk_member(&doc, &h)));
+        // THE RE-OPEN: the marker on `into` naming this side (`names_side`),
+        // composed on the head the marker names; else the trunk's head as it
+        // stands.
+        let reopen = into.as_ref().and_then(|into| reopening(&doc, form.side(), into, target.as_ref().and_then(|t| t.marker.as_ref())));
         let head = match &reopen {
             Some(m) => bounded_address(&m.head).expect("filtered to a trunk member"),
             None => self.trunk_head(&session, &signed, &doc, &start, &form.library_side())?,
         };
-        let side = match &form {
-            Form::Daughter(d) => lib::Side::Member(d.clone()),
-            Form::Draft(d) => {
-                // The side as compose read it: at the marker's position
-                // where a write under it landed since, else its image as it
-                // stands, the same state.
-                let position = match reopen.as_ref().and_then(|m| m.at) {
-                    Some(at) if self.moved_since(&session, d, at)? => Some(at),
-                    _ => None,
-                };
-                lib::Side::Draft { at: d.clone(), position }
-            }
-            // The library's fork side names no position: a re-open reads
-            // the fork as it stands (skep #770).
-            Form::Fork(f) => lib::Side::Fork(f.clone()),
-        };
-        let inputs = lib::Inputs { doc: doc.clone(), head, base: None, sides: vec![side], options: lib::Options::default(), kind: kind.clone() };
-        let merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(&session, r))?;
+        let mut merged = self.composed(&session, &doc, &form, head, reopen.as_ref(), &kind)?;
+        // What a landing over an earlier landing of the merge replaces, where
+        // a fork moved since it (the owner's ruling of 2026-11-20).
+        let mut replaced = None;
         if let (Some(marker), Some(into)) = (&reopen, &into) {
-            return self.reopened(&session, key, form, merged, into, marker.at);
+            if !self.fork_moved(&session, &signed.account, &kind, &form, &merged, into, marker)? {
+                return self.reopened(&session, key, form, merged, into, marker.at);
+            }
+            // The moved fork: composed again on the trunk's head as it
+            // stands, and landed over `into`.
+            let head = self.trunk_head(&session, &signed, &doc, &start, &form.library_side())?;
+            if head != merged.inputs.head {
+                merged = self.composed(&session, &doc, &form, head, None, &kind)?;
+            }
+            replaced = Some(self.replaced(&session, into, &merged)?);
         }
         if merged.composed.counts.m > merged.cap {
             return Err(Refusal::shell(Name::OVER_CAP, json!({"n": merged.composed.counts.m, "cap": merged.cap})));
         }
         // A fresh draft asked for while a record of the person's own names a
-        // draft landing of the key (the survey §5 item 2), read as the
-        // library's landing reads it: the newest record of their own, by
-        // `lib::resume` with no draft named, which writes nothing — never
-        // the composition's `prior`, which is read under the reader's
-        // currency and can be another account's record of the kind. That
-        // draft is read as `into` is, untrusted; its marker naming this
-        // merge is the re-open; else it is landed into, the same landing
-        // (skep #790); and the library is handed `into` none only where no
-        // such record stood at this read — one landed since is the library's
-        // answer, nothing staged, which its `staged` says. `over` is the
-        // marker read here on the draft the landing goes into, which the
-        // composition standing in it is set aside by (skep #981).
+        // draft landing of the merge (the survey §5 item 2), read as the
+        // library's landing reads it: the newest record of their own of the
+        // key, by `lib::resume` with no draft named, which writes nothing —
+        // never the composition's `prior`, which is read under the reader's
+        // currency and can be another account's record of the kind — else,
+        // where a fork or a draft side moved since that landing, so the key
+        // is another, their newest record of the merge with the states
+        // ignored (`lib::landed_draft`). That draft is read as `into` is,
+        // untrusted. Found by the key, its marker naming this merge is the
+        // re-open; else it is landed into, the same landing (skep #790).
+        // Found with the states ignored, the call goes on as one naming it:
+        // its marker naming the side re-opens it or, at a fork moved since,
+        // is landed over with what it replaces; else it is landed into. The
+        // library is handed `into` none only where neither read found a
+        // record — one landed since is the library's answer, nothing staged,
+        // which its `staged` says. `over` is the marker read here on the
+        // draft the landing goes into, which the composition standing in it
+        // is set aside by (skep #981).
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let mut landing_into = into.clone();
         let mut over = target.and_then(|t| t.marker);
@@ -1179,9 +1238,21 @@ impl Shell {
                     )));
                 };
                 let facts = self.landing_target(&session, &signed.account, &prior)?;
-                if facts.marker.as_ref().is_some_and(|m| m.sides.contains(&side_text) && m.head == merged.inputs.head.to_string()) {
+                if facts.marker.as_ref().is_some_and(|m| names_side(form.side(), &prior, m) && m.head == merged.inputs.head.to_string()) {
                     let at = facts.marker.as_ref().and_then(|m| m.at);
                     return self.reopened(&session, key, form, merged, &prior, at);
+                }
+                over = facts.marker;
+                landing_into = Some(prior);
+            } else if let Some(prior) = self.landed_draft(&session, &signed.account, &kind, &merged)? {
+                let facts = self.landing_target(&session, &signed.account, &prior)?;
+                if let Some(marker) = reopening(&doc, form.side(), &prior, facts.marker.as_ref()) {
+                    let head = bounded_address(&marker.head).expect("filtered to a trunk member");
+                    let composed = if head == merged.inputs.head && !matches!(form, Form::Draft(_)) { merged.clone() } else { self.composed(&session, &doc, &form, head, Some(&marker), &kind)? };
+                    if !self.fork_moved(&session, &signed.account, &kind, &form, &composed, &prior, &marker)? {
+                        return self.reopened(&session, key, form, composed, &prior, marker.at);
+                    }
+                    replaced = Some(self.replaced(&session, &prior, &merged)?);
                 }
                 over = facts.marker;
                 landing_into = Some(prior);
@@ -1205,9 +1276,92 @@ impl Shell {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
         };
         let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone() };
-        let answer = report_json(&composition.merged, &composition.form, "landed", json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()}));
+        let mut extra = json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()});
+        if let Some(replaced) = replaced {
+            extra["replaced"] = replaced.iter().map(replaced_json).collect();
+        }
+        let answer = report_json(&composition.merged, &composition.form, "landed", extra);
         self.merges.stand_over(key, composition, over.as_ref());
         Ok(answer)
+    }
+
+    /// Composes `form`'s merge on `head` (`skep_client::merge::compose`).
+    ///
+    /// At THE RE-OPEN — `reopen` the marker it re-opens — a draft side is
+    /// read as compose read it: at the marker's position where a write under
+    /// it landed since, else its image as it stands, the same state. A fork
+    /// is read as it stands, its state recorded beside it, which the re-open
+    /// tests against the landing's (`Shell::fork_moved`).
+    ///
+    /// # Errors
+    ///
+    /// The drafts supplement's, at a draft side re-opened
+    /// (`Shell::moved_since`); the composition's, through `merge_refusal`.
+    fn composed(&self, session: &SessionEntry, doc: &Address, form: &Form, head: Address, reopen: Option<&MergeMarker>, kind: &Address) -> Result<lib::Merged, Refusal> {
+        let side = match form {
+            Form::Daughter(d) => lib::Side::Member(d.clone()),
+            Form::Draft(d) => {
+                let position = match reopen.and_then(|m| m.at) {
+                    Some(at) if self.moved_since(session, d, at)? => Some(at),
+                    _ => None,
+                };
+                lib::Side::Draft { at: d.clone(), position }
+            }
+            Form::Fork(f) => lib::Side::Fork(f.clone()),
+        };
+        let inputs = lib::Inputs { doc: doc.clone(), head, base: None, sides: vec![side], options: lib::Options::default(), kind: kind.clone() };
+        lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))
+    }
+
+    /// Returns whether the fork a composition reads moved since its landing.
+    ///
+    /// It is THE RE-OPEN's test at the fork side, of the landing `marker` marks
+    /// in `draft` (the module doc; skep #770). The state recorded is the fork
+    /// side's in the person's own record of the merge, its states ignored
+    /// (`skep_client::merge::landed_draft`), where that record names `draft` as
+    /// landed in; else none is recorded (`Unrecorded`), and the fork has moved
+    /// where it was arranged past the marker's `at`. The state now is the
+    /// composition's own, read at its position. A daughter, a draft side and a
+    /// fork landed in itself never move: the fork's changes since are edits in
+    /// the draft landed in.
+    ///
+    /// # Errors
+    ///
+    /// `landed_draft`'s refusals, through `merge_refusal`.
+    #[allow(clippy::too_many_arguments)]
+    fn fork_moved(&self, session: &SessionEntry, account: &str, kind: &Address, form: &Form, merged: &lib::Merged, draft: &Address, marker: &MergeMarker) -> Result<bool, Refusal> {
+        let Form::Fork(fork) = form else { return Ok(false) };
+        let Some(now) = fork_state(&merged.record).filter(|_| fork != draft) else { return Ok(false) };
+        let landed = lib::landed_draft(&session.board, Some(&session.token), kind, &merged.key, account).map_err(|r| self.merge_refusal(session, r))?;
+        let recorded = landed.filter(|r| matches!(&r.landed, Some(lib::RecordLanding::Draft { draft: d, .. }) if d == draft)).and_then(|r| fork_state(&r)).unwrap_or(SideState::Unrecorded);
+        Ok(recorded.moved(now, marker.at))
+    }
+
+    /// Returns the draft the person's own record of the merge landed in.
+    ///
+    /// The record is found with its states ignored
+    /// (`skep_client::merge::landed_draft`).
+    ///
+    /// # Errors
+    ///
+    /// `landed_draft`'s refusals, through `merge_refusal`.
+    fn landed_draft(&self, session: &SessionEntry, account: &str, kind: &Address, merged: &lib::Merged) -> Result<Option<Address>, Refusal> {
+        let record = lib::landed_draft(&session.board, Some(&session.token), kind, &merged.key, account).map_err(|r| self.merge_refusal(session, r))?;
+        Ok(record.and_then(|r| match r.landed {
+            Some(lib::RecordLanding::Draft { draft, .. }) => Some(draft),
+            _ => None,
+        }))
+    }
+
+    /// Returns each stretch of `draft` that landing `merged` there replaces.
+    ///
+    /// It is `skep_client::merge::replaced`'s answer.
+    ///
+    /// # Errors
+    ///
+    /// `replaced`'s refusals, through `merge_refusal`.
+    fn replaced(&self, session: &SessionEntry, draft: &Address, merged: &lib::Merged) -> Result<Vec<lib::Replaced>, Refusal> {
+        lib::replaced(&session.board, Some(&session.token), draft, merged).map_err(|r| self.merge_refusal(session, r))
     }
 
     /// Answers the re-open: the report with nothing landed, each unsettled
@@ -1794,11 +1948,25 @@ fn report_json(merged: &lib::Merged, form: &Form, outcome: &str, extra: Value) -
     v
 }
 
+/// Returns one side of the record as the report carries it.
+///
+/// It is `shapes`' `MergeSide`: a fork and a draft with `arranged`, their
+/// state, `null` where the board kept none or the record keeps none.
 fn side_json(side: &SideAt) -> Value {
+    let arranged = |state: &SideState| match state {
+        SideState::At(q) => json!(q),
+        SideState::Unarranged | SideState::Unrecorded => Value::Null,
+    };
     match side {
         SideAt::Member { at, role } => json!({"at": at.to_string(), "role": role.as_str(), "position": Value::Null}),
-        SideAt::Draft { at, position } => json!({"at": at.to_string(), "role": Role::Draft.as_str(), "position": position}),
+        SideAt::Fork { at, arranged: state } => json!({"at": at.to_string(), "role": Role::Fork.as_str(), "position": Value::Null, "arranged": arranged(state)}),
+        SideAt::Draft { at, position, arranged: state } => json!({"at": at.to_string(), "role": Role::Draft.as_str(), "position": position, "arranged": arranged(state)}),
     }
+}
+
+/// Returns one stretch a landing replaced (`shapes`' `ReplacedStretch`).
+fn replaced_json(r: &lib::Replaced) -> Value {
+    json!({"ordinal": r.ordinal, "width": r.width, "origin": r.origin.to_string(), "i_start": r.i_start})
 }
 
 fn run_json(run: &Run, side: Option<SideIx>, family: Family) -> Value {

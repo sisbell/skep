@@ -2871,6 +2871,8 @@ fn another_accounts_fork_is_composed_landed_taken_back_and_published_with_its_re
         "the base the fork's source, the head E.2: {landed}"
     );
     assert_eq!((landed["sides"][1]["at"].as_str(), landed["sides"][1]["role"].as_str(), landed["sides"][1]["position"].clone()), (Some(fork.as_str()), Some("fork"), Value::Null), "{landed}");
+    let arranged = g.op(doc_metadata(&fork))["arranged_at"].clone();
+    assert!(arranged.is_u64() && landed["sides"][1]["arranged"] == arranged, "the fork's state, its `arranged_at`: {landed}");
     let library = composed_over(&g, &f, Side::Fork(parse_address(&fork).unwrap()));
     assert_eq!(landed["record"]["gaps"], library.record.to_value()["gaps"], "the library's gaps for the same sides: {landed}");
     assert_eq!((landed["gaps"].as_array().map(Vec::len), landed["gaps"][0]["kind"].as_str()), (Some(1), Some("order")), "both sides wrote after \"the fox\": {landed}");
@@ -2929,6 +2931,150 @@ fn another_accounts_fork_is_composed_landed_taken_back_and_published_with_its_re
         (chain.to_string(), first.parse().unwrap(), r["width"].as_str().unwrap().parse().unwrap())
     }));
     assert_eq!(merged, held, "M is E.3's words: {over}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Writes `words` into `other`'s fork at `ordinal`, typed at its last ack.
+///
+/// The last ack is the position the fork's text last changed at. Answers
+/// the write's position.
+fn edit_fork(g: &Ground, other: &Other, fork: &str, ordinal: u64, words: &str) -> u64 {
+    let last = g.op(frames::doc_metadata(fork))["arranged_at"].as_u64().expect("the fork's last arrangement");
+    written(g, &other.token, &json!({"op": "insert", "doc": fork, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [words], "as_of": last}))["at"]
+        .as_u64()
+        .expect("the insert's position")
+}
+
+/// Checks that a fork edited since its landing lands over the draft.
+///
+/// It is skep #770's case, against the daemon, and the landing publishes what
+/// it records. Another account forks E.1 and writes " quietly"; composed with
+/// no `into`, the merge lands in a fresh draft L. The forker writes " now" in
+/// the fork, the person writes "zz " into L, and E.3 is published. Composed
+/// into L, the fork moved since the landing: the merge is composed again on the
+/// trunk's head E.3 and lands over L, never re-opened — the report's `head`
+/// E.3, its fork side's `arranged` the fork's new state, `replaced` exactly "zz
+/// ", which M does not carry, and L holding E.3's words and the fork's new
+/// ones. Composed into L again, the fork unedited since, it re-opens, nothing
+/// landed and nothing replaced. The forker writes again; composed with no
+/// `into`, the person's own record of the merge, its states ignored, names L,
+/// and the merge lands there, never in a fresh draft, replacing nothing.
+/// Published as E.4, its record verifies `Equal`, and once the fork is edited
+/// again `SideMoved` naming it (the mutants that re-open whatever the fork's
+/// state, compose a moved fork on the marker's head, or read the person's own
+/// landing by its key alone).
+#[test]
+fn a_fork_edited_since_its_landing_is_composed_again_and_the_landing_publishes_what_it_records() {
+    use skep_client::merge::{current, verify, Record, SideState, Verdict};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let fork = forked(&g, &other, &f.e1, " quietly");
+    let compose = |into: Option<&str>| {
+        let mut args = json!({"session": g.session, "doc": f.edition, "fork": fork});
+        if let Some(into) = into {
+            args["into"] = json!(into);
+        }
+        let report = g.call("merge.compose", args).unwrap_or_else(|r| panic!("{r}"));
+        assert_report_declared(&report);
+        for stretch in report["replaced"].as_array().into_iter().flatten() {
+            crate::shapes::assert_declared("ReplacedStretch", stretch);
+        }
+        report
+    };
+    let first = compose(None);
+    assert_eq!((first["outcome"].as_str(), first["fresh"].as_bool()), (Some("landed"), Some(true)), "{first}");
+    assert!(first.get("replaced").is_none(), "a fresh landing replaces nothing: {first}");
+    let l = first["into"].as_str().expect("the fresh draft").to_string();
+    assert_eq!(g.text(&l, 21), "the fox jumps quietly", "L holds the merge");
+    // The forker writes; the person writes into L; E.3 is published.
+    let moved = edit_fork(&g, &other, &fork, 16, " now");
+    g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["zz "], "as_of": g.position()}));
+    let e3 = the_next_version(&g, &f);
+    // Composed into L: the moved fork lands over L on the trunk's head.
+    let landed = compose(Some(&l));
+    assert_eq!(
+        (landed["outcome"].as_str(), landed["head"].as_str(), landed["into"].as_str(), landed["fresh"].as_bool()),
+        (Some("landed"), Some(e3.as_str()), Some(l.as_str()), Some(false)),
+        "landed over L, never re-opened: {landed}"
+    );
+    assert_eq!(landed["sides"][1]["arranged"], json!(moved), "the fork's new state: {landed}");
+    assert_eq!(landed["replaced"], json!([{"ordinal": 1, "width": 3, "origin": l, "i_start": 1}]), "\"zz \", which M does not carry: {landed}");
+    assert_eq!(g.text(&l, 26), "the fox jumps! quietly now", "E.3's words and the fork's new ones, never \"zz \"");
+    // Composed into L again, the fork unedited since: the re-open.
+    let before = g.position();
+    let reopened = compose(Some(&l));
+    assert_eq!(reopened["outcome"].as_str(), Some("reopened"), "{reopened}");
+    assert!(reopened.get("replaced").is_none(), "nothing replaced: {reopened}");
+    assert_eq!(g.position(), before, "nothing landed");
+    // The forker writes again; composed with no `into`, the merge lands in L.
+    edit_fork(&g, &other, &fork, 20, " again");
+    let again = compose(None);
+    assert_eq!(
+        (again["outcome"].as_str(), again["into"].as_str(), again["fresh"].as_bool(), again["replaced"].clone()),
+        (Some("landed"), Some(l.as_str()), Some(false), json!([])),
+        "the person's own landing found with the states ignored, nothing taken out of L: {again}"
+    );
+    // Published as E.4: its record verifies, then the fork moves again.
+    let owed = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!(owed.name(), "window_parts_owed", "{owed}");
+    let v = owed.to_value();
+    let answers: serde_json::Map<String, Value> =
+        v["parts"].as_array().unwrap_or_else(|| panic!("the parts: {v}")).iter().map(|p| (format!("{}.{}", p["run"], p["part"]), json!("keep_private"))).collect();
+    let published = g.call("merge.land", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
+    let e4 = format!("{}.4", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str()), (Some("landed"), Some(e4.as_str())), "{published}");
+    let key = Record::from_value(&again["record"]).expect("the report's record").key();
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let kind = parse_address(KIND).unwrap();
+    let record = current(&entry.board, Some(&entry.token), &kind, &key).expect("the lookup").expect("E.4's record");
+    assert_eq!(record.landed, Some(RecordLanding::Member { member: parse_address(&e4).unwrap(), position: published["at"].as_u64().unwrap() }), "{record:?}");
+    assert_eq!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::Equal), "the record names what E.4 holds");
+    let edited = edit_fork(&g, &other, &fork, 1, "so ");
+    assert!(
+        matches!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::SideMoved { ref side, recorded: SideState::At(_), now: Some(now) }) if side.to_string() == fork && now == edited),
+        "the fork edited since"
+    );
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a fork its owner landed in itself re-opens once edited.
+///
+/// It is against the daemon (skep #770). The agent stages S from E.1, writes "
+/// quietly" and lands the merge with E.2 into S itself, whose marker names no
+/// side. The agent writes " now" in S — an edit in the draft landed in — and
+/// the merge composed again into S re-opens, nothing landed: the re-open's test
+/// of a marker's side is `Composition::marks`' own, and the fork landed in
+/// itself is no moved fork (the mutants that keep the re-open's own side test,
+/// which lands again, and that test the fork's state at S itself).
+#[test]
+fn a_fork_landed_into_itself_and_edited_by_its_owner_re_opens() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let agent = agent_seat(&dir, &sd, &g);
+    let stage = agent.op(frames::stage(&f.e1, None));
+    let s = stage["addr"].as_str().expect("an ack_addr").to_string();
+    agent.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": stage["at"]}));
+    let into_itself = || agent.call("merge.compose", json!({"session": agent.session, "doc": f.edition, "fork": s, "into": s})).unwrap_or_else(|r| panic!("{r}"));
+    let landed = into_itself();
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(s.as_str())), "{landed}");
+    let meta = agent.op(frames::doc_metadata(&s));
+    assert_eq!(meta["merge"]["sides"], json!([]), "the premise: S marked, naming no side: {meta}");
+    let width: u64 = landed["runs"].as_array().unwrap().iter().map(|r| r["width"].as_u64().unwrap()).sum();
+    agent.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": (width + 1).to_string()}, "values": [" now"], "as_of": agent.position()}));
+    let before = g.position();
+    let reopened = into_itself();
+    assert_report_declared(&reopened);
+    assert_eq!((reopened["outcome"].as_str(), reopened["into"].as_str()), (Some("reopened"), Some(s.as_str())), "{reopened}");
+    assert!(reopened.get("replaced").is_none(), "{reopened}");
+    assert_eq!(g.position(), before, "nothing landed");
+    agent.shell.shutdown();
     g.shell.shutdown();
     sd.shutdown();
 }

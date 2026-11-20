@@ -69,8 +69,11 @@
 //! through `/op-at` at P, so
 //! the record describes a state the board held at one moment and never one
 //! that an edit landing between two reads composed; the record carries P
-//! for its draft side (§4: "for a draft read at N"), the result carries it
-//! as its `as_of`, and the draft landing is typed against P. A P the board
+//! for its draft side (§4: "for a draft read at N") and each fork's and
+//! draft's state as of P — the position its text last changed at,
+//! `doc_metadata`'s `arranged_at`, off the one answer its anchor is read
+//! from (skep #770) — the result carries P as its `as_of`, and the draft
+//! landing is typed against P. A P the board
 //! does not answer is refused by name — its history reclaimed
 //! ([`Refusal::HistoryReclaimed`]), past the board's head
 //! ([`Refusal::BeyondHead`]) or inside one commit
@@ -264,7 +267,12 @@ pub enum Side {
     /// a staged fork published as an edition of its own among them, its base
     /// moved to that edition's member — is refused [`Refusal::BaseUnknown`].
     /// Read as named: a published fork with members of its own would float
-    /// to its head, so the caller names the member of it it means.
+    /// to its head, so the caller names the member of it it means. Its
+    /// state — the position its text last changed at, `arranged_at` on the
+    /// same `doc_metadata` — is recorded beside it
+    /// ([`SideAt::Fork`](super::record::SideAt::Fork)), so a verifier tells
+    /// a fork edited since the merge from a record that is wrong
+    /// ([`Verdict::SideMoved`](super::record::Verdict::SideMoved)).
     Fork(Address),
 }
 
@@ -376,7 +384,11 @@ pub struct Merged {
     pub composed: Composed,
     /// Each run of M's family, parallel to `composed.runs`.
     pub families: Vec<Family>,
-    /// The key the record is current under: `(doc, base, {sides})`.
+    /// The key the record is current under, `record`'s own.
+    ///
+    /// It is `(doc, base, {sides}, {states})` ([`Record::key`]). A fork's
+    /// and a draft's state are terms of it, so a merge composed over a side
+    /// whose text has changed since is another key.
     pub key: RecordKey,
     /// The cap `composed.counts.m` is checked against at the landing.
     ///
@@ -386,8 +398,9 @@ pub struct Merged {
     /// The record the landing will write, unlanded.
     ///
     /// Its `landed` is none, its `claims` none, its `replaces` the prior
-    /// record's link where one stands, and its draft side at `as_of`, the
-    /// one position the draft was read at. The landing fills `landed` and
+    /// record's link where one stands, its draft side at `as_of`, the one
+    /// position the draft was read at, and its fork and draft sides with
+    /// their states as of it. The landing fills `landed` and
     /// `claims`, and sets `replaces` from its own read of the merger's
     /// newest record for the key (the `land` module's doc; P20).
     pub record: Record,
@@ -402,7 +415,9 @@ pub struct Merged {
     /// The standing record for the key, where one is current.
     ///
     /// It is §3's "What a second agent sees", under the reader's currency
-    /// (the trunk owner's records first) at the composition. The landing never
+    /// (the trunk owner's records first) at the composition — a record of
+    /// the key, its sides' states included, so a record composed over a
+    /// fork or a draft side read in another state is none. The landing never
     /// lands by it: it reads the merger's own newest record for the key
     /// when it lands (the `land` module's doc).
     pub prior: Option<Record>,
@@ -1858,14 +1873,22 @@ pub(super) struct Readings {
     pub(super) composed: Composed,
     /// Each run of M's family.
     pub(super) families: Vec<Family>,
+    /// Each side's `arranged_at` at P, in side order.
+    ///
+    /// A fork's and a draft's come off the one `doc_metadata` its anchor was
+    /// read from, `None` where the board keeps none; a member's is `None`,
+    /// its address its state.
+    pub(super) arranged: Vec<Option<u64>>,
 }
 
 /// Makes the reads of §1.3 in order, then the core's walk.
 ///
 /// The reads are the document's metadata; for each side in order, a fork's
-/// or a draft's own metadata for its anchor — a fork's the base the board
-/// records for it, else the source it was born sharing ([`fork_anchor`]); a
-/// draft's the base the board records for it — then the metadata of each
+/// or a draft's own metadata for its anchor and its state — a fork's anchor
+/// the base the board records for it, else the source it was born sharing
+/// ([`fork_anchor`]); a draft's the base the board records for it; each
+/// one's state its `arranged_at`, carried in side order beside the readings
+/// (`Readings::arranged`) — then the metadata of each
 /// hop of its line of recorded bases below the trunk ([`recorded_line`]);
 /// the head's extent; the base imaged — the document's own arrangement
 /// where the base is the document, read only where its `own_count` is above
@@ -1879,10 +1902,11 @@ pub(super) struct Readings {
 /// The base is derived from where the lines end ([`derived_base`]). A base
 /// handed in is checked against it beside every side: beside a fork side it
 /// is the record's own at `verify`, never a caller's ([`compose`] refuses
-/// one), and one the lines do not derive is faced — the fork read as it
-/// stands, the record naming no position for a fork side, while a landing
-/// into a staged fork, or its publication, moves the base it records;
-/// beside a draft side, or beside member sides alone — a caller's or the
+/// one), and one the lines do not derive is faced — the fork's recorded
+/// base moved since the record with its text unmoved, or the record,
+/// written before a fork side's state was kept, names none, the fork's
+/// state having matched before the reads (`record::verify`); beside a draft
+/// side, or beside member sides alone — a caller's or the
 /// record's — it is refused by name ([`Refusal::DraftBaseDisagrees`],
 /// [`Refusal::NamedBaseDisagrees`]): naming the base never moves what the
 /// merge composes against.
@@ -1935,50 +1959,7 @@ pub(super) fn read_shape(
     sides: &[Side],
     options: &Options,
 ) -> Result<Readings, Refusal> {
-    if !is_trunk_member(doc, head) {
-        return Err(Halt::face(
-            format!("{head} is not a trunk member of {doc}"),
-            "the head is the document's latest trunk member, `D.h`",
-            "name the head member, or read it with `head_of`",
-        )
-        .into());
-    }
-    if sides.iter().filter(|s| matches!(s, Side::Draft { .. })).count() > 1 {
-        return Err(Refusal::TwoDrafts);
-    }
-    // Every list the walk is given is numbered by its one-byte `SideIx`, the
-    // head's 0 and each side's its place after it: `last` is the last side's.
-    let Ok(last) = u8::try_from(sides.len()) else {
-        return Err(Halt::face(
-            format!(
-                "this merge names {} sides besides the head, past the {MAX_SIDES} one merge composes",
-                sides.len()
-            ),
-            "a merge numbers every list it composes by one byte, the head's first",
-            "merge fewer sides at a time; nothing was read or written",
-        )
-        .into());
-    };
-    for side in sides {
-        match side {
-            // A draft's anchor is read off the board below, after the
-            // trunk's own metadata.
-            Side::Draft { .. } => {}
-            // A fork lies outside the trunk's own tree: `doc` itself, a
-            // member of its chain or an address within either is none. Its
-            // anchor is read off the board below, as a draft's is.
-            Side::Fork(fork) => {
-                if trunk_of(fork).as_ref() == Some(doc) {
-                    return Err(Refusal::BaseUnknown(side.clone()));
-                }
-            }
-            Side::Member(m) => {
-                if m == doc || !in_chain(doc, m) {
-                    return Err(Refusal::BaseUnknown(side.clone()));
-                }
-            }
-        }
-    }
+    let last = check_shape(doc, head, sides)?;
     // Step 1: the document and the head. THE ONE POSITION P (skep #762): the
     // draft side's named position, else the `as_of` of this first read,
     // made at the head; every read after it is made at P.
@@ -2012,15 +1993,18 @@ pub(super) fn read_shape(
     // Each side's line, in side order: its anchor — a fork's the base the
     // board records for it, else its source; a draft's the base the board
     // records for it; a member's itself — then the bases recorded up from it
-    // to the trunk, every read at P.
+    // to the trunk, every read at P. A fork's and a draft's state comes off
+    // the one `doc_metadata` its anchor is read from.
     let mut ends: Vec<LineEnd> = Vec::with_capacity(sides.len());
+    let mut arranged: Vec<Option<u64>> = Vec::with_capacity(sides.len());
     for side in sides {
-        let anchor = match side {
+        let (anchor, state) = match side {
             Side::Fork(fork) => fork_anchor(reader, doc, side, fork, at)?,
             Side::Draft { at: draft, .. } => draft_base(reader, doc, side, draft, at)?,
-            Side::Member(m) => m.clone(),
+            Side::Member(m) => (m.clone(), None),
         };
         ends.push(recorded_line(reader, doc, side, &anchor, at)?);
+        arranged.push(state);
     }
     let (head_extent, head_as_of) = reader.span_set(head, Some(at))?;
     // Step 2: the base, derived from where the lines end; a named one
@@ -2035,14 +2019,14 @@ pub(super) fn read_shape(
     if let Some(named) = base {
         if named != served {
             // Beside a fork the named base is a record's (`compose` refuses
-            // a caller's unread), and the record names no position for its
-            // fork side: the fork is read as it stands, so a landing into a
-            // staged fork, or its publication, since the record was written
-            // has moved the base it derives.
+            // a caller's unread), and its fork's state matched before the
+            // reads (`record::verify`): the fork's recorded base moved with
+            // its text unmoved, or the record, written before the states
+            // were kept, names none.
             return Err(if sides.iter().any(|s| matches!(s, Side::Fork(_))) {
                 Halt::face(
                     format!("the record names the base {named}, and the board's records now derive {served} for its fork side"),
-                    "a fork's base is derived from where the board records it standing — its recorded base, which a landing into a staged fork or its publication moves, else its source — and a record names no position for a fork side, so its fork is read as it stands",
+                    "a fork's base is derived from where the board records it standing — its recorded base, which a landing into a staged fork moves, else its source — and the fork's recorded base moved since the record, or the record, written before a fork side's state was kept, names none",
                     "this record cannot be checked against its fork as it stands, or it is not one this library would write against this board; nothing was read at another position and nothing was written",
                 )
                 .into()
@@ -2106,7 +2090,76 @@ pub(super) fn read_shape(
         return Err(e);
     }
     let families = composed.runs.iter().map(|p| family_of(&p.run.origin, doc, sides)).collect();
-    Ok(Readings { at, base, base_image, maps, head_extent, owner: meta.owner, composed, families })
+    Ok(Readings {
+        at,
+        base,
+        base_image,
+        maps,
+        head_extent,
+        owner: meta.owner,
+        composed,
+        families,
+        arranged,
+    })
+}
+
+/// Checks a shape's sides before any read.
+///
+/// It answers the last side's one-byte number. The checks are
+/// [`read_shape`]'s first refusals, in its order: a head that is
+/// no trunk member of `doc`, two drafts, more sides than [`MAX_SIDES`], a
+/// member that is no member of `doc`'s chain and a fork in `doc`'s own
+/// tree. A verifier makes them before it reads a fork's state.
+///
+/// # Errors
+///
+/// As [`read_shape`]'s first four.
+pub(super) fn check_shape(doc: &Address, head: &Address, sides: &[Side]) -> Result<u8, Refusal> {
+    if !is_trunk_member(doc, head) {
+        return Err(Halt::face(
+            format!("{head} is not a trunk member of {doc}"),
+            "the head is the document's latest trunk member, `D.h`",
+            "name the head member, or read it with `head_of`",
+        )
+        .into());
+    }
+    if sides.iter().filter(|s| matches!(s, Side::Draft { .. })).count() > 1 {
+        return Err(Refusal::TwoDrafts);
+    }
+    // Every list the walk is given is numbered by its one-byte `SideIx`, the
+    // head's 0 and each side's its place after it: `last` is the last side's.
+    let Ok(last) = u8::try_from(sides.len()) else {
+        return Err(Halt::face(
+            format!(
+                "this merge names {} sides besides the head, past the {MAX_SIDES} one merge composes",
+                sides.len()
+            ),
+            "a merge numbers every list it composes by one byte, the head's first",
+            "merge fewer sides at a time; nothing was read or written",
+        )
+        .into());
+    };
+    for side in sides {
+        match side {
+            // A draft's anchor is read off the board after the trunk's own
+            // metadata (`read_shape`).
+            Side::Draft { .. } => {}
+            // A fork lies outside the trunk's own tree: `doc` itself, a
+            // member of its chain or an address within either is none. Its
+            // anchor is read off the board as a draft's is.
+            Side::Fork(fork) => {
+                if trunk_of(fork).as_ref() == Some(doc) {
+                    return Err(Refusal::BaseUnknown(side.clone()));
+                }
+            }
+            Side::Member(m) => {
+                if m == doc || !in_chain(doc, m) {
+                    return Err(Refusal::BaseUnknown(side.clone()));
+                }
+            }
+        }
+    }
+    Ok(last)
 }
 
 /// Reads where the board records a fork side standing: the fork's anchor.
@@ -2124,6 +2177,8 @@ pub(super) fn read_shape(
 /// record's case (j)): the two checks in order — present, of this
 /// document's chain. An anchor that is `doc` itself is a fork taken before
 /// its first version, whose line ends there at once ([`recorded_line`]).
+/// Beside it is the fork's state, the same answer's `arranged_at`, which
+/// the record keeps for the fork side ([`SideAt::Fork`]).
 ///
 /// # Errors
 ///
@@ -2139,10 +2194,10 @@ fn fork_anchor(
     side: &Side,
     fork: &Address,
     at: u64,
-) -> Result<Address, Refusal> {
+) -> Result<(Address, Option<u64>), Refusal> {
     let meta = reader.metadata(fork, Some(at))?;
     match meta.base.or(meta.source).as_deref().and_then(parse_address) {
-        Some(anchor) if in_chain(doc, &anchor) => Ok(anchor),
+        Some(anchor) if in_chain(doc, &anchor) => Ok((anchor, meta.arranged_at)),
         _ => Err(Refusal::BaseUnknown(side.clone())),
     }
 }
@@ -2164,7 +2219,8 @@ fn fork_anchor(
 /// ([`recorded_line`]), so a draft staged from a daughter `D.k.m` merges
 /// with the head over `D.k`, the base that daughter was published against,
 /// and one staged from `D` itself, or whose publication landed as version
-/// 1's daughter, over `D`'s own arrangement.
+/// 1's daughter, over `D`'s own arrangement. Beside it is the draft's
+/// state, the same answer's `arranged_at` ([`SideAt::Draft`]).
 ///
 /// # Errors
 ///
@@ -2178,10 +2234,10 @@ fn draft_base(
     side: &Side,
     draft: &Address,
     at: u64,
-) -> Result<Address, Refusal> {
+) -> Result<(Address, Option<u64>), Refusal> {
     let meta = reader.metadata(draft, Some(at))?;
     match meta.base.as_deref().and_then(parse_address) {
-        Some(base) if in_chain(doc, &base) => Ok(base),
+        Some(base) if in_chain(doc, &base) => Ok((base, meta.arranged_at)),
         _ => Err(Refusal::BaseUnknown(side.clone())),
     }
 }
@@ -2566,27 +2622,19 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         &inputs.sides,
         &inputs.options,
     )?;
-    let Readings { at, base, maps, head_extent, owner, composed, families, .. } = readings;
-    let key = RecordKey::new(
-        inputs.doc.clone(),
-        base.clone(),
-        std::iter::once(inputs.head.clone())
-            .chain(inputs.sides.iter().map(|s| s.address().clone())),
-    );
-    // Step 7: the prior records, the trunk owner's account's current over
-    // another's — the journal's reads, at the head: they raise the reader's
-    // running `as_of` past P, which nothing below reads.
-    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner))?;
+    let Readings { at, base, maps, head_extent, owner, composed, families, arranged, .. } =
+        readings;
     // The record's sides: the head, then each side — a draft at P, the one
-    // position it was read at.
+    // position it was read at, and a fork and a draft with their states.
     let mut sides: Vec<SideAt> = vec![SideAt::Member { at: inputs.head.clone(), role: Role::Head }];
-    for side in &inputs.sides {
-        sides.push(match side {
-            Side::Draft { at: draft, .. } => SideAt::Draft { at: draft.clone(), position: Some(at) },
-            side => SideAt::of(side),
-        });
-    }
-    let record = Record {
+    sides.extend(
+        inputs
+            .sides
+            .iter()
+            .zip(arranged)
+            .map(|(side, arranged_at)| SideAt::of(side, at, arranged_at)),
+    );
+    let mut record = Record {
         doc: inputs.doc.clone(),
         base,
         sides,
@@ -2597,10 +2645,17 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         gaps: composed.gaps.clone(),
         values: composed.values.clone(),
         answers: Vec::new(),
-        replaces: prior.as_ref().and_then(|p| p.link.clone()),
+        replaces: None,
         by: record::by(),
         link: None,
     };
+    // The key is the record's own, so the two never disagree.
+    let key = record.key();
+    // Step 7: the prior records, the trunk owner's account's current over
+    // another's — the journal's reads, at the head: they raise the reader's
+    // running `as_of` past P, which nothing below reads.
+    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner))?;
+    record.replaces = prior.as_ref().and_then(|p| p.link.clone());
     Ok(Merged {
         inputs: inputs.clone(),
         composed,

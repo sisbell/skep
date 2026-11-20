@@ -147,9 +147,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("PublicationEvent", json!({"board": "b-0", "session": "s-0", "draft": "1.0.1.0.67", "state": "acknowledged", "member": "1.0.1.0.64.2", "edition": null, "at": 412})),
         (
             "MergeReport",
-            json!({"outcome": "landed", "doc": "1.0.1.0.64", "head": "1.0.1.0.64.1", "base": "1.0.1.0.64.1", "side": "1.0.1.0.64.1.1", "form": "daughter", "sides": [{"at": "1.0.1.0.64.1", "role": "head", "position": null}], "runs": [{"origin": "1.0.1.0.64", "i_start": 1, "width": 19, "side": null, "family": "own"}], "gaps": [], "counts": {"a": 1, "b": 1, "m": 1}, "cap": 4096, "over_cap": false, "record": {"type": "merge"}, "as_of": 12, "into": "1.0.1.0.67", "position": 13, "fresh": false, "head_moved": null, "record_link": "1.0.1.0.1.0.2.3", "member": "1.0.1.0.64.2", "claims": []}),
+            json!({"outcome": "landed", "doc": "1.0.1.0.64", "head": "1.0.1.0.64.1", "base": "1.0.1.0.64.1", "side": "1.0.2.0.69", "form": "fork", "sides": [{"at": "1.0.1.0.64.1", "role": "head", "position": null}, {"at": "1.0.2.0.69", "role": "fork", "position": null, "arranged": 11}], "runs": [{"origin": "1.0.1.0.64", "i_start": 1, "width": 19, "side": null, "family": "own"}], "gaps": [], "counts": {"a": 1, "b": 1, "m": 1}, "cap": 4096, "over_cap": false, "record": {"type": "merge"}, "as_of": 12, "into": "1.0.1.0.67", "position": 13, "fresh": false, "head_moved": null, "record_link": "1.0.1.0.1.0.2.3", "member": "1.0.1.0.64.2", "claims": [], "replaced": [{"ordinal": 20, "width": 3, "origin": "1.0.1.0.67", "i_start": 1}]}),
         ),
-        ("MergeSide", json!({"at": "1.0.1.0.67", "role": "draft", "position": 12})),
+        ("MergeSide", json!({"at": "1.0.1.0.67", "role": "draft", "position": 12, "arranged": null})),
+        ("ReplacedStretch", json!({"ordinal": 20, "width": 3, "origin": "1.0.1.0.67", "i_start": 1})),
         ("MergeRun", json!({"origin": "1.0.1.0.64", "i_start": 1, "width": 19, "side": 1, "family": "draft_native"})),
         ("MergeGap", json!({"id": 1, "kind": "order", "after": "1.0.1.0.64.0.1.4", "before": null, "runs": [{"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6}], "placed": [0, 1], "settled": false, "resolved_by": null})),
         ("GapRun", json!({"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6})),

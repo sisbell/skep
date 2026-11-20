@@ -42,6 +42,9 @@
 //! acknowledgment; [`record_published`], the record of a merge a
 //! publication of the merger's own landed — the editor's shot from the
 //! draft the merge was landed in — written once and never a second shot;
+//! [`replaced`], the stretches of a draft a landing there would replace;
+//! [`landed_draft`], the person's own draft landing of a merge found with
+//! its sides' states ignored;
 //! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
@@ -113,12 +116,17 @@ pub use compose::{
     base_of, compose_runs, script, Choice, Composed, Gap, GapId, GapKind, InPlaceOp, Item, Options,
     PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, ValueLog,
 };
-pub use land::{land, record_published, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
+pub use land::{
+    land, record_published, replaced, resume, Landed, Landing, Merger, Replaced, SHOT_BODY_BUDGET,
+};
 pub use windows::{given_parts, owed_parts, part_answers, Answers, Flag, Misfit, WindowPart};
 pub use reads::{
     compose, head_of, origin_of, Family, Inputs, Merged, NoUndo, Refusal, Role, Side,
     SHOT_RUN_CAP,
 };
 pub use crate::publication::SupersedeCause;
-pub use record::{current, verify, PartAnswer, Record, RecordKey, RecordLanding, RecordedAnswer, SideAt, Verdict};
+pub use record::{
+    current, landed_draft, verify, PartAnswer, Record, RecordKey, RecordLanding, RecordedAnswer,
+    SideAt, SideState, Verdict,
+};
 pub use undo::{undo, unwithdraw, withdraw, Undone, Unwithdrawn, Withdrawn};

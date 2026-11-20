@@ -567,7 +567,8 @@ usage: skep <command> [flags]
                of the merged text (no answer given for you), --into lands
                it in a draft in one
                write (refused whole where the draft changed since), --new
-               in a fresh draft staged from the head; a newer version
+               in a fresh draft staged from the head, or in the draft your
+               landing of this merge stands in; a newer version
                published since is told; --undo puts a draft back as it
                stood before a merge landed in it (with --withdrawal it
                puts back the merge a withdrawal took out), --withdraw

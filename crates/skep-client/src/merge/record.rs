@@ -29,20 +29,27 @@
 //! with the landed member's image over its first `placed` positions, or the
 //! draft's at the position recorded, the daemon's `compare` the oracle the
 //! client's join is checked against (§1.3 step 4), and answers `Equal`,
-//! `Differs` or `Unreadable`, never a verdict manufactured for a document
-//! it may not read (D14): the trunk, the head, the base, a side or the
-//! landed document withheld from the reader answers `Unreadable` naming it,
-//! as does the origin of a run a side windows whose values the value rule
-//! reads, masked as a `withheld` item.
+//! `Differs`, `SideMoved` or `Unreadable`, never a verdict manufactured for
+//! a document it may not read (D14): the trunk, the head, the base, a side
+//! or the landed document withheld from the reader answers `Unreadable`
+//! naming it, as does the origin of a run a side windows whose values the
+//! value rule reads, masked as a `withheld` item.
+//! A fork's text can change after the merge, so the record keeps each
+//! mutable side's state beside its address — the position its text last
+//! changed at when the merge was composed, `doc_metadata`'s `arranged_at`
+//! ([`SideState`]) — and a fork arranged since answers `SideMoved` naming
+//! it, never `Differs`; a draft side is read at the position the record
+//! names for it, so its later edits change nothing the verdict reads.
 //! A position the record names is read as named or not at all: one whose
 //! history the board has reclaimed withholds the verdict (`Unreadable`),
 //! and one past the board's head or inside one commit is refused as the
 //! record's, its face advising no read elsewhere (skep #761).
 //!
 //! **One schema**, kind `merge`: `type` fixed, `v` the schema's version,
-//! `rules` the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`,
-//! `runs`, `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under
-//! D13"), with `answers` beside them only where a window part was answered
+//! `rules` the rule set's, then `doc`, `base`, `sides` — a fork side and a
+//! draft side carrying `arranged`, its state — `landed`, `claims`, `runs`,
+//! `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under D13"), with
+//! `answers` beside them only where a window part was answered
 //! (§1.5, THE SHOT's WINDOW PARTS) or the shot sent a draft side's words by
 //! reference because a record named them as published (the twins, the
 //! `windows` module's doc): each is those words and their answer, the
@@ -87,11 +94,16 @@ pub(super) fn by() -> String {
 
 // ── the key ───────────────────────────────────────────────────────────────
 
-/// The key a record is current under — `(doc, base, {sides})`.
+/// The key a record is current under — `(doc, base, {sides}, {states})`.
 ///
 /// It is a term of the body (the merge record's §4, "Its currency"; P20).
 /// The sides are a set: kept sorted, so two keys naming the same sides in
-/// another order are one.
+/// another order are one. The states are each mutable side's — a fork's, a
+/// draft's — so a merge composed over a side whose text changed since is a
+/// key of its own, never the same landing as the earlier one (skep #790).
+/// Equality is exact: a state [`SideState::Unrecorded`] equals no other, so
+/// a record written before the states were kept is current for no key
+/// composed since. [`RecordKey::stateless`] drops the states.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordKey {
     /// The trunk document.
@@ -100,31 +112,139 @@ pub struct RecordKey {
     /// before its first version.
     pub base: Address,
     /// Every side's address, the head's included, in address order.
+    ///
+    /// They are what the links of a record's kind are found by.
     pub sides: Vec<Address>,
+    /// Each fork or draft side's address and state, in address order.
+    pub states: Vec<(Address, SideState)>,
 }
 
 impl RecordKey {
-    /// Returns a key over `sides`, sorted and deduplicated.
-    pub fn new(doc: Address, base: Address, sides: impl IntoIterator<Item = Address>) -> RecordKey {
+    /// Returns a key over `sides` and `states`.
+    ///
+    /// Each is sorted by address and deduplicated.
+    pub fn new(
+        doc: Address,
+        base: Address,
+        sides: impl IntoIterator<Item = Address>,
+        states: impl IntoIterator<Item = (Address, SideState)>,
+    ) -> RecordKey {
         let mut sides: Vec<Address> = sides.into_iter().collect();
         sides.sort_by_key(reads::comps);
         sides.dedup();
-        RecordKey { doc, base, sides }
+        let mut states: Vec<(Address, SideState)> = states.into_iter().collect();
+        states.sort_by_key(|(at, _)| reads::comps(at));
+        states.dedup_by(|a, b| a.0 == b.0);
+        RecordKey { doc, base, sides, states }
+    }
+
+    /// Returns the key with its states dropped.
+    ///
+    /// It is the key of the composition whatever state its mutable sides
+    /// were read in: the one a person's earlier landing of the merge is
+    /// found by ([`landed_draft`]) after a side's text has changed.
+    pub fn stateless(&self) -> RecordKey {
+        RecordKey { states: Vec::new(), ..self.clone() }
     }
 
     /// Returns the key as one line of text.
     ///
-    /// The text is `merge:<doc>:<base>:<side>+<side>…`, as long as its
-    /// sides make it. It is the text naming the shot's writes, and it opens
-    /// the draft landing's, which names the draft and the position too and,
-    /// for a draft named, the record the landing follows where one stands,
-    /// and the stage's, which names the position and, where one stands, the
-    /// record the landing will replace. A write's per-session ids are
-    /// spelled over the SHA-256 of its text, a fixed width whatever the
-    /// sides (the `land` module's doc).
+    /// The text is `merge:<doc>:<base>:<side>+<side>…`, then `:<side>@<q>`
+    /// for each state — `@null` for [`SideState::Unarranged`], none for
+    /// [`SideState::Unrecorded`] — as long as its sides make it. So a key
+    /// with no fork or draft side, or one of a record written before the
+    /// states were kept, spells the text it spelled then. It is the text
+    /// naming the shot's writes, and it opens the draft landing's, which
+    /// names the draft and the position too and, for a draft named, the
+    /// record the landing follows where one stands, and the stage's, which
+    /// names the position and, where one stands, the record the landing will
+    /// replace. A write's per-session ids are spelled over the SHA-256 of its
+    /// text, a fixed width whatever the sides (the `land` module's doc).
     pub fn text(&self) -> String {
         let sides: Vec<String> = self.sides.iter().map(ToString::to_string).collect();
-        format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"))
+        let mut text = format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"));
+        for (at, state) in &self.states {
+            match state {
+                SideState::Unrecorded => {}
+                SideState::Unarranged => text.push_str(&format!(":{at}@null")),
+                SideState::At(q) => text.push_str(&format!(":{at}@{q}")),
+            }
+        }
+        text
+    }
+}
+
+/// A mutable side's state, as the record keeps it (§4; skep #770).
+///
+/// It is the position the side's text last changed at as of the
+/// composition's one position P, `doc_metadata`'s `arranged_at` read off
+/// the side's own metadata (wire.md §The response envelope): the fork's and
+/// the draft's, whose texts change after a merge. A member is immutable, so
+/// its address is its state and it carries none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideState {
+    /// No state recorded.
+    ///
+    /// It is a record written before the states were kept, its side
+    /// carrying no `arranged` member.
+    Unrecorded,
+    /// The board served `arranged_at` `null` at P.
+    ///
+    /// It is a document never arranged since its mint, or one minted
+    /// before the board kept the position.
+    Unarranged,
+    /// The side's `arranged_at` at P.
+    At(u64),
+}
+
+impl SideState {
+    /// Returns the state a served `arranged_at` names.
+    ///
+    /// It is `At` its position, `Unarranged` for `null`.
+    pub fn of(arranged_at: Option<u64>) -> SideState {
+        arranged_at.map_or(SideState::Unarranged, SideState::At)
+    }
+
+    /// Returns whether a side recorded in this state has moved since.
+    ///
+    /// `now` is the state the side is read in. An `At` or `Unarranged` side has
+    /// moved where `now` is another state. An `Unrecorded` one has where its
+    /// text was arranged after `since`, the position of the landing the record
+    /// names — never where `since` is unknown.
+    pub fn moved(self, now: SideState, since: Option<u64>) -> bool {
+        let now = match now {
+            SideState::At(q) => Some(q),
+            SideState::Unarranged | SideState::Unrecorded => None,
+        };
+        match self {
+            SideState::At(q) => now != Some(q),
+            SideState::Unarranged => now.is_some(),
+            SideState::Unrecorded => since.zip(now).is_some_and(|(since, now)| now > since),
+        }
+    }
+
+    /// Returns the state as a record's `arranged` member spells it.
+    ///
+    /// It is the position, `null` for `Unarranged`, and `None` — no member
+    /// — for `Unrecorded`.
+    fn to_value(self) -> Option<Value> {
+        match self {
+            SideState::Unrecorded => None,
+            SideState::Unarranged => Some(Value::Null),
+            SideState::At(q) => Some(Value::from(q)),
+        }
+    }
+
+    /// Returns the state a side's `arranged` member spells.
+    ///
+    /// It is `Unrecorded` where the member is missing, `Unarranged` for
+    /// `null` and `At` for a number; `None` for a member of another kind.
+    fn from_value(v: Option<&Value>) -> Option<SideState> {
+        match v {
+            None => Some(SideState::Unrecorded),
+            Some(Value::Null) => Some(SideState::Unarranged),
+            Some(q) => q.as_u64().map(SideState::At),
+        }
     }
 }
 
@@ -132,18 +252,31 @@ impl RecordKey {
 
 /// One side as the record's `sides` carries it (§4).
 ///
-/// It is a member with its role, or a draft with the position it was read
-/// at.
+/// It is a member with its role, a fork with its state, or a draft with the
+/// position it was read at and its state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SideAt {
-    /// `{"at": <member>, "role": …}` — the head, an alternative, or a fork.
+    /// `{"at": <member>, "role": …}` — the head or an alternative.
     Member {
         /// The member.
         at: Address,
-        /// Its role.
+        /// Its role, the head's or an alternative's.
         role: Role,
     },
-    /// `{"at": {"draft": <address>, "position": N}, "role": "draft"}`.
+    /// `{"at": <fork>, "role": "fork", "arranged": N}`.
+    Fork {
+        /// The fork.
+        at: Address,
+        /// The fork's state when the merge was composed.
+        ///
+        /// [`verify`] answers [`Verdict::SideMoved`] where the fork has been
+        /// arranged since, never `Differs`.
+        arranged: SideState,
+    },
+    /// A draft, with the position it was read at and its state.
+    ///
+    /// It is spelled `{"at": {"draft": <address>, "position": N}, "role":
+    /// "draft", "arranged": N}`.
     Draft {
         /// The draft.
         at: Address,
@@ -156,23 +289,40 @@ pub enum SideAt {
         /// that rendered the draft has made of either since. A record naming
         /// none reads them at the position its own first read answers.
         position: Option<u64>,
+        /// The draft's state as of that position.
+        ///
+        /// It is a term of the key; `verify` reads the draft at `position`
+        /// whatever its state now.
+        arranged: SideState,
     },
 }
 
 impl SideAt {
     /// Returns the record's side for a composed [`Side`].
-    pub fn of(side: &Side) -> SideAt {
+    ///
+    /// The side was read at the composition's one position `at`, and
+    /// `arranged_at` is the `doc_metadata` term its anchor was read with. A
+    /// draft names `at` as the position it was read at, and a fork and a
+    /// draft carry their state, `arranged_at` or `Unarranged` where the
+    /// board served none; a member carries neither.
+    pub fn of(side: &Side, at: u64, arranged_at: Option<u64>) -> SideAt {
         match side {
-            Side::Member(at) => SideAt::Member { at: at.clone(), role: Role::Alternative },
-            Side::Fork(at) => SideAt::Member { at: at.clone(), role: Role::Fork },
-            Side::Draft { at, position } => SideAt::Draft { at: at.clone(), position: *position },
+            Side::Member(member) => SideAt::Member { at: member.clone(), role: Role::Alternative },
+            Side::Fork(fork) => {
+                SideAt::Fork { at: fork.clone(), arranged: SideState::of(arranged_at) }
+            }
+            Side::Draft { at: draft, .. } => SideAt::Draft {
+                at: draft.clone(),
+                position: Some(at),
+                arranged: SideState::of(arranged_at),
+            },
         }
     }
 
     /// Returns the side's address.
     pub fn address(&self) -> &Address {
         match self {
-            SideAt::Member { at, .. } | SideAt::Draft { at, .. } => at,
+            SideAt::Member { at, .. } | SideAt::Fork { at, .. } | SideAt::Draft { at, .. } => at,
         }
     }
 
@@ -180,7 +330,16 @@ impl SideAt {
     pub fn role(&self) -> Role {
         match self {
             SideAt::Member { role, .. } => *role,
+            SideAt::Fork { .. } => Role::Fork,
             SideAt::Draft { .. } => Role::Draft,
+        }
+    }
+
+    /// Returns the side's state: a fork's or a draft's, `None` for a member.
+    pub fn arranged(&self) -> Option<SideState> {
+        match self {
+            SideAt::Member { .. } => None,
+            SideAt::Fork { arranged, .. } | SideAt::Draft { arranged, .. } => Some(*arranged),
         }
     }
 
@@ -188,30 +347,51 @@ impl SideAt {
     pub fn side(&self) -> Option<Side> {
         match self {
             SideAt::Member { role: Role::Head, .. } => None,
-            SideAt::Member { at, role: Role::Fork } => Some(Side::Fork(at.clone())),
             SideAt::Member { at, .. } => Some(Side::Member(at.clone())),
-            SideAt::Draft { at, position } => {
+            SideAt::Fork { at, .. } => Some(Side::Fork(at.clone())),
+            SideAt::Draft { at, position, .. } => {
                 Some(Side::Draft { at: at.clone(), position: *position })
             }
         }
     }
 
     fn to_value(&self) -> Value {
-        match self {
-            SideAt::Member { at, role } => json!({"at": at.to_string(), "role": role.as_str()}),
-            SideAt::Draft { at, position } => {
-                json!({"at": {"draft": at.to_string(), "position": position}, "role": Role::Draft.as_str()})
+        let (mut v, arranged) = match self {
+            SideAt::Member { at, role } => {
+                (json!({"at": at.to_string(), "role": role.as_str()}), None)
             }
+            SideAt::Fork { at, arranged } => {
+                (json!({"at": at.to_string(), "role": Role::Fork.as_str()}), arranged.to_value())
+            }
+            SideAt::Draft { at, position, arranged } => (
+                json!({"at": {"draft": at.to_string(), "position": position}, "role": Role::Draft.as_str()}),
+                arranged.to_value(),
+            ),
+        };
+        if let Some(arranged) = arranged {
+            v["arranged"] = arranged;
         }
+        v
     }
 
+    /// Returns the side a record's `sides` entry spells.
+    ///
+    /// An `at` object is a draft read at its `position`; an `at` address is
+    /// a fork where the role is `fork`, else a member. A missing `arranged`
+    /// reads as [`SideState::Unrecorded`], and `None` is answered for an
+    /// entry this build cannot read.
     fn from_value(v: &Value) -> Option<SideAt> {
         let role = Role::parse(v["role"].as_str()?)?;
-        match &v["at"] {
-            Value::String(at) => Some(SideAt::Member { at: parse_address(at)?, role }),
-            at => Some(SideAt::Draft {
+        let arranged = || SideState::from_value(v.get("arranged"));
+        match (&v["at"], role) {
+            (Value::String(at), Role::Fork) => {
+                Some(SideAt::Fork { at: parse_address(at)?, arranged: arranged()? })
+            }
+            (Value::String(at), role) => Some(SideAt::Member { at: parse_address(at)?, role }),
+            (at, _) => Some(SideAt::Draft {
                 at: parse_address(at["draft"].as_str()?)?,
                 position: at["position"].as_u64(),
+                arranged: arranged()?,
             }),
         }
     }
@@ -445,7 +625,8 @@ impl Record {
     /// cannot read — a gap naming a side past the one byte a side is
     /// numbered by among them; a missing `landed`, `claims`, `retries`,
     /// `replaces`, `by`, `values.applied` or `answers` reads as its empty
-    /// value, and `rules` is not read. A member this build does not know is left
+    /// value, a side's missing `arranged` as [`SideState::Unrecorded`], and
+    /// `rules` is not read. A member this build does not know is left
     /// unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
@@ -502,11 +683,14 @@ impl Record {
     }
 
     /// Returns the key the record is current under.
+    ///
+    /// It is its sides' addresses and the state of each fork or draft side.
     pub fn key(&self) -> RecordKey {
         RecordKey::new(
             self.doc.clone(),
             self.base.clone(),
             self.sides.iter().map(|s| s.address().clone()),
+            self.sides.iter().filter_map(|s| Some((s.address().clone(), s.arranged()?))),
         )
     }
 
@@ -724,11 +908,45 @@ pub(super) fn current_among(
     key: &RecordKey,
     owner: Option<&str>,
 ) -> Result<Option<Record>, Refusal> {
-    let found = records_of(reader, kind, key)?;
+    let found = records_of(reader, kind, key, |k| k == key)?;
     let (owned, others): (Vec<Found>, Vec<Found>) =
         found.into_iter().partition(|f| owner.is_some_and(|owner| f.lies_in(owner)));
     let pool = if owned.is_empty() { others } else { owned };
     Ok(newest(pool).map(|f| f.record))
+}
+
+/// Returns `account`'s own record of a draft landing of `key`'s merge.
+///
+/// The key's states are ignored. The record is found as [`current`] finds
+/// records — the links of `kind` to each side of the key, each record's atom
+/// read through its journal — but matched on `doc`, `base` and `sides` alone
+/// ([`RecordKey::stateless`]), so a record composed over a fork or a draft side
+/// whose text has changed since matches, and so does one written before the
+/// states were kept. Of the matches whose link lies in `account` exactly, the
+/// newest by the order their links were minted is answered where it names a
+/// draft landing, else none: a take-back recorded since leaves the merge landed
+/// in no draft, as [`resume`](super::resume) reads it. An embedder reads it
+/// where a composition finds no record of its own key and a draft holding the
+/// person's earlier landing of the merge is still the one to land in.
+///
+/// # Errors
+///
+/// As [`current`]'s.
+pub fn landed_draft(
+    board: &Board,
+    token: Option<&Token>,
+    kind: &Address,
+    key: &RecordKey,
+    account: &str,
+) -> Result<Option<Record>, Refusal> {
+    let reader = Reader::new(board, token, OnEnd::Rerun);
+    let stateless = key.stateless();
+    let own = records_of(&reader, kind, key, |k| k.stateless() == stateless)?
+        .into_iter()
+        .filter(|f| f.lies_in(account));
+    Ok(newest(own)
+        .map(|f| f.record)
+        .filter(|r| matches!(r.landed, Some(RecordLanding::Draft { .. }))))
 }
 
 /// A record as a reader found it: the record, the link it was found
@@ -760,7 +978,7 @@ impl Found {
     /// any it serves one for — the link's address breaking a tie. Each link
     /// is homed in the journal that holds its record, any number of them
     /// per account, so an address orders links within one journal alone.
-    fn age(&self) -> (Option<u64>, Vec<Nat>) {
+    pub(super) fn age(&self) -> (Option<u64>, Vec<Nat>) {
         (self.at, reads::comps(&self.link))
     }
 }
@@ -777,7 +995,8 @@ pub(super) fn newest(found: impl IntoIterator<Item = Found>) -> Option<Found> {
 /// the order the links were answered. They are found as [`current`] finds
 /// them: the links of `kind` to each side of the key, each link once, each
 /// record's atom read through its journal's arrangement and its key
-/// checked.
+/// checked by `same` — equality for the key itself, or the states ignored
+/// ([`landed_draft`]).
 ///
 /// # Errors
 ///
@@ -786,6 +1005,7 @@ pub(super) fn records_of(
     reader: &Reader<'_>,
     kind: &Address,
     key: &RecordKey,
+    same: impl Fn(&RecordKey) -> bool,
 ) -> Result<Vec<Found>, Refusal> {
     let mut seen: Vec<String> = Vec::new();
     let mut found: Vec<Found> = Vec::new();
@@ -798,7 +1018,7 @@ pub(super) fn records_of(
             seen.push(link.to_string());
             let Some(link_addr) = parse_address(link) else { continue };
             if let Some(f) = read_record(reader, &link_addr)? {
-                if f.record.key() == *key {
+                if same(&f.record.key()) {
                     found.push(f);
                 }
             }
@@ -876,6 +1096,22 @@ pub enum Verdict {
         /// The first V-ordinal, counted from 1, at which the two differ.
         at: u64,
     },
+    /// A fork side's text has changed since the merge was composed.
+    ///
+    /// The record names the fork's state when it was composed; the board
+    /// now serves another, so the recomputation would read a text the merge
+    /// never composed from, and no verdict on the landing is made of it —
+    /// never `Differs`, which a record that is wrong answers (skep #770). A
+    /// record written before the states were kept answers so where the fork
+    /// was arranged after the landing it names.
+    SideMoved {
+        /// The fork side.
+        side: Address,
+        /// Its state as the record names it.
+        recorded: SideState,
+        /// Its `arranged_at` as the board serves it now; `None` for `null`.
+        now: Option<u64>,
+    },
     /// A document the verdict needs is not readable to this reader.
     ///
     /// It is the trunk, the head, the base or a side, withheld at any read
@@ -903,14 +1139,22 @@ pub enum Verdict {
 /// the base the board records for it, are read as of the position the
 /// record names for the side (wire.md §Reading history), so the testimony
 /// is checked against the state the merge composed from, whatever the
-/// landing that rendered the draft has made of either since. The record
-/// names no position for a fork side, so a fork is read as it stands, its
-/// anchor — the base the board records for it, else its source — with it:
-/// where a landing into a staged fork, or its publication, has moved that
-/// base since the record was written, the record's base is no longer the
-/// one its sides derive, and the record is faced, never verified. The
-/// daemon's `compare` is asked once as the oracle of the client's join
-/// (§1.3 step 4), in parts past its budgets.
+/// landing that rendered the draft has made of either since. A fork side
+/// is read at that same position where the record names one, else as it
+/// stands, its anchor — the base the board records for it, else its source
+/// — with it, so its state is checked first (skep #770): its `arranged_at`
+/// is read where the recomputation will read the fork, and where it is not
+/// the state the record names — or, in a record written before the states
+/// were kept, where it is past the landing's position — the verdict is
+/// [`Verdict::SideMoved`] naming the fork, before anything is recomputed;
+/// the fork's state at the recomputation's own position is compared again
+/// after its reads, so an edit landing between the two is `SideMoved` too,
+/// never `Differs`. A fork whose recorded base moved since the record with
+/// its text unmoved, or one the record, written before the states were
+/// kept, names no state for, derives another base than the record names,
+/// and the record is faced, never verified. The daemon's `compare` is asked
+/// once as the oracle of the client's join (§1.3 step 4), in parts past its
+/// budgets.
 ///
 /// A document the recomputation reads — the trunk, the head, the base, a
 /// side — that the reader may not read withholds the verdict (§4,
@@ -930,33 +1174,40 @@ pub enum Verdict {
 ///
 /// # Errors
 ///
-/// The reads' refusals ([`Refusal`]) on the trunk, the head, the base and
-/// the sides — a document the board has not registered,
-/// [`Refusal::NoSuchDocument`], among them — but `withheld`, a rejection or
-/// an item a value read meets, and a reclaimed position the record names,
-/// which answer [`Verdict::Unreadable`]; a record whose base is not the one
-/// the sides' recorded bases derive, [`Refusal::NamedBaseDisagrees`] —
-/// beside a draft side [`Refusal::DraftBaseDisagrees`], and beside a fork
-/// side faced, naming the base the record names and the one the board's
-/// records now derive, since the fork is read as it stands and a landing
-/// into a staged fork, or its publication, moves its base (the record of a
-/// landing into the fork itself among them) — never verified against the
-/// base it names; a record whose fork side is of the trunk owner's own
-/// account, [`Refusal::ForkOfOwner`] — the owner's draft is the draft side,
-/// and no composition names it as a fork — never verified as a fork's
-/// merge; a position the record names past the board's head or inside one
-/// commit, [`Refusal::BeyondHead`] or [`Refusal::NotAPosition`] naming the
-/// draft as the record's — the record was not written against this board's
-/// history as it stands; a record with no head side or with `landed` none
-/// is faced — there is nothing to verify against — and so is one naming
-/// more sides besides the head than a merge numbers, before any read; a
-/// client join the oracle disagrees with is this library's own fault,
-/// faced; a landed member with no `placed` term is faced; the landed
-/// document's reads' refusals but `withheld`, `doc_not_registered` and a
-/// reclaimed landing position, which answer [`Verdict::Unreadable`]; an
-/// `image` run that is no content I-address. The death signal under the
-/// token at any read is [`Refusal::SessionEnded`], the verification made
-/// again on a new session.
+/// Before any read: a record with no head side is faced; then one whose
+/// sides no merge composes — a head that is no trunk member of the
+/// document, two draft sides ([`Refusal::TwoDrafts`]), more sides besides
+/// the head than a merge numbers, faced, or a member or a fork no shape
+/// reads ([`Refusal::BaseUnknown`]); then one with `landed` none, faced —
+/// there is nothing to verify against. Then the fork sides' state
+/// reads' refusals — a fork this reader may not read answers
+/// [`Verdict::Unreadable`] naming it, a fork the board has not registered
+/// is [`Refusal::NoSuchDocument`], and a position the record names answers
+/// as the recomputation's reads at it do; then the reads' refusals
+/// ([`Refusal`]) on the trunk, the head, the base and the sides — a
+/// document the board has not registered, [`Refusal::NoSuchDocument`],
+/// among them — but `withheld`, a rejection or an item a value read meets,
+/// and a reclaimed position the record names, which answer
+/// [`Verdict::Unreadable`]; a record whose base is not the one the sides'
+/// recorded bases derive, [`Refusal::NamedBaseDisagrees`] — beside a draft
+/// side [`Refusal::DraftBaseDisagrees`], and beside a fork side faced,
+/// naming the base the record names and the one the board's records now
+/// derive: the fork's recorded base moved since the record with its text
+/// unmoved, or the record, written before the states were kept, names no
+/// state for it — never verified against the base it names; a record whose
+/// fork side is of the trunk owner's own account, [`Refusal::ForkOfOwner`]
+/// — the owner's draft is the draft side, and no composition names it as a
+/// fork — never verified as a fork's merge; a position the record names
+/// past the board's head or inside one commit, [`Refusal::BeyondHead`] or
+/// [`Refusal::NotAPosition`] naming the draft as the record's — the record
+/// was not written against this board's history as it stands; a client
+/// join the oracle disagrees with is this library's own fault, faced; a
+/// landed member with no `placed` term is faced; the landed document's
+/// reads' refusals but `withheld`, `doc_not_registered` and a reclaimed
+/// landing position, which answer [`Verdict::Unreadable`]; an `image` run
+/// that is no content I-address. The death signal under the token at any
+/// read is [`Refusal::SessionEnded`], the verification made again on a new
+/// session.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
     let head = record.head().ok_or_else(|| {
@@ -966,32 +1217,71 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
             "this record is not one this library wrote; nothing to verify",
         )
     })?;
-    let sides: Vec<Side> = record.sides.iter().filter_map(SideAt::side).collect();
+    // The record's sides besides the head, and the sides they compose as,
+    // in one order.
+    let named: Vec<&SideAt> = record.sides.iter().filter(|s| s.side().is_some()).collect();
+    let sides: Vec<Side> = named.iter().filter_map(|s| s.side()).collect();
+    reads::check_shape(&record.doc, head.address(), &sides)?;
+    let Some(landed) = &record.landed else {
+        return Err(Halt::face(
+            "nothing to verify: the record landed nothing",
+            "a record with `landed` null is the question a merger filed, not a landing",
+            "verify the record of the landing that answered it",
+        )
+        .into());
+    };
+    let (RecordLanding::Member { position: landed_at, .. }
+    | RecordLanding::Draft { position: landed_at, .. }) = *landed;
     let options = record.options();
     // The position the record names for its draft side: every read of the
     // recomputation, the join's oracle included, is made at it.
     let composed_at = record.sides.iter().find_map(|s| match s {
-        SideAt::Draft { at, position: Some(p) } => Some((at, *p)),
-        SideAt::Draft { .. } | SideAt::Member { .. } => None,
+        SideAt::Draft { at, position: Some(p), .. } => Some((at, *p)),
+        SideAt::Draft { .. } | SideAt::Member { .. } | SideAt::Fork { .. } => None,
     });
-    let recomputed = reads::read_shape(
+    // Each fork's state, read where the recomputation will read the fork:
+    // one arranged since the merge is no text the merge composed from.
+    for side in &named {
+        let SideAt::Fork { at: fork, arranged } = side else { continue };
+        let now = match reader.metadata(fork, composed_at.map(|(_, p)| p)) {
+            Ok(meta) => meta.arranged_at,
+            Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
+            Err(e) => return at_record(e, composed_at),
+        };
+        if arranged.moved(SideState::of(now), Some(landed_at)) {
+            return Ok(Verdict::SideMoved { side: fork.clone(), recorded: *arranged, now });
+        }
+    }
+    let readings = match reads::read_shape(
         &reader,
         &record.doc,
         head.address(),
         Some(record.base.clone()),
         &sides,
         &options,
-    )
-    .and_then(|readings| reads::check_join(&reader, &readings).map(|()| readings));
-    let readings = match recomputed {
+    ) {
         Ok(readings) => readings,
         // A document the recomputation reads that this reader may not read:
         // the verdict withheld, never manufactured (§4, testimony; D14).
         Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
         Err(e) => return at_record(e, composed_at),
     };
-    let (target, at, placed) = match &record.landed {
-        Some(RecordLanding::Member { member, .. }) => {
+    // The forks' states at the recomputation's own position: an edit
+    // landing after the check above is a fork arranged since, never a
+    // difference.
+    for (side, now) in named.iter().zip(&readings.arranged) {
+        let SideAt::Fork { at: fork, arranged } = side else { continue };
+        if arranged.moved(SideState::of(*now), Some(landed_at)) {
+            return Ok(Verdict::SideMoved { side: fork.clone(), recorded: *arranged, now: *now });
+        }
+    }
+    match reads::check_join(&reader, &readings) {
+        Ok(()) => {}
+        Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
+        Err(e) => return at_record(e, composed_at),
+    }
+    let (target, at, placed) = match landed {
+        RecordLanding::Member { member, .. } => {
             let meta = match reader.metadata(member, None) {
                 Ok(m) => m,
                 Err(Refusal::Unreadable(_)) | Err(Refusal::NoSuchDocument(_)) => {
@@ -1002,7 +1292,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
             let placed = meta.placed.ok_or_else(|| Halt::face(format!("{member} carries no `placed` term"), "a member a shot minted carries the positions the client placed (wire.md §Namespace, `doc_metadata`)", "this member was not minted by a shot this library can verify"))?;
             (member.clone(), None, placed)
         }
-        Some(RecordLanding::Draft { draft, position }) => {
+        RecordLanding::Draft { draft, position } => {
             let extent = match reader.extent(draft, Some(*position)) {
                 Ok(e) => e,
                 Err(Refusal::Unreadable(_)) | Err(Refusal::NoSuchDocument(_)) => {
@@ -1011,14 +1301,6 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
                 Err(e) => return at_record(e, Some((draft, *position))),
             };
             (draft.clone(), Some(*position), extent)
-        }
-        None => {
-            return Err(Halt::face(
-                "nothing to verify: the record landed nothing",
-                "a record with `landed` null is the question a merger filed, not a landing",
-                "verify the record of the landing that answered it",
-            )
-            .into())
         }
     };
     let image = match reader.image(&target, at, 1, placed) {

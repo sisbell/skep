@@ -141,7 +141,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   its defaults, as the whole arrangement
   of `into` or of a fresh draft staged from the head, by one write; its
   answer is the gap report, and composing again re-opens the draft,
-  reading each gap's state off it, or names the version a merged
+  reading each gap's state off it — save at a fork changed since the
+  landing, which is composed again on the head and lands over the draft,
+  the answer's `replaced` naming each stretch of the earlier landing's
+  words and the edits made in it since that it replaced, and `merge_undo`
+  putting them back — or names the version a merged
   daughter went into. A fork composed by its own owner lands in a fresh
   draft of theirs staged from the head, re-basing it for the document's
   owner to merge; the fork itself as `into` takes the merge at any head

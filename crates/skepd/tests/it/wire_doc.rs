@@ -356,7 +356,8 @@ fn fixture(name: &str) -> Response {
         // (PUB-8.12), asked of the birth version `D.1` itself, which the shot
         // minted from the memberless document taken at three positions,
         // placing five: its shot terms beside the document's state (D25's
-        // (c′)), the base its shot recorded that document.
+        // (c′)), the base its shot recorded that document, its arrangement
+        // last changed by that shot.
         "doc_metadata" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 1]),
             published: true,
@@ -373,6 +374,7 @@ fn fixture(name: &str) -> Response {
             base_copied: None,
             merge: None,
             own_count: n(5),
+            arranged_at: Some(Seq(7)),
             at: Some(Seq(7)),
             time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
@@ -380,7 +382,8 @@ fn fixture(name: &str) -> Response {
         // A private draft the staging act minted off the birth version above
         // (B3-S10): no chain member and no shot terms, its `source` the member
         // copied and `source_copied` the five positions the copy took, its
-        // `base` that member and `base_copied` the same five.
+        // `base` that member and `base_copied` the same five, its arrangement
+        // last changed by the stage that minted it.
         "doc_metadata_unborn" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 64]),
             published: false,
@@ -393,6 +396,7 @@ fn fixture(name: &str) -> Response {
             base_copied: Some(n(5)),
             merge: None,
             own_count: n(5),
+            arranged_at: Some(Seq(8)),
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(9),
@@ -402,7 +406,9 @@ fn fixture(name: &str) -> Response {
         // member `1.0.1.0.1.1`, which it was born sharing — its `source`, the
         // five positions its copy took its `source_copied`. Its own chain has
         // no member and no shot minted it, so the other per-member facts are
-        // null — the base among them: a `version` records none.
+        // null — the base among them: a `version` records none. A build
+        // before the position map minted it, so the board keeps neither its
+        // mint position nor the position its arrangement last changed at.
         "doc_metadata_fork" => Response::DocMetadata {
             doc: a(&[1, 0, 2, 0, 1]),
             published: false,
@@ -415,6 +421,7 @@ fn fixture(name: &str) -> Response {
             base_copied: None,
             merge: None,
             own_count: n(5),
+            arranged_at: None,
             at: None,
             time: None,
             as_of: Seq(9),
@@ -423,8 +430,9 @@ fn fixture(name: &str) -> Response {
         // skep #764): a `set_arrangement` composed on version 2 at six
         // positions moved its base there and put the marker beside it — the
         // one side merged, the head at the extent read, the landing's
-        // position — its `source_copied` the five its stage copied, and
-        // its `own_count` the seven positions the landing left it holding.
+        // position — its `source_copied` the five its stage copied, its
+        // `own_count` the seven positions the landing left it holding, and
+        // its `arranged_at` the landing's own position.
         "doc_metadata_marked" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 64]),
             published: false,
@@ -442,6 +450,7 @@ fn fixture(name: &str) -> Response {
                 at: Seq(14),
             }),
             own_count: n(7),
+            arranged_at: Some(Seq(14)),
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(15),

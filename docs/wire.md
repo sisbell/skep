@@ -1597,43 +1597,69 @@ a client reads the arrangement only where this count is above `0`. Its
 cost is a sum over the address's content runs, as the content extent of
 `retrieve_doc_v_span_set` is. Served as `source` is.
 
+`arranged_at` is THE POSITION THE TEXT A READER OF THE ADDRESS NAMED
+READS LAST CHANGED AT, a number as `at` and `as_of` are: the commit
+position of the last placement, removal, rearrangement or shot into that
+arrangement, or of the `version` or `stage` that minted it; a link write
+homed in the document never moves it. It is the one member of this
+response that FLOATS (§The publish shot and head-float, head-float): a
+version member, a private document and a published document with no
+member yet answer their own entry, and a bare published document whose
+chain has a member answers its trunk head's, so a new head, or a
+declared deposit landing in the head, moves it. A client holding a
+position `p` reads `arranged_at > p` as that text having changed since
+`p`. It is the entry the typed state is checked against (§Arrangement,
+the typed state) for an owner's in-place edit or `set_arrangement` of a
+draft and for a declared deposit naming the bare document or its head:
+a frame whose `as_of` is at or past it passes that check, and one below
+it is refused — `arrangement_moved`, its `site.current` this entry,
+wherever no refusal standing ahead of the typed state answers first. A
+deposit naming an older member is checked against the head's entry,
+which the bare document answers. `null` where the board keeps no entry —
+a document never arranged since its mint (one `create_new_document` or
+`fork` minted and nobody has edited), or one a build before the position
+map minted and nothing has arranged since — and then no frame is refused
+for its typed state. Kept in the board's state, so `/op-at` answers it
+as of any position. Served as `source` is.
+
 `at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
 `link_value` carries a link's: `at` the position of the commit that
-minted it — a version member answers ITS OWN mint, the one member of
-this response that does not project to the document, so a `version`'s
-member and a `publish` shot's member each date themselves, and the trunk
-document dates its own creation — kept in the board's state, so it is
-answered at any age and `/op-at` at `at − 1` answers the address
-`doc_not_registered`; `time` the daemon's testimony of when that position
-committed and `time_from` which testimony, `"feed"` (the `/changes` row's
-own `time`, the exact source) or `"anchor"` (the newest hourly
-`skep-time` record at or below `at`), `null` together where neither
-holds a reading; and `at` `null` — the two with it — for an address a
-build before the position map minted. Served to whoever may read the
-address named, as `source` is. The system account's four seeded documents
-answer `at: 0`, the genesis coordinate, with no time.
+minted it — a version member answers ITS OWN mint, not its document's,
+so a `version`'s member and a `publish` shot's member each date
+themselves, and the trunk document dates its own creation — kept in the
+board's state, so it is answered at any age and `/op-at` at `at − 1`
+answers the address `doc_not_registered`; `time` the daemon's testimony
+of when that position committed and `time_from` which testimony,
+`"feed"` (the `/changes` row's own `time`, the exact source) or
+`"anchor"` (the newest hourly `skep-time` record at or below `at`),
+`null` together where neither holds a reading; and `at` `null` — the two
+with it — for an address a build before the position map minted. Served
+to whoever may read the address named, as `source` is. The system
+account's four seeded documents answer `at: 0`, the genesis coordinate,
+with no time.
 
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
 placing five positions minted from the memberless document taken at
 three — its `shot_base` that document — a shot member, so `source` is
 `null` and the board records no base for it, its own arrangement the
-five positions the shot placed — the shot at 7, its row still in the
-feed:
+five positions the shot placed — the shot at 7, which is both its `at`
+and its `arranged_at`, its row still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
+{"arranged_at":7,"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
 ```
 
 A private draft the staging act minted at 8 off that birth version —
 `source` the member copied and `source_copied` the five positions the
 copy took, `base` that member and `base_copied` the same five, so a
-`publish` off it carries `base_extent` 5, and its own count the same
-five — whose feed line is gone, dated by the hour's anchor:
+`publish` off it carries `base_extent` 5, its own count the same five,
+and its arrangement last changed by that stage, so `arranged_at` is 8
+too — whose feed line is gone, dated by the hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"arranged_at":8,"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
@@ -1641,11 +1667,12 @@ A cross-owner fork — a private document of another account, minted by
 sharing that member, which is its `source`, the five positions its copy
 took its `source_copied` and its own count; its own chain has no member,
 no shot minted it and no staging act recorded a base for it — and minted
-by a build before the position map, so its age is unknown:
+by a build before the position map, which also predates the arranged-at
+positions, so neither its age nor its `arranged_at` is known:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
+{"arranged_at":null,"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
 ```
 
 The staged draft above after a merge's landing: a `set_arrangement` at
@@ -1656,11 +1683,12 @@ version 3 is published, when the landing's ack tells it (`ack`'s
 `head_moved`), and the marker ends at the draft's next `publish`; its
 `source_copied` is still the five its stage copied, beside the six the
 landing moved `base_copied` to, and the landing left it holding seven
-positions, its `own_count`:
+positions, its `own_count`, and is the last change to its arrangement,
+its `arranged_at` 14 beside the `at` 8 of its mint:
 
 <!-- wire: response doc_metadata_marked -->
 ```json
-{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"own_count":"7","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"arranged_at":14,"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"own_count":"7","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -1754,7 +1782,9 @@ Fields:
   positions — the document state the refused edit named, echoed, and
   the position the document's arrangement last changed at (§Arrangement,
   the typed state), the state a writer reads again before placing its
-  text afresh.
+  text afresh — served ahead of any write as `doc_metadata`'s
+  `arranged_at` of the address the edit names, or of the bare document
+  for a deposit naming an older member (§The response envelope).
   Span faults: `not_ordinal_level`, `not_level_uniform`,
   `start_not_zero_free`, `start_too_shallow`. On the publication's two
   re-window refusals, `kept_place_moved` and `stray_place_unrecorded`,
@@ -2672,7 +2702,10 @@ pointwise pair, `project` and
 `discoverable_from`, which read the link against the arrangement a
 reader of `d` sees, so a projection's V-coordinates are the head's, as
 `image`'s are; `version` of a bare address shares the head's
-arrangement. Daughters never float: the bare address is the trunk's.
+arrangement; and `doc_metadata`'s `arranged_at` is the head's entry —
+when the text a reader of the bare address reads last changed — though
+its `own_count` does not float (below). Daughters never float: the bare
+address is the trunk's.
 A VERSION address answers its own member, forever. A memberless
 published document answers its own arrangement — the pin taken here:
 until the first shot, the document's pre-chain arrangement (the home's
@@ -3716,6 +3749,11 @@ it records none;
 `own_count` is the address named's own content count, never floated —
 for a published document with versions, the count of what it held
 before version 1, which `image` and `compare` read with `own`;
+`arranged_at` is the position the text a reader of the address named
+reads last changed at, the one member that floats — for a published
+document with versions, its newest version's — and the entry an edit
+landing in that text is checked against (§Arrangement, the typed state),
+`null` where the board keeps none;
 `at`, `time` and `time_from` are the age of the address named — the
 position of the commit that minted it, kept in the board's state, and
 the daemon's testimony of when it committed (§The response envelope,
@@ -3792,15 +3830,22 @@ every response names where it sits), so a writer passes back the `as_of`
 of the read its text came from, raised by the `at` of each of its own
 acks on the document. The board keeps, per document, the position its
 content arrangement last changed at — a placement, a removal, a
-rearrangement, a shot or a `version` minting it — and refuses a frame
-whose `as_of` is below it `arrangement_moved` (§Rejection codes), behind
-`published_target` and ahead of every shape check, so a frame typed
-against an older arrangement meets the one code and never
-`out_of_bounds` for positions that were true when it was typed. A frame
-typed against the current state lands exactly as it did without the
-member. A frame without it is `malformed` (§The request envelope). A
-link write homed in the document — `make_link` and its kin — is not an
-arrangement change and never refuses the next edit.
+rearrangement, a shot, or a `version` or `stage` minting it — and
+refuses a frame whose `as_of` is below it `arrangement_moved`
+(§Rejection codes), behind `published_target` and ahead of every shape
+check, so a frame typed against an older arrangement meets the one code
+and never `out_of_bounds` for positions that were true when it was
+typed. A frame typed against the current state lands exactly as it did
+without the member. A frame without it is `malformed` (§The request
+envelope). A link write homed in the document — `make_link` and its kin
+— is not an arrangement change and never refuses the next edit.
+`doc_metadata` serves the position as `arranged_at` (§The response
+envelope), so a writer learns it before writing and a reader learns
+whether the text changed since a position it holds: asked of the
+address an edit names, it is the entry that edit is checked against —
+for a declared deposit, the entry of the arrangement it lands in, which
+for a deposit naming an older member is the head's, served for the bare
+document.
 
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first

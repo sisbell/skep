@@ -678,6 +678,61 @@ fn a_published_documents_arrangement_from_before_version_1_is_served_where_a_rea
     sd.shutdown();
 }
 
+/// When the text a reader reads last changed, over the wire (wire.md §The
+/// response envelope, `doc_metadata`'s `arranged_at`): a number, as `at` is,
+/// and `null` where the board keeps no entry. A fresh edition answers
+/// `null`, and its declared deposit's position once it takes one; once
+/// version 1 is published off it, the bare edition answers version 1's
+/// position — the head's, the text its readers read. `/op-at` at the
+/// deposit's position answers the deposit's, the world as it stood then,
+/// never a position the historical door restamps. A draft answers its last
+/// edit's position to its owner, and `/op-at` at an earlier edit that
+/// edit's.
+#[test]
+fn doc_metadata_serves_when_the_text_its_readers_read_last_changed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let arranged_at = |token: Option<&str>, at: Option<u64>, doc: &str| -> Value {
+        let frame = format!(r#"{{"doc":"{doc}","op":"doc_metadata"}}"#);
+        let v = match at {
+            Some(at) => op_at_ok(port, token, at, &frame),
+            None => op(port, token, &frame),
+        };
+        expect_resp(&v, "doc_metadata")["arranged_at"].clone()
+    };
+
+    let e = published_edition(port, &signed);
+    assert_eq!(arranged_at(None, None, &e), Value::Null, "born empty, never arranged");
+    let deposited = op(port, Some(&signed), &insert(&e, 1, "abc", true));
+    let (first, deposited_at) = (acked_addr(&deposited), acked_at(&deposited));
+    assert_eq!(arranged_at(None, None, &e), Value::from(deposited_at), "memberless: its own");
+    let published = op(port, Some(&signed), &publish(&e, None, None, &[run(&e, &first, 2)]));
+    let (v1, shot_at) = (acked_addr(&published), acked_at(&published));
+    assert_eq!(v1, format!("{e}.1"), "version 1");
+    assert_eq!(arranged_at(None, None, &e), Value::from(shot_at), "the head's, version 1's");
+    assert_eq!(arranged_at(None, None, &v1), Value::from(shot_at));
+    assert_eq!(
+        arranged_at(None, Some(deposited_at), &e),
+        Value::from(deposited_at),
+        "as of the deposit, the memberless edition's own"
+    );
+
+    let d = draft(port, &bare);
+    let inserted_at = acked_at(&op(port, Some(&bare), &insert(&d, 1, "xyz", false)));
+    let deleted_at = acked_at(&op(port, Some(&bare), &delete(&d, 1, 1)));
+    assert!(deleted_at > inserted_at);
+    assert_eq!(arranged_at(Some(&bare), None, &d), Value::from(deleted_at), "its last edit's");
+    assert_eq!(
+        arranged_at(Some(&bare), Some(inserted_at), &d),
+        Value::from(inserted_at),
+        "as of the insert, the insert's"
+    );
+    sd.shutdown();
+}
+
 /// PUB-2.49 on the POINTWISE PAIR (wire.md §Head-float, as built since
 /// `32b70bc`; owner 2026-09-25): `project` and `discoverable_from` on a bare
 /// published address answer the HEAD member's arrangement — the link is read

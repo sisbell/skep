@@ -43,7 +43,8 @@ skep-content = { path = "../skep-content" }
 # `content_run_count` + `Run::iextent` behind `as_ordinal_vspan` assemble
 # editlink's successor (§4); `trunk_of`/`published_target`/`birth_version`,
 # `birth_extent`/`shot_terms` and `Caller` for the door and the publication
-# reads.
+# reads, and `reading_surface` for the one doc-metadata member that floats,
+# `arranged_at`.
 skep-arrangement = { path = "../skep-arrangement" }
 # M6 — the seven content/provenance queries over M10's snapshot, and the one
 # producer of FaultSite's `operand`, `region` and `fault` (§5); the site's

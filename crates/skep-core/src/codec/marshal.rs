@@ -757,9 +757,13 @@ pub(super) fn j_response(r: &Response) -> Value {
         // the content count of the address named's own arrangement, a
         // decimal string, never null and never floated: for a bare published
         // document whose chain has a member, the count of the arrangement it
-        // held before its first version. `at`, `time` and `time_from` are
-        // the age of the address named, as `link_value` carries a link's:
-        // the mint position off the world's map, null for an address a build
+        // held before its first version. `arranged_at` is the position the
+        // arrangement a reader of the address named reads last changed at, a
+        // number as `at` is, null where the board keeps no entry — the one
+        // member that floats: for a bare published document whose chain has
+        // a member, its trunk head's. `at`, `time` and `time_from` are the
+        // age of the address named, as `link_value` carries a link's: the
+        // mint position off the world's map, null for an address a build
         // before it minted; the time and its source null together where no
         // testimony holds a reading.
         Response::DocMetadata {
@@ -774,6 +778,7 @@ pub(super) fn j_response(r: &Response) -> Value {
             base_copied,
             merge,
             own_count,
+            arranged_at,
             at,
             time,
             as_of,
@@ -804,6 +809,7 @@ pub(super) fn j_response(r: &Response) -> Value {
                 ("base_copied", base_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("merge", merge.as_ref().map(j_marker).unwrap_or(Value::Null)),
                 ("own_count", j_nat(own_count)),
+                ("arranged_at", arranged_at.map(j_seq).unwrap_or(Value::Null)),
                 ("at", at.map(j_seq).unwrap_or(Value::Null)),
                 ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
                 ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),

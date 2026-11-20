@@ -24,8 +24,8 @@ use common::*;
 use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
     Deposit, Disposition, Endset, Op, OpKind, PrincipalId, PublishDeposits, PublishTarget,
-    RejectCode, Rejection, Run, SessionId, Shot, ShotRun, SlotArg, SuccessorSpec, VSpec,
-    MAX_SLOT_SPANS,
+    RejectCode, Rejection, Run, Seq, SessionId, SetArrangement, Shot, ShotRun, SlotArg,
+    SuccessorSpec, VSpec, Val, MAX_SLOT_SPANS,
 };
 use skep_links::MAX_SLOT_RESOLVE_STEPS;
 
@@ -1197,6 +1197,66 @@ fn an_edit_typed_against_an_older_arrangement_is_refused_with_both_positions_and
     assert!(landed_at > linked_at, "an insert typed before the link write lands after it");
     let rej = stale(Op::Delete { doc: d, p: vp(1, 1), width: nat(1), as_of: linked_at });
     assert_eq!(rej.site.and_then(|s| s.current), Some(landed_at), "the draft's position is the insert's, never the link's");
+}
+
+/// The typed state, served ahead of the write (skep #1109): `doc_metadata`
+/// answers as `arranged_at` the position the draft's arrangement last changed
+/// at. A fresh draft answers none; `insert3` moves it to the insert's
+/// position; a `make_link` homed in the draft leaves it there; a
+/// `set_arrangement` emptying the draft moves it to that write's. The served
+/// position is the one the check holds an edit to: an insert typed one below
+/// it is refused `arrangement_moved` with it as `current`, and the same insert
+/// typed at it lands and moves it again.
+#[test]
+fn doc_metadata_serves_the_position_an_edit_is_checked_against_and_a_link_moves_none() {
+    let fx = setup();
+    let arranged_at =
+        |doc: &Address| match ex(&fx.febe, fx.user, Op::DocMetadata { doc: doc.clone() }) {
+            skep_febe::Response::DocMetadata { arranged_at, .. } => arranged_at,
+            other => panic!("doc_metadata answers: {other:?}"),
+        };
+    let d = create_doc(&fx);
+    assert_eq!(arranged_at(&d), None, "never arranged since its mint");
+    let (_, inserted_at) = insert3(&fx, &d);
+    assert_eq!(arranged_at(&d), Some(inserted_at), "the insert's position");
+    let (_, linked_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::MakeLink {
+            home: d.clone(),
+            from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+            replaces: None,
+        },
+    ));
+    assert!(linked_at > inserted_at);
+    assert_eq!(arranged_at(&d), Some(inserted_at), "a link write homed in the draft moves nothing");
+    let emptying = SetArrangement { runs: vec![], head: None, base: None, merge: None };
+    let emptied_at = ack(ex(
+        &fx.febe,
+        fx.user,
+        Op::SetArrangement { doc: d.clone(), arrangement: emptying, as_of: linked_at },
+    ));
+    let served = arranged_at(&d).expect("the emptying write changed the arrangement");
+    assert_eq!(served, emptied_at, "the set_arrangement's position");
+    // The served position is the one the typed state is checked against.
+    let insert = |as_of: Seq| Op::Insert {
+        doc: d.clone(),
+        at: vp(1, 1),
+        values: vec![Val::new(vec![b'x'])],
+        deposit: Deposit::Undeclared,
+        as_of,
+    };
+    let rej = rejected(ex(&fx.febe, fx.user, insert(Seq(served.0 - 1))));
+    assert_eq!(rej.code, RejectCode::ArrangementMoved, "{rej}");
+    assert_eq!(
+        rej.site.and_then(|s| s.current),
+        Some(served),
+        "the refusal's current is the served position"
+    );
+    let (_, landed_at) = ack_addr(ex(&fx.febe, fx.user, insert(served)));
+    assert_eq!(arranged_at(&d), Some(landed_at), "the insert typed at it lands and moves it");
 }
 
 /// PUB-6.23 on `stage` (the staging act, B3-S10): a stage of a source the

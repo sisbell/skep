@@ -31,8 +31,8 @@
 //! families needs no transaction and is answered off the one snapshot the
 //! read dispatch pins; M10 composes three, the publication reads:
 //! [`Op::DocMetadata`] (M3's publication bit, owner and chain with M5's
-//! frozen birth extent, shot terms, fork source, draft base and own content
-//! count),
+//! frozen birth extent, shot terms, fork source, draft base, own content
+//! count and the arranged-at position of the arrangement a reader reads),
 //! [`Op::EditionClaims`]
 //! (the world's edition-claim class under the door's home rule) and
 //! [`Op::UniversalGrants`] (the grant fold's live universal index narrowed

@@ -1974,6 +1974,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base_copied: None,
                 merge: None,
                 own_count: n(5),
+                arranged_at: Some(Seq(7)),
                 at: Some(Seq(7)),
                 time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
@@ -1982,7 +1983,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         // A private draft the staging act minted off the member above: its
         // `source` the member copied with `source_copied` the five positions
         // the copy took, its `base` the member and `base_copied` the same
-        // five (the staging act, B3-S10).
+        // five (the staging act, B3-S10), its arrangement last changed by the
+        // stage that minted it.
         (
             "doc_metadata_unborn",
             Response::DocMetadata {
@@ -1997,6 +1999,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base_copied: Some(n(5)),
                 merge: None,
                 own_count: n(5),
+                arranged_at: Some(Seq(8)),
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(9),
@@ -2005,7 +2008,9 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         // A cross-owner fork: a fresh private document in another account,
         // born sharing the member `1.0.1.0.1.1` — its `source`, the five
         // positions its copy took its `source_copied` — with no base: a
-        // `version` records none.
+        // `version` records none. A build before the position map minted
+        // it, so the board keeps neither its mint position nor the position
+        // its arrangement last changed at.
         (
             "doc_metadata_fork",
             Response::DocMetadata {
@@ -2020,6 +2025,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base_copied: None,
                 merge: None,
                 own_count: n(5),
+                arranged_at: None,
                 at: None,
                 time: None,
                 as_of: Seq(9),
@@ -2028,7 +2034,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         // The staged draft above after a landing (skep #764): its base the
         // head the merge was composed on, and the marker beside it — the
         // sides, the head at the extent read, the landing's position — its
-        // `source_copied` the five its copy took, unmoved by the landing.
+        // `source_copied` the five its copy took, unmoved by the landing, and
+        // its arrangement last changed by the landing.
         (
             "doc_metadata_marked",
             Response::DocMetadata {
@@ -2048,6 +2055,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     at: Seq(14),
                 }),
                 own_count: n(7),
+                arranged_at: Some(Seq(14)),
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(15),
@@ -2180,6 +2188,12 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     for (answer, count) in [(&member, "5"), (&staged, "5"), (&fork, "5"), (&marked, "7")] {
         assert_eq!(answer["own_count"], Value::String(count.into()), "{answer}");
     }
+    // The arranged-at position: a JSON number where the board keeps an
+    // entry, as `at` is, and present and null where it keeps none.
+    for (answer, position) in [(&member, 7u64), (&staged, 8), (&marked, 14)] {
+        assert_eq!(answer["arranged_at"], Value::from(position), "{answer}");
+    }
+    assert!(fork.get("arranged_at").is_some_and(Value::is_null), "no entry kept: {fork}");
     // The landing's ack (skep #764): `head_moved` rides only where told.
     let acks: Vec<Value> = all_responses()
         .into_iter()

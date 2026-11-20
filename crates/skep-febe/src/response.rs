@@ -376,22 +376,21 @@ pub enum Response {
     /// extent where the draft was staged from a published surface and the
     /// source draft's count where it is an alternative, and it stays put when
     /// the draft's publications or landings move `base_copied`. `at` is the
-    /// position of the commit that minted the ADDRESS NAMED — a member answers its own mint,
-    /// the one member of this shape that does not project to the document —
-    /// kept in the world by M3's position map, and `None` where a build
-    /// before the map minted it; `time` is the transport's testimony of when
-    /// that position committed ([`MintTime`]), filled through
-    /// [`Response::mint_mut`]. Both are served to whoever may read the
-    /// address named, as `source` is. `base` and `base_copied` are the draft
-    /// base of the address named (the staging act, B3-S10; M5's
-    /// `draft_base`): the member or bare document the draft's next
-    /// publication lands after — recorded by the `stage` that minted it and
-    /// moved by every publication of the draft itself and every landing that
-    /// names a base, never by a shot keeping it (`keep_base`) — and the
-    /// extent the copy took
-    /// of it, both absent where the board records no base: a document minted
-    /// by `create_new_document` or `fork` and never published, an alternative
-    /// of a draft the board held no base for, a member, a trunk. `source` is
+    /// position of the commit that minted the address named — a member
+    /// answers its own mint, never its document's — kept in the world by
+    /// M3's position map, and `None` where a build before the map minted it;
+    /// `time` is the transport's testimony of when that position committed
+    /// ([`MintTime`]), filled through [`Response::mint_mut`]. Both are served
+    /// to whoever may read the address named, as `source` is. `base` and
+    /// `base_copied` are the draft base of the address named (the staging
+    /// act, B3-S10; M5's `draft_base`): the member or bare document the
+    /// draft's next publication lands after — recorded by the `stage` that
+    /// minted it and moved by every publication of the draft itself and
+    /// every landing that names a base, never by a shot keeping it
+    /// (`keep_base`) — and the extent the copy took of it, both absent where
+    /// the board records no base: a document minted by `create_new_document`
+    /// or `fork` and never published, an alternative of a draft the board
+    /// held no base for, a member, a trunk. `source` is
     /// answered for a `stage`d draft as for a `version`'s: the surface it
     /// was copied from. Both served to every reader of the draft, as `source`
     /// is. `merge` is the marker of the merge the draft carries (the landing
@@ -411,7 +410,28 @@ pub enum Response {
     /// copied from, and which `image` and a `compare` region read as named
     /// serve. `0` on most documents: a published document is born empty and
     /// takes words of its own only by a declared deposit before its first
-    /// version. Served as `source` is.
+    /// version. Served as `source` is. `arranged_at` is the position the
+    /// arrangement a reader of the address named reads last changed at —
+    /// M5's `arranged_at` of the `reading_surface` of the address named, the
+    /// one member of this shape that floats: a version member, a private
+    /// document and a memberless published document answer their own entry,
+    /// a bare published document whose chain has a member its trunk head's,
+    /// which a new head or a declared deposit landing in the head moves
+    /// (PUB-2.53, PUB-2.66). The entry is the commit position of the last
+    /// placement, removal, rearrangement or shot into that arrangement, or of
+    /// the `version` or `stage` that minted it, and a link write moves none:
+    /// a client holding a position `p` reads `arranged_at > p` as that text
+    /// changed since `p`, and `None` — a document never arranged since its
+    /// mint, a `fork`-minted one — as unchanged since its mint. It is the
+    /// position the typed-state check compares an edit's `as_of` with, for
+    /// an owner's in-place edit or `set_arrangement` of a draft and for a
+    /// declared deposit naming the bare document or its head (one naming an
+    /// older member is checked against the head): an edit typed below it
+    /// fails the check — refused `ArrangementMoved`, with it as the site's
+    /// `current`, unless a refusal standing ahead of the check answers first
+    /// — and `None` fails none. World data, as `at` is, so a front door that
+    /// restamps the answer's position ([`Response::as_of_mut`]) leaves it as
+    /// read. Served as `source` is.
     DocMetadata {
         /// The trunk document the argument projects to.
         doc: Address,
@@ -437,6 +457,9 @@ pub enum Response {
         merge: Option<Marker>,
         /// The content count of the address named's own arrangement.
         own_count: Nat,
+        /// The position the arrangement a reader of the address named reads
+        /// last changed at, where the board keeps one.
+        arranged_at: Option<Seq>,
         /// The position of the commit that minted the address named.
         at: Option<Seq>,
         /// The transport's testimony of when `at` committed.

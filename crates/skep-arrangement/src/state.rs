@@ -138,9 +138,11 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// touches the link run-list alone: a link write homed in a draft is not a
 /// change to the draft's arrangement. It is what the five in-place edits ask
 /// through [`arranged_at`](M5State::arranged_at) to refuse an edit typed
-/// against an older state of the document (`Vstream`'s `AsOf`), and it is
-/// state the checkpoint must carry: a journal replay re-derives it, but
-/// below the reclaim floor nothing else holds the position.
+/// against an older state of the document (`Vstream`'s `AsOf`) and what the
+/// doc-metadata read serves as `arranged_at`, asked of the arrangement a
+/// reader of the address named reads, and it is state the checkpoint must
+/// carry: a journal replay re-derives it, but below the reclaim floor
+/// nothing else holds the position.
 ///
 /// **The draft bases** (`draft_bases`; the staging act, B3-S10) are the
 /// seventh field, and the one two writes move: for every draft the
@@ -986,8 +988,10 @@ impl M5State {
     /// Answers the address named, as every read here does: asked of a bare
     /// published document with members it answers that document's own
     /// entry, never its trunk head's; a declared deposit's check asks for
-    /// the surface the deposit lands in. One map lookup, reading no run; the
-    /// position is `Copy`.
+    /// the surface the deposit lands in, and the doc-metadata read, which
+    /// serves the entry as `arranged_at`, for the
+    /// [`reading_surface`](crate::reading_surface) of the address it names.
+    /// One map lookup, reading no run; the position is `Copy`.
     pub fn arranged_at(&self, doc: &Address) -> Option<Seq> {
         self.arranged_at.get(doc).copied()
     }

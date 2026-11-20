@@ -694,9 +694,14 @@ pub enum Op {
     /// count of the arrangement it held before its first version (PUB-2.66).
     /// That count is a sum over the address's content runs, the one part of
     /// this answer whose cost grows with the document's fragmentation — what
-    /// the span-set read pays for its content extent. `doc` is a doc-argument
-    /// (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the consult,
-    /// PUB-6.12). It must
+    /// the span-set read pays for its content extent. Beside them it answers
+    /// the position the arrangement a reader of the address named reads last
+    /// changed at, the one part of the answer that floats (M5's
+    /// `arranged_at` of that arrangement, which `reading_surface` decides): a
+    /// bare published document whose chain has a member answers its trunk
+    /// head's (PUB-2.53), every other address its own. `doc` is a
+    /// doc-argument (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
+    /// consult, PUB-6.12). It must
     /// also be a registered document: unregistered, or any other tier, ⟹
     /// `DocNotRegistered` — M10's own refusal, like [`Op::EditionClaims`]'s,
     /// since this read composes its answer from more than one store and so

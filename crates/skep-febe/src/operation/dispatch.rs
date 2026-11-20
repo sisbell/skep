@@ -12,7 +12,7 @@
 // `m3()`/`m5()`/`links()`/`content()` methods the read arms call, so no
 // accessor trait is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
-use skep_arrangement::{published_target, trunk_of, AsOf, M5Rec};
+use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
@@ -790,7 +790,16 @@ where
             // of the address named, which never floats, so a bare published
             // document whose chain has a member answers the count of the
             // arrangement it held before its first version (PUB-2.66) — the
-            // one field here whose read walks runs.
+            // one field here whose read walks runs. The arranged-at position
+            // is the one field that floats: M5's `arranged_at` asked of the
+            // arrangement a reader of the address named reads, which
+            // `reading_surface` decides (PUB-2.49, PUB-2.50, PUB-2.53) — a
+            // version member, a private document and a memberless published
+            // document answer their own entry, a bare published document
+            // whose chain has a member its trunk head's. The float is asked
+            // behind the registration refusal, its precondition, and off this
+            // snapshot, so the entry is never above `as_of`. It takes no gate
+            // of its own: the head reads as its document does.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
@@ -805,6 +814,7 @@ where
                 // with (the landing lane): served to whoever reads the
                 // draft, as the base is.
                 let merge = standing.and_then(|b| b.merge.clone());
+                let arranged_at = world.m5().arranged_at(&reading_surface(m3, &doc));
                 let at = m3.minted_at(&doc);
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
@@ -822,6 +832,7 @@ where
                     base_copied,
                     merge,
                     own_count,
+                    arranged_at,
                     at,
                     time: None,
                     as_of,

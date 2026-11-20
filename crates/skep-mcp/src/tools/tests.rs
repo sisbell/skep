@@ -876,7 +876,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
         ("create_well_known_document", &["slot", "mint_home_first", "committed: false"]),
         ("set_arrangement", &["WHOLE", "head_moved", "fork_base_moved"]),
         ("line_numbers", &["masked", "range_not_present"]),
-        ("doc_metadata", &["base", "withheld"]),
+        ("doc_metadata", &["base", "withheld", "arranged_at"]),
         ("fetch", &[&mib, "not_a_cell"]),
         ("rearrange", &["THREE", "FOUR", "[b, c) then [a, b)", "[c, d), [b, c), [a, b)", "bad_cut_count", "\"adebc\"", "\"cbade\""]),
     ];

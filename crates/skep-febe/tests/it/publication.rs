@@ -15,10 +15,12 @@
 //! of every fence.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::common;
 
 use common::*;
+use skep_arrangement::HasM5;
 use skep_febe::{
     Address, Base, CompareRegion, DeliveryItem, Op, PublishDeposits, PublishTarget, RegionSpec,
     RejectCode, Run, SessionId, Shot, ShotRun, Spec, UniversalGrant, UniversalIndexRow, Val, FROM,
@@ -398,6 +400,69 @@ fn a_published_documents_arrangement_from_before_version_1_is_read_where_a_reque
         (nat(3), nat(3)),
         "the edition's own arrangement stays frozen; the head grows"
     );
+}
+
+/// WHEN THE TEXT A READER READS LAST CHANGED (skep #1109), on the
+/// doc-metadata read: `arranged_at` is the entry of the arrangement a reader
+/// of the address named reads (PUB-2.49, PUB-2.50, PUB-2.53). A fresh
+/// edition answers none; a deposit while memberless, its own entry. Once
+/// `Op::Version` mints its first member the edition answers that member's —
+/// the head's, never its own entry, which M5 still holds at the deposit — and
+/// a declared deposit naming the edition, landing in the head, moves both. A
+/// second `Op::Version` makes a new head: the edition and the new head answer
+/// its position, while the older member, a version address reading itself,
+/// keeps the deposit's — the one address where what its readers read and
+/// what a deposit naming it lands in are two arrangements.
+#[test]
+fn doc_metadata_says_when_the_arrangement_its_readers_read_last_changed() {
+    let kernel = kernel();
+    let fx = fixture_on(surface_over(Arc::clone(&kernel)));
+    let arranged_at =
+        |doc: &Address| match ex(&fx.febe, fx.user, Op::DocMetadata { doc: doc.clone() }) {
+            skep_febe::Response::DocMetadata { arranged_at, .. } => arranged_at,
+            other => panic!("doc_metadata answers: {other:?}"),
+        };
+    let own_entry = |doc: &Address| kernel.snapshot().world().m5().arranged_at(doc);
+    let edition = create_edition(&fx);
+    assert_eq!(arranged_at(&edition), None, "born empty and never arranged");
+    let (_, deposited_at) = deposit3(&fx, &edition);
+    assert_eq!(arranged_at(&edition), Some(deposited_at), "memberless: its own entry");
+    let version = |fx: &Fixture| {
+        ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None }))
+    };
+    let (first, first_at) = version(&fx);
+    assert_eq!(
+        (arranged_at(&edition), arranged_at(&first)),
+        (Some(first_at), Some(first_at)),
+        "the head's entry"
+    );
+    assert_eq!(own_entry(&edition), Some(deposited_at), "the edition's own entry, frozen");
+    // A declared deposit naming the edition lands in the head.
+    let (_, landed_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: edition.clone(),
+            at: vp(1, 4),
+            values: vec![Val::new(vec![b'd'])],
+            deposit: declared(),
+            as_of: head(&fx),
+        },
+    ));
+    assert_eq!(
+        (arranged_at(&edition), arranged_at(&first)),
+        (Some(landed_at), Some(landed_at)),
+        "the deposit moved the head"
+    );
+    // A second version: a new head, and the first member pinned.
+    let (second, second_at) = version(&fx);
+    assert_eq!(
+        (arranged_at(&edition), arranged_at(&second)),
+        (Some(second_at), Some(second_at)),
+        "the new head's entry"
+    );
+    assert_eq!(arranged_at(&first), Some(landed_at), "an older member reads itself");
+    assert_eq!(own_entry(&edition), Some(deposited_at), "and the edition's own stays put");
 }
 
 /// PUB-8.46 and the registration refusal M10 ORIGINATES: the two publication

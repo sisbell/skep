@@ -15,7 +15,9 @@
 //!   draft the board records a base for, that base with the extent its copy
 //!   took (`M5State::draft_base`; the staging act, B3-S10), and for every
 //!   address its own content count, never floated (`M5State::content_count`;
-//!   PUB-2.66);
+//!   PUB-2.66), and the position the arrangement its readers read last
+//!   changed at, the one member that floats (`M5State::arranged_at` of the
+//!   arrangement `reading_surface` names; PUB-2.53);
 //! * [`Op::EditionClaims`] takes the world's edition-claim class and keeps
 //!   the rows whose home the caller reads — [`require_registered_document`]
 //!   is the refusal that bounds it;

@@ -1,8 +1,9 @@
 //! The pure core of the merge — the merge record's §7 `compose_runs`.
 //!
-//! A base and its sides come in as run lists, as `image` delivers them; the
-//! merged list, the gap report and the run counts go out; every value read
-//! is made through a closure the caller supplies, so a test needs no board.
+//! A base and its sides come in as run lists, as `image` delivers them,
+//! with the document the merge lands on; the merged list, the gap report
+//! and the run counts go out; every value read is made through a closure
+//! the caller supplies, so a test needs no board.
 //! The record's §1.4 states the composition in seven steps, and the seven
 //! private functions `removals`, `spine_of`, `additions`, `placement`,
 //! `gaps`, `splice` and `report` are those steps in that order, with
@@ -390,7 +391,13 @@ pub enum InPlaceOp {
 /// `base` is the base's run list — a member's, or the document's own
 /// arrangement from before its first version, empty on most documents — and
 /// each side its own, every list as `image` delivers it, the sides in
-/// commit order. `spine_hint` names
+/// commit order. `doc` is the trunk the merge lands on, the bare document
+/// named as the origin of every run of its own text (`origin_of`). The
+/// document's chain is that text and every origin the base holds, whatever
+/// the base holds — an empty base included — and the order rule puts a
+/// group whose first run is in the chain before every group whose first run
+/// is not: a window onto a document the base holds nothing of, a draft's
+/// fresh text, a fork's (merge record §2 R1; skep #1115). `spine_hint` names
 /// the side whose order the spine takes where the sides disagree about the
 /// order of the surviving base material; `None` computes it — the base's
 /// order, or the one side's that reordered, or the reorders of two or more
@@ -423,30 +430,35 @@ pub enum InPlaceOp {
 /// Panics in a debug build on a run of width 0.
 pub fn compose_runs(
     base: &[Run],
+    doc: &Address,
     sides: &[(SideIx, Vec<Run>)],
     spine_hint: Option<SideIx>,
     options: &Options,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> Composed {
     let r = Refinement::of(base, sides);
+    let chain = r.chain(doc);
     let mut seqs = r.sides.clone();
     if options.retype {
         undo_retypes(&r, &mut seqs, values);
     }
     claim_identities(&r, &mut seqs);
     let hint = spine_hint.and_then(|h| r.side_ix.iter().position(|s| *s == h));
-    let first = walk(&r, &seqs, hint, None, options, values);
+    let first = walk(&r, &chain, &seqs, hint, None, options, values);
     if hint.is_none() {
         if let Some((side, by)) = moves_choice(&r, &first, &options.resolutions) {
-            return walk(&r, &seqs, Some(side), Some(by), options, values);
+            return walk(&r, &chain, &seqs, Some(side), Some(by), options, values);
         }
     }
     first
 }
 
 /// Runs the seven steps over the normalized sequences under one spine choice.
+///
+/// `chain` is the document's chain, as `Refinement::chain` reads it.
 fn walk(
     r: &Refinement,
+    chain: &HashSet<usize>,
     seqs: &[Vec<usize>],
     hint: Option<usize>,
     forced: Option<ResolvedBy>,
@@ -460,7 +472,7 @@ fn walk(
     let stretches = additions(seqs, &in_base);
     let placed = placement(r, &stretches, &removed_by, &removed, &spine, &spine_pos);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
-    let (mut entries, applied) = gaps(r, &stretches, &placed, &regions, moves.len(), options, values);
+    let (mut entries, applied) = gaps(r, chain, &stretches, &placed, &regions, moves.len(), options, values);
     let ignored = resolve(r, &mut entries, &mut moves, &options.resolutions, &in_base, &spine_pos);
     let runs = splice(r, &entries, &spine);
     let gaps = report(r, &entries, &moves, &spine);
@@ -611,6 +623,18 @@ impl Refinement {
             origins,
             frags,
         }
+    }
+
+    /// Returns the interned origins of the document's chain.
+    ///
+    /// They are `doc`, the trunk whose own text names it as its origin, and
+    /// every origin the base holds, whatever the base holds — so an empty
+    /// base still leaves the document's own text in the chain (merge record
+    /// §2 R1; skep #1115).
+    fn chain(&self, doc: &Address) -> HashSet<usize> {
+        let mut chain: HashSet<usize> = self.base.iter().map(|&f| self.frags[f].origin).collect();
+        chain.extend(self.origins.iter().position(|o| o == doc));
+        chain
     }
 
     /// Returns each fragment's index in the base, where it is the base's.
@@ -1163,9 +1187,12 @@ struct Entry {
 /// no gap or an `anchor`; the collisions at one spine gap are one
 /// `collision` gap, a region no side filled listed too; then the dedup
 /// where it is on. The gaps are numbered here, in M's order after the
-/// `moves` gaps, so the dedup can name the gap it fired at.
+/// `moves` gaps, so the dedup can name the gap it fired at. `chain` is the
+/// document's chain the order rule reads.
+#[allow(clippy::too_many_arguments)]
 fn gaps(
     r: &Refinement,
+    chain: &HashSet<usize>,
     stretches: &[Stretch],
     placed: &[Placed],
     regions: &[Region],
@@ -1220,9 +1247,11 @@ fn gaps(
     }
     // The order rule: a spot two sides added at is an `order` gap where it
     // would otherwise be no gap or an `anchor`, the groups by the commit of
-    // their first run — inside one chain the address order, a side whose
-    // material is not the base's chain last.
-    let chain: HashSet<usize> = r.base.iter().map(|&f| r.frags[f].origin).collect();
+    // their first run — inside the document's chain the address order, a
+    // group whose first run lies outside it last. The chain is the
+    // document's own text and every origin the base holds, so over an empty
+    // base the document's text still comes before a window onto a document
+    // addressed below it (skep #1115).
     for entry in entries.iter_mut() {
         entry.groups.sort_by_key(|g| {
             let first = r.frags[g.frags[0]];

@@ -1978,7 +1978,7 @@ pub(super) fn read_shape(
             }
         }
     };
-    let composed = compose_runs(&base_runs, &side_runs, None, options, &values);
+    let composed = compose_runs(&base_runs, doc, &side_runs, None, options, &values);
     if let Some(e) = fault.into_inner() {
         return Err(e);
     }

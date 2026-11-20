@@ -1,9 +1,10 @@
 //! The merge's unit suite: the merge record's §9 vectors, each row one
 //! test over `compose_runs` with the row's literal runs, asserting M as
 //! runs, the gap kinds, the `settled` flags and the value log as the table
-//! stands after the rulings, beside a base of no positions and the base a
-//! side begun before the first version was begun from; the resolutions,
-//! one per unsettled kind; the
+//! stands after the rulings, beside a base of no positions, the base a side
+//! begun before the first version was begun from and the document's chain
+//! the order rule reads whatever the base holds; the resolutions, one per
+//! unsettled kind; the
 //! record's re-statement of them as a law over every place a gap is moved
 //! to; the fences the module promises; the one rule as a property over
 //! generated inputs; `base_of` over §1.2's address forms; `script` over
@@ -13,7 +14,9 @@
 //! The notation is the record's: `(D,s,w)` is the run of `w` positions of
 //! `D` from `D·s`; the base `D.2` is `[(D,1,11)]` "the cat sat" — `D·1–4`
 //! "the ", `5–7` "cat", `8–11` " sat"; A's fresh identity takes `D·12…`,
-//! B's the ordinals after it.
+//! B's the ordinals after it. `(T,s,w)` is a run of `T`, a trunk addressed
+//! above `D`, in the cells where a window onto `D` meets the trunk's own
+//! text.
 
 use std::collections::BTreeSet;
 
@@ -44,9 +47,19 @@ fn f() -> Address {
     addr("1.0.2.0.1")
 }
 
+/// `T`, a trunk addressed above `D` and `Z`.
+fn t() -> Address {
+    addr("1.0.1.0.70")
+}
+
 /// `(D,s,w)`.
 fn rd(s: u64, w: u64) -> Run {
     Run::new(d(), s, w)
+}
+
+/// `(T,s,w)`.
+fn rt(s: u64, w: u64) -> Run {
+    Run::new(t(), s, w)
 }
 
 /// `D·n`, the address of the document's position `n`.
@@ -88,7 +101,23 @@ fn text(table: &'static [(u64, &'static str)]) -> impl Fn(SideIx, &Run) -> Optio
 }
 
 fn compose(base: &[Run], sides: &[(SideIx, Vec<Run>)]) -> Composed {
-    compose_runs(base, sides, None, &Options::default(), &unread)
+    compose_runs(base, &d(), sides, None, &Options::default(), &unread)
+}
+
+/// Composes onto the trunk `T` under `values`, the defaults otherwise.
+///
+/// # Panics
+///
+/// Panics unless `D` is addressed below `T`: the premise of every cell that
+/// windows `D` into `T`, without which the address order alone would put
+/// `T`'s text first.
+fn compose_t(
+    base: &[Run],
+    sides: &[(SideIx, Vec<Run>)],
+    values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+) -> Composed {
+    assert!(d() < t(), "the premise: `D` is addressed below the trunk `T`");
+    compose_runs(base, &t(), sides, None, &Options::default(), values)
 }
 
 fn runs(c: &Composed) -> Vec<Run> {
@@ -223,13 +252,13 @@ fn case_f_prime_with_retype_on_keeps_the_base_identity() {
     let values = text(&[(1, "the cat sat"), (12, "cat"), (16, "-")]);
     let options = Options { retype: true, ..Options::default() };
     let sides = two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 5), rd(16, 1), rd(6, 6)]);
-    let c = compose_runs(&base(), &sides, None, &options, &values);
+    let c = compose_runs(&base(), &d(), &sides, None, &options, &values);
     assert_eq!(runs(&c), vec![rd(1, 5), rd(16, 1), rd(6, 6)], "the c-at sat");
     assert_eq!(kinds(&c), vec![]);
     assert_eq!(c.values, ValueLog { dedup: true, retype: true, applied: vec![] });
     // The retype is undone only where the bytes are equal.
     let other = text(&[(1, "the cat sat"), (12, "dog"), (16, "-")]);
-    let c = compose_runs(&base(), &sides, None, &options, &other);
+    let c = compose_runs(&base(), &d(), &sides, None, &options, &other);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 3), rd(16, 1), rd(8, 4)]);
     assert_eq!(kinds(&c), vec![(GapKind::Corner, false)]);
 }
@@ -241,7 +270,7 @@ fn case_f_prime_with_retype_on_keeps_the_base_identity() {
 fn case_g_the_same_words_added_by_both_are_kept_once_under_dedup() {
     let values = text(&[(1, "the cat sat"), (12, "big "), (16, "big ")]);
     let sides = two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]);
-    let c = compose_runs(&base(), &sides, None, &Options::default(), &values);
+    let c = compose_runs(&base(), &d(), &sides, None, &Options::default(), &values);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 4), rd(5, 7)], "the big cat sat");
     assert_eq!(kinds(&c), vec![(GapKind::Order, true)]);
     assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Rule));
@@ -257,11 +286,11 @@ fn case_g_with_dedup_off_keeps_both_and_never_coalesces_on_value() {
     let values = text(&[(1, "the cat sat"), (12, "big "), (16, "big "), (17, "big ")]);
     let options = Options { dedup: false, ..Options::default() };
     let a = vec![rd(1, 4), rd(12, 4), rd(5, 7)];
-    let c = compose_runs(&base(), &two(a.clone(), vec![rd(1, 4), rd(16, 4), rd(5, 7)]), None, &options, &values);
+    let c = compose_runs(&base(), &d(), &two(a.clone(), vec![rd(1, 4), rd(16, 4), rd(5, 7)]), None, &options, &values);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 8), rd(5, 7)], "the big big cat sat");
     assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
     assert_eq!(c.values, ValueLog { dedup: false, retype: false, applied: vec![] });
-    let c = compose_runs(&base(), &two(a, vec![rd(1, 4), rd(17, 4), rd(5, 7)]), None, &options, &values);
+    let c = compose_runs(&base(), &d(), &two(a, vec![rd(1, 4), rd(17, 4), rd(5, 7)]), None, &options, &values);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 4), rd(17, 4), rd(5, 7)], "equal bytes, apart: two runs");
     assert_eq!(c.counts.m, 4);
 }
@@ -313,8 +342,9 @@ fn case_i_prime_an_atom_replaced_on_both_sides_is_a_collision() {
 
 /// (j) a fork merged back, as the composition serves it: A's "big " at
 /// `D·4|D·5`, F's "dog" for `5–7` — an `anchor` for A's, its right anchor
-/// gone, settled; F's group last, not in the chain. The fork's base is the
-/// reads' to find (its served source); the core composes the pair as any.
+/// gone, settled; F's "dog" at its own spot, after A's by the base order of
+/// their anchors (`D·5` before `D·8`). The fork's base is the reads' to
+/// find (its served source); the core composes the pair as any.
 #[test]
 fn case_j_a_fork_merged_back_composes_with_the_fork_last() {
     let dog = Run::new(f(), 1, 3);
@@ -356,6 +386,69 @@ fn an_empty_base_takes_both_texts_in_one_order_gap() {
     assert_eq!(runs(&c), vec![rd(1, 7), rd(20, 7)]);
     assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
     assert_eq!(anchors(&c), vec![(None, None)], "between the document's two ends");
+    assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
+}
+
+/// THE DOCUMENT'S CHAIN over a base of no positions (skep #1115; R1): the
+/// head's "the fox" (`T·1–7`), the trunk's own text, and the side's window
+/// onto `D` both add at the one spot — the head's first, its text in the
+/// chain whatever the base holds, where by address alone the window would
+/// lead: ONE `order` gap, unsettled.
+#[test]
+fn an_empty_base_puts_the_documents_own_text_before_a_window_addressed_below_it() {
+    let c = compose_t(&[], &two(vec![rt(1, 7)], vec![rd(1, 7)]), &unread);
+    assert_eq!(runs(&c), vec![rt(1, 7), rd(1, 7)], "the trunk's text, then the window");
+    assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
+    assert_eq!(anchors(&c), vec![(None, None)], "between the document's two ends");
+    assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
+}
+
+/// The same words on both sides over a base of no positions, dedup on
+/// (skep #1115; §5 (g)): "the fox" kept once, the trunk's own identity —
+/// the one already in the chain, the group R1 lists first — the gap
+/// settled by the value rule and the window's copy listed, not placed.
+#[test]
+fn an_empty_base_keeps_the_documents_own_identity_where_a_window_says_the_same() {
+    let fox = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+        (run.i_start..run.reach())
+            .map(|n| b"the fox".get(usize::try_from(n.checked_sub(1)?).ok()?).map(|b| vec![*b]))
+            .collect()
+    };
+    let c = compose_t(&[], &two(vec![rt(1, 7)], vec![rd(1, 7)]), &fox);
+    assert_eq!(runs(&c), vec![rt(1, 7)], "the fox, once");
+    assert_eq!(kinds(&c), vec![(GapKind::Order, true)]);
+    assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Rule));
+    assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0)]));
+    assert_eq!(gap_runs(&c), vec![vec![(0, rt(1, 7)), (1, rd(1, 7))]], "the dropped copy is listed");
+    assert_eq!(c.values.applied, vec![GapId(1)]);
+}
+
+/// The chain before the address (R1): over a base holding the trunk's
+/// "the " (`T·1–4`), the head adds "fox" (`T·5–7`) and the side a window
+/// onto `D` at the one spot after it — the head's first though `D` is
+/// addressed below `T`, as the order rule reads whether a group's first run
+/// is in the chain before it reads any address.
+#[test]
+fn the_order_rule_reads_the_chain_before_the_address() {
+    let c = compose_t(&[rt(1, 4)], &two(vec![rt(1, 4), rt(5, 3)], vec![rt(1, 4), rd(1, 3)]), &unread);
+    assert_eq!(runs(&c), vec![rt(1, 7), rd(1, 3)], "the fox, then the window");
+    assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
+    assert_eq!(anchors(&c), vec![(Some(4), None)]);
+    assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
+}
+
+/// The document's own text is in the chain over a base holding none of it
+/// (skep #1115; R1): the base is a window onto `Z` alone, the head adds the
+/// trunk's own "fox" (`T·1–3`) after it and the side a window onto `D` at
+/// the same spot — the head's first, `T` in the chain though no base run
+/// names it.
+#[test]
+fn the_documents_own_text_is_in_the_chain_over_a_base_holding_none_of_it() {
+    let hello = Run::new(z(), 1, 5);
+    let sides = two(vec![hello.clone(), rt(1, 3)], vec![hello.clone(), rd(1, 3)]);
+    let c = compose_t(std::slice::from_ref(&hello), &sides, &unread);
+    assert_eq!(runs(&c), vec![hello, rt(1, 3), rd(1, 3)], "the base's window, the trunk's text, the side's window");
+    assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
 }
 
@@ -448,7 +541,7 @@ fn two_reorders_of_different_material_compose_without_a_gap() {
 #[test]
 fn the_spine_hint_picks_the_side_whose_order_the_spine_takes() {
     let sides = two(vec![rd(5, 7), rd(1, 4)], vec![rd(1, 7), rd(12, 4), rd(8, 4)]);
-    let c = compose_runs(&base(), &sides, Some(SideIx(1)), &Options::default(), &unread);
+    let c = compose_runs(&base(), &d(), &sides, Some(SideIx(1)), &Options::default(), &unread);
     assert_eq!(runs(&c), vec![rd(1, 7), rd(12, 4), rd(8, 4)]);
     assert_eq!(kinds(&c), vec![(GapKind::Moves, false)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1)]));
@@ -471,7 +564,7 @@ fn a_fresh_identity_two_sides_hold_is_placed_once() {
 fn an_order_gap_takes_the_mergers_order() {
     let sides = two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]);
     let options = resolve(1, Choice::Order(vec![SideIx(1), SideIx(0)]));
-    let c = compose_runs(&base(), &sides, None, &options, &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &options, &unread);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(16, 4), rd(12, 4), rd(5, 7)], "the fat big cat sat");
     assert_eq!(kinds(&c), vec![(GapKind::Order, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1), SideIx(0)]));
@@ -484,12 +577,12 @@ fn an_order_gap_takes_the_mergers_order() {
 #[test]
 fn a_collision_takes_keep_only_and_keep_both() {
     let sides = two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4), rd(16, 6), rd(8, 4)]);
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::KeepOnly(SideIx(1))), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::KeepOnly(SideIx(1))), &unread);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(16, 6), rd(8, 4)], "the kitten sat");
     assert_eq!(kinds(&c), vec![(GapKind::Collision, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1)]));
     assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Person));
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 3), rd(16, 6), rd(8, 4)]);
     assert_eq!(kinds(&c), vec![(GapKind::Collision, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
@@ -500,7 +593,7 @@ fn a_collision_takes_keep_only_and_keep_both() {
 #[test]
 fn a_cut_takes_a_before_placement() {
     let sides = two(vec![rd(5, 7), rd(1, 4)], vec![rd(1, 4), rd(12, 4), rd(5, 7)]);
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::Before(d_at(5))), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::Before(d_at(5))), &unread);
     assert_eq!(runs(&c), vec![rd(12, 4), rd(5, 7), rd(1, 4)], "fat cat satthe ");
     assert_eq!(kinds(&c), vec![(GapKind::Cut, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Before);
@@ -513,13 +606,13 @@ fn a_cut_takes_a_before_placement() {
 #[test]
 fn a_corner_takes_omit_and_a_placement() {
     let sides = two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)]);
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::Omit), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::Omit), &unread);
     assert_eq!(runs(&c), vec![rd(1, 4)], "the ");
     assert_eq!(kinds(&c), vec![(GapKind::Corner, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Omitted);
     assert_eq!(gap_runs(&c), vec![vec![(0, rd(12, 1))]], "the omitted run stays listed");
     assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Person));
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::Before(d_at(1))), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::Before(d_at(1))), &unread);
     assert_eq!(runs(&c), vec![rd(12, 1), rd(1, 4)], "Xthe ");
     assert_eq!(anchors(&c), vec![(None, Some(1))]);
 }
@@ -534,7 +627,7 @@ fn a_moves_gap_takes_the_other_sides_order() {
         resolutions: vec![Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: by.clone() }],
         ..Options::default()
     };
-    let c = compose_runs(&[rd(1, 3)], &sides, None, &options, &unread);
+    let c = compose_runs(&[rd(1, 3)], &d(), &sides, None, &options, &unread);
     assert_eq!(runs(&c), vec![rd(1, 1), rd(3, 1), rd(2, 1)], "B's order");
     assert_eq!(kinds(&c), vec![(GapKind::Moves, true)]);
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1)]));
@@ -550,14 +643,14 @@ fn a_resolution_on_a_settled_gap_is_ignored_and_reported() {
     let on_settled = Resolution { gap: GapId(1), choice: Choice::Omit, by: ResolvedBy::Person };
     let unknown = Resolution { gap: GapId(9), choice: Choice::Omit, by: ResolvedBy::Person };
     let options = Options { resolutions: vec![on_settled.clone(), unknown.clone()], ..Options::default() };
-    let c = compose_runs(&base(), &sides, None, &options, &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &options, &unread);
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 4), rd(8, 4)], "unchanged");
     assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
     assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Rule));
     assert_eq!(c.ignored, vec![on_settled, unknown]);
     // A choice the kind cannot take: `KeepBoth` at a one-sided corner.
     let sides = two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)]);
-    let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
+    let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
     assert_eq!(kinds(&c), vec![(GapKind::Corner, false)]);
     assert_eq!(c.ignored.len(), 1);
 }
@@ -577,7 +670,7 @@ fn a_move_and_an_order_compose_at_one_gap() {
             .iter()
             .map(|choice| Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person })
             .collect();
-        let c = compose_runs(&base(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+        let c = compose_runs(&base(), &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
         assert_eq!(runs(&c), vec![rd(1, 11), rd(16, 4), rd(12, 4)], "the cat satfat big : {choices:?}");
         assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1), SideIx(0)]), "{choices:?}");
         assert_eq!(anchors(&c), vec![(Some(11), None)], "{choices:?}");
@@ -663,8 +756,8 @@ fn a_record_recomposes_every_place_and_choice_its_merger_made() {
                         .map(|choice| Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person })
                         .collect();
                     let options = Options { resolutions: resolutions.clone(), ..Options::default() };
-                    let first = compose_runs(&base(), sides, None, &options, &unread);
-                    let again = compose_runs(&base(), sides, None, &recorded(&first).options(), &unread);
+                    let first = compose_runs(&base(), &d(), sides, None, &options, &unread);
+                    let again = compose_runs(&base(), &d(), sides, None, &recorded(&first).options(), &unread);
                     assert_eq!((runs(&again), &again.gaps), (runs(&first), &first.gaps), "{name}: {resolutions:?}");
                     moved += usize::from(anchors(&first) != unmoved);
                 }
@@ -692,7 +785,7 @@ fn vectors() -> Vec<(&'static str, Composed)> {
         ("e′", compose(&base(), &two(moved(), a()))),
         ("f", compose(&base(), &two(edit(), vec![rd(1, 7), rd(15, 1), rd(8, 4)]))),
         ("f′", compose(&base(), &two(edit(), vec![rd(1, 5), rd(16, 1), rd(6, 6)]))),
-        ("g", compose_runs(&base(), &two(a(), vec![rd(1, 4), rd(16, 4), rd(5, 7)]), None, &Options::default(), &same)),
+        ("g", compose_runs(&base(), &d(), &two(a(), vec![rd(1, 4), rd(16, 4), rd(5, 7)]), None, &Options::default(), &same)),
         ("h", compose(&base(), &two(vec![rd(1, 4), Run::new(z(), 1, 5), rd(5, 7)], vec![rd(1, 4), rd(8, 4)]))),
         ("i", compose(&base(), &two(vec![rd(1, 2), rd(12, 1), rd(4, 8)], vec![rd(1, 11)]))),
         ("i′", compose(&base(), &two(vec![rd(1, 2), rd(12, 1), rd(4, 8)], vec![rd(1, 2), rd(13, 1), rd(4, 8)]))),
@@ -3208,6 +3301,62 @@ mod scripted {
             "both texts at the one spot"
         );
         assert_eq!(merged.composed.counts, RunCounts { a: 1, b: 1, m: 2 });
+    }
+
+    /// THE DOCUMENT'S OWN TEXT LEADS a window onto a document addressed
+    /// below it, over any base (skep #1115; R1). Over `D`'s own arrangement,
+    /// empty: the daughter `D.1.2`, recorded against `D`, is a window onto
+    /// `DOC1`'s "an owl" — the head's "the fox jumps" first and the window
+    /// after it at the one spot, an unsettled `order` gap. Over the member
+    /// `D.1`, a window onto `Z` and none of `D`'s text: the head's own
+    /// " jumps" after it leads the daughter's window onto `DOC1` the same
+    /// way. The chain the composition reads is the document's, never the
+    /// base's address nor the head's.
+    #[test]
+    fn the_documents_own_text_comes_before_a_window_addressed_below_it_over_any_base() {
+        assert!(a(DOC1) < a(D), "the premise: `DOC1` is addressed below `D`");
+        let order = |merged: &Merged| -> Vec<(GapKind, bool, Placement)> {
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled, g.placed.clone())).collect()
+        };
+        let unsettled = vec![(GapKind::Order, false, Placement::Order(vec![SideIx(0), SideIx(1)]))];
+        let mut w = World::begun_before_version_1();
+        w.text(DOC1, 1, "an owl");
+        w.doc(DOC1, true, ACCOUNT, vec![run(DOC1, 1, 6)]);
+        w.member(&format!("{D}.1.2"), vec![run(DOC1, 1, 6)], Some(0));
+        w.bare_based(&format!("{D}.1.2"));
+        let (_dialer, board, _) = open(w);
+        let merged =
+            compose(&board, Some(&token()), &with_side(Side::Member(a(&format!("{D}.1.2")))))
+                .expect("composed");
+        assert_eq!(merged.key.base, a(D), "the document's own arrangement, empty");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 13), run(DOC1, 1, 6)],
+            "the fox jumps, then an owl"
+        );
+        assert_eq!(merged.families, vec![Family::Own, Family::Window]);
+        assert_eq!(order(&merged), unsettled, "both texts at the one spot");
+        let mut w = World::new();
+        w.text(Z, 1, "hello");
+        w.text(D, 1, " jumps");
+        w.text(DOC1, 1, "an owl");
+        w.doc(Z, true, ACCOUNT, vec![run(Z, 1, 5)]);
+        w.doc(DOC1, true, ACCOUNT, vec![run(DOC1, 1, 6)]);
+        let head = vec![run(Z, 1, 5), run(D, 1, 6)];
+        w.doc(D, true, ACCOUNT, head.clone());
+        w.member(&format!("{D}.1"), vec![run(Z, 1, 5)], None);
+        w.member(&format!("{D}.2"), head, Some(5));
+        w.member(&format!("{D}.1.1"), vec![run(Z, 1, 5), run(DOC1, 1, 6)], Some(5));
+        w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+        let (_dialer, board, _) = open(w);
+        let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
+        assert_eq!(merged.key.base, a(&format!("{D}.1")), "a member holding none of `D`'s text");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(Z, 1, 5), run(D, 1, 6), run(DOC1, 1, 6)],
+            "hello jumps, then an owl"
+        );
+        assert_eq!(order(&merged), unsettled, "both additions after the window");
     }
 
     /// EVERY LINE THAT ENDS AT THE DOCUMENT composes over it (skep #1113),

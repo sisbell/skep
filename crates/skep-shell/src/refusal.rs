@@ -396,16 +396,24 @@ impl Name {
     /// A side whose base the merge library cannot read (`client.md` §4b.1's
     /// merge row, `BaseUnknown{side}`).
     ///
-    /// The detail names the `side` and the `reason`: `base_unknown` — a
-    /// member of another document, a draft of another account's, a draft the
-    /// board records no base for or whose base lies in another chain, a fork
-    /// the board serves no source for or whose source lies in another chain
+    /// The detail names the `reason` and, beside every reason but
+    /// `base_disagrees`, the `side`: `base_unknown` — a member of another
+    /// document, a draft of another account's, a draft the board records no
+    /// base for or whose base lies in another chain, a fork the board serves
+    /// no source for or whose source lies in another chain
     /// (`skep_client::merge::Refusal::BaseUnknown`); `bare_source` with the
-    /// `source` — a draft staged, or a fork taken, from the bare document
-    /// before its first version, whose base is history the board does not
-    /// serve (`Refusal::BareSource`); `draft_base_disagrees` with `named` and
-    /// `served` (`Refusal::DraftBaseDisagrees`, never met by this shell,
-    /// which names no base).
+    /// `source`, the bare document, and the `hop` on the side's line
+    /// published from it where the side's own base or source is not — a
+    /// side begun from the document before its first version, while no
+    /// version of it stands, so there is nothing to merge onto, or where
+    /// the board serves no count of its arrangement from before that version
+    /// (`Refusal::BareSource`); `hop_unrecorded` with the `hop` on the
+    /// side's line the board records no base for, never taken from its
+    /// address (`Refusal::HopUnrecorded`); `draft_base_disagrees` with
+    /// `named` and `served` (`Refusal::DraftBaseDisagrees`) and
+    /// `base_disagrees` with `named` and `served`
+    /// (`Refusal::NamedBaseDisagrees`), each never met by this shell, which
+    /// names no base.
     pub const BASE_UNKNOWN: Name = Name("base_unknown");
     /// Two drafts off one head: no merge shape
     /// (`skep_client::merge::Refusal::TwoDrafts`); the way out is to shoot

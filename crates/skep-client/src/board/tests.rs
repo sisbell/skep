@@ -66,6 +66,9 @@ fn the_frames_spell_the_wire() {
 /// serializes to the example's line byte for byte, and the same op at
 /// another slot, `count_v_by_home` with its `except`, `line_numbers`
 /// (§Content & provenance reads) with both its lists, byte for byte,
+/// `image` and a `compare` region reading a document's own arrangement
+/// (`own`; §Link discovery reads, §Content & provenance reads), byte for
+/// byte,
 /// `rearrange` (§Arrangement) over three cuts, byte for byte,
 /// `copy` (§Arrangement) of one source span, byte for byte, `make_link`
 /// (§Links (writes)) with its `from` in the V-spec form, byte for byte,
@@ -111,6 +114,15 @@ fn the_builders_spell_the_wires_own_examples() {
     // the canonical empty lists where nothing is asked but the count.
     assert_eq!(frames::line_numbers("1.0.1.0.1", &[3], &[2, 9]).to_string(), r#"{"doc":"1.0.1.0.1","lines":["2","9"],"op":"line_numbers","positions":[{"ordinal":"3","subspace":"1"}]}"#);
     assert_eq!(frames::line_numbers("1.0.1.0.1", &[], &[]).to_string(), r#"{"doc":"1.0.1.0.1","lines":[],"op":"line_numbers","positions":[]}"#);
+    // The reads of a document's own arrangement (PUB-2.66): `image` and a
+    // `compare` region carrying `own`, each the example's own line, as the
+    // frame serializes; the plain forms carry no `own`.
+    assert_eq!(frames::image_own("1.0.1.0.1", 1, 3).to_string(), r#"{"d":"1.0.1.0.1","op":"image","own":true,"region":[{"start":"1.1","width":"0.3"}]}"#);
+    assert_eq!(
+        frames::compare(&[frames::region_own("1.0.1.0.1", 1, 3)], &[frames::region("1.0.1.0.64", 1, 3)]).to_string(),
+        r#"{"op":"compare","rho1":[{"doc":"1.0.1.0.1","own":true,"spans":[{"start":"1.1","width":"0.3"}]}],"rho2":[{"doc":"1.0.1.0.64","spans":[{"start":"1.1","width":"0.3"}]}]}"#
+    );
+    assert!(frames::image("1.0.1.0.1", 1, 3).get("own").is_none() && frames::region("1.0.1.0.1", 1, 3).get("own").is_none(), "no `own` where none is asked");
     // The move by identity: the example's own line, as the frame serializes.
     assert_eq!(
         frames::rearrange("1.0.1.0.1", &[1, 3, 6], 7, None).to_string(),

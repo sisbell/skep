@@ -6,16 +6,19 @@
 //! `client.md` §2.1 lists the thirteen it stands beside, none touching
 //! content — this one does, which is why the library's `merge` feature is
 //! on for this crate alone. The board, the document and one side are named
-//! — an alternative member; a draft, read at the board's head, whose base is
-//! the member the board records it was staged from (`doc_metadata`'s
-//! `base`, read by the library; `--base` names it only to be checked, and
-//! one the board's record does not derive is refused), the report's `sides`
-//! carrying the position the draft was read at, which a verifier reads the
-//! draft and its recorded base as of; or a fork of one of the document's
-//! published versions, whose base is the source the board serves for it
-//! (`doc_metadata`'s `source`) — a draft staged from, or a fork taken from,
-//! the bare document before its first version is refused with that reason —
-//! and the head where the feed walk should not supply it; the
+//! — an alternative member; a draft, read at the board's head, whose base
+//! the library derives from the base the board records it was staged from
+//! (`doc_metadata`'s `base`), up the bases the board recorded for each
+//! member on its line, never from an address (`--base` names it only to be
+//! checked, and one the board's records do not derive is refused), the
+//! report's `sides` carrying the position the draft was read at, which a
+//! verifier reads the draft and its recorded base as of; or a fork of the
+//! document, whose base is derived so from the source the board serves for
+//! it (`doc_metadata`'s `source`) — a side begun from the bare document
+//! before its first version, a draft or a fork unpublished or a member
+//! published beside version 1, composing over the document's own
+//! arrangement from before that version, the report's `base` the document
+//! itself — and the head where the feed walk should not supply it; the
 //! command composes the merge under the rules — every read at one board
 //! position, the report's `as_of` — and prints the `Merged` report as one
 //! JSON document on stdout, exit 0. With `--publish` it lands the merge as

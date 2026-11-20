@@ -248,6 +248,17 @@ pub fn image(doc: &str, from: u64, width: u64) -> Value {
     json!({"op": "image", "d": doc, "region": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
 }
 
+/// Builds `image` with `own: true` over content ordinals `from ..` of `doc`.
+///
+/// It reads `doc`'s own arrangement, never floated to a head (wire.md §Link
+/// discovery reads, `image`; PUB-2.66): for a published document with
+/// versions, the arrangement it held before version 1, which
+/// `doc_metadata`'s `own_count` counts; on every other document the answer
+/// [`image`] gives.
+pub fn image_own(doc: &str, from: u64, width: u64) -> Value {
+    json!({"op": "image", "d": doc, "own": true, "region": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
+}
+
 /// The room one position of a `retrieve_i` answer takes, its address apart.
 ///
 /// An `i_delivery` answer carries one item a position asked, never
@@ -456,6 +467,17 @@ pub fn universal_grants() -> Value {
 /// It covers content ordinals `from ..` of `doc`, `width` of them.
 pub fn region(doc: &str, from: u64, width: u64) -> Value {
     json!({"doc": doc, "spans": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
+}
+
+/// Builds one region of a `compare` operand carrying `own: true`.
+///
+/// It covers content ordinals `from ..` of `doc`'s own arrangement, never
+/// floated to a head (wire.md §Content & provenance reads, `compare`;
+/// PUB-2.66), `width` of them: for a published document with versions, the
+/// arrangement it held before version 1; on every other document what
+/// [`region`] covers.
+pub fn region_own(doc: &str, from: u64, width: u64) -> Value {
+    json!({"doc": doc, "own": true, "spans": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
 }
 
 /// Builds `{"op":"compare","rho1":[…],"rho2":[…]}`.

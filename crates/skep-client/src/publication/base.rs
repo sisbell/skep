@@ -125,7 +125,8 @@ pub enum Standing {
     /// not move — a draft begun before any version, published beside
     /// version 1.
     SupersededFirst {
-        /// `doc`'s first member, `⟨doc⟩.1`, the daughter's parent.
+        /// `doc`'s first member, `⟨doc⟩.1`: the member the daughter's
+        /// address lies under, its recorded base (`shot_base`) being `doc`.
         first: Address,
     },
 }

@@ -38,19 +38,27 @@
 //! it was composed on — written with no base and no marker, the fork being
 //! no staged draft — else refuses `fork_base_moved` with nothing written,
 //! the way on a fresh draft staged from the head. The head is the trunk's
-//! head as the board stands, read up the trunk from the member the side
-//! lies under — a daughter's parent, a draft side's recorded base, a
-//! fork's source — by the library's head read
+//! head as the board stands, read up the trunk from where the side starts
+//! — the trunk member a daughter's address, a draft side's recorded base or
+//! a fork's source lies under — by the library's head read
 //! (`skep_client::publication::standing`): the members past it by
 //! doubling, then a binary search, which needs no feed walk and meets no
-//! retention floor. A board answering every member the doubling asks
-//! refuses the row `shape` naming `doc_metadata` after 64 reads, nothing
-//! composed or landed (SP-17). A draft side or a fork lying under no member
-//! is refused before that read as the library refuses it: `base_unknown`
-//! with `reason` `bare_source` naming `doc` where the draft is the
-//! owner's, staged from the bare document before its first version —
-//! whether or not one stands since — or where the fork, of any account,
-//! was taken from the bare document so; else with `reason` `base_unknown`.
+//! retention floor. A draft side the owner's account staged from the bare
+//! document, or a fork of any account taken from it, starts at `doc`
+//! itself: its head is read up from `doc`'s first member, and where no
+//! version stands yet the side is refused `base_unknown` with `reason`
+//! `bare_source` naming `doc`, nothing to merge onto. A board answering
+//! every member the doubling asks refuses the row `shape` naming
+//! `doc_metadata` after 64 reads, nothing composed or landed (SP-17).
+//! Another account's draft staged from the bare document, and a draft or a
+//! fork lying in no member of `doc`'s chain, is refused before that read as
+//! the library refuses it, `base_unknown` with `reason` `base_unknown`.
+//! Where a side starts names no base: the library derives the base from
+//! the bases the board recorded up the side's line, so a side begun before
+//! the document's first version — a daughter published beside version 1,
+//! or a draft or a fork still unpublished — composes over the document's
+//! own arrangement from before that version, the report's `base` `doc`
+//! itself, and the texts written apart meet in an `order` gap.
 //! THE RE-OPEN: where the marker on `into` names this daughter — or, at
 //! the draft side, this draft, at the fork side this fork — the draft
 //! already carries this merge: the report with NOTHING LANDED, composed on
@@ -237,7 +245,8 @@
 //!
 //! **The refusals** cross as typed data: the library's own by name where
 //! the contract names one — `unreadable {doc}`, `no_such_document {doc}`,
-//! `base_unknown {side, reason}`, `two_drafts`, `over_cap {n, cap}`,
+//! `base_unknown {reason, …}` (the members each reason names, `side` beside
+//! all but `base_disagrees`), `two_drafts`, `over_cap {n, cap}`,
 //! `not_owner {addr}`, `no_merge`, `nothing_to_undo {draft, why}` — the
 //! rest under `merge_refused {arm, …}`; the board's verdicts verbatim,
 //! `arrangement_moved` with its `site.as_of` and `site.current` among them;
@@ -347,6 +356,16 @@ impl Form {
             Form::Daughter(_) => "daughter",
             Form::Draft(_) => "draft",
             Form::Fork(_) => "fork",
+        }
+    }
+
+    /// Returns the side as the merge library names it, a draft read as it
+    /// stands.
+    fn library_side(&self) -> lib::Side {
+        match self {
+            Form::Daughter(d) => lib::Side::Member(d.clone()),
+            Form::Draft(d) => lib::Side::Draft { at: d.clone(), position: None },
+            Form::Fork(f) => lib::Side::Fork(f.clone()),
         }
     }
 
@@ -533,61 +552,55 @@ fn trunk_member_above(doc: &Address, a: &Address) -> Option<Address> {
     validate(Tumbler::new(comps).ok()?).ok()
 }
 
-/// Returns the trunk member of `doc` a draft side lies under: the one the
-/// base the board records for it (`base`) lies under.
+/// Returns where a draft side's head read starts: the trunk member of `doc`
+/// the base the board records for it (`base`) lies under, or `doc` itself
+/// where the draft was staged from the bare document.
 ///
 /// It is the head read's start at the draft side (`client.md` §4b.1's merge
 /// row), decided off the draft's one `doc_metadata` read. It is answered
-/// for a draft of any account that lies under one: the composition refuses
-/// another account's draft itself.
+/// for a draft of any account that lies under a member, the composition
+/// refusing another account's draft itself; a draft staged from `doc`
+/// itself — before its first version (wire.md §Namespace, `stage`), whether
+/// or not one stands since — starts at `doc` where it is of `doc`'s owner's
+/// account, the account `doc` lies in (`skep-namespace`'s
+/// `effective_owner_prefix`). The start names no base: the library derives
+/// that from the bases the board recorded (`skep_client::merge::compose`).
 ///
 /// # Errors
 ///
-/// Where the draft lies under none, the merge library's own refusal of the
-/// side, as its read of the side decides it (`skep_client::merge::compose`,
-/// the owner tested before the base):
-///
-/// - `BareSource` naming `doc` where `base` is `doc` itself — the draft
-///   staged from the bare document before its first version (wire.md
-///   §Namespace, `stage`), whether or not one stands since — and the draft
-///   is of `doc`'s owner's account, the account `doc` lies in
-///   (`skep-namespace`'s `effective_owner_prefix`);
-/// - `BaseUnknown` where no base is recorded, the base lies in another
-///   document's chain, or the bare document is another account's draft's
-///   base.
+/// `BaseUnknown`, the merge library's own refusal of the side, as its read
+/// of the side decides it (the owner tested before the base): where no
+/// base is recorded, the base lies in another document's chain, or the bare
+/// document is another account's draft's base.
 fn draft_start(doc: &Address, draft: &Address, base: Option<&Address>) -> Result<Address, lib::Refusal> {
-    let side = || lib::Side::Draft { at: draft.clone(), position: None };
     let the_owners = account_of(&draft.to_string()).is_some_and(|a| account_of(&doc.to_string()).as_deref() == Some(a.as_str()));
-    if the_owners && base == Some(doc) {
-        return Err(lib::Refusal::BareSource { side: side(), source: doc.clone() });
+    match base {
+        Some(b) if b == doc && the_owners => Ok(doc.clone()),
+        _ => base.and_then(|b| trunk_member_above(doc, b)).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Draft { at: draft.clone(), position: None })),
     }
-    base.and_then(|b| trunk_member_above(doc, b)).ok_or_else(|| lib::Refusal::BaseUnknown(side()))
 }
 
-/// Returns the trunk member of `doc` a fork lies under: the one the source
-/// the board serves for it (`source`) lies under.
+/// Returns where a fork's head read starts: the trunk member of `doc` the
+/// source the board serves for it (`source`) lies under, or `doc` itself
+/// where the fork was taken from the bare document.
 ///
 /// It is the head read's start at the fork side, decided off the fork's one
-/// `doc_metadata` read, as the library reads the fork's base
+/// `doc_metadata` read, as the library reads the fork's anchor
 /// (`skep_client::merge::compose`, the fork's `source`): no owner is tested,
 /// since a fork is a document of any account the board serves a source for.
+/// A fork taken from `doc` itself — before its first version, whether or
+/// not one stands since — starts at `doc`.
 ///
 /// # Errors
 ///
-/// Where the fork lies under none, the merge library's own refusal of the
-/// side:
-///
-/// - `BareSource` naming `doc` where `source` is `doc` itself — the fork
-///   taken from the bare document before its first version, whether or not
-///   one stands since;
-/// - `BaseUnknown` where no source is served — a document no `version` or
-///   `stage` minted — or the source lies in another document's chain.
+/// `BaseUnknown`, the merge library's own refusal of the side: where no
+/// source is served — a document no `version` or `stage` minted — or the
+/// source lies in another document's chain.
 fn fork_start(doc: &Address, fork: &Address, source: Option<&Address>) -> Result<Address, lib::Refusal> {
-    let side = || lib::Side::Fork(fork.clone());
-    if source == Some(doc) {
-        return Err(lib::Refusal::BareSource { side: side(), source: doc.clone() });
+    match source {
+        Some(s) if s == doc => Ok(doc.clone()),
+        _ => source.and_then(|s| trunk_member_above(doc, s)).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Fork(fork.clone()))),
     }
-    source.and_then(|s| trunk_member_above(doc, s)).ok_or_else(|| lib::Refusal::BaseUnknown(side()))
 }
 
 // ── the reads the rows make themselves ────────────────────────────────────
@@ -664,11 +677,13 @@ impl Shell {
 
     /// Returns the trunk's head as the board stands, read up from `start`.
     ///
-    /// `start` is a trunk member of `doc`, the one the side lies under. The
-    /// read is the library's head read (`skep_client::publication::standing`
-    /// under the session's publisher): the members past `start` by doubling,
+    /// `start` is where `side` starts (`draft_start`, `fork_start`): the
+    /// trunk member of `doc` it lies under, or `doc` itself, whose head is
+    /// read up from its first member where one stands. The read is the
+    /// library's head read (`skep_client::publication::standing` under the
+    /// session's publisher): the members past a trunk member by doubling,
     /// then a binary search between the last that answered and the first
-    /// that did not, `start` itself where the member after it is not
+    /// that did not, that member itself where the one after it is not
     /// registered. A board answering every member the doubling asks is
     /// refused after 64 reads and read no further (SP-17).
     ///
@@ -678,18 +693,35 @@ impl Shell {
     /// `unreadable` naming the member read, `busy`, `session_died`, the
     /// board's other verdicts verbatim, `unreachable`, and `shape` naming
     /// `doc_metadata` for an answer that is no `doc_metadata` answer (SP-14)
-    /// or once the doubling is spent; and a face naming the shell behind the
-    /// library where the read answers the standing of the bare document,
-    /// which no read of a trunk member answers.
-    fn trunk_head(&self, session: &SessionEntry, signed: &Signed, doc: &Address, start: &Address) -> Result<Address, Refusal> {
-        match skep_client::publication::standing(&signed.publisher(session), doc, start).map_err(|f| self.fault(session, "merge.compose", f))? {
-            Standing::AtHead => Ok(start.clone()),
-            Standing::Behind { head } => Ok(head),
-            Standing::First | Standing::SupersededFirst { .. } => Err(Refusal::from(Halt::face(
+    /// or once the doubling is spent; at `doc` with no version standing,
+    /// `base_unknown` with `reason` `bare_source` naming `doc` — the
+    /// library's `BareSource` of `side`, nothing to merge onto; and a face
+    /// naming the shell behind the library where the read of a trunk member
+    /// answers the standing of the bare document, which no read of one
+    /// answers.
+    fn trunk_head(&self, session: &SessionEntry, signed: &Signed, doc: &Address, start: &Address, side: &lib::Side) -> Result<Address, Refusal> {
+        let publisher = signed.publisher(session);
+        let read = |from: &Address| skep_client::publication::standing(&publisher, doc, from).map_err(|f| self.fault(session, "merge.compose", f));
+        let behind = || {
+            Refusal::from(Halt::face(
                 "the head read answered a trunk member as the bare document",
                 "`skep_client::publication::standing` of a trunk member answers `AtHead` or `Behind` on every path",
                 "report it: the shell's merge row is behind the library",
-            ))),
+            ))
+        };
+        let from = match read(start)? {
+            Standing::AtHead => return Ok(start.clone()),
+            Standing::Behind { head } => return Ok(head),
+            Standing::First if start == doc => {
+                return Err(self.merge_refusal(session, lib::Refusal::BareSource { side: side.clone(), source: doc.clone(), hop: None }));
+            }
+            Standing::SupersededFirst { first } if start == doc => first,
+            Standing::First | Standing::SupersededFirst { .. } => return Err(behind()),
+        };
+        match read(&from)? {
+            Standing::AtHead => Ok(from),
+            Standing::Behind { head } => Ok(head),
+            Standing::First | Standing::SupersededFirst { .. } => Err(behind()),
         }
     }
 
@@ -774,8 +806,16 @@ impl Shell {
             R::Unreadable(doc) => Refusal::shell(Name::UNREADABLE, json!({"doc": s(&doc)})),
             R::NoSuchDocument(doc) => Refusal::shell(Name::NO_SUCH_DOCUMENT, json!({"doc": s(&doc)})),
             R::BaseUnknown(side) => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "base_unknown"})),
-            R::BareSource { side, source } => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "bare_source", "source": s(&source)})),
+            R::BareSource { side, source, hop } => {
+                let mut detail = json!({"side": s(side.address()), "reason": "bare_source", "source": s(&source)});
+                if let Some(hop) = hop {
+                    detail["hop"] = json!(s(&hop));
+                }
+                Refusal::shell(Name::BASE_UNKNOWN, detail)
+            }
+            R::HopUnrecorded { side, hop } => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "hop_unrecorded", "hop": s(&hop)})),
             R::DraftBaseDisagrees { side, named, served } => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "draft_base_disagrees", "named": s(&named), "served": s(&served)})),
+            R::NamedBaseDisagrees { named, served } => Refusal::shell(Name::BASE_UNKNOWN, json!({"reason": "base_disagrees", "named": s(&named), "served": s(&served)})),
             R::ForkBaseNamed { fork, base } => other("fork_base_named", json!({"fork": s(&fork), "base": s(&base)})),
             R::TwoDrafts => Refusal::shell(Name::TWO_DRAFTS, json!({})),
             R::OverCap { runs, cap } => Refusal::shell(Name::OVER_CAP, json!({"n": runs, "cap": cap})),
@@ -877,25 +917,29 @@ impl Shell {
     ///    step 5's and `merge.land`'s record;
     /// 4. `into`'s read, as step 3's reads, and `not_owner` naming it where
     ///    it is published or another account's; at the draft side the
-    ///    draft's read, and `base_unknown` where the board records no base
-    ///    for it in `doc`'s chain — `reason` `bare_source`, naming `source`
-    ///    (`doc` itself), where the draft is of `doc`'s owner's account and
-    ///    was staged from the bare document before its first version, else
-    ///    `reason` `base_unknown` (`draft_start`); at the fork side the
-    ///    fork's read, `unreadable` where the session may not read it, and
-    ///    `base_unknown` where the board serves it no source in `doc`'s
-    ///    chain — `reason` `bare_source`, naming `source` (`doc` itself),
-    ///    where it was taken from the bare document before its first
-    ///    version, else `reason` `base_unknown` (`fork_start`); then, where
-    ///    no re-open
-    ///    stands, the head read's (`trunk_head`): `unreadable`, `busy`,
-    ///    `session_died`, the board's verdicts, `unreachable`, and `shape`
-    ///    naming `doc_metadata` for an answer it cannot read or where the
-    ///    board answers every member the read asks, nothing composed;
+    ///    draft's read, and `base_unknown` with `reason` `base_unknown`
+    ///    where the board records no base for it in `doc`'s chain, or where
+    ///    another account's draft was staged from `doc` itself
+    ///    (`draft_start`); at the fork side the fork's read, `unreadable`
+    ///    where the session may not read it, and `base_unknown` with
+    ///    `reason` `base_unknown` where the board serves it no source in
+    ///    `doc`'s chain (`fork_start`); then, where no re-open stands, the
+    ///    head read's (`trunk_head`): `unreadable`, `busy`, `session_died`,
+    ///    the board's verdicts, `unreachable`, and `shape` naming
+    ///    `doc_metadata` for an answer it cannot read or where the board
+    ///    answers every member the read asks; and, for a draft or a fork
+    ///    begun from `doc` itself while no version of it stands,
+    ///    `base_unknown` with `reason` `bare_source` naming `source` (`doc`
+    ///    itself) — nothing to merge onto: publish the draft, which lands
+    ///    version 1 — nothing composed;
     /// 5. the composition's (`skep_client::merge::compose`): `base_unknown`
-    ///    with its reason, `two_drafts`, `unreadable`, `no_such_document`,
-    ///    `merge_refused` with its arm, the board's verdicts verbatim; then
-    ///    `over_cap` where M passes the cap, nothing landed;
+    ///    with its reason — `hop_unrecorded` naming the `hop` on the side's
+    ///    line the board records no base for, `bare_source` with the `hop`
+    ///    where the board serves no count of the document's arrangement from
+    ///    before its first version (an older board), `base_unknown` —
+    ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
+    ///    with its arm, the board's verdicts verbatim; then `over_cap` where
+    ///    M passes the cap, nothing landed;
     /// 6. where no `into` is named, the read of the person's own standing
     ///    record of the key (`skep_client::merge::resume`): a halt's face,
     ///    `session_died`; where it names a draft landing, that draft's read,
@@ -970,9 +1014,12 @@ impl Shell {
             Some(into) => Some(self.landing_target(&session, &signed.account, into)?),
             None => None,
         };
-        // The trunk member the side lies under: a daughter's parent, a
-        // draft side's recorded base's, a fork's source's — else the
-        // library's own refusal of the side, before the head is read.
+        // Where the head read starts: the trunk member a daughter's address
+        // lies under, a draft side's recorded base's or a fork's source's,
+        // or `doc` itself for a side begun from it — else the library's own
+        // refusal of the side, before the head is read. It finds the head,
+        // never the base, which the library derives from the bases the
+        // board recorded up the side's line.
         let start = match &form {
             Form::Daughter(d) => trunk_member_above(&doc, d).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Member(d.clone()))),
             Form::Draft(d) => draft_start(&doc, d, self.draft_facts(&session, d)?.base.as_ref()),
@@ -985,7 +1032,7 @@ impl Shell {
         let reopen = target.as_ref().and_then(|t| t.marker.clone()).filter(|m| m.sides.iter().any(|s| *s == side_text)).filter(|m| bounded_address(&m.head).is_some_and(|h| is_trunk_member(&doc, &h)));
         let head = match &reopen {
             Some(m) => bounded_address(&m.head).expect("filtered to a trunk member"),
-            None => self.trunk_head(&session, &signed, &doc, &start)?,
+            None => self.trunk_head(&session, &signed, &doc, &start, &form.library_side())?,
         };
         let side = match &form {
             Form::Daughter(d) => lib::Side::Member(d.clone()),

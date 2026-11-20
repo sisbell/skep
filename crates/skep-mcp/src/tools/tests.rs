@@ -1181,12 +1181,16 @@ fn the_publication_references_state_the_shells_shapes() {
 /// REJECTIONS ARE DATA names `held_lines {doc, held}`: every tool's
 /// `held_lines`, and `merge_land`'s `window_parts_owed`, each part in it
 /// spelled as the shell's `WindowPart`, and `other_panel`; the compose
-/// reference names `base_unknown` by each reason the shell answers it with,
-/// at the draft side and at the fork side, `bare_source` naming its
-/// `source` for a draft of yours begun from the bare document and for a
-/// fork taken from it, the way on from that draft whether or not a version
-/// stands since, and the fork side's own refusal at its landing,
-/// `fork_base_moved`. The compose reference and MERGING name every gap kind
+/// reference names `base_unknown` with every member the shell answers it
+/// with, by each reason, at the draft side and at the fork side,
+/// `bare_source` naming its `source` for a draft of yours or a fork begun
+/// from the bare document while it has no version, with the way on from
+/// that draft, and naming its `hop` where the board serves no count of the
+/// document's words before version 1, `hop_unrecorded` naming its `hop`,
+/// and the fork side's own refusal at its landing, `fork_base_moved`; it
+/// and MERGING say that a side begun from the document before its first
+/// version composes over the document as it stood then, `base` the
+/// document itself. The compose reference and MERGING name every gap kind
 /// the shell's `GapKind` spells;
 /// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
 /// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
@@ -1261,9 +1265,13 @@ fn the_merge_references_state_the_shells_shapes() {
     // MERGING, and the texts that send a merge to the four.
     for said in [
         "a document never published has nothing to merge",
-        "whose recorded base (doc_metadata(draft).base) is a version of doc",
-        "whose source (doc_metadata(fork).source) is a version of doc",
+        "whose recorded base (doc_metadata(draft).base) is doc or a version of doc",
+        "whose source (doc_metadata(fork).source) is doc or a version of doc",
+        "The base is read off the bases the board recorded, never off an address",
+        "composes over doc as it stood before version 1, empty on most documents, base then doc itself",
+        "while doc has no version yet it is refused base_unknown with reason bare_source, nothing to merge onto",
         "refused base_unknown, nothing written",
+        "reason hop_unrecorded names the hop",
         "A gap is settled by EDITING THE DRAFT",
         "resolved_by agent",
         "change no words",
@@ -1292,19 +1300,23 @@ fn the_merge_references_state_the_shells_shapes() {
         "REJECTIONS ARE DATA names the merge tools among the calls an end may not have stopped: {rejections}"
     );
     // What a compose made again after a lost answer or a session's end
-    // leaves, and how a draft it left is found; and `base_unknown` by each
-    // reason, with the way on from a draft begun before the first version.
+    // leaves, and how a draft it left is found; the base read off the
+    // records, `doc` itself for a side begun before the first version; and
+    // `base_unknown` by each reason, with the way on from a draft begun
+    // while no version stands.
     let compose = reference(&catalog, "merge_compose");
     for said in [
         "which the adapter makes again itself, once, under the next session — may have left a draft it staged, or landed in, that no merge record names",
         "With into named, the call made again re-opens into, or lands there, and stages nothing more; with none named, it stages another, the first left standing beside it",
         "changes_since(class: \"drafts\") from before the call names such a draft",
-        "base_unknown {side, reason, source?}",
+        "base the version both sides descend from, read off the bases the board recorded and never off an address — doc itself where a side was begun from doc before its first version",
+        "up from the version the side lies under, or from doc's first version for a side begun from doc itself",
+        "base_unknown {side, reason, source?, hop?}",
         "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account — compose that one as a fork",
-        "and for a fork with no source, one the fork op minted, or one whose source is no version of doc",
-        "reason bare_source, naming source (doc itself), for a draft of yours staged from the bare document before its first version",
-        "publish that draft while doc has no version — it lands version 1, leaving nothing to merge — or, once one stands, stage a draft from the head and bring the words over into it",
-        "and for a fork, of any account, taken from the bare document so",
+        "and for a fork with no source, one the fork op minted, or one whose source is neither doc nor a version of it",
+        "reason bare_source, naming source (doc itself), for a draft of yours or a fork, of any account, begun from doc while doc has no version yet — nothing to merge onto: publish that draft, which lands version 1",
+        "naming the hop, the version on the side's line published from doc, where the side's own base or source is not doc",
+        "reason hop_unrecorded, naming the hop, a version on the side's line the board records no base for, its base never taken from its address",
         "refused merge_refused fork_base_moved {fork, source, head} where its source is not the head",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");

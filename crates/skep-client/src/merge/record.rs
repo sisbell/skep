@@ -21,9 +21,11 @@
 //! **Testimony, plainly (D4).** The record is a claim its writer makes, as
 //! the supersession claim beside it is; the daemon derives nothing from it,
 //! the member's arrangement is the fact. Everything it asserts is
-//! recomputable from reads a verifier can make — the base and the sides are
-//! members, or a draft the verifier may read, the rules are versioned, the
-//! value switches are in the body — so `verify` recomputes M and compares it
+//! recomputable from reads a verifier can make — the base is a member or
+//! the document's own arrangement from before its first version, the one
+//! the board's recorded bases derive for the sides, the sides are members
+//! or a draft the verifier may read, the rules are versioned, the value
+//! switches are in the body — so `verify` recomputes M and compares it
 //! with the landed member's image over its first `placed` positions, or the
 //! draft's at the position recorded, the daemon's `compare` the oracle the
 //! client's join is checked against (§1.3 step 4), and answers `Equal`,
@@ -94,7 +96,8 @@ pub(super) fn by() -> String {
 pub struct RecordKey {
     /// The trunk document.
     pub doc: Address,
-    /// The base member.
+    /// The base: a member, or the document itself where a side was begun
+    /// before its first version.
     pub base: Address,
     /// Every side's address, the head's included, in address order.
     pub sides: Vec<Address>,
@@ -348,7 +351,9 @@ impl PartAnswer {
 pub struct Record {
     /// The trunk.
     pub doc: Address,
-    /// The base member — never absent.
+    /// The base — never absent: a member, or the document itself where a
+    /// side was begun before its first version, its own arrangement from
+    /// before that version the state composed over.
     ///
     /// The `no_base` shape is not offered (decision 15).
     pub base: Address,
@@ -885,7 +890,8 @@ pub enum Verdict {
 
 /// Verifies a record's testimony (§4, testimony; §7, `verify`).
 ///
-/// M is recomputed from the record's inputs — its base, its sides, its
+/// M is recomputed from the record's inputs — its base, checked against the
+/// base the board's recorded bases derive for its sides, its sides, its
 /// value switches and the choices its gaps record — the merger's answers at
 /// its window parts applied to it (`answers`, one function with the shot's
 /// own, `merge::windows`'s `applied`), and compared with the landed
@@ -923,7 +929,10 @@ pub enum Verdict {
 /// the sides — a document the board has not registered,
 /// [`Refusal::NoSuchDocument`], among them — but `withheld`, a rejection
 /// or an item a value read meets, and a reclaimed position the record
-/// names, which answer [`Verdict::Unreadable`]; a position the record names
+/// names, which answer [`Verdict::Unreadable`]; a record whose base is not
+/// the one the sides' recorded bases derive, [`Refusal::NamedBaseDisagrees`]
+/// — beside a draft side [`Refusal::DraftBaseDisagrees`] — never verified
+/// against the base it names; a position the record names
 /// past the board's head or inside one commit, [`Refusal::BeyondHead`] or
 /// [`Refusal::NotAPosition`] naming the draft as the record's — the record
 /// was not written against this board's history as it stands; a record

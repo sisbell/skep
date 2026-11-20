@@ -24,9 +24,10 @@
 //! landing on the new head with the count in its record and its claim
 //! marking the daughter; and `--fork` ADMITTED — a
 //! second account's fork of a published version merged from the source the
-//! board serves for it and published — while a fork of the bare document,
-//! taken before its first version, is refused with its own reason, exit 1,
-//! nothing on stdout; and `--draft` WITHOUT `--base` — a draft `stage`
+//! board serves for it and published — and a fork of the bare document,
+//! taken before its first version, composed once a version stands over the
+//! document as it stood before it, its `base` the document itself, nothing
+//! written; and `--draft` WITHOUT `--base` — a draft `stage`
 //! minted off the base version merged over the base the board records for
 //! it, a `--base` that agrees taken, and one the board's record does not
 //! derive refused by name, exit 1, nothing on stdout; and `--draft` WITH
@@ -551,7 +552,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     let v = report(&r);
     assert_eq!(v["doc"].as_str(), Some(d_s.as_str()));
     assert_eq!(v["head"].as_str(), Some(head_s.as_str()), "the head off the feed walk");
-    assert_eq!(v["base"].as_str(), Some(base.to_string().as_str()), "the base derived along the anchor chains");
+    assert_eq!(v["base"].as_str(), Some(base.to_string().as_str()), "the base derived from the bases the board recorded");
     assert_eq!(runs_of(&v), vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "3".into())], "the big cat");
     assert_eq!(v["runs"][1]["side"], json!(0), "the head's fresh run carries its side");
     assert_eq!(v["runs"][1]["family"], json!("own"));
@@ -768,8 +769,10 @@ fn a_moved_head_is_refused_with_the_head_to_run_again_on_and_never_retried() {
 /// reads the fork's served source off the board, composes "the big cat" over
 /// the base `D.1` — never named — with the fork's role `fork`, and
 /// `--publish` lands the trunk's next member with its record found from the
-/// fork. A fork of the BARE document, taken before its first version, is
-/// refused with its own reason, exit 1, nothing on stdout, nothing written.
+/// fork. A fork of the BARE document, taken before its first version,
+/// composes once a version stands over the document as it stood before it,
+/// the report's `base` the document itself, the talk naming it, nothing
+/// written (skep #1113).
 #[test]
 fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     let dir = tempfile::tempdir().unwrap();
@@ -814,17 +817,20 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert!(r.err.contains(&format!("published {member} at position")), "{}", r.err);
 
     // A FORK OF THE BARE DOCUMENT — a second document, forked before its
-    // first version — is refused with its own reason once the document has
-    // a head to merge with.
+    // first version — composes once the document has a head to merge with,
+    // over the document as it stood before that version (skep #1113): the
+    // base `d2` itself, empty, so M is the head's words; nothing written.
     let d2 = rig.document(&session);
     let bare_fork = rig.fork(&forker, &d2);
     let base2 = rig.shot(&session, &d2, None, &[Staged::Fresh { text: "the cat sat" }]);
     let before = rig.board.health().unwrap().log_position();
     let r = rig.merge(&["--doc", &d2.to_string(), "--fork", &bare_fork.to_string(), "--kind", &kind]);
-    assert_eq!(r.code, 1, "{r:?}");
-    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
-    assert!(r.err.contains(&format!("the board refused: bare_source:the fork {bare_fork} was taken from {d2} itself, before it had a version (a bare source)")), "{}", r.err);
+    let v = report(&r);
+    assert_eq!((v["base"].as_str(), v["head"].as_str()), (Some(d2.to_string().as_str()), Some(base2.to_string().as_str())), "the document itself, the head off the feed: {v}");
+    assert_eq!(runs_of(&v), rig.image(&token, &base2, 11), "the head's words, the fork adding none");
+    assert_eq!(v["gaps"], json!([]));
     assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
+    assert!(r.err.contains(&format!("composed over the base {d2}: ")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
     session.close().expect("close");
 }

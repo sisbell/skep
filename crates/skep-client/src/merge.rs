@@ -4,7 +4,8 @@
 //! record, `_designs/CLIENT/2026-10-14-reconciling-versions-design.md` in
 //! the skep-ux-design repository, §0 and §7.
 //!
-//! The merge reads the base member and the sides as run lists, and from
+//! The merge reads the base — a member, or the document's own arrangement
+//! from before its first version — and the sides as run lists, and from
 //! those lists alone it knows what each side removed (a base position
 //! absent from that side), what each side added (a position not the base's)
 //! and where each addition sits (between which two base positions). It

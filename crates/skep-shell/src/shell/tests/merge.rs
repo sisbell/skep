@@ -34,18 +34,26 @@
 //! the withdrawal's typed at that write's own position and refused past the
 //! agent's own burst, nothing wiped, and a gap the agent settles, by an edit
 //! or a resolution, recorded `agent`; the draft side composed and landed
-//! with no claim, its re-open reading the side as merged; a draft side
-//! lying under no trunk member refused `base_unknown` by the library's
-//! reason before the head is read — `bare_source` naming the document for
-//! the owner's draft staged before the first version, whether or not one
-//! stands since, `base_unknown` for another account's, one staged from
-//! another document and one never staged; another account's fork — a
-//! `version` or a `stage` of a version — composed over the source the board
-//! serves for it, landed, re-opened, taken back and published with no
-//! claim, its words asked as windows and its record found from it, and
-//! composed again over the member with no gap; a fork with no source, or
-//! one in another chain, refused `base_unknown`, and one of the bare
-//! document `bare_source` whatever its account; the agent's re-base of its
+//! with no claim, its re-open reading the side as merged; the owner's draft
+//! staged before the first version refused `base_unknown` with `reason`
+//! `bare_source` naming the document while no version stands, and composed
+//! over the document as it stood before that version once one does, a
+//! draft side lying in no member refused `base_unknown` by the library's
+//! reason before the head is read — another account's draft staged from
+//! the document, one staged from another document and one never staged; a
+//! version published beside version 1 from a draft begun before it, and
+//! that draft, composed over the document as it stood before version 1 —
+//! the base the board recorded, never the daughter's address — landed and
+//! answered `merged` after its landing, nothing written (skep #1113);
+//! another account's fork — a `version` or a `stage` of a version —
+//! composed over the source the board serves for it, landed, re-opened,
+//! taken back and published with no claim, its words asked as windows and
+//! its record found from it, and composed again over the member with no
+//! gap; a fork with no source, or one in another chain, refused
+//! `base_unknown`, and one of the bare document `bare_source` whatever its
+//! account while no version stands, composed over the document once one
+//! does; the refusals of a side's line crossing as typed data naming their
+//! members with no daemon behind the shell; the agent's re-base of its
 //! own fork into a fresh draft of its own, the fork itself as `into`
 //! refused `fork_base_moved` and its landing on the person's trunk refused
 //! `not_owner`; the merged arm
@@ -326,6 +334,47 @@ fn a_published_journal_crosses_as_typed_data_naming_it() {
     shell.shutdown();
 }
 
+/// Checks that the refusals of a side's line of recorded bases cross as
+/// typed data naming their members (skep #1113).
+///
+/// The library's `BareSource` with a `hop` is `base_unknown` with `reason`
+/// `bare_source`, its `side`, its `source` and its `hop`, and with none
+/// carries no `hop`; `HopUnrecorded` is `reason` `hop_unrecorded` with the
+/// `side` and the `hop`; `NamedBaseDisagrees` is `reason` `base_disagrees`
+/// with `named` and `served` and no `side`. The session stands after each
+/// (the mutants that drop the `hop`, or cross either new refusal as a
+/// halt).
+#[test]
+fn the_refusals_of_a_sides_line_cross_as_typed_data_naming_their_members() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let entry = shell.sessions.get(&standing).unwrap();
+    let parse = |text: &str| skep_client::address::parse_address(text).expect("an address");
+    let (doc, daughter, draft) = ("1.0.1.0.64", "1.0.1.0.64.1.1", "1.0.1.0.66");
+    let crossed = |r: Library| {
+        let crossed = shell.merge_refusal(&entry, r);
+        assert_eq!(crossed.name(), "base_unknown", "{}", crossed.to_value());
+        crossed.to_value()
+    };
+    let member = Side::Member(parse(daughter));
+    assert_eq!(
+        crossed(Library::BareSource { side: member.clone(), source: parse(doc), hop: Some(parse(daughter)) }),
+        json!({"kind": "shell", "name": "base_unknown", "side": daughter, "reason": "bare_source", "source": doc, "hop": daughter})
+    );
+    assert_eq!(
+        crossed(Library::BareSource { side: Side::Draft { at: parse(draft), position: None }, source: parse(doc), hop: None }),
+        json!({"kind": "shell", "name": "base_unknown", "side": draft, "reason": "bare_source", "source": doc})
+    );
+    assert_eq!(crossed(Library::HopUnrecorded { side: member, hop: parse(daughter) }), json!({"kind": "shell", "name": "base_unknown", "side": daughter, "reason": "hop_unrecorded", "hop": daughter}));
+    assert_eq!(
+        crossed(Library::NamedBaseDisagrees { named: parse("1.0.1.0.64.1"), served: parse(doc) }),
+        json!({"kind": "shell", "name": "base_unknown", "reason": "base_disagrees", "named": "1.0.1.0.64.1", "served": doc})
+    );
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    shell.shutdown();
+}
+
 /// Checks that the twin fence met again past the shot's one re-read crosses
 /// as typed data naming the draft and the member.
 ///
@@ -348,8 +397,10 @@ fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
 ///
 /// Every member answers where `members` is none. Its `/health` is a board
 /// that takes writes and its `in_claims` names no claim; its `doc_metadata`
-/// of `doc` and of each member the trunk holds is a published document's, of
-/// any other address `doc_not_registered`; its `retrieve_doc_v_span_set` at
+/// of `doc` and of each member the trunk holds is a published document's,
+/// of a daughter of a trunk member one recording its address parent as its
+/// `shot_base`, of any other address `doc_not_registered`; its
+/// `retrieve_doc_v_span_set` at
 /// a position is `withheld`, so a composition stops at its read of the head
 /// it was handed, naming it. Every other `/op` is an empty delivery (no
 /// `H.1`, so no index opens) and every other path is answered nothing. Past
@@ -414,9 +465,12 @@ fn answer_as_a_trunk(mut stream: std::net::TcpStream, doc: &str, members: Option
                 kept.iter().filter(|f| trunk_member_read(doc, f).is_some()).count()
             };
             let registered = frame["doc"] == doc || member.is_some_and(|k| members.is_none_or(|n| k <= n));
+            // A daughter's recorded base: its address parent.
+            let parent = frame["doc"].as_str().and_then(|d| d.strip_prefix(doc)?.strip_prefix('.')).and_then(|v| Some(format!("{doc}.{}", &v[..v.rfind('.')?])));
             match frame["op"].as_str() {
                 _ if member.is_some() && trunk_reads > 64 => return,
                 Some("doc_metadata") if registered => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2"}),
+                Some("doc_metadata") if parent.is_some() => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2", "shot_base": parent}),
                 Some("doc_metadata") => json!({"resp": "rejected", "code": "doc_not_registered", "op": "doc_metadata"}),
                 Some("in_claims") => json!({"resp": "claims", "as_of": 10, "claims": []}),
                 Some("retrieve_doc_v_span_set") if path == "/op-at" => json!({"resp": "rejected", "code": "withheld", "op": "retrieve_doc_v_span_set"}),
@@ -1963,21 +2017,25 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     sd.shutdown();
 }
 
-/// Checks that a draft side lying under no trunk member is refused as the
-/// library refuses it, by its reason, before the head is read.
+/// Checks that a draft side staged from the bare document waits for its
+/// first version, then composes over the document as it stood before it
+/// (skep #1113), and that a draft lying in no member is refused.
 ///
 /// D and D2 are the claimant's, staged from the published E while its chain
 /// is empty, and T another account's, staged from E then too; Dz is the
 /// claimant's, staged from another bare published document Z, and N a draft
 /// never staged. D2 composed as E's draft side is refused exactly
-/// `base_unknown` with `reason` `bare_source` naming E as its `source` —
-/// before E's first version, and again once D publishes it as E.1 — and T,
-/// Dz and N each exactly `base_unknown` with `reason` `base_unknown`, no
-/// `source`; the board's position unmoved by every refusal (the mutants
-/// that answer `bare_source` never, for another account's draft based on
-/// E, or for every draft no member lies above).
+/// `base_unknown` with `reason` `bare_source` naming E as its `source`
+/// before E's first version, nothing to merge onto, the board's position
+/// unmoved. Once D publishes "the fox" as E.1, D2 composes over E — its
+/// arrangement before version 1, empty — and lands: `base` E, head E.1,
+/// "the fox" and D2's "the cat" both in the draft landed into, one
+/// unsettled `order` gap. T, Dz and N are each exactly `base_unknown` with
+/// `reason` `base_unknown`, no `source`, nothing written (the mutants that
+/// keep refusing D2 once E.1 stands, answer `bare_source` for another
+/// account's draft based on E, or read E's head where no version stands).
 #[test]
-fn a_draft_side_staged_before_the_first_version_is_refused_bare_source_naming_the_document() {
+fn a_draft_side_staged_before_the_first_version_composes_over_the_document_once_one_stands() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -1996,14 +2054,75 @@ fn a_draft_side_staged_before_the_first_version_is_refused_bare_source_naming_th
         refused
     };
     let bare_source = json!({"kind": "shell", "name": "base_unknown", "side": d2, "reason": "bare_source", "source": e});
-    assert_eq!(refused(&d2), bare_source, "before E's first version");
+    assert_eq!(refused(&d2), bare_source, "before E's first version, nothing to merge onto");
     g.call("publication.open", json!({"session": g.session, "draft": d, "doc": e, "readable_drafts": [d], "published": [e]})).unwrap_or_else(|r| panic!("{r}"));
     let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
-    assert_eq!(first["member"].as_str(), Some(format!("{e}.1").as_str()), "{first}");
-    assert_eq!(refused(&d2), bare_source, "once E.1 stands, D2's recorded base still E");
+    let e1 = format!("{e}.1");
+    assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": e, "draft": d2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&report);
+    assert_eq!(
+        (report["outcome"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some(e.as_str()), Some(e1.as_str())),
+        "once E.1 stands, D2 composes over E itself: {report}"
+    );
+    let gaps: Vec<(&str, bool)> = report["gaps"].as_array().unwrap().iter().map(|gap| (gap["kind"].as_str().unwrap(), gap["settled"].as_bool().unwrap())).collect();
+    assert_eq!(gaps, [("order", false)], "both texts at the one spot: {report}");
+    let landed = g.text(report["into"].as_str().unwrap(), 14);
+    assert!(landed.contains("the fox") && landed.contains("the cat"), "both texts kept: {landed:?}");
     for (draft, what) in [(&theirs, "another account's draft staged from E"), (&dz, "a draft staged from another document"), (&n, "a draft never staged")] {
         assert_eq!(refused(draft), json!({"kind": "shell", "name": "base_unknown", "side": draft, "reason": "base_unknown"}), "{what}");
     }
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a version published beside version 1 merges over the
+/// document as it stood before it, against the daemon (skep #1113).
+///
+/// E is created published and empty; D and D2 are staged from it; D
+/// publishes "the fox" as E.1, then D2, its base still E, publishes "the
+/// cat" beside it as E.1.1 — recorded against E while its address says
+/// E.1 — and the board moves D2's base to E.1.1. `merge.compose` of D2 as
+/// the draft side composes over E, the bases the board recorded walked up
+/// from E.1.1; of E.1.1 as the alternative it lands over E: `base` E, "the
+/// fox" and "the cat" both in the draft landed into, one unsettled `order`
+/// gap. Landed on the trunk with its claim and its record, the alternative
+/// composed again answers `merged`, naming the member, its record found and
+/// nothing written (the mutant that takes E.1.1's address for its base
+/// composes over E.1 and drops "the fox").
+#[test]
+fn a_version_published_beside_version_1_merges_over_the_document_as_it_stood_before_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let e = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&e, "the fox");
+    let d2 = g.staged(&e, "the cat");
+    let publish = |draft: &str| -> String {
+        g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": e, "readable_drafts": [draft], "published": [e]})).unwrap_or_else(|r| panic!("{r}"));
+        let ack = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        ack["member"].as_str().unwrap_or_else(|| panic!("a member: {ack}")).to_string()
+    };
+    let (e1, e11, e2) = (format!("{e}.1"), format!("{e}.1.1"), format!("{e}.2"));
+    assert_eq!(publish(&d), e1, "the first version");
+    assert_eq!(publish(&d2), e11, "beside version 1, its daughter");
+    let drafted = g.call("merge.compose", json!({"session": g.session, "doc": e, "draft": d2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((drafted["base"].as_str(), drafted["head"].as_str()), (Some(e.as_str()), Some(e1.as_str())), "D2's base moved to E.1.1, which the board recorded against E: {drafted}");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": e, "alternative": e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&report);
+    assert_eq!((report["outcome"].as_str(), report["base"].as_str(), report["head"].as_str()), (Some("landed"), Some(e.as_str()), Some(e1.as_str())), "the daughter composes over E itself: {report}");
+    let gaps: Vec<(&str, bool)> = report["gaps"].as_array().unwrap().iter().map(|gap| (gap["kind"].as_str().unwrap(), gap["settled"].as_bool().unwrap())).collect();
+    assert_eq!(gaps, [("order", false)], "both texts at the one spot: {report}");
+    let landed = g.text(report["into"].as_str().unwrap(), 14);
+    assert!(landed.contains("the fox") && landed.contains("the cat"), "both texts kept: {landed:?}");
+    let published = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(published["member"].as_str(), Some(e2.as_str()), "{published}");
+    let before = g.position();
+    let merged = g.call("merge.compose", json!({"session": g.session, "doc": e, "alternative": e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((merged["outcome"].as_str(), merged["member"].as_str(), merged["base"].as_str()), (Some("merged"), Some(e2.as_str()), Some(e.as_str())), "{merged}");
+    assert!(merged["record_link"].is_string(), "its record found: {merged}");
+    assert_eq!(g.position(), before, "nothing written");
     g.shell.shutdown();
     sd.shutdown();
 }
@@ -2501,11 +2620,12 @@ fn another_accounts_fork_is_composed_landed_taken_back_and_published_with_its_re
 /// with `reason` `base_unknown`; and its `stage` of Z, another published
 /// document of the person's, while Z's chain is empty, composed as Z's fork,
 /// is refused exactly `base_unknown` with `reason` `bare_source` naming Z as
-/// its `source` — before Z's first version and again once it stands — the
-/// board's position unmoved by every refusal (the mutants that keep the
-/// draft side's owner test at the fork, answering `base_unknown` for another
-/// account's fork of the bare document, or answer `bare_source` for every
-/// fork no member lies above).
+/// its `source` before Z's first version, nothing to merge onto — the
+/// board's position unmoved by every refusal — and once Z.1 stands composes
+/// over Z itself, its arrangement before version 1, and lands (the mutants
+/// that keep the draft side's owner test at the fork, answering
+/// `base_unknown` for another account's fork of the bare document, or keep
+/// refusing it once a version stands).
 #[test]
 fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
     let dir = TempDir::new().unwrap();
@@ -2540,8 +2660,14 @@ fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
     let d = g.staged(&z, "the owl");
     g.call("publication.open", json!({"session": g.session, "draft": d, "doc": z, "readable_drafts": [d], "published": [z]})).unwrap_or_else(|r| panic!("{r}"));
     let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
-    assert_eq!(first["member"].as_str(), Some(format!("{z}.1").as_str()), "{first}");
-    assert_eq!(refused(&z, &theirs), bare_source, "once Z.1 stands, the fork's source still Z");
+    let z1 = format!("{z}.1");
+    assert_eq!(first["member"].as_str(), Some(z1.as_str()), "{first}");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": z, "fork": theirs})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("fork"), Some(z.as_str()), Some(z1.as_str())),
+        "once Z.1 stands, the fork of Z composes over Z itself: {report}"
+    );
     g.shell.shutdown();
     sd.shutdown();
 }

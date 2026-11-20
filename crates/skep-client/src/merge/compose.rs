@@ -11,12 +11,16 @@
 //! decide each gap's kind and its default; §5's value rule reads bytes at a
 //! shared gap (the dedup) and, switched on, before the walk (the retype).
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
-//! the nearest common ancestor of two members by §1.2's address forms, and
-//! [`script`], the in-place edit script that turns a draft's list into a
-//! target — a preview; the draft landing sends one `set_arrangement`.
+//! the nearest common ancestor of two members by §1.2's address forms —
+//! the record on the trunk, where every member was minted against the one
+//! before it; below the trunk the reads walk the bases the board recorded
+//! instead (the `reads` module) — and [`script`], the in-place edit script
+//! that turns a draft's list into a target — a preview; the draft landing
+//! sends one `set_arrangement`.
 //!
 //! The vocabulary is the record's. A run is `(origin, i_start, width)`. The
-//! base is the member every side descends from. The spine is the surviving
+//! base is the state every side descends from: a member, or the document's
+//! own arrangement from before its first version. The spine is the surviving
 //! base material in the order M keeps it. A side's run is fresh when its
 //! positions are not the base's. A stretch is a side's maximal run of fresh
 //! material at one place, with its two anchors: the base positions
@@ -383,8 +387,10 @@ pub enum InPlaceOp {
 
 /// Composes the sides over the base: M, the gap report and the counts.
 ///
-/// `base` is the base member's run list and each side its own, every list
-/// as `image` delivers it, the sides in commit order. `spine_hint` names
+/// `base` is the base's run list — a member's, or the document's own
+/// arrangement from before its first version, empty on most documents — and
+/// each side its own, every list as `image` delivers it, the sides in
+/// commit order. `spine_hint` names
 /// the side whose order the spine takes where the sides disagree about the
 /// order of the surviving base material; `None` computes it — the base's
 /// order, or the one side's that reordered, or the reorders of two or more
@@ -1460,15 +1466,24 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], spine: &[usize]) -
 
 // ── the base of two members ───────────────────────────────────────────────
 
-/// Returns the base of two members of one chain (merge record §1.2).
+/// Returns the base of two members of one chain by their addresses (merge
+/// record §1.2).
 ///
-/// It is their nearest common ancestor along the chains of members each was
-/// minted against. A trunk member `D.k` was minted against `D.k−1`, a
-/// daughter `X.m` against `X`; `D.1` against nothing. So for `D.k+1` against
-/// `D.k.m` the base is `D.k`; for `D.k.1` against `D.k.2`, `D.k`; for
-/// `D.k.1.1` against the head, `D.k`; for `D.k.1` against `D.j.1` with
-/// `j < k`, `D.j`. `None` for two members of different documents, and for
-/// an address that is no member: a bare document, a draft, an element.
+/// It is their nearest common ancestor along the chains their addresses
+/// spell: a trunk member `D.k` under `D.k−1`, a daughter `X.m` under `X`,
+/// `D.1` under nothing. So for `D.k+1` against `D.k.m` it is `D.k`; for
+/// `D.k.1` against `D.k.2`, `D.k`; for `D.k.1.1` against the head, `D.k`;
+/// for `D.k.1` against `D.j.1` with `j < k`, `D.j`. `None` for two members
+/// of different documents, and for an address that is no member: a bare
+/// document, a draft, an element.
+///
+/// On the trunk the address is the record: a trunk member `D.k` was minted
+/// against `D.k−1`, so for two trunk members this is the base. Below the
+/// trunk an address need not name the member a daughter was published
+/// against — a draft begun from `D` before its first version and published
+/// once `D.1` stood lands as `D.1.k`, recorded against `D` — and the merge's
+/// reads walk the bases the board recorded instead (the `reads` module),
+/// never this.
 pub fn base_of(a: &Address, b: &Address) -> Option<Address> {
     let (head_a, versions_a) = member_parts(a)?;
     let (head_b, versions_b) = member_parts(b)?;

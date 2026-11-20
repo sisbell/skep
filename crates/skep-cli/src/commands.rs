@@ -567,10 +567,14 @@ fn journal_published(journal: &Address) -> String {
 /// The exit is "the board refused": a halt the library faced keeps its own
 /// code; every typed refusal is the board's verdict under the wire code the
 /// refusal is named for, its detail the refusal's own words — the side
-/// whose base cannot be read, the second draft, a fork's bare source or a
-/// draft's bare base, a base named for a fork and a base named for a draft
-/// that the board's record does not derive, which the library refuses
-/// before any image, among them, under their own names; the unowned draft
+/// whose base cannot be read, the second draft, a side begun before the
+/// document's first version on a board serving no count of its arrangement
+/// from before it (`bare_source`), a hop on a side's line the board
+/// records no base for (`hop_unrecorded`), a base named for a fork, and a
+/// base named for a draft or beside members alone that the board's recorded
+/// bases do not derive (`draft_base_disagrees`, `base_disagrees`), which
+/// the library refuses before any image, among them, under their own
+/// names; the unowned draft
 /// side under `not_owner`, its detail naming the draft; the draft landing's
 /// two — a fork composed on another head than its source under
 /// `fork_base_moved`, a draft of another document under
@@ -599,8 +603,10 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::Halt(_) | Refusal::SessionEnded(_) => "",
         Refusal::BaseUnknown(_) => "base_unknown",
         Refusal::BareSource { .. } => "bare_source",
+        Refusal::HopUnrecorded { .. } => "hop_unrecorded",
         Refusal::ForkBaseNamed { .. } => "fork_base_named",
         Refusal::DraftBaseDisagrees { .. } => "draft_base_disagrees",
+        Refusal::NamedBaseDisagrees { .. } => "base_disagrees",
         Refusal::TwoDrafts => "two_drafts",
         Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
         Refusal::NoSuchDocument(_) => "doc_not_registered",
@@ -751,6 +757,30 @@ mod tests {
                 Some(format!("1.0.1.0.1 is published, and a merge record is kept only in a private document — {undone} and nothing was written. Name a private document of yours with --journal, or leave --journal out to use your private journal.").as_str())
             );
             assert_eq!(finish(Err(refused(Refusal::PublishedJournal { journal: journal.clone() }, step))), 1);
+        }
+    }
+
+    /// Checks that the refusals of a side's line of recorded bases are the
+    /// board's refusals under their own codes (skep #1113).
+    ///
+    /// A hop the board records no base for is `hop_unrecorded`, a named base
+    /// the recorded bases do not derive `base_disagrees`, and a side begun
+    /// before the document's first version on a board serving no count of
+    /// its words before it `bare_source`, each exit 1, its detail the
+    /// library's own words.
+    #[test]
+    fn the_refusals_of_a_sides_line_are_the_boards_under_their_own_codes() {
+        let a = |text: &str| skep_client::address::parse_address(text).expect("an address");
+        let side = skep_client::merge::Side::Member(a("1.0.1.0.64.1.1"));
+        for (refusal, code) in [
+            (Refusal::HopUnrecorded { side: side.clone(), hop: a("1.0.1.0.64.1.1") }, "hop_unrecorded"),
+            (Refusal::NamedBaseDisagrees { named: a("1.0.1.0.64.1"), served: a("1.0.1.0.64") }, "base_disagrees"),
+            (Refusal::BareSource { side: side.clone(), source: a("1.0.1.0.64"), hop: Some(a("1.0.1.0.64.1.1")) }, "bare_source"),
+        ] {
+            let words = refusal.to_string();
+            let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Compose) else { panic!("the board's refusal") };
+            assert_eq!((r.code.as_str(), r.detail.as_deref()), (code, Some(words.as_str())));
+            assert_eq!(finish(Err(refused(refusal, Step::Compose))), 1);
         }
     }
 

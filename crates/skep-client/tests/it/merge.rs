@@ -79,26 +79,26 @@ use skep_address::Address;
 use skep_client::address::{document_of, parse_address};
 use skep_client::board::{
     acked_addr, acked_at, frames, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Scope,
-    Token,
+    Token, T_ENROLL,
 };
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, record_published, resume, undo, unwithdraw, verify, withdraw, Answers, Inputs,
-    Landed, Landing, Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt,
+    compose, current, head_of, land, record_published, resume, undo, unwithdraw, verify, withdraw, Answers, GapKind,
+    Inputs, Landed, Landing, Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt,
     SupersedeCause, Verdict,
 };
 use skep_client::publication;
 use skep_client::sign::{sig_hex, signer_from_seed, Signer};
 use skep_identity::{
-    entry_body_empty, entry_body_publish, entry_frame, ContentFreeOp, DocTerm, EntryBody, ShotBase,
-    ShotSegmentPiece,
+    entry_body_empty, entry_body_insert, entry_body_publish, entry_frame, ContentFreeOp, DocTerm,
+    EntryBody, ShotBase, ShotSegmentPiece,
 };
 use skep_signature::HybridSigner;
 
 use crate::common::{
-    bare, board, claim, insert_text, keyed_sub_account, keygen, mint, spawn, wire_delegate,
-    wire_session,
+    bare, board, claim, insert_text, keyed_sub_account, keygen, mint, spawn, typed_at,
+    wire_delegate, wire_session,
 };
 
 /// The claimant's account and principal on a notebook.
@@ -2467,5 +2467,113 @@ fn a_frame_refused_for_want_of_its_signature_leaves_its_id_to_the_signed_send() 
         "the memo's acknowledgment"
     );
     assert_eq!(board.health().unwrap().log_position(), committed, "nothing committed twice");
+    session.close().expect("close");
+}
+
+/// A board claimed for the cells of a version begun before version 1: the
+/// board, its daemon — kept while the cell runs — and the device key.
+fn claimed(dir: &std::path::Path) -> (Board, skepd::Skepd, HybridSigner) {
+    let sd = spawn(&dir.join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    (board, sd, device)
+}
+
+/// A VERSION BEGUN BEFORE VERSION 1, against the daemon (skep #1113): `B`
+/// and `C` are staged from the memberless `X`, each with words of its own;
+/// `B`'s shot births `X.1` ("ab") and `C`'s, its base still the bare
+/// document, lands `X.1.1` ("wxyz") — recorded against `X` (`shot_base`)
+/// while its address says `X.1` — the board moving `C`'s recorded base
+/// there. Merged with the head, `X.1.1` composes over `X`'s own arrangement
+/// from before version 1, empty (`own_count` 0): the key's base `X`, both
+/// texts kept, the head's first, in one unsettled `order` gap. `C` as the
+/// draft side composes over `X` the same, its base walked up from `X.1.1`.
+/// Landed as the shot, its record names `X` and verifies `Equal`.
+#[test]
+fn a_version_begun_before_version_1_merges_over_the_documents_own_arrangement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (board, _sd, device) = claimed(dir.path());
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let x = published_document(&board, &session, &device);
+    let staged = |text: &str| -> Address {
+        let d = addr(acked_addr(&acked(board.op(Some(&bare_token), &frames::stage(&x.to_string(), None)))).expect("the staged draft"));
+        insert_text(&board, &bare_token, &d.to_string(), 1, text);
+        d
+    };
+    let (b, c) = (staged("ab"), staged("wxyz"));
+    let x1 = shot(&board, &session, &device, &bare_token, &x, Some((&x, 0)), &[Staged::Draft { draft: &b, from: 1, text: "ab" }]);
+    let x11 = shot(&board, &session, &device, &bare_token, &x, Some((&x, 0)), &[Staged::Draft { draft: &c, from: 1, text: "wxyz" }]);
+    assert_eq!((x1.to_string(), x11.to_string()), (format!("{x}.1"), format!("{x}.1.1")), "the birth version, then its daughter");
+    let daughter = read(&board, Some(&token), &frames::doc_metadata(&x11.to_string()));
+    assert_eq!(daughter["shot_base"].as_str(), Some(x.to_string().as_str()), "the premise — the board recorded the daughter against X: {daughter}");
+    let trunk = read(&board, Some(&token), &frames::doc_metadata(&x.to_string()));
+    assert_eq!(trunk["own_count"].as_str(), Some("0"), "X held nothing before version 1: {trunk}");
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+    let inputs = |side: Side| Inputs { doc: x.clone(), head: x1.clone(), base: None, sides: vec![side], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&board, Some(&token), &inputs(Side::Member(x11.clone()))).expect("composed");
+    assert_eq!(merged.key.base, x, "the base the board recorded, never the address's X.1");
+    assert_eq!(m_of(&merged), vec![rd(&x, 1, 6)], "ab, then wxyz: both kept, the head's first");
+    assert_eq!(merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect::<Vec<_>>(), vec![(GapKind::Order, false)]);
+    let drafted = compose(&board, Some(&token), &inputs(Side::Draft { at: c.clone(), position: None })).expect("composed");
+    assert_eq!(drafted.key.base, x, "C's base moved to X.1.1, which the board recorded against X");
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let landed = land(&board, &merged, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }).expect("landed");
+    let Landed::Member { address: member, .. } = &landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{x}.2"), "the trunk's next member");
+    assert_eq!(read(&board, Some(&token), &frames::retrieve_v(&member.to_string(), 1, 6))["items"][0]["content"], "abwxyz");
+    let record = current(&board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(record.base, x);
+    assert_eq!(verify(&board, Some(&token), &record).expect("verified"), Verdict::Equal);
+    session.close().expect("close");
+}
+
+/// THE DOCUMENT'S OWN ARRANGEMENT read where it holds words, against the
+/// daemon (PUB-2.66; the arrangement suite's shape, `stage.rs`'s): `Y`
+/// takes "abcz" by a declared deposit while memberless, `own_count` 4;
+/// version 1 is "abc"; the daughter `Y.1.1`, made against `Y`, is "abcwz".
+/// `image` with `own` over `Y` answers its four positions, and so does a
+/// `compare` whose first region carries `own`. The merge of the head with
+/// the daughter is composed over "abcz" and is "abcw": the head's removal
+/// of "z" stands, the daughter's "w" placed beside the surviving "c", an
+/// `anchor` gap the rules settle. Landed, its record verifies `Equal`, the
+/// join's `compare` reading the base region with `own`.
+#[test]
+fn a_documents_own_arrangement_is_read_with_own_and_merged_over() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (board, _sd, device) = claimed(dir.path());
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let y = published_document(&board, &session, &device);
+    let ty = addr(T_ENROLL);
+    let as_of = typed_at(&board, &token, &y.to_string());
+    let mut deposit = json!({"op": "insert", "doc": y.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": ["abcz"], "deposit": T_ENROLL, "as_of": as_of});
+    deposit["attest"] = attest(&board, &device, &addr(ACCOUNT), &y, &entry_body_insert(Some(&ty), b"abcz".chunks(1)));
+    acked(session.op(&deposit));
+    let y1 = shot(&board, &session, &device, &bare_token, &y, Some((&y, 4)), &[Staged::Own { from: 1, text: "abc" }]);
+    let y11 = shot(&board, &session, &device, &bare_token, &y, Some((&y, 4)), &[Staged::Own { from: 1, text: "abc" }, Staged::Fresh { text: "w" }, Staged::Own { from: 4, text: "z" }]);
+    assert_eq!((y1.to_string(), y11.to_string()), (format!("{y}.1"), format!("{y}.1.1")), "the birth version, then its daughter");
+    let trunk = read(&board, Some(&token), &frames::doc_metadata(&y.to_string()));
+    assert_eq!(trunk["own_count"].as_str(), Some("4"), "{trunk}");
+    let own = read(&board, Some(&token), &frames::image_own(&y.to_string(), 1, 4));
+    assert_eq!(own["runs"], json!([{"i_start": format!("{y}.0.1.1"), "width": "4"}]), "the arrangement before version 1, never floated: {own}");
+    let compared = read(&board, Some(&token), &frames::compare(&[frames::region_own(&y.to_string(), 1, 4)], &[frames::region(&y11.to_string(), 1, 5)]));
+    assert_eq!(compared["resp"], "compare", "a region carrying `own` is answered: {compared}");
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+    let inputs = Inputs { doc: y.clone(), head: y1.clone(), base: None, sides: vec![Side::Member(y11.clone())], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&board, Some(&token), &inputs).expect("composed");
+    assert_eq!(merged.key.base, y);
+    assert_eq!(merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect::<Vec<_>>(), vec![(GapKind::Anchor, true)], "the daughter's `w` beside the surviving `c`");
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let landed = land(&board, &merged, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }).expect("landed");
+    let Landed::Member { address: member, .. } = &landed else { panic!("{landed:?}") };
+    assert_eq!(read(&board, Some(&token), &frames::retrieve_v(&member.to_string(), 1, 4))["items"][0]["content"], "abcw", "the head's removal of `z` stands");
+    let record = current(&board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(verify(&board, Some(&token), &record).expect("verified"), Verdict::Equal);
     session.close().expect("close");
 }

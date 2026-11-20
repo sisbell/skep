@@ -11,32 +11,57 @@
 //! the published words they became; and [`Refusal`], every refusal a read
 //! or a landing can meet.
 //!
-//! The reads, in the record's order (§1.3): the document's metadata and the
-//! head's extent; the base — named by the caller, or derived by `base_of`
-//! for members of one chain — imaged whole; the head and each side imaged
-//! whole; the shared material joined by the core over the lists; the values
-//! where the value rule has work, read through the side that holds them;
-//! and the prior records for the key, so a standing record is known before
-//! anything is written (§3, idempotence). Every `image` past the run budget
-//! is re-asked in halves and the parts re-joined by I-adjacency (§8: "a
-//! region past the budget can be asked in parts"), every `retrieve_v` past
-//! the delivery budget likewise. A fork side's base is the SOURCE the board
-//! serves for it — `doc_metadata`'s `source`, the member the fork was born
-//! sharing (the fork-source design record, arm A; the merge record's case
-//! (j)) — and a draft side's the BASE the board records for it —
-//! `doc_metadata`'s `base`, the member it was staged from, moved to the
-//! member each publication it rendered minted (wire.md §Namespace, `stage`)
-//! — each read before the head's extent and never the caller's to know: a
-//! base the caller names beside a draft side must be the one the records
-//! derive, and one named beside a fork side is refused unread.
+//! The reads, in the record's order (§1.3): the document's metadata; each
+//! side's line of recorded bases, walked to the trunk; the head's extent;
+//! the base, derived from where those lines end, imaged whole; the head and
+//! each side imaged whole; the shared material joined by the core over the
+//! lists; the values where the value rule has work, read through the side
+//! that holds them; and the prior records for the key, so a standing record
+//! is known before anything is written (§3, idempotence). Every `image`
+//! past the run budget is re-asked in halves and the parts re-joined by
+//! I-adjacency (§8: "a region past the budget can be asked in parts"),
+//! every `retrieve_v` past the delivery budget likewise.
+//!
+//! **The base, from the records** (the owner's ruling of 2026-11-02: a
+//! version tree takes a daughter's parent from the base the board recorded,
+//! never from its address). A side's line starts at its ANCHOR: a member's
+//! is itself; a fork side's the SOURCE the board serves for it —
+//! `doc_metadata`'s `source`, the member or the bare document the fork was
+//! born sharing (the fork-source design record, arm A; the merge record's
+//! case (j)); a draft side's the BASE the board records for it —
+//! `doc_metadata`'s `base`, the member or the bare document it was staged
+//! from, moved to the member each publication it rendered minted (wire.md
+//! §Namespace, `stage`). From the anchor the line climbs the bases the
+//! board recorded, each hop below the trunk read at P off its own
+//! `doc_metadata` — its `shot_base`, the base its shot was made against,
+//! else its `source`, the member a `version` snapshotted into it — until it
+//! ends at the document itself or at a trunk member, where the address is
+//! the record: a shot naming the head lands on the trunk and one naming any
+//! other base lands as that base's daughter, save one naming the bare
+//! document once a member stands, which lands under the first member,
+//! `D.1.k`, recorded against `D` (`skep-arrangement`'s `shot_admission`). A
+//! hop the board records no parent for is refused
+//! ([`Refusal::HopUnrecorded`]), never taken from its address, and a parent
+//! the minting rule cannot have recorded is the board's fault, faced. The
+//! base is the document itself where any side's line ends there — a side
+//! begun before the document's first version — its image the document's
+//! own arrangement from before that version, read with `own` at P where
+//! the trunk's `own_count` is above 0 and not read at all at 0 (PUB-2.66);
+//! else it is the earliest trunk member the head and the lines end at, the
+//! nearest common ancestor on the trunk. The lines are walked before the
+//! head's extent, and the base is never the caller's to know: a base the
+//! caller names is checked against the derived one beside every side and
+//! refused where it disagrees, and one named beside a fork side is refused
+//! unread.
 //!
 //! **One position for everything** (skep #762; the landing lane's ruling).
 //! Every frame a shape's reads send is answered at ONE board position P:
 //! the position the draft side names where it names one, else the `as_of`
 //! of the shape's first read, the document's `doc_metadata`, made at the
-//! head. Every later read — a fork's source, a draft's base, the head's
-//! extent and image, the base's image, each side's image, the values read
-//! through the sides, the join's `compare` — goes through `/op-at` at P, so
+//! head. Every later read — a fork's source, a draft's base, each hop of a
+//! side's line, the head's extent and image, the base's image, each side's
+//! image, the values read through the sides, the join's `compare` — goes
+//! through `/op-at` at P, so
 //! the record describes a state the board held at one moment and never one
 //! that an edit landing between two reads composed; the record carries P
 //! for its draft side (§4: "for a draft read at N"), the result carries it
@@ -52,10 +77,11 @@
 //! bare document itself, a draft of an account other than the trunk
 //! owner's, a draft the board records no base for, a fork no `version`
 //! minted or one taken from another document (decision 15) — refuses
-//! before the first `image`, as does a fork of a BARE source or a draft
-//! staged from one, a side taken from the document before its first
-//! version, whose base is history the board does not serve; a side the
-//! reader may not read refuses at its own read. A run a readable side
+//! before the first `image`, as does a side whose line passes a hop the
+//! board records no parent for, and a side begun before the document's
+//! first version where the board serves no `own_count`, its base an
+//! arrangement this board does not count ([`Refusal::BareSource`]); a side
+//! the reader may not read refuses at its own read. A run a readable side
 //! windows from a document the reader may not read is answered whole by
 //! `image` and `compare` and masked by `retrieve_v` (wire.md §The read
 //! predicate, "a delivery masks per run"), so it refuses where a value is
@@ -86,7 +112,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{validate, Address, Level, Nat, Tumbler};
 
 use crate::address::parse_address;
 use crate::board::answers::{self, IRun, Metadata};
@@ -97,7 +123,7 @@ use crate::halt::Halt;
 use crate::publication::enumerate::MAX_WIRE_LIST;
 use crate::publication::{self, home_of_link, owned_by, SupersedeCause};
 
-use super::compose::{base_of, compose_runs, Composed, Item, Options, Run, SideIx};
+use super::compose::{compose_runs, Composed, Item, Options, Run, SideIx};
 use super::record::{self, Record, RecordKey, SideAt};
 use super::windows::{Misfit, WindowPart};
 
@@ -140,16 +166,16 @@ pub struct Inputs {
     /// No read answers a bare document's head member (unverified-here 7), so
     /// the caller names it, from its own knowledge or from [`head_of`].
     pub head: Address,
-    /// The base member, where the caller names it.
+    /// The base, where the caller names it.
     ///
-    /// Derived where `None`: by `base_of` along the sides' anchors — a
-    /// member its own, a fork side's the source the board serves for it, a
-    /// draft side's the base the board records for it (`doc_metadata`'s
-    /// `base`) — so no merge needs one named (§1.2). Named beside a draft
-    /// side it is checked against the derived base and refused where it
-    /// disagrees ([`Refusal::DraftBaseDisagrees`]); beside a fork side it is
-    /// refused unread ([`Refusal::ForkBaseNamed`]); beside member sides
-    /// alone it is taken as named.
+    /// Derived where `None`, from where each side's line of recorded bases
+    /// ends (the module's doc) — a member, or the document itself where a
+    /// side was begun before its first version — so no merge needs one
+    /// named (§1.2). A named one is checked against the derived base and
+    /// refused where it disagrees: beside a draft side
+    /// [`Refusal::DraftBaseDisagrees`], beside member sides alone
+    /// [`Refusal::NamedBaseDisagrees`]; beside a fork side it is refused
+    /// unread ([`Refusal::ForkBaseNamed`]).
     pub base: Option<Address>,
     /// The other sides, in commit order.
     ///
@@ -170,23 +196,27 @@ pub struct Inputs {
 pub enum Side {
     /// A member of the document's chain.
     ///
-    /// It is a daughter, or a daughter's daughter.
+    /// It is a daughter, or a daughter's daughter, its line of recorded
+    /// bases walked from itself (the module's doc).
     Member(Address),
     /// A draft of the trunk owner's account (§1.2 shape (2)).
     ///
     /// It is read as of `position` where one is given — which is then the
     /// one position P every read of the composition is made at — else at
     /// the position the composition's first read answers, its base and its
-    /// image alike. Its base is the one the board records for it — the
-    /// `base` member of its `doc_metadata`, the member it was staged from,
-    /// moved to the member each publication it rendered minted (wire.md
-    /// §Namespace, `stage`) — read as of the same position, so a record's
-    /// side, which carries the position its draft was read at, composes
-    /// against the base that stood then. A draft the board records no base
-    /// for, or whose recorded base lies in another document, is refused
-    /// [`Refusal::BaseUnknown`]; one staged from the bare document, before
-    /// its first version, [`Refusal::BareSource`]; a base the caller names
-    /// beside it must be the one the records derive
+    /// image alike. Its anchor is the base the board records for it — the
+    /// `base` member of its `doc_metadata`, the member or the bare document
+    /// it was staged from, moved to the member each publication it rendered
+    /// minted (wire.md §Namespace, `stage`) — read as of the same position,
+    /// so a record's side, which carries the position its draft was read
+    /// at, composes against the base that stood then; the merge's base is
+    /// derived up the recorded bases from it (the module's doc), so a draft
+    /// staged before the document's first version merges over the
+    /// document's own arrangement from before that version, whether it is
+    /// still unpublished or its publication landed as version 1's daughter.
+    /// A draft the board records no base for, or whose recorded base lies
+    /// in another document, is refused [`Refusal::BaseUnknown`]; a base the
+    /// caller names beside it must be the one the records derive
     /// ([`Refusal::DraftBaseDisagrees`]).
     Draft {
         /// The draft's address.
@@ -198,15 +228,16 @@ pub enum Side {
         /// one, or the one the first read answered.
         position: Option<u64>,
     },
-    /// A cross-owner fork of one of the document's published versions (§1.2
-    /// shape (4), case (j)).
+    /// A cross-owner fork of the document (§1.2 shape (4), case (j)).
     ///
-    /// Its base is the source the board serves for it — the `source` member
-    /// of its `doc_metadata`, the version member the fork was born sharing —
-    /// and never the caller's to name ([`Refusal::ForkBaseNamed`]). A fork
-    /// whose source is the bare document, taken before its first version,
-    /// is refused [`Refusal::BareSource`]; one no `version` minted, or one
-    /// taken from another document, [`Refusal::BaseUnknown`]. Read as named:
+    /// Its anchor is the source the board serves for it — the `source`
+    /// member of its `doc_metadata`, the version member or the bare
+    /// document the fork was born sharing — and the merge's base is derived
+    /// up the recorded bases from it (the module's doc), never the caller's
+    /// to name ([`Refusal::ForkBaseNamed`]): a fork taken before the
+    /// document's first version merges over the document's own arrangement
+    /// from before that version. One no `version` minted, or one taken from
+    /// another document, is refused [`Refusal::BaseUnknown`]. Read as named:
     /// a published fork with members of its own would float to its head, so
     /// the caller names the member of it it means.
     Fork(Address),
@@ -235,6 +266,16 @@ impl Side {
         match self {
             Side::Draft { position, .. } => *position,
             Side::Member(_) | Side::Fork(_) => None,
+        }
+    }
+
+    /// Returns the noun a refusal names the side by: `version`, `draft` or
+    /// `fork`.
+    fn noun(&self) -> &'static str {
+        match self {
+            Side::Member(_) => "version",
+            Side::Draft { .. } => "draft",
+            Side::Fork(_) => "fork",
         }
     }
 }
@@ -360,28 +401,49 @@ pub struct Merged {
 pub enum Refusal {
     /// A side whose base the library cannot read, refused before any `image`.
     ///
-    /// It is a member of another document or the bare document itself, a
-    /// draft of an account other than the trunk owner's, a draft the board
-    /// records no base for — never staged, or minted by `fork` or
-    /// `create_new_document` — or whose recorded base lies in another
-    /// document, a fork no `version` minted or one taken from another
-    /// document, or a side no base can be derived with (decision 15; no
-    /// interim).
+    /// It is a member of another document, the bare document itself or an
+    /// address within a member, a draft of an account other than the trunk
+    /// owner's, a draft the board records no base for — never staged, or
+    /// minted by `fork` or `create_new_document` — or whose recorded base
+    /// lies in another document, or a fork no `version` minted or one taken
+    /// from another document (decision 15; no interim).
     BaseUnknown(Side),
-    /// A fork side whose source, or a draft side whose recorded base, is the
-    /// bare document: a side taken from the document before its first
-    /// version, refused before any `image`.
+    /// A side begun before the document's first version whose base cannot
+    /// be read, refused before any `image`.
     ///
-    /// Its base is the document's arrangement as it stood at the fork's
-    /// mint or the draft's staging — history the board does not serve as a
-    /// base (the fork-source design record, decision 4) — so merging it is
-    /// not offered.
+    /// Its base is the document's own arrangement from before that version
+    /// (PUB-2.66), and either no version of the document stands yet, so
+    /// there is nothing to merge onto — the editor's shell refuses a side
+    /// so, `hop` none, before it composes — or the board serves no count of
+    /// that arrangement, its `doc_metadata` carrying no `own_count` (an
+    /// older board), which is where the composition refuses. The side is a
+    /// draft staged from the bare document, a fork taken from it, or a side
+    /// whose line of recorded bases passes a member published from it once
+    /// version 1 stood (its daughter `D.1.k`, recorded against `D`).
     BareSource {
-        /// The fork or draft side.
+        /// The side whose line ends at the document.
         side: Side,
-        /// The source the board serves for a fork, or the base it records for
-        /// a draft: the bare document.
+        /// Where the side's line ends: the bare document.
         source: Address,
+        /// The member on the side's line whose recorded base is the
+        /// document — the side itself where it is that member; `None` where
+        /// the side's own base or source is the document.
+        hop: Option<Address>,
+    },
+    /// A hop on a side's line of recorded bases the board records no parent
+    /// for, refused before any `image` (the owner's ruling of 2026-11-02: a
+    /// version tree takes a daughter's parent from the base the board
+    /// recorded, never from its address).
+    ///
+    /// The hop is a member below the trunk whose `doc_metadata` serves
+    /// neither `shot_base` nor `source` — one a build before the board
+    /// recorded a shot's base minted. Its address need not name the member
+    /// it was published against, so no base is derived through it.
+    HopUnrecorded {
+        /// The side whose line passes the hop.
+        side: Side,
+        /// The member the board records no parent for.
+        hop: Address,
     },
     /// A base the caller named for a fork side, refused before any read.
     ///
@@ -398,17 +460,31 @@ pub enum Refusal {
     /// A base the caller named beside a draft side that is not the one the
     /// board's records derive, refused before any `image`.
     ///
-    /// A draft's base is the one the board records for it (`doc_metadata`'s
-    /// `base`), and the merge's base is derived from it along the anchors as
-    /// for every side; a named one is taken only where it equals that, so
-    /// naming the base never moves what a merge composes against — a wrong
-    /// guess is refused, never composed against.
+    /// A draft's anchor is the base the board records for it
+    /// (`doc_metadata`'s `base`), and the merge's base is derived from it up
+    /// the recorded bases as for every side; a named one is taken only
+    /// where it equals that, so naming the base never moves what a merge
+    /// composes against — a wrong guess is refused, never composed against.
     DraftBaseDisagrees {
         /// The draft side.
         side: Side,
         /// The base the caller named.
         named: Address,
         /// The base the board's records derive.
+        served: Address,
+    },
+    /// A base the caller named beside member sides alone that is not the
+    /// one the board's recorded bases derive, refused before any `image`.
+    ///
+    /// It is the rule [`Refusal::DraftBaseDisagrees`] keeps beside a draft:
+    /// naming the base never moves what a merge composes against. A merge
+    /// record names its base so at [`record::verify`], and a record composed
+    /// over another base than the records derive is refused here, never
+    /// verified against it.
+    NamedBaseDisagrees {
+        /// The base the caller named.
+        named: Address,
+        /// The base the board's recorded bases derive.
         served: Address,
     },
     /// Two draft sides: not a merge shape.
@@ -750,12 +826,18 @@ impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refusal::BaseUnknown(side) => write!(f, "the base of the side {} cannot be read: a side is a version of the document, a draft of the document owner's account the board records a base for (one `stage` minted), or a fork of one of the document's versions", side.address()),
-            Refusal::BareSource { side, source } => match side {
-                Side::Draft { at, .. } => write!(f, "the draft {at} was staged from {source} itself, before it had a version (a bare base): its base is history the board does not serve, and merging it is not offered"),
-                Side::Member(_) | Side::Fork(_) => write!(f, "the fork {} was taken from {source} itself, before it had a version (a bare source): its base is history the board does not serve, and merging it is not offered", side.address()),
-            },
+            Refusal::BareSource { side, source, hop } => {
+                write!(f, "the {} {} ", side.noun(), side.address())?;
+                match hop {
+                    Some(hop) if hop != side.address() => write!(f, "descends from {hop}, begun from {source} itself before its first version")?,
+                    Some(_) | None => write!(f, "was begun from {source} itself, before its first version")?,
+                }
+                write!(f, ": its base is {source}'s arrangement from before that version, and either no version of {source} stands yet, so there is nothing to merge onto (publishing it lands version 1), or this board serves no count of that arrangement (doc_metadata's own_count), so it cannot be read; nothing was merged")
+            }
+            Refusal::HopUnrecorded { side, hop } => write!(f, "the board records no base for {hop}, on the line of the {} {} (its doc_metadata serves neither shot_base nor source — a member an older build minted): a base is never taken from an address, so this merge is not composed; nothing was merged", side.noun(), side.address()),
             Refusal::ForkBaseNamed { fork, base } => write!(f, "the base {base} was named for the fork {fork}: a fork's base is the source the board serves for it (doc_metadata's source), never the caller's to name — leave base unset"),
             Refusal::DraftBaseDisagrees { side, named, served } => write!(f, "the base {named} was named for the draft {}, whose recorded base (doc_metadata's base) derives the base {served}: a draft's base is the board's to serve — leave base unset, or name the base the board derives", side.address()),
+            Refusal::NamedBaseDisagrees { named, served } => write!(f, "the base {named} was named, and the bases the board records for the sides derive the base {served}: a merge's base is the board's to serve — leave base unset, or name the base the board derives"),
             Refusal::TwoDrafts => f.write_str("two drafts off one head are no merge shape: shoot one first"),
             Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld)"),
             Refusal::NoSuchDocument(doc) => write!(f, "{doc} is not registered at this board"),
@@ -924,6 +1006,21 @@ pub(super) fn is_trunk_member(doc: &Address, a: &Address) -> bool {
     version_components(doc, a).is_some_and(|v| v.len() == 1)
 }
 
+/// Returns whether `a` is `doc` itself or a member of its chain: a document
+/// address in `doc`'s trunk, never an element within one.
+fn in_chain(doc: &Address, a: &Address) -> bool {
+    a.level() == Level::Document && trunk_of(a).as_ref() == Some(doc)
+}
+
+/// Returns the address a member's lies under: its last component stripped.
+///
+/// `None` for an address of one component.
+fn address_parent(a: &Address) -> Option<Address> {
+    let mut comps = comps(a);
+    comps.pop()?;
+    validate(Tumbler::new(comps).ok()?).ok()
+}
+
 /// Returns the trunk member after `head`: its one version component plus one.
 pub(super) fn next_trunk_member(head: &Address) -> Option<Address> {
     let mut comps = comps(head);
@@ -957,12 +1054,20 @@ pub(super) fn last_component(a: &Address) -> Option<u64> {
 /// One document's image, whole.
 ///
 /// It holds the document, the position it was read at, its extent and its
-/// runs as served, each run's `ordinal` the document's own V-ordinal, and
-/// the position the answers named.
+/// runs as served, each run's `ordinal` the document's own V-ordinal, the
+/// position the answers named, and whether it is the document's own
+/// arrangement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Imaged {
-    /// The document imaged — a member, or a draft.
+    /// The document imaged — a member, a draft, or the bare document whose
+    /// own arrangement a base is.
     pub(super) doc: Address,
+    /// Whether the image is `doc`'s own arrangement, read with `own`
+    /// (PUB-2.66): a base that is the bare document, its arrangement from
+    /// before its first version. The join's `compare` reads the base region
+    /// so too ([`check_join`]). The head and the sides are never read so,
+    /// and no value is read through an own image.
+    pub(super) own: bool,
     /// The position the document was read at; `None` the head.
     ///
     /// Every image a shape's reads make carries the one position P (the
@@ -1175,11 +1280,12 @@ impl<'a> Reader<'a> {
         from: u64,
         width: u64,
     ) -> Result<Vec<IRun>, Refusal> {
-        Ok(self.image_read(doc, at, from, width)?.0)
+        Ok(self.image_read(doc, at, from, width, false)?.0)
     }
 
-    /// Images as [`Reader::image`] does, with the highest `as_of` the parts
-    /// answered — `None` where no part was read, or none carried one.
+    /// Images as [`Reader::image`] does — `doc`'s own arrangement where
+    /// `own`, sent with `own` (PUB-2.66) — with the highest `as_of` the
+    /// parts answered: `None` where no part was read, or none carried one.
     ///
     /// # Errors
     ///
@@ -1193,40 +1299,47 @@ impl<'a> Reader<'a> {
         at: Option<u64>,
         from: u64,
         width: u64,
+        own: bool,
     ) -> Result<(Vec<IRun>, Option<u64>), Refusal> {
         let mut out = Vec::new();
-        let mut seen = 0usize;
-        let as_of = self.image_into(doc, at, from, width, &mut out, &mut seen)?;
+        let as_of = self.image_into(doc, at, from, width, own, &mut out)?;
         Ok((out, as_of))
     }
 
+    /// Images one part of [`Reader::image_read`] into `out`, halving it on
+    /// `image_too_large`; the runs `out` holds are the runs seen so far.
     fn image_into(
         &self,
         doc: &Address,
         at: Option<u64>,
         from: u64,
         width: u64,
+        own: bool,
         out: &mut Vec<IRun>,
-        seen: &mut usize,
     ) -> Result<Option<u64>, Refusal> {
         if width == 0 {
             return Ok(None);
         }
-        let v = self.read(&frames::image(&doc.to_string(), from, width), at)?;
+        let text = doc.to_string();
+        let frame = if own {
+            frames::image_own(&text, from, width)
+        } else {
+            frames::image(&text, from, width)
+        };
+        let v = self.read(&frame, at)?;
         if let Some(r) = Rejection::of(&v) {
             if r.key() != "image_too_large" {
                 return Err(self.refuse(doc, &r, &v));
             }
             if width == 1 {
-                return Err(Refusal::TooFragmented { doc: doc.clone(), runs_seen: *seen });
+                return Err(Refusal::TooFragmented { doc: doc.clone(), runs_seen: out.len() });
             }
             let left = width / 2;
-            let first = self.image_into(doc, at, from, left, out, seen)?;
-            let rest = self.image_into(doc, at, from + left, width - left, out, seen)?;
+            let first = self.image_into(doc, at, from, left, own, out)?;
+            let rest = self.image_into(doc, at, from + left, width - left, own, out)?;
             return Ok(first.max(rest));
         }
         let runs = answers::i_runs(&v, width).ok_or_else(|| shape("image", &v))?;
-        *seen += runs.len();
         out.extend(runs.into_iter().map(|mut r| {
             r.ordinal += from - 1;
             r
@@ -1244,8 +1357,31 @@ impl<'a> Reader<'a> {
     /// [`Reader::span_set`]'s and [`Reader::image_read`]'s errors.
     pub(crate) fn imaged(&self, doc: &Address, at: Option<u64>) -> Result<Imaged, Refusal> {
         let (extent, as_of) = self.span_set(doc, at)?;
-        let (runs, imaged_as_of) = self.image_read(doc, at, 1, extent)?;
-        Ok(Imaged { doc: doc.clone(), at, extent, runs, as_of: as_of.max(imaged_as_of) })
+        let (runs, imaged_as_of) = self.image_read(doc, at, 1, extent, false)?;
+        Ok(Imaged {
+            doc: doc.clone(),
+            own: false,
+            at,
+            extent,
+            runs,
+            as_of: as_of.max(imaged_as_of),
+        })
+    }
+
+    /// Reads `doc`'s own arrangement as of `at`, its `count` positions
+    /// whole: the arrangement a published document held before its first
+    /// version, which `image` with `own` answers (PUB-2.66).
+    ///
+    /// `count` is the `own_count` the trunk's `doc_metadata` served at `at`;
+    /// at 0 nothing is read and the image is empty. The image is whole or
+    /// in parts as [`Reader::image`] reads one.
+    ///
+    /// # Errors
+    ///
+    /// [`Reader::image_read`]'s errors.
+    fn imaged_own(&self, doc: &Address, at: u64, count: u64) -> Result<Imaged, Refusal> {
+        let (runs, as_of) = self.image_read(doc, Some(at), 1, count, true)?;
+        Ok(Imaged { doc: doc.clone(), own: true, at: Some(at), extent: count, runs, as_of })
     }
 
     /// Reads the values at content ordinals `from ..` of `doc`.
@@ -1610,9 +1746,12 @@ pub(super) struct Readings {
     /// module's doc): the draft side's named position, else the first
     /// read's `as_of`.
     pub(super) at: u64,
-    /// The base member, named or derived.
+    /// The base: a member, or the document itself where a side was begun
+    /// before its first version — derived from the sides' lines of recorded
+    /// bases, a named one checked against it (the module's doc).
     pub(super) base: Address,
-    /// The base's image.
+    /// The base's image: the document's own arrangement where the base is
+    /// the document itself.
     pub(super) base_image: Imaged,
     /// The head's and each side's image, in side order.
     pub(super) maps: Vec<Imaged>,
@@ -1628,28 +1767,27 @@ pub(super) struct Readings {
 
 /// Makes the reads of §1.3 in order, then the core's walk.
 ///
-/// The reads are the document's metadata, each fork and draft side's
-/// metadata for its base — a fork's the source it was born sharing, a
-/// draft's the base the board records for it — the head's extent, the base
-/// imaged, the head and each side imaged, the composition with the values
-/// read through the sides. The first read is made at the position the
-/// draft side names, else at the head, and every later read at the one
-/// position P that read answered (the module's doc): a draft at a position
-/// names P; else P is the first read's `as_of`, and an edit landing on any
-/// side between two reads changes nothing the reads answer.
+/// The reads are the document's metadata; for each side in order, a fork's
+/// or a draft's own metadata for its anchor — a fork's the source it was
+/// born sharing, a draft's the base the board records for it — then the
+/// metadata of each hop of its line of recorded bases below the trunk
+/// ([`recorded_line`]); the head's extent; the base imaged — the document's
+/// own arrangement where the base is the document, read only where its
+/// `own_count` is above 0; the head and each side imaged; the composition
+/// with the values read through the sides. The first read is made at the
+/// position the draft side names, else at the head, and every later read
+/// at the one position P that read answered (the module's doc): a draft at
+/// a position names P; else P is the first read's `as_of`, and an edit
+/// landing on any side between two reads changes nothing the reads answer.
 ///
-/// A side's ANCHOR along the base derivation is its base as the board
-/// serves it: a fork's its source — the version member the board serves as
-/// its `doc_metadata` `source` (the merge record's case (j); the fork-source
-/// design record, arm A) — a draft's the member its `doc_metadata` `base`
-/// names as of the position the draft is read at (`draft_base`), a member's
-/// itself. A base handed in beside a fork side is the record's own at
-/// `verify`, never a caller's ([`compose`] refuses one): it must be the base
-/// the sources derive, else the record contradicts the board. A base handed
-/// in beside a draft side — a caller's or the record's — must be the base
-/// the anchors derive too, else it is refused by name
-/// ([`Refusal::DraftBaseDisagrees`]): naming the base never moves what the
-/// merge composes against.
+/// The base is derived from where the lines end ([`derived_base`]). A base
+/// handed in is checked against it beside every side: beside a fork side
+/// it is the record's own at `verify`, never a caller's ([`compose`]
+/// refuses one), and one the lines do not derive is the record
+/// contradicting the board, faced; beside a draft side, or beside member
+/// sides alone — a caller's or the record's — it is refused by name
+/// ([`Refusal::DraftBaseDisagrees`], [`Refusal::NamedBaseDisagrees`]):
+/// naming the base never moves what the merge composes against.
 ///
 /// # Errors
 ///
@@ -1658,28 +1796,30 @@ pub(super) struct Readings {
 /// - a head that is no trunk member of `doc`, faced;
 /// - two drafts, [`Refusal::TwoDrafts`];
 /// - more sides besides the head than [`MAX_SIDES`], faced;
-/// - a member of another document or the bare document itself,
+/// - a member that is no member of `doc`'s chain — of another document, the
+///   bare document itself, an address within a member —
 ///   [`Refusal::BaseUnknown`];
 /// - the metadata read's refusals — at the named position,
 ///   [`Reader::read`]'s faults of a position included — and an answer
 ///   naming no `as_of`, faced;
 /// - a draft of an account other than the trunk owner's,
 ///   [`Refusal::BaseUnknown`];
-/// - for each fork or draft side in order: its metadata read's refusals at
-///   P — [`Reader::read`]'s faults of a position included,
+/// - for each side in order: at a fork or a draft its metadata read's
+///   refusals at P — [`Reader::read`]'s faults of a position included,
 ///   [`Refusal::HistoryReclaimed`] among them — the side unreadable,
 ///   [`Refusal::Unreadable`]; a fork no `version` minted or a draft the
 ///   board records no base for, or one whose source or recorded base lies
-///   in another document, [`Refusal::BaseUnknown`]; a fork of the bare
-///   document or a draft staged from it, [`Refusal::BareSource`];
+///   in another document, [`Refusal::BaseUnknown`]; then its line's —
+///   each hop's metadata read's refusals at P, a hop the board records no
+///   parent for, [`Refusal::HopUnrecorded`], a parent that contradicts the
+///   hop's address, faced;
 /// - the head's extent read's refusals;
-/// - a base that cannot be derived, [`Refusal::BaseUnknown`] — every
-///   `BaseUnknown` decided before any `image`;
-/// - a named base beside a fork side that is not the one the sources
-///   derive, faced;
-/// - a named base beside a draft side that is not the one the anchors
-///   derive, [`Refusal::DraftBaseDisagrees`];
-/// - a base that is no member of `doc`'s chain, faced;
+/// - a named base the lines do not derive: beside a fork side faced, beside
+///   a draft side [`Refusal::DraftBaseDisagrees`], beside member sides
+///   alone [`Refusal::NamedBaseDisagrees`];
+/// - a base that is the document itself where the trunk's metadata carried
+///   no `own_count`, [`Refusal::BareSource`] naming the first side whose
+///   line ends there — every refusal so far decided before any `image`;
 /// - then each image and value read's own refusals — a run a readable side
 ///   windows from a document the reader may not read,
 ///   [`Refusal::Unreadable`] naming that document where the value rule
@@ -1718,11 +1858,11 @@ pub(super) fn read_shape(
     };
     for side in sides {
         match side {
-            // A fork's base and a draft's are read off the board below,
+            // A fork's anchor and a draft's are read off the board below,
             // after the trunk's own metadata.
             Side::Fork(_) | Side::Draft { .. } => {}
             Side::Member(m) => {
-                if trunk_of(m).as_ref() != Some(doc) || version_components(doc, m).is_none() {
+                if m == doc || !in_chain(doc, m) {
                     return Err(Refusal::BaseUnknown(side.clone()));
                 }
             }
@@ -1751,74 +1891,69 @@ pub(super) fn read_shape(
             }
         }
     }
-    // Each side's anchor along the base derivation: a fork's is the source
-    // the board serves for it and a draft's the base the board records for
-    // it, each read now at P; a member's is itself.
-    let mut anchors: Vec<Address> = Vec::with_capacity(sides.len());
+    // Each side's line, in side order: its anchor — a fork's the source the
+    // board serves for it, a draft's the base the board records for it, a
+    // member's itself — then the bases recorded up from it to the trunk,
+    // every read at P.
+    let mut ends: Vec<LineEnd> = Vec::with_capacity(sides.len());
     for side in sides {
-        anchors.push(match side {
+        let anchor = match side {
             Side::Fork(fork) => fork_source(reader, doc, side, fork, at)?,
             Side::Draft { at: draft, .. } => draft_base(reader, doc, side, draft, at)?,
             Side::Member(m) => m.clone(),
-        });
+        };
+        ends.push(recorded_line(reader, doc, side, &anchor, at)?);
     }
     let (head_extent, head_as_of) = reader.span_set(head, Some(at))?;
-    // Step 2: the base, named or derived along the anchor chains.
-    let derived = || -> Result<Address, Refusal> {
-        let mut b = head.clone();
-        for (side, anchor) in sides.iter().zip(&anchors) {
-            b = base_of(&b, anchor).ok_or_else(|| Refusal::BaseUnknown(side.clone()))?;
-        }
-        Ok(b)
+    // Step 2: the base, derived from where the lines end; a named one
+    // checked against it beside every side — beside a draft never against
+    // the draft's recorded base itself, which a daughter's staging makes a
+    // different member.
+    let derived = derived_base(head, sides, &ends);
+    let served = match &derived {
+        Derived::Document { .. } => doc.clone(),
+        Derived::Member(member) => member.clone(),
     };
-    let has_fork = sides.iter().any(|s| matches!(s, Side::Fork(_)));
-    let draft = sides.iter().find(|s| matches!(s, Side::Draft { .. }));
-    let base = match base {
-        Some(b) if has_fork => {
-            let served = derived()?;
-            if served != b {
-                return Err(Halt::face(
-                    format!("the base {b} is not the base {served} the board serves for the fork side"),
-                    "a fork's base is the source its `doc_metadata` names, which this record contradicts",
+    if let Some(named) = base {
+        if named != served {
+            return Err(if sides.iter().any(|s| matches!(s, Side::Fork(_))) {
+                Halt::face(
+                    format!("the base {named} is not the base {served} the board serves for the fork side"),
+                    "a fork's base is derived from the source its `doc_metadata` names, which this record contradicts",
                     "this record is not one this library would write against this board; nothing was written",
                 )
-                .into());
-            }
-            b
+                .into()
+            } else if let Some(side) = sides.iter().find(|s| matches!(s, Side::Draft { .. })) {
+                Refusal::DraftBaseDisagrees { side: side.clone(), named, served }
+            } else {
+                Refusal::NamedBaseDisagrees { named, served }
+            });
         }
-        // Beside a draft side a named base is checked against the base the
-        // board's records derive — never against the draft's recorded base
-        // itself, which a daughter's staging makes a different member.
-        Some(b) => match draft {
-            Some(side) => {
-                let served = derived()?;
-                if served != b {
-                    return Err(Refusal::DraftBaseDisagrees {
-                        side: side.clone(),
-                        named: b,
-                        served,
-                    });
-                }
-                b
-            }
-            None => b,
-        },
-        None => derived()?,
-    };
-    if trunk_of(&base).as_ref() != Some(doc) || version_components(doc, &base).is_none() {
-        return Err(Halt::face(
-            format!("{base} is no member of {doc}'s chain"),
-            "the base of a merge is the member both sides descend from",
-            "name a base member of the document, or none to derive it",
-        )
-        .into());
     }
-    let base_image = reader.imaged(&base, Some(at))?;
+    // The base's image: at the document itself, its own arrangement from
+    // before its first version, counted by the trunk's `own_count` read at P
+    // and read at P only where that count is above 0.
+    let base_image = match derived {
+        Derived::Member(member) => reader.imaged(&member, Some(at))?,
+        Derived::Document { side, hop } => {
+            let Some(count) = meta.own_count else {
+                return Err(Refusal::BareSource {
+                    side: side.clone(),
+                    source: doc.clone(),
+                    hop: hop.cloned(),
+                });
+            };
+            reader.imaged_own(doc, at, count)?
+        }
+    };
+    let base = served;
     // Step 3: the head, then each side — every image at P, the head's
     // included, so the values read through the images are read at P too.
-    let (head_runs, head_imaged_as_of) = reader.image_read(head, Some(at), 1, head_extent)?;
+    let (head_runs, head_imaged_as_of) =
+        reader.image_read(head, Some(at), 1, head_extent, false)?;
     let mut maps = vec![Imaged {
         doc: head.clone(),
+        own: false,
         at: Some(at),
         extent: head_extent,
         runs: head_runs,
@@ -1851,19 +1986,20 @@ pub(super) fn read_shape(
     Ok(Readings { at, base, base_image, maps, head_extent, owner: meta.owner, composed, families })
 }
 
-/// Reads the source a fork side was born sharing, checked as the fork's base.
+/// Reads the source a fork side was born sharing: the fork's anchor.
 ///
 /// It is the fork's `doc_metadata` `source` (the fork-source design record,
-/// arm A), read at the one position `at`, and it is the base where it is a
-/// version member of `doc` (the merge record's case (j)): the three checks
-/// in order — present, of this document, a member.
+/// arm A), read at the one position `at`, and it is the anchor where it is
+/// `doc` itself or a member of its chain (the merge record's case (j)): the
+/// two checks in order — present, of this document's chain. A source that
+/// is `doc` itself is a fork taken before its first version, whose line
+/// ends there at once ([`recorded_line`]).
 ///
 /// # Errors
 ///
 /// [`Reader::metadata`]'s errors on the fork — the fork unreadable,
 /// [`Refusal::Unreadable`]; a fork no `version` minted (no source), or one
-/// whose source lies in another document, [`Refusal::BaseUnknown`]; a fork
-/// of the bare document, [`Refusal::BareSource`].
+/// whose source lies in another document, [`Refusal::BaseUnknown`].
 fn fork_source(
     reader: &Reader<'_>,
     doc: &Address,
@@ -1872,43 +2008,37 @@ fn fork_source(
     at: u64,
 ) -> Result<Address, Refusal> {
     let meta = reader.metadata(fork, Some(at))?;
-    let Some(source) = meta.source.as_deref().and_then(parse_address) else {
-        return Err(Refusal::BaseUnknown(side.clone()));
-    };
-    if trunk_of(&source).as_ref() != Some(doc) {
-        return Err(Refusal::BaseUnknown(side.clone()));
+    match meta.source.as_deref().and_then(parse_address) {
+        Some(source) if in_chain(doc, &source) => Ok(source),
+        _ => Err(Refusal::BaseUnknown(side.clone())),
     }
-    if version_components(doc, &source).is_none() {
-        return Err(Refusal::BareSource { side: side.clone(), source });
-    }
-    Ok(source)
 }
 
-/// Reads the base the board records for a draft side, checked as its base.
+/// Reads the base the board records for a draft side: the draft's anchor.
 ///
 /// It is the draft's `doc_metadata` `base` (wire.md §Namespace, `stage`;
-/// §The response envelope): the member the draft was staged from, moved to
-/// the member each publication of the draft itself minted and never by a
-/// merge's shot that names the draft, which keeps it (`keep_base`;
-/// skep #944) — read as [`fork_source`] reads a fork's `source`, never the
-/// caller's to know — and it is the draft's anchor where it is a version
-/// member of `doc`: the three checks in order — recorded, of this
-/// document, a member. The read is at the one position `at`, as the
-/// draft's image is (wire.md §Reading history): the base that stood when
-/// the draft was read, which a publication of the draft may have moved
-/// since, so a record's side composes against the base its merge composed
-/// against. The merge's
-/// base is then derived from it along the anchors, so a draft staged from a
-/// daughter `D.k.m` merges with the head over `D.k`, not over the daughter.
+/// §The response envelope): the member or the bare document the draft was
+/// staged from, moved to the member each publication of the draft itself
+/// minted and never by a merge's shot that names the draft, which keeps it
+/// (`keep_base`; skep #944) — read as [`fork_source`] reads a fork's
+/// `source`, never the caller's to know — and it is the draft's anchor
+/// where it is `doc` itself or a member of its chain: the two checks in
+/// order — recorded, of this document's chain. The read is at the one
+/// position `at`, as the draft's image is (wire.md §Reading history): the
+/// base that stood when the draft was read, which a publication of the
+/// draft may have moved since, so a record's side composes against the
+/// base its merge composed against. The merge's base is then derived up the
+/// bases recorded from it ([`recorded_line`]), so a draft staged from a
+/// daughter `D.k.m` merges with the head over `D.k`, the base that daughter
+/// was published against, and one staged from `D` itself, or whose
+/// publication landed as version 1's daughter, over `D`'s own arrangement.
 ///
 /// # Errors
 ///
 /// [`Reader::metadata`]'s errors on the draft — the draft unreadable,
 /// [`Refusal::Unreadable`]; a draft the board records no base for — never
 /// staged, or minted by `fork` or `create_new_document` — or one whose
-/// recorded base lies in another document, [`Refusal::BaseUnknown`]; a
-/// draft whose recorded base is the bare document, staged before the
-/// document's first version, [`Refusal::BareSource`].
+/// recorded base lies in another document, [`Refusal::BaseUnknown`].
 fn draft_base(
     reader: &Reader<'_>,
     doc: &Address,
@@ -1917,16 +2047,140 @@ fn draft_base(
     at: u64,
 ) -> Result<Address, Refusal> {
     let meta = reader.metadata(draft, Some(at))?;
-    let Some(base) = meta.base.as_deref().and_then(parse_address) else {
-        return Err(Refusal::BaseUnknown(side.clone()));
-    };
-    if trunk_of(&base).as_ref() != Some(doc) {
-        return Err(Refusal::BaseUnknown(side.clone()));
+    match meta.base.as_deref().and_then(parse_address) {
+        Some(base) if in_chain(doc, &base) => Ok(base),
+        _ => Err(Refusal::BaseUnknown(side.clone())),
     }
-    if version_components(doc, &base).is_none() {
-        return Err(Refusal::BareSource { side: side.clone(), source: base });
+}
+
+/// Where a side's line of recorded bases ends ([`recorded_line`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LineEnd {
+    /// The document itself: the side was begun before its first version.
+    Document {
+        /// The member on the line whose recorded base is the document;
+        /// `None` where the side's anchor is the document.
+        hop: Option<Address>,
+    },
+    /// A trunk member, where the address is the record.
+    Trunk(Address),
+}
+
+/// Walks a side's line of recorded bases from its anchor to where it meets
+/// the trunk (the module's doc).
+///
+/// `anchor` is the side's own address for a member, a fork's source, a
+/// draft's recorded base. Each hop below the trunk is read at the one
+/// position `at`, its recorded parent the hop's `doc_metadata`
+/// `shot_base` — the base its shot was made against (wire.md §The response
+/// envelope, the shot terms) — else its `source`, the member an owned
+/// `version` snapshotted into it. The line ends at `doc` itself, or at a
+/// trunk member with nothing read: a trunk member `D.k+1` was minted
+/// against `D.k`, a shot naming the head landing on the trunk and one
+/// naming another base landing as that base's daughter
+/// (`skep-arrangement`'s `shot_admission`), so on the trunk the address is
+/// the record. A recorded parent is the hop's address parent, or `doc`
+/// itself for a hop under `doc`'s first member — a shot naming the bare
+/// document once a member stands lands there — so each hop strips a
+/// version component or reaches `doc`, and the walk ends.
+///
+/// # Errors
+///
+/// [`Reader::metadata`]'s errors on a hop — [`Refusal::Unreadable`] naming
+/// it among them — each answered as itself, never as a hop with no record
+/// (SP-14); a hop the board records no parent for,
+/// [`Refusal::HopUnrecorded`] — a parent is never taken from an address
+/// (the owner's ruling of 2026-11-02); a parent that is no address, or one
+/// the minting rule cannot have recorded, faced as the board's fault.
+fn recorded_line(
+    reader: &Reader<'_>,
+    doc: &Address,
+    side: &Side,
+    anchor: &Address,
+    at: u64,
+) -> Result<LineEnd, Refusal> {
+    let mut hop = anchor.clone();
+    let mut bare_hop = None;
+    loop {
+        if hop == *doc {
+            return Ok(LineEnd::Document { hop: bare_hop });
+        }
+        if is_trunk_member(doc, &hop) {
+            return Ok(LineEnd::Trunk(hop));
+        }
+        let meta = reader.metadata(&hop, Some(at))?;
+        let Some(recorded) = meta.shot_base.or(meta.source) else {
+            return Err(Refusal::HopUnrecorded { side: side.clone(), hop });
+        };
+        let parent = parse_address(&recorded).ok_or_else(|| {
+            Halt::face(
+                format!("the board records `{recorded}` as the base {hop} was published against"),
+                "a recorded base (`doc_metadata`'s `shot_base` or `source`) is an address",
+                "this is a board fault; nothing was written",
+            )
+        })?;
+        let under = address_parent(&hop);
+        let beside_first = parent == *doc
+            && under
+                .as_ref()
+                .is_some_and(|u| is_trunk_member(doc, u) && last_component(u) == Some(1));
+        if under.as_ref() != Some(&parent) && !beside_first {
+            return Err(Halt::face(
+                format!("the board records {parent} as the base {hop} was published against"),
+                format!("a member lies under the base its shot or its `version` named — under {doc}'s first member where that base is {doc} itself — and {hop} does not lie under {parent}"),
+                "this is a board fault, its records contradicting its own minting rule; nothing was written",
+            )
+            .into());
+        }
+        if parent == *doc {
+            bare_hop = Some(hop);
+        }
+        hop = parent;
     }
-    Ok(base)
+}
+
+/// The base the sides' lines derive with the head ([`derived_base`]): the
+/// base's address and how its image is read, from one value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Derived<'s> {
+    /// The document itself, its own arrangement from before its first
+    /// version imaged: `side` is the first side whose line ends there, and
+    /// `hop` the member on that line recorded against the document, where
+    /// the side's anchor is not the document itself.
+    Document {
+        /// The first side whose line ends at the document.
+        side: &'s Side,
+        /// The member on its line recorded against the document.
+        hop: Option<&'s Address>,
+    },
+    /// A trunk member, imaged as it stands.
+    Member(Address),
+}
+
+/// Returns the base the sides' lines derive with the head (the module's
+/// doc), `ends` parallel to `sides`.
+///
+/// It is the document itself where any line ends there, the document's own
+/// arrangement from before its first version being the one state every
+/// side then descends from; else the earliest trunk member among the head
+/// and the lines' ends — the nearest common ancestor on the trunk, every
+/// member of which was minted against the one before it, as [`base_of`]
+/// of two trunk members answers.
+///
+/// [`base_of`]: super::base_of
+fn derived_base<'s>(head: &Address, sides: &'s [Side], ends: &'s [LineEnd]) -> Derived<'s> {
+    let mut base = head;
+    for (side, end) in sides.iter().zip(ends) {
+        match end {
+            LineEnd::Document { hop } => return Derived::Document { side, hop: hop.as_ref() },
+            LineEnd::Trunk(member) => {
+                if comps(member) < comps(base) {
+                    base = member;
+                }
+            }
+        }
+    }
+    Derived::Member(base.clone())
 }
 
 /// Returns a run's family by its origin.
@@ -1992,7 +2246,10 @@ pub(super) fn first_difference(
 /// asked in parts past its budgets (`too_many_blocks`, `too_many_pairs`:
 /// the sides asked one at a time, then the larger operand halved and
 /// re-asked), and for each side the base positions the pairs name as shared
-/// must be exactly the base positions that side's image holds.
+/// must be exactly the base positions that side's image holds. A base that
+/// is the document's own arrangement is compared as its image was read,
+/// its region carrying `own` (PUB-2.66); a base of no positions shares
+/// none, and nothing is asked.
 ///
 /// # Errors
 ///
@@ -2005,7 +2262,7 @@ pub(super) fn check_join(reader: &Reader<'_>, readings: &Readings) -> Result<(),
     let regions: Vec<(Address, u64, u64)> =
         readings.maps.iter().map(|m| (m.doc.clone(), 1, m.extent)).collect();
     let mut pairs = Vec::new();
-    compare_parts(reader, &base.doc, 1, base.extent, &regions, at, &mut pairs)?;
+    compare_parts(reader, base, 1, base.extent, &regions, at, &mut pairs)?;
     for m in &readings.maps {
         let doc = m.doc.to_string();
         let mut oracle: Vec<(u64, u64)> =
@@ -2050,8 +2307,10 @@ fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 
 /// Asks one `compare` of the base region against the side regions.
 ///
-/// On a budget refusal it asks the sides one at a time, then halves the
-/// larger operand, until each part answers.
+/// The base region is `base`'s positions `from ..`, `width` of them,
+/// carrying `own` where `base` is the document's own arrangement. On a
+/// budget refusal it asks the sides one at a time, then halves the larger
+/// operand, until each part answers.
 ///
 /// # Errors
 ///
@@ -2062,7 +2321,7 @@ fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 /// [`Reader::read`]'s errors.
 fn compare_parts(
     reader: &Reader<'_>,
-    base: &Address,
+    base: &Imaged,
     from: u64,
     width: u64,
     sides: &[(Address, u64, u64)],
@@ -2072,7 +2331,12 @@ fn compare_parts(
     if width == 0 || sides.iter().all(|(_, _, w)| *w == 0) {
         return Ok(());
     }
-    let rho1 = [frames::region(&base.to_string(), from, width)];
+    let text = base.doc.to_string();
+    let rho1 = [if base.own {
+        frames::region_own(&text, from, width)
+    } else {
+        frames::region(&text, from, width)
+    }];
     let rho2: Vec<Value> = sides
         .iter()
         .filter(|(_, _, w)| *w > 0)
@@ -2081,7 +2345,7 @@ fn compare_parts(
     let v = reader.read(&frames::compare(&rho1, &rho2), at)?;
     if let Some(r) = Rejection::of(&v) {
         if !matches!(r.key(), "too_many_blocks" | "too_many_pairs") {
-            return Err(reader.refuse(base, &r, &v));
+            return Err(reader.refuse(&base.doc, &r, &v));
         }
         if sides.len() > 1 {
             for side in sides {
@@ -2109,7 +2373,7 @@ fn compare_parts(
             );
         }
         return Err(Halt::face(
-            format!("`compare` refuses {base} against {side} down to one position"),
+            format!("`compare` refuses {} against {side} down to one position", base.doc),
             format!("{}: the board's compare budget refuses operands of one position", r.token()),
             "this board is not speaking the wire this client expects; nothing was written",
         )
@@ -2143,8 +2407,13 @@ fn compare_parts(
 /// A base named beside a fork side, [`Refusal::ForkBaseNamed`], before any
 /// read — a fork's base is the board's to serve (the fork-source design
 /// record, decision 8); then `read_shape`'s — more than 255 sides besides
-/// the head among them, faced before any read — then the prior records'
-/// reads' refusals, which `record::current` answers.
+/// the head among them, faced before any read; a hop the board records no
+/// parent for, [`Refusal::HopUnrecorded`]; a named base the sides' recorded
+/// bases do not derive, [`Refusal::DraftBaseDisagrees`] or
+/// [`Refusal::NamedBaseDisagrees`]; a side begun before the document's
+/// first version on a board serving no `own_count`,
+/// [`Refusal::BareSource`] — then the prior records' reads' refusals, which
+/// `record::current` answers.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {

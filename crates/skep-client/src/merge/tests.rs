@@ -1,7 +1,9 @@
 //! The merge's unit suite: the merge record's §9 vectors, each row one
 //! test over `compose_runs` with the row's literal runs, asserting M as
 //! runs, the gap kinds, the `settled` flags and the value log as the table
-//! stands after the rulings; the resolutions, one per unsettled kind; the
+//! stands after the rulings, beside a base of no positions and the base a
+//! side begun before the first version was begun from; the resolutions,
+//! one per unsettled kind; the
 //! record's re-statement of them as a law over every place a gap is moved
 //! to; the fences the module promises; the one rule as a property over
 //! generated inputs; `base_of` over §1.2's address forms; `script` over
@@ -340,6 +342,38 @@ fn case_two_daughters_fold_as_three_sides_over_one_base() {
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
     assert_eq!(anchors(&c), vec![(Some(4), Some(5))]);
     assert_eq!(c.counts, RunCounts { a: 3, b: 6, m: 5 });
+}
+
+/// A BASE OF NO POSITIONS (skep #1113): the document's own arrangement from
+/// before its first version, empty on most documents, is the base of a side
+/// begun then. The head's "the fox" (`D·1–7`) and the side's "the cat"
+/// (`D·20–26`) both add at the one spot an empty spine has, between the
+/// document's two ends: ONE `order` gap, unsettled, both kept, the head's
+/// first.
+#[test]
+fn an_empty_base_takes_both_texts_in_one_order_gap() {
+    let c = compose(&[], &two(vec![rd(1, 7)], vec![rd(20, 7)]));
+    assert_eq!(runs(&c), vec![rd(1, 7), rd(20, 7)]);
+    assert_eq!(kinds(&c), vec![(GapKind::Order, false)]);
+    assert_eq!(anchors(&c), vec![(None, None)], "between the document's two ends");
+    assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(0), SideIx(1)]));
+}
+
+/// THE BASE A SIDE WAS BEGUN FROM decides whether a removal stands (skep
+/// #1113; the arrangement suite's shape, `stage.rs`'s): `D` held "abcz"
+/// (`D·1–4`) before its first version, version 1 is "abc", and the
+/// daughter begun from `D` "abcwz" (`w` at `D·5`). Over "abcz" M is "abcw":
+/// the head's removal of "z" stands, the "w" placed beside the surviving
+/// "c" by the rules. Over "abc" — the base the daughter's address names —
+/// "z" reads as the daughter's addition and comes back: "abcwz".
+#[test]
+fn the_base_a_side_was_begun_from_decides_whether_a_removal_stands() {
+    let (head, daughter) = (vec![rd(1, 3)], vec![rd(1, 3), rd(5, 1), rd(4, 1)]);
+    let c = compose(&[rd(1, 4)], &two(head.clone(), daughter.clone()));
+    assert_eq!(runs(&c), vec![rd(1, 3), rd(5, 1)], "abcw");
+    assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
+    let by_address = compose(&[rd(1, 3)], &two(head, daughter));
+    assert_eq!(runs(&by_address), vec![rd(1, 3), rd(5, 1), rd(4, 1)], "abcwz");
 }
 
 /// The corner, all gone: A's "X" at `D·6|D·7`, B removed everything — a
@@ -1376,6 +1410,11 @@ mod scripted {
         owner: String,
         placed: Option<u64>,
         base_extent: Option<u64>,
+        /// The base the shot that minted the member was made against, as the
+        /// board recorded it — its `doc_metadata` `shot_base` (wire.md §The
+        /// response envelope); `None` in the birth shape and where no shot
+        /// minted the document.
+        shot_base: Option<String>,
         /// The source a `version` minted the document sharing, or a `stage`
         /// copied into it — its `doc_metadata` `source`; `None` where
         /// neither did.
@@ -1539,6 +1578,13 @@ mod scripted {
         /// the board's or the transport's fault — and so does every later
         /// one presenting a token, nothing of either applied.
         die_at: Option<usize>,
+        /// Each trunk's own arrangement from before its first version, where
+        /// a cell plants one (PUB-2.66): what `image` and a `compare` region
+        /// with `own` read of it, and its `own_count`. A trunk with a head
+        /// and none planted holds none, as most published documents do.
+        pre_chain: BTreeMap<String, Vec<Run>>,
+        /// `doc_metadata` serves no `own_count`: an older board.
+        no_own_count: bool,
     }
 
     impl World {
@@ -1572,6 +1618,7 @@ mod scripted {
                     owner: owner.to_string(),
                     placed: None,
                     base_extent: None,
+                    shot_base: None,
                     source: None,
                     staged: BTreeMap::new(),
                     markers: BTreeMap::new(),
@@ -1611,13 +1658,25 @@ mod scripted {
             d.source = Some(base.to_string());
         }
 
-        /// A member of a chain with its shot terms.
+        /// A member of a chain with its shot terms, its `shot_base` the base
+        /// the minting rule names (`skep-arrangement`'s `shot_admission`):
+        /// none for `D.1` (the birth shape), `D.k−1` for a later trunk
+        /// member `D.k`, the address parent for a daughter.
         fn member(&mut self, text: &str, runs: Vec<Run>, base_extent: Option<u64>) {
             let placed = runs.iter().map(|r| r.width).sum();
+            let trunk = crate::address::document_of(text).expect("a member's trunk");
+            let versions: Vec<u64> =
+                text[trunk.len() + 1..].split('.').map(|c| c.parse().unwrap()).collect();
+            let shot_base = match versions[..] {
+                [1] => None,
+                [k] => Some(format!("{trunk}.{}", k - 1)),
+                _ => Some(text[..text.rfind('.').unwrap()].to_string()),
+            };
             self.doc(text, true, ACCOUNT, runs);
             let d = self.docs.get_mut(text).unwrap();
             d.placed = Some(placed);
             d.base_extent = base_extent;
+            d.shot_base = shot_base;
             self.position += 1;
             self.rows.push(FeedRow {
                 at: self.position,
@@ -1625,6 +1684,17 @@ mod scripted {
                 docs: vec![text.to_string()],
                 terms: None,
             });
+        }
+
+        /// Records `text`, a member under the trunk's first member, as
+        /// published from the BARE trunk once that member stood — its
+        /// `shot_base` the trunk (wire.md §The response envelope: "a draft
+        /// begun from the memberless document `D` and published once `D.1`
+        /// stands lands as `D.1`'s daughter `D.1.k`, and its `shot_base` is
+        /// `D`").
+        fn bare_based(&mut self, text: &str) {
+            let trunk = crate::address::document_of(text).expect("a member's trunk");
+            self.docs.get_mut(text).expect("a member of the world").shot_base = Some(trunk);
         }
 
         /// A cross-owner FORK: a private document of `owner`'s account that a
@@ -1722,6 +1792,30 @@ mod scripted {
             w
         }
 
+        /// THE SHAPE BEGUN BEFORE VERSION 1 (skep #1113): `D` published and
+        /// empty; its first version `D.1` "the fox", the head `D.2` adding
+        /// " jumps"; the daughter `D.1.1` "the cat" — a draft staged from
+        /// the empty `D` and published once `D.1` stood, so recorded against
+        /// `D` while its address says `D.1` — and the ordinary daughter
+        /// `D.2.1` "the fox runs", recorded against `D.2`. Over `D`'s own
+        /// arrangement, empty, the head's text and the cat are both
+        /// additions at the one spot.
+        fn begun_before_version_1() -> World {
+            let mut w = World::new();
+            w.text(D, 1, "the fox jumps");
+            w.text(D, 20, "the cat");
+            w.text(D, 30, " runs");
+            let head = vec![run(D, 1, 13)];
+            w.doc(D, true, ACCOUNT, head.clone());
+            w.member(&format!("{D}.1"), vec![run(D, 1, 7)], None);
+            w.member(&format!("{D}.2"), head, Some(7));
+            w.member(&format!("{D}.1.1"), vec![run(D, 20, 7)], Some(0));
+            w.bare_based(&format!("{D}.1.1"));
+            w.member(&format!("{D}.2.1"), vec![run(D, 1, 7), run(D, 30, 5)], Some(13));
+            w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+            w
+        }
+
         fn arrangement(&self, doc: &str, at: Option<u64>) -> Option<Vec<Run>> {
             let d = self.docs.get(doc)?;
             Some(match at {
@@ -1730,6 +1824,22 @@ mod scripted {
                     d.history.range(..=at).next_back().map(|(_, r)| r.clone()).unwrap_or_default()
                 }
             })
+        }
+
+        /// `doc`'s own arrangement as of `at`, never floated (wire.md §The
+        /// publish shot and head-float; PUB-2.66): what `image` and a
+        /// `compare` region carrying `own` read, and what `own_count`
+        /// counts — a trunk's planted pre-chain arrangement, none for a
+        /// trunk with a head and none planted, else the arrangement itself.
+        fn own_arrangement(&self, doc: &str, at: Option<u64>) -> Option<Vec<Run>> {
+            if !self.docs.contains_key(doc) {
+                return None;
+            }
+            match self.pre_chain.get(doc) {
+                Some(runs) => Some(runs.clone()),
+                None if self.trunk_head.contains_key(doc) => Some(Vec::new()),
+                None => self.arrangement(doc, at),
+            }
         }
 
         fn fresh(&mut self, origin: &str) -> u64 {
@@ -1899,7 +2009,14 @@ mod scripted {
                     let staged = d.staged.range(..=position).next_back().map(|(_, s)| s);
                     let marker = d.markers.range(..=position).next_back().and_then(|(_, m)| m.clone());
                     let merge = marker.map(|m| json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.to_string(), "at": m.at}));
-                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next()})))
+                    let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next()});
+                    // The address named's own content count, never floated —
+                    // absent on an older board.
+                    if !self.no_own_count {
+                        let own = self.own_arrangement(doc, Some(position)).unwrap_or_default();
+                        answer["own_count"] = json!(own.iter().map(|r| r.width).sum::<u64>().to_string());
+                    }
+                    Ok(reply(200, answer))
                 }
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
@@ -1917,7 +2034,8 @@ mod scripted {
                         return Ok(masked(doc));
                     }
                     let (from, width) = span(&frame["region"][0]);
-                    let Some(runs) = self.arrangement(doc, at) else { return Ok(rejected("doc_not_registered")) };
+                    let runs = if frame["own"] == true { self.own_arrangement(doc, at) } else { self.arrangement(doc, at) };
+                    let Some(runs) = runs else { return Ok(rejected("doc_not_registered")) };
                     let clipped = clip(&runs, from, width);
                     if clipped.len() > self.image_cap {
                         return Ok(rejected("image_too_large"));
@@ -1957,7 +2075,8 @@ mod scripted {
                         for region in rho.as_array().unwrap() {
                             let doc = region["doc"].as_str().unwrap();
                             let (from, width) = span(&region["spans"][0]);
-                            let Some(runs) = self.arrangement(doc, at) else { return Err(rejected("doc_not_registered")) };
+                            let runs = if region["own"] == true { self.own_arrangement(doc, at) } else { self.arrangement(doc, at) };
+                            let Some(runs) = runs else { return Err(rejected("doc_not_registered")) };
                             let clipped = clip(&runs, from, width);
                             blocks += clipped.len();
                             out.push((doc.to_string(), clipped));
@@ -2230,6 +2349,7 @@ mod scripted {
                     let d = self.docs.get_mut(&member).unwrap();
                     d.placed = Some(placed);
                     d.base_extent = Some(base_extent);
+                    d.shot_base = Some(base.clone());
                     if !member.strip_prefix(&format!("{doc}.")).unwrap().contains('.') {
                         self.trunk_head.insert(doc.clone(), member.clone());
                         self.docs.get_mut(&doc).unwrap().runs = runs;
@@ -2799,12 +2919,13 @@ mod scripted {
     // ── compose ──────────────────────────────────────────────────────────
 
     /// §1.3's reads IN ORDER: the document's metadata at the head, then —
-    /// each at the ONE POSITION that read answered (skep #762) — the head's
-    /// extent, the base's extent and image, the head's image, the
-    /// daughter's extent and image, then the prior records by the links of
-    /// the kind to each side at the head — and nothing written. The result
-    /// is the race shape's M with its counts, key, cap and unlanded record,
-    /// its `as_of` that one position.
+    /// each at the ONE POSITION that read answered (skep #762) — the
+    /// daughter's metadata for the base the board recorded for it (skep
+    /// #1113), the head's extent, the base's extent and image, the head's
+    /// image, the daughter's extent and image, then the prior records by the
+    /// links of the kind to each side at the head — and nothing written. The
+    /// result is the race shape's M with its counts, key, cap and unlanded
+    /// record, its `as_of` that one position.
     #[test]
     fn compose_reads_in_the_records_order_and_writes_nothing() {
         let (dialer, board, _) = open(World::race());
@@ -2813,6 +2934,7 @@ mod scripted {
             dialer.ops(),
             [
                 "doc_metadata",
+                "at:doc_metadata",
                 "at:retrieve_doc_v_span_set",
                 "at:retrieve_doc_v_span_set",
                 "at:image",
@@ -2825,13 +2947,18 @@ mod scripted {
             "the first read at the head, every read of the shape after it at its position, the journal's at the head"
         );
         let p = dialer.world().position;
-        for op in ["retrieve_doc_v_span_set", "image"] {
+        for op in ["doc_metadata", "retrieve_doc_v_span_set", "image"] {
             assert!(
                 dialer.positions(op).iter().all(|at| *at == p),
                 "`{op}` at the one position {p}: {:?}",
                 dialer.positions(op)
             );
         }
+        assert_eq!(
+            dialer.frames("doc_metadata")[1]["doc"],
+            format!("{D}.1.1"),
+            "the daughter's metadata, its recorded base `D.1` ending its line on the trunk"
+        );
         let docs: Vec<String> = dialer
             .frames("retrieve_doc_v_span_set")
             .iter()
@@ -2886,51 +3013,45 @@ mod scripted {
     }
 
     /// The fence on sides whose base the board does not serve: a member of
-    /// another document and a draft of another account each refuse
-    /// `BaseUnknown` before any `image`; two drafts refuse `TwoDrafts`. A
-    /// DRAFT is read before it is judged — its `doc_metadata`, for the base
-    /// the board records for it (skep #743) — and composes with no base
-    /// named where one is recorded, refusing, still before any `image`:
-    /// `BaseUnknown` where the board records none (a draft never staged) or
-    /// where its recorded base lies in another document; `BareSource`, with
-    /// its own reason, where its recorded base is the bare document — a
-    /// draft staged before the document's first version. A FORK is read
-    /// before it is judged — its `doc_metadata`, for the source it was born
-    /// sharing — and refuses, still before any `image`: `BaseUnknown` where
-    /// no `version` minted it (no source) or where its source lies in
-    /// another document; `BareSource`, with its own reason, where its source
-    /// is the bare document — a fork taken before the document's first
-    /// version; `Unreadable` where the merger may not read the fork at all.
-    /// A base the caller names beside a fork side refuses `ForkBaseNamed`
-    /// before any read.
+    /// another document, the bare document itself and an address within a
+    /// member, and a draft of another account each refuse `BaseUnknown`
+    /// before any `image`; two drafts refuse `TwoDrafts`. A DRAFT is read
+    /// before it is judged — its `doc_metadata`, for the base the board
+    /// records for it (skep #743) — and composes with no base named where
+    /// one is recorded, refusing, still before any `image`, `BaseUnknown`
+    /// where the board records none (a draft never staged) or where its
+    /// recorded base lies in another document. A FORK is read before it is
+    /// judged — its `doc_metadata`, for the source it was born sharing — and
+    /// refuses, still before any `image`: `BaseUnknown` where no `version`
+    /// minted it (no source) or where its source lies in another document;
+    /// `Unreadable` where the merger may not read the fork at all. A base
+    /// the caller names beside a fork side refuses `ForkBaseNamed` before
+    /// any read. (A draft or a fork begun from the bare document composes
+    /// over its own arrangement: `every_side_whose_line_ends_at_the_document_composes_over_it`.)
     #[test]
     fn a_foreign_side_or_a_side_without_a_served_base_refuses_before_any_image() {
         let mut w = World::race();
-        // Another published document `Z` with a member, and four forks in
-        // another account: one no `version` minted, one of `Z`'s member, one
-        // of the bare `D`, and one the merger may not read.
-        let (unminted, of_z, of_bare, hidden) = ("1.0.2.0.65", "1.0.2.0.66", "1.0.2.0.67", "1.0.2.0.68");
+        // Another published document `Z` with a member, and three forks in
+        // another account: one no `version` minted, one of `Z`'s member,
+        // and one the merger may not read.
+        let (unminted, of_z, hidden) = ("1.0.2.0.65", "1.0.2.0.66", "1.0.2.0.68");
         w.text(Z, 1, "hello");
         w.doc(Z, true, ACCOUNT, vec![run(Z, 1, 5)]);
         w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
         w.doc(unminted, false, "1.0.2", Vec::new());
         w.fork(of_z, "1.0.2", &format!("{Z}.1"), vec![run(Z, 1, 5)]);
-        w.fork(of_bare, "1.0.2", D, vec![run(D, 1, 11)]);
         w.fork(hidden, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
         w.withheld.insert(hidden.to_string());
-        // Four drafts of the merger's account: `S` staged from the base
+        // Three drafts of the merger's account: `S` staged from the base
         // `D.1` with "!!!" typed at its end; one never staged, so the board
-        // records no base; one staged from `Z`'s member; one staged from the
-        // bare `D`.
-        let (unstaged, of_z_draft, of_bare_draft) = ("1.0.1.0.67", "1.0.1.0.68", "1.0.1.0.70");
+        // records no base; one staged from `Z`'s member.
+        let (unstaged, of_z_draft) = ("1.0.1.0.67", "1.0.1.0.68");
         w.text(S, 1, "!!!");
         w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, 3)]);
         w.staged(S, &format!("{D}.1"), 11);
         w.doc(unstaged, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.doc(of_z_draft, false, ACCOUNT, vec![run(Z, 1, 5)]);
         w.staged(of_z_draft, &format!("{Z}.1"), 5);
-        w.doc(of_bare_draft, false, ACCOUNT, vec![run(D, 1, 11)]);
-        w.staged(of_bare_draft, D, 11);
         let (dialer, board, _) = open(w);
         let with =
             |sides: Vec<Side>, base: Option<Address>| Inputs { sides, base, ..race_inputs() };
@@ -2952,7 +3073,6 @@ mod scripted {
         );
         assert_eq!(dialer.frames("doc_metadata")[1]["doc"], unminted);
         refuses(fork(of_z), None, Refusal::BaseUnknown(fork(of_z)));
-        refuses(fork(of_bare), None, Refusal::BareSource { side: fork(of_bare), source: a(D) });
         refuses(fork(hidden), None, Refusal::Unreadable(a(hidden)));
         refuses(
             fork(F),
@@ -2966,6 +3086,13 @@ mod scripted {
         );
         let foreign = Side::Member(a(&format!("{Z}.1")));
         refuses(foreign.clone(), None, Refusal::BaseUnknown(foreign));
+        // The bare document itself, and an address within a member, are no
+        // member: refused before any read past the shape's own.
+        for not_a_member in [D.to_string(), format!("{D}.1.0.1.3")] {
+            let side = Side::Member(a(&not_a_member));
+            refuses(side.clone(), None, Refusal::BaseUnknown(side));
+            assert!(dialer.ops().is_empty(), "no read: {:?}", dialer.ops());
+        }
         let other_account = Side::Draft { at: a("1.0.2.0.71"), position: None };
         refuses(
             other_account.clone(),
@@ -2994,11 +3121,6 @@ mod scripted {
             "the trunk's metadata, then the draft's for its base at the one position, and nothing after"
         );
         refuses(draft(of_z_draft), None, Refusal::BaseUnknown(draft(of_z_draft)));
-        refuses(
-            draft(of_bare_draft),
-            None,
-            Refusal::BareSource { side: draft(of_bare_draft), source: a(D) },
-        );
         let two = vec![
             Side::Draft { at: a(S), position: None },
             Side::Draft { at: a("1.0.1.0.67"), position: None },
@@ -3007,6 +3129,330 @@ mod scripted {
             compose(&board, Some(&token()), &with(two, Some(a(&format!("{D}.1"))))),
             Err(Refusal::TwoDrafts)
         );
+    }
+
+    /// The inputs merging the head `D.2` with `side`, no base named.
+    fn with_side(side: Side) -> Inputs {
+        Inputs { sides: vec![side], ..race_inputs() }
+    }
+
+    /// The documents each `image` frame the dialer served read, in order.
+    fn imaged(dialer: &Scripted) -> Vec<String> {
+        dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect()
+    }
+
+    /// A VERSION BEGUN BEFORE VERSION 1 (skep #1113): the daughter `D.1.1`,
+    /// a draft staged from the empty `D` and published once `D.1` stood, is
+    /// recorded against `D` while its address says `D.1`. The composition
+    /// reads the base the board recorded — ONE `doc_metadata` of the
+    /// daughter, at the one position, right after the trunk's — and
+    /// composes over `D`'s own arrangement from before version 1, empty
+    /// (`own_count` 0), reading nothing of it: the head's "the fox jumps"
+    /// and the daughter's "the cat" are both additions at the one spot —
+    /// their values read through the sides that hold them, the value rule
+    /// finding no identical bytes — ONE unsettled `order` gap, the head's
+    /// first by default, and "the fox" is kept (the mutant that takes the
+    /// daughter's address composes over `D.1` and drops it, its removal by
+    /// the daughter). The key and the record name `D`.
+    #[test]
+    fn a_version_begun_before_version_1_composes_over_the_documents_own_arrangement() {
+        let (dialer, board, _) = open(World::begun_before_version_1());
+        let merged =
+            compose(&board, Some(&token()), &with_side(Side::Member(a(&format!("{D}.1.1")))))
+                .expect("composed");
+        assert_eq!(
+            dialer.ops(),
+            [
+                "doc_metadata",
+                "at:doc_metadata",
+                "at:retrieve_doc_v_span_set",
+                "at:image",
+                "at:retrieve_doc_v_span_set",
+                "at:image",
+                "at:retrieve_v",
+                "at:retrieve_v",
+                "find_links_ftt",
+                "find_links_ftt"
+            ],
+            "the trunk's metadata, the daughter's for its recorded base, the head and the daughter — nothing of `D`"
+        );
+        let delivered: Vec<String> = dialer
+            .frames("retrieve_v")
+            .iter()
+            .map(|f| f["specs"][0]["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            delivered,
+            [format!("{D}.2"), format!("{D}.1.1")],
+            "each addition read through the side holding it"
+        );
+        assert_eq!(dialer.frames("doc_metadata")[1]["doc"], format!("{D}.1.1"));
+        assert_eq!(
+            imaged(&dialer),
+            [format!("{D}.2"), format!("{D}.1.1")],
+            "the head and the daughter alone"
+        );
+        assert_eq!(
+            (merged.key.base.clone(), merged.record.base.clone()),
+            (a(D), a(D)),
+            "the base the board recorded"
+        );
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 13), run(D, 20, 7)],
+            "the fox jumps, then the cat: both kept"
+        );
+        assert_eq!(
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect::<Vec<_>>(),
+            vec![(GapKind::Order, false)],
+            "both texts at the one spot"
+        );
+        assert_eq!(merged.composed.counts, RunCounts { a: 1, b: 1, m: 2 });
+    }
+
+    /// EVERY LINE THAT ENDS AT THE DOCUMENT composes over it (skep #1113),
+    /// each `D`'s empty own arrangement, nothing of `D` imaged: a member
+    /// under the bare-based daughter, `D.1.1.1`, its line two hops read in
+    /// order; the draft whose publication minted that daughter, its
+    /// recorded base moved there; a fork whose source is the daughter; a
+    /// draft staged from `D` itself and a fork of `D` itself, still
+    /// unpublished with `D.1` standing, each anchored at the document; and
+    /// the bare-based daughter beside `D.2.1`, whose line ends at `D.2` —
+    /// a line ending at `D` makes the base `D` whatever the others. `D.2.1`
+    /// alone composes over `D.2`.
+    #[test]
+    fn every_side_whose_line_ends_at_the_document_composes_over_it() {
+        let mut w = World::begun_before_version_1();
+        let (published_from, staged_bare) = ("1.0.1.0.70", S);
+        let (fork_of_daughter, fork_of_bare) = (F, "1.0.2.0.70");
+        w.text(D, 40, " now");
+        w.text(staged_bare, 1, "the owl");
+        w.text(fork_of_bare, 1, "a lynx");
+        w.member(&format!("{D}.1.1.1"), vec![run(D, 20, 7), run(D, 40, 4)], Some(7));
+        w.doc(published_from, false, ACCOUNT, vec![run(D, 20, 7)]);
+        w.staged(published_from, &format!("{D}.1.1"), 7);
+        w.doc(staged_bare, false, ACCOUNT, vec![run(staged_bare, 1, 7)]);
+        w.staged(staged_bare, D, 0);
+        w.fork(fork_of_daughter, "1.0.2", &format!("{D}.1.1"), vec![run(D, 20, 7)]);
+        w.fork(fork_of_bare, "1.0.2", D, vec![run(fork_of_bare, 1, 6)]);
+        let (dialer, board, _) = open(w);
+        let sides = [
+            Side::Member(a(&format!("{D}.1.1.1"))),
+            Side::Draft { at: a(published_from), position: None },
+            Side::Fork(a(fork_of_daughter)),
+            Side::Draft { at: a(staged_bare), position: None },
+            Side::Fork(a(fork_of_bare)),
+        ];
+        for side in sides {
+            dialer.clear();
+            let merged = compose(&board, Some(&token()), &with_side(side.clone()))
+                .unwrap_or_else(|e| panic!("{side:?}: {e:?}"));
+            assert_eq!(merged.key.base, a(D), "{side:?}");
+            assert!(
+                !imaged(&dialer).contains(&D.to_string()),
+                "{side:?}: nothing of `D` imaged: {:?}",
+                dialer.ops()
+            );
+            let met: Vec<String> = dialer
+                .frames("doc_metadata")
+                .iter()
+                .map(|f| f["doc"].as_str().unwrap().to_string())
+                .collect();
+            let line: Vec<String> = match &side {
+                Side::Member(m) => vec![D.to_string(), m.to_string(), format!("{D}.1.1")],
+                Side::Draft { at, .. } if at == &a(published_from) => {
+                    vec![D.to_string(), at.to_string(), format!("{D}.1.1")]
+                }
+                Side::Fork(f) if f == &a(fork_of_daughter) => {
+                    vec![D.to_string(), f.to_string(), format!("{D}.1.1")]
+                }
+                other => vec![D.to_string(), other.address().to_string()],
+            };
+            assert_eq!(
+                met, line,
+                "{side:?}: the trunk's, the side's own, then each hop of its line"
+            );
+        }
+        let (bare_based, ordinary) =
+            (Side::Member(a(&format!("{D}.1.1"))), Side::Member(a(&format!("{D}.2.1"))));
+        for sides in [vec![bare_based.clone(), ordinary.clone()], vec![ordinary, bare_based]] {
+            let merged =
+                compose(&board, Some(&token()), &Inputs { sides: sides.clone(), ..race_inputs() })
+                    .unwrap_or_else(|e| panic!("{sides:?}: {e:?}"));
+            assert_eq!(
+                merged.key.base,
+                a(D),
+                "{sides:?}: one line ends at the document, whichever side comes later"
+            );
+        }
+        let ordinary =
+            compose(&board, Some(&token()), &with_side(Side::Member(a(&format!("{D}.2.1")))))
+                .expect("composed");
+        assert_eq!(ordinary.key.base, a(&format!("{D}.2")), "recorded against its address parent");
+        assert_eq!(
+            m_runs(&ordinary),
+            vec![run(D, 1, 7), run(D, 30, 5)],
+            "the fox runs: the daughter's removal of \" jumps\" stands"
+        );
+    }
+
+    /// THE DOCUMENT'S OWN ARRANGEMENT read where it holds words (PUB-2.66;
+    /// the arrangement suite's shape, `stage.rs`'s): `D` held "abcz" before
+    /// its first version, `own_count` 4; version 1 is "abc"; the daughter
+    /// `D.1.1`, begun from `D` and recorded against it, is "abcwz". The base
+    /// is read ONCE, `image` with `own`, at the one position, and M is
+    /// "abcw": the head's removal of "z" stands and the daughter's "w" goes
+    /// beside the surviving "c", an `anchor` gap the rules settle — where
+    /// over `D.1`, as the address would have it, "z" comes back as the
+    /// daughter's addition, and over `D` floated to its head (an image with
+    /// no `own`) the same. Landed, its record names `D`, and `verify` asks
+    /// the join's `compare` with the base region carrying `own` and answers
+    /// `Equal`.
+    #[test]
+    fn a_documents_own_arrangement_is_read_with_own_where_its_count_is_above_0() {
+        let mut w = World::new();
+        w.text(D, 1, "abcz");
+        w.text(D, 5, "w");
+        w.doc(D, true, ACCOUNT, vec![run(D, 1, 3)]);
+        w.pre_chain.insert(D.to_string(), vec![run(D, 1, 4)]);
+        w.member(&format!("{D}.1"), vec![run(D, 1, 3)], None);
+        w.member(&format!("{D}.1.1"), vec![run(D, 1, 3), run(D, 5, 1), run(D, 4, 1)], Some(4));
+        w.bare_based(&format!("{D}.1.1"));
+        w.trunk_head.insert(D.to_string(), format!("{D}.1"));
+        let (dialer, board, signer) = open(w);
+        let inputs = Inputs {
+            head: a(&format!("{D}.1")),
+            ..with_side(Side::Member(a(&format!("{D}.1.1"))))
+        };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        let of_d: Vec<Value> = dialer.frames("image").into_iter().filter(|f| f["d"] == D).collect();
+        assert_eq!(
+            of_d,
+            vec![frames::image_own(D, 1, 4)],
+            "the document's own arrangement, read once with `own`"
+        );
+        let p = dialer.world().position;
+        assert!(
+            dialer.positions("image").iter().all(|at| *at == p),
+            "at the one position: {:?}",
+            dialer.positions("image")
+        );
+        assert_eq!(merged.key.base, a(D));
+        assert_eq!(m_runs(&merged), vec![run(D, 1, 3), run(D, 5, 1)], "abcw");
+        assert_eq!(
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect::<Vec<_>>(),
+            vec![(GapKind::Anchor, true)],
+            "the daughter's `w` beside the surviving `c`"
+        );
+        let session = sign_in(&board, &signer);
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a current record");
+        assert_eq!(record.base, a(D));
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record).expect("verified"), Verdict::Equal);
+        let compared = dialer.frames("compare");
+        assert!(
+            !compared.is_empty()
+                && compared.iter().all(|f| f["rho1"] == json!([frames::region_own(D, 1, 4)])),
+            "the oracle reads the base as it was imaged: {compared:?}"
+        );
+    }
+
+    /// THE LINE THE BOARD CANNOT SERVE refuses before any `image` (skep
+    /// #1113): on a board serving no `own_count` — an older board — a side
+    /// whose line ends at `D` is `BareSource`, naming the side, `D` and the
+    /// hop whose recorded base `D` is (none for a draft staged from `D`
+    /// itself); a hop serving neither `shot_base` nor `source` is
+    /// `HopUnrecorded` naming it, its address never taken as its parent; a
+    /// hop whose recorded base its address contradicts is the board's fault,
+    /// faced. A daughter `D.1.1` recorded against `D.1`, its address
+    /// parent, composes over `D.1`.
+    #[test]
+    fn a_line_the_board_cannot_serve_refuses_before_any_image() {
+        let mut w = World::begun_before_version_1();
+        w.text(D, 40, " now");
+        w.member(&format!("{D}.1.1.1"), vec![run(D, 20, 7), run(D, 40, 4)], Some(7));
+        w.text(S, 1, "the owl");
+        w.doc(S, false, ACCOUNT, vec![run(S, 1, 7)]);
+        w.staged(S, D, 0);
+        w.no_own_count = true;
+        let (dialer, board, _) = open(w);
+        let daughter = a(&format!("{D}.1.1"));
+        let refused = |side: Side| -> Refusal {
+            dialer.clear();
+            let err = compose(&board, Some(&token()), &with_side(side)).expect_err("refused");
+            assert!(imaged(&dialer).is_empty(), "no image before the refusal: {:?}", dialer.ops());
+            err
+        };
+        let member = Side::Member(daughter.clone());
+        assert_eq!(
+            refused(member.clone()),
+            Refusal::BareSource { side: member.clone(), source: a(D), hop: Some(daughter.clone()) }
+        );
+        let under = Side::Member(a(&format!("{D}.1.1.1")));
+        assert_eq!(
+            refused(under.clone()),
+            Refusal::BareSource { side: under, source: a(D), hop: Some(daughter.clone()) }
+        );
+        let draft = Side::Draft { at: a(S), position: None };
+        assert_eq!(
+            refused(draft.clone()),
+            Refusal::BareSource { side: draft, source: a(D), hop: None }
+        );
+        dialer.world().no_own_count = false;
+        dialer.world().docs.get_mut(&daughter.to_string()).unwrap().shot_base = None;
+        assert_eq!(
+            refused(member.clone()),
+            Refusal::HopUnrecorded { side: member.clone(), hop: daughter.clone() }
+        );
+        dialer.world().docs.get_mut(&daughter.to_string()).unwrap().shot_base =
+            Some(format!("{D}.2"));
+        let Refusal::Halt(Halt::Halt(face)) = refused(member.clone()) else { panic!("faced") };
+        assert!(
+            face.state.contains(&format!("{D}.2")) && face.act.contains("board fault"),
+            "{face}"
+        );
+        dialer.world().docs.get_mut(&daughter.to_string()).unwrap().shot_base =
+            Some(format!("{D}.1"));
+        dialer.clear();
+        let merged = compose(&board, Some(&token()), &with_side(member)).expect("composed");
+        assert_eq!(merged.key.base, a(&format!("{D}.1")), "recorded against its address parent");
+    }
+
+    /// A NAMED BASE IS CHECKED BESIDE MEMBER SIDES (skep #1113): naming
+    /// `D.1` — the base the bare-based daughter's address says — beside it
+    /// is refused `NamedBaseDisagrees` before any `image`; naming `D`
+    /// composes. Landed, its record verifies `Equal`; the same record over
+    /// `D.1`, as a build deriving the base from the address wrote it, is
+    /// refused the same at `verify`, never answered `Equal`.
+    #[test]
+    fn a_named_base_beside_member_sides_is_checked_against_the_recorded_bases() {
+        let (dialer, board, signer) = open(World::begun_before_version_1());
+        let daughter = Side::Member(a(&format!("{D}.1.1")));
+        let named = |base: &str| Inputs { base: Some(a(base)), ..with_side(daughter.clone()) };
+        let by_address = a(&format!("{D}.1"));
+        assert_eq!(
+            compose(&board, Some(&token()), &named(&format!("{D}.1"))),
+            Err(Refusal::NamedBaseDisagrees { named: by_address.clone(), served: a(D) })
+        );
+        assert!(imaged(&dialer).is_empty(), "nothing imaged: {:?}", dialer.ops());
+        let merged = compose(&board, Some(&token()), &named(D)).expect("composed");
+        assert_eq!(merged.key.base, a(D));
+        let session = sign_in(&board, &signer);
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a current record");
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        let over_the_address = Record { base: by_address.clone(), ..record };
+        dialer.clear();
+        assert_eq!(
+            verify(&board, Some(&token()), &over_the_address),
+            Err(Refusal::NamedBaseDisagrees { named: by_address, served: a(D) })
+        );
+        assert!(imaged(&dialer).is_empty(), "nothing imaged: {:?}", dialer.ops());
     }
 
     /// MORE SIDES THAN ONE BYTE NUMBERS REFUSE BEFORE ANY READ (skep #792):

@@ -399,8 +399,9 @@ impl Name {
     /// The detail names the `reason` and, beside every reason but
     /// `base_disagrees`, the `side`: `base_unknown` — a member of another
     /// document, a draft of another account's, a draft the board records no
-    /// base for or whose base lies in another chain, a fork the board serves
-    /// no source for or whose source lies in another chain
+    /// base for or whose base lies in another chain, a fork the board
+    /// records neither a base nor a source for, or whose recorded base —
+    /// else its source — lies in another chain
     /// (`skep_client::merge::Refusal::BaseUnknown`); `fork_of_owner` — a
     /// fork of the document owner's own account, whose draft is the draft
     /// side (`Refusal::ForkOfOwner`); `bare_source` with the

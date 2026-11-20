@@ -130,8 +130,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   {doc, alternative | draft | fork, into?}` is the shell's
   `merge.compose`: the published document's head merged with ONE side —
   a daughter of its chain, a draft of the owner's account whose recorded
-  base is a version of `doc`, or another account's fork whose source is
-  one, a draft of the owner's account given as `fork` refused
+  base is a version of `doc`, or another account's fork whose recorded
+  base, else its source, is one — a landing into a fork its owner staged
+  moving that base — a draft of the owner's account given as `fork` refused
   `base_unknown` with reason `fork_of_owner` — and the merge landed, at
   its defaults, as the whole arrangement
   of `into` or of a fresh draft staged from the head, by one write; its
@@ -139,8 +140,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   reading each gap's state off it, or names the version a merged
   daughter went into. A fork composed by its own owner lands in a fresh
   draft of theirs staged from the head, re-basing it for the document's
-  owner to merge; the fork itself as `into` is refused `fork_base_moved`
-  unless its source is the head. A gap is settled by editing the draft.
+  owner to merge; the fork itself as `into` takes the merge at any head
+  where its owner staged it, and where a `version` minted it is refused
+  `fork_base_moved` unless its source is the head. A gap is settled by
+  editing the draft.
   `merge_land {resolutions?, answers?}` is the shell's `merge.land`: the
   draft published through the publication family's one signed write with
   the supersession claim on the daughter — none at the draft or fork

@@ -17,8 +17,9 @@ composition refused with nothing published), `--into` lands it in a draft, the r
 in a private document
 — a published `--journal` said by the composition's talk and refused
 before any write, exit 1 — a daughter is reported and never retried,
-another account's fork of the document (`--fork`) is merged from the source the board
-serves for it, every side's base derived up the bases the board recorded
+another account's fork of the document (`--fork`) is merged from where the board records
+it standing — its recorded base, which a landing into it moves, else its source — every
+side's base derived up the bases the board recorded
 and never from an address — a side begun from the bare document before its
 first version merged over the document's arrangement from before that
 version, the report's `base` the document itself — and a side whose base

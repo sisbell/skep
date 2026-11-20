@@ -13,9 +13,11 @@
 //! checked, and one the board's records do not derive is refused), the
 //! report's `sides` carrying the position the draft was read at, which a
 //! verifier reads the draft and its recorded base as of; or another
-//! account's fork of the document, whose base is derived so from the source
-//! the board serves for it (`doc_metadata`'s `source`), a document of the
-//! owner's own account given as `--fork` refused `fork_of_owner`, the
+//! account's fork of the document, whose base is derived so from where the
+//! board records it standing — the base it records for a fork its owner
+//! staged (`doc_metadata`'s `base`), which each landing into it moves to
+//! the head, else its source (`doc_metadata`'s `source`) — a document of
+//! the owner's own account given as `--fork` refused `fork_of_owner`, the
 //! owner's draft being the `--draft` side — a side begun from the bare
 //! document before its first version, a draft or a fork unpublished or a
 //! member published beside version 1, composing over the document's own

@@ -17,46 +17,49 @@
 //! `{doc, draft, into?}`, or THE FORK `{doc, fork, into?}` — composes the
 //! merge of the trunk's head with a daughter of the person's own, with a
 //! draft of the family behind the head, or with a fork of one of the
-//! document's versions — a document outside the chain the board serves
-//! that version for as its `source`, another account's `version` or
-//! `stage` of it (the merge record's §1.2 shape (4)) — and LANDS it: M as
-//! the whole arrangement of `into` by the library's one write, typed
-//! against the composition's read of the draft, the draft's recorded base
-//! re-recorded to the head and the merge marked beside it; a newer version
-//! published since compose is never refused, the write landing on the head
-//! used and `head_moved` told (LAND AND TELL); a draft changed since the
-//! compose's read refused `arrangement_moved`, the board's verdict, nothing
-//! landed. `into` IS THE PAGE's: the draft "continue in" lands at where it
-//! holds nothing unpublished, a level draft of the family staged from the
-//! head where one stands, else none — a FRESH draft staged from the head
-//! first, two commits (R3) — decided before the act off the feed rows the
-//! page holds and followed here, never decided afresh; read as UNTRUSTED
-//! input, its `doc_metadata` read before anything is composed and a
-//! published draft or another account's refused `not_owner` (skep #799).
-//! At the fork side `into` may name the fork itself, its owner's: the
-//! library's landing then takes M only where the fork's source is the head
-//! it was composed on — written with no base and no marker, the fork being
-//! no staged draft — else refuses `fork_base_moved` with nothing written,
-//! the way on a fresh draft staged from the head. The head is the trunk's
-//! head as the board stands, read up the trunk from where the side starts
-//! — the trunk member a daughter's address, a draft side's recorded base or
-//! a fork's source lies under — by the library's head read
-//! (`skep_client::publication::standing`): the members past it by
-//! doubling, then a binary search, which needs no feed walk and meets no
-//! retention floor. A draft side the owner's account staged from the bare
-//! document, or a fork of any account taken from it, starts at `doc`
-//! itself: its head is read up from `doc`'s first member, and where no
-//! version stands yet the side is refused `base_unknown` with `reason`
-//! `bare_source` naming `doc`, nothing to merge onto. A board answering
-//! every member the doubling asks refuses the row `shape` naming
-//! `doc_metadata` after 64 reads, nothing composed or landed (SP-17).
-//! Another account's draft staged from the bare document, and a draft or a
-//! fork lying in no member of `doc`'s chain, is refused before that read as
-//! the library refuses it, `base_unknown` with `reason` `base_unknown`. A
-//! fork of `doc`'s owner's own account — the owner's draft, which is the
-//! draft side, its words re-minted at the shot — is refused by the
-//! composition, `base_unknown` with `reason` `fork_of_owner`, nothing
-//! landed.
+//! document's versions — a document outside the chain the board records
+//! standing on that version, another account's `stage` of it by its
+//! recorded base, which each landing into it moves to the head, or its
+//! `version` of it by its `source` (the merge record's §1.2 shape (4)) —
+//! and LANDS it: M as the whole arrangement of `into` by the library's one
+//! write, typed against the composition's read of the draft, the draft's
+//! recorded base re-recorded to the head and the merge marked beside it; a
+//! newer version published since compose is never refused, the write
+//! landing on the head used and `head_moved` told (LAND AND TELL); a draft
+//! changed since the compose's read refused `arrangement_moved`, the
+//! board's verdict, nothing landed. `into` IS THE PAGE's: the draft
+//! "continue in" lands at where it holds nothing unpublished, a level draft
+//! of the family staged from the head where one stands, else none — a FRESH
+//! draft staged from the head first, two commits (R3) — decided before the
+//! act off the feed rows the page holds and followed here, never decided
+//! afresh; read as UNTRUSTED input, its `doc_metadata` read before anything
+//! is composed and a published draft or another account's refused
+//! `not_owner` (skep #799). At the fork side `into` may name the fork
+//! itself, its owner's: a fork its owner staged takes M at any head, its
+//! recorded base moving to the head and the merge marked beside it, as a
+//! draft does; a fork a `version` minted, which the board records no base
+//! for, takes M only where its source is the head it was composed on —
+//! written with no base and no marker — else the library's landing refuses
+//! `fork_base_moved` with nothing written, the way on a fresh draft staged
+//! from the head. The head is the trunk's head as the board stands, read up
+//! the trunk from where the side starts — the trunk member a daughter's
+//! address, a draft side's recorded base, or a fork's recorded base, else
+//! its source, lies under — by the library's head read
+//! (`skep_client::publication::standing`): the members past it by doubling,
+//! then a binary search, which needs no feed walk and meets no retention
+//! floor. A draft side the owner's account staged from the bare document,
+//! or a fork of any account taken from it, starts at `doc` itself: its head
+//! is read up from `doc`'s first member, and where no version stands yet
+//! the side is refused `base_unknown` with `reason` `bare_source` naming
+//! `doc`, nothing to merge onto. A board answering every member the
+//! doubling asks refuses the row `shape` naming `doc_metadata` after 64
+//! reads, nothing composed or landed (SP-17). Another account's draft
+//! staged from the bare document, and a draft or a fork lying in no member
+//! of `doc`'s chain, is refused before that read as the library refuses it,
+//! `base_unknown` with `reason` `base_unknown`. A fork of `doc`'s owner's
+//! own account — the owner's draft, which is the draft side, its words
+//! re-minted at the shot — is refused by the composition, `base_unknown`
+//! with `reason` `fork_of_owner`, nothing landed.
 //! Where a side starts names no base: the library derives the base from
 //! the bases the board recorded up the side's line, so a side begun before
 //! the document's first version — a daughter published beside version 1,
@@ -342,9 +345,10 @@ enum Form {
     /// A draft of the family behind the head, the merge's side.
     Draft(Address),
     /// A fork of a version of the trunk's chain, the merge's side: a
-    /// document outside the chain the board serves that version for as its
-    /// `source` — another account's `version` of the member, or its `stage`
-    /// of one (the merge record's §1.2 shape (4)).
+    /// document outside the chain the board records standing on that
+    /// version — another account's `stage` of the member, its recorded
+    /// base, which each landing into it moves to the head, or its `version`
+    /// of one, its `source` (the merge record's §1.2 shape (4)).
     Fork(Address),
 }
 
@@ -584,28 +588,31 @@ fn draft_start(doc: &Address, draft: &Address, base: Option<&Address>) -> Result
     }
 }
 
-/// Returns where a fork's head read starts: the trunk member of `doc` the
-/// source the board serves for it (`source`) lies under, or `doc` itself
-/// where the fork was taken from the bare document.
+/// Returns where a fork's head read starts: the trunk member of `doc` its
+/// anchor lies under, or `doc` itself where the fork was taken from the
+/// bare document.
 ///
-/// It is the head read's start at the fork side, decided off the fork's one
-/// `doc_metadata` read, as the library reads the fork's anchor
-/// (`skep_client::merge::compose`, the fork's `source`). It is answered for
-/// a fork of any account, the composition refusing one of `doc`'s owner's
-/// own account itself, `fork_of_owner` — the owner's draft is the draft
-/// side — as it refuses another account's draft at the draft side. A fork
-/// taken from `doc` itself — before its first version, whether or not one
-/// stands since — starts at `doc`.
+/// `anchor` is where the board records the fork standing, off its one
+/// `doc_metadata` read: its recorded base (`base`) where the board records
+/// one — a fork another account staged, moved to the head by each landing
+/// into it — else its source (`source`), as the library reads the fork's
+/// anchor (`skep_client::merge::compose`; the owner's ruling of 2026-11-19,
+/// skep #1106). It is answered for a fork of any account, the composition
+/// refusing one of `doc`'s owner's own account itself, `fork_of_owner` —
+/// the owner's draft is the draft side — as it refuses another account's
+/// draft at the draft side. A fork taken from `doc` itself — before its
+/// first version, whether or not one stands since — starts at `doc`.
 ///
 /// # Errors
 ///
-/// `BaseUnknown`, the merge library's own refusal of the side: where no
-/// source is served — a document no `version` or `stage` minted — or the
-/// source lies in another document's chain.
-fn fork_start(doc: &Address, fork: &Address, source: Option<&Address>) -> Result<Address, lib::Refusal> {
-    match source {
-        Some(s) if s == doc => Ok(doc.clone()),
-        _ => source.and_then(|s| trunk_member_above(doc, s)).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Fork(fork.clone()))),
+/// `BaseUnknown`, the merge library's own refusal of the side: where the
+/// board records neither a base nor a source — a document `fork` or
+/// `create_new_document` minted — or the anchor lies in another document's
+/// chain.
+fn fork_start(doc: &Address, fork: &Address, anchor: Option<&Address>) -> Result<Address, lib::Refusal> {
+    match anchor {
+        Some(a) if a == doc => Ok(doc.clone()),
+        _ => anchor.and_then(|a| trunk_member_above(doc, a)).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Fork(fork.clone()))),
     }
 }
 
@@ -923,22 +930,22 @@ impl Shell {
     ///    `session_died`; then the merged arm's composition and record, as
     ///    step 5's and `merge.land`'s record;
     /// 4. `into`'s read, as step 3's reads, and `not_owner` naming it where
-    ///    it is published or another account's; at the draft side the
-    ///    draft's read, and `base_unknown` with `reason` `base_unknown`
-    ///    where the board records no base for it in `doc`'s chain, or where
-    ///    another account's draft was staged from `doc` itself
-    ///    (`draft_start`); at the fork side the fork's read, `unreadable`
-    ///    where the session may not read it, and `base_unknown` with
-    ///    `reason` `base_unknown` where the board serves it no source in
-    ///    `doc`'s chain (`fork_start`); then, where no re-open stands, the
-    ///    head read's (`trunk_head`): `unreadable`, `busy`, `session_died`,
-    ///    the board's verdicts, `unreachable`, and `shape` naming
-    ///    `doc_metadata` for an answer it cannot read or where the board
-    ///    answers every member the read asks; and, for a draft or a fork
-    ///    begun from `doc` itself while no version of it stands,
-    ///    `base_unknown` with `reason` `bare_source` naming `source` (`doc`
-    ///    itself) — nothing to merge onto: publish the draft, which lands
-    ///    version 1 — nothing composed;
+    ///    it is published or another account's; at the draft side the draft's
+    ///    read, and `base_unknown` with `reason` `base_unknown` where the
+    ///    board records no base for it in `doc`'s chain, or where another
+    ///    account's draft was staged from `doc` itself (`draft_start`); at
+    ///    the fork side the fork's read, `unreadable` where the session may
+    ///    not read it, and `base_unknown` with `reason` `base_unknown` where
+    ///    the board records it neither a base nor a source, or where its
+    ///    recorded base, else its source, lies in no member of `doc`'s chain
+    ///    (`fork_start`); then, where no re-open stands, the head read's
+    ///    (`trunk_head`): `unreadable`, `busy`, `session_died`, the board's
+    ///    verdicts, `unreachable`, and `shape` naming `doc_metadata` for an
+    ///    answer it cannot read or where the board answers every member the
+    ///    read asks; and, for a draft or a fork begun from `doc` itself while
+    ///    no version of it stands, `base_unknown` with `reason` `bare_source`
+    ///    naming `source` (`doc` itself) — nothing to merge onto: publish the
+    ///    draft, which lands version 1 — nothing composed;
     /// 5. the composition's (`skep_client::merge::compose`): `base_unknown`
     ///    with its reason — `fork_of_owner` where the fork side is of
     ///    `doc`'s owner's own account, the owner's draft being the draft
@@ -1024,15 +1031,18 @@ impl Shell {
             None => None,
         };
         // Where the head read starts: the trunk member a daughter's address
-        // lies under, a draft side's recorded base's or a fork's source's,
-        // or `doc` itself for a side begun from it — else the library's own
-        // refusal of the side, before the head is read. It finds the head,
-        // never the base, which the library derives from the bases the
-        // board recorded up the side's line.
+        // lies under, a draft side's recorded base's, or a fork's recorded
+        // base's, else its source's, or `doc` itself for a side begun from
+        // it — else the library's own refusal of the side, before the head
+        // is read. It finds the head, never the base, which the library
+        // derives from the bases the board recorded up the side's line.
         let start = match &form {
             Form::Daughter(d) => trunk_member_above(&doc, d).ok_or_else(|| lib::Refusal::BaseUnknown(lib::Side::Member(d.clone()))),
             Form::Draft(d) => draft_start(&doc, d, self.draft_facts(&session, d)?.base.as_ref()),
-            Form::Fork(f) => fork_start(&doc, f, self.draft_facts(&session, f)?.source.as_ref()),
+            Form::Fork(f) => {
+                let facts = self.draft_facts(&session, f)?;
+                fork_start(&doc, f, facts.base.as_ref().or(facts.source.as_ref()))
+            }
         };
         let start = start.map_err(|r| self.merge_refusal(&session, r))?;
         // THE RE-OPEN: the marker on `into` naming this side, composed on

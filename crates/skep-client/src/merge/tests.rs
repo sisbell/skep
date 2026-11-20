@@ -3176,7 +3176,7 @@ mod scripted {
         assert_eq!(
             dialer.ops(),
             ["doc_metadata", "at:doc_metadata"],
-            "the trunk's metadata, then the fork's for its source at the one position, and nothing after"
+            "the trunk's metadata, then the fork's for its anchor at the one position, and nothing after"
         );
         assert_eq!(dialer.frames("doc_metadata")[1]["doc"], unminted);
         refuses(fork(of_z), None, Refusal::BaseUnknown(fork(of_z)));
@@ -3793,6 +3793,158 @@ mod scripted {
             vec![(GapKind::Order, false)]
         );
         assert_eq!(merged.key.base, a(&format!("{D}.1")));
+    }
+
+    /// A STAGED FORK STANDS WHERE THE BOARD RECORDS IT (the owner's ruling
+    /// of 2026-11-19; skep #1106): another account's draft `Y`, staged from
+    /// `D.1` — its base and its `source` `D.1` — and landed into once `D.2`
+    /// stood, the landing moving its recorded base to `D.2` and keeping its
+    /// source, holds `D.2`'s "the big cat sat" and "!!!" of its own; the
+    /// head `D.3` has dropped "big ". Composed as a fork, its anchor is the
+    /// base the board records, read off the fork's ONE `doc_metadata`: the
+    /// base is `D.2`, the head's removal of "big " stands and the fork's
+    /// "!!!" is a window onto it — over its source `D.1`, "big " would come
+    /// back as the fork's own addition (the mutant that reads the source
+    /// first). Landed in a fresh draft, its record verifies `Equal`.
+    #[test]
+    fn a_staged_fork_composes_over_the_base_the_board_records_never_its_source() {
+        let y = "1.0.2.0.72";
+        let (v1, v2, v3) = (format!("{D}.1"), format!("{D}.2"), format!("{D}.3"));
+        let mut w = World::race();
+        w.text(y, 1, "!!!");
+        w.doc(y, false, "1.0.2", vec![run(D, 1, 11), run(y, 1, 3)]);
+        w.staged(y, &v1, 11);
+        // The landing into `Y` once `D.2` stood: its words M, its base moved
+        // to the head at the landing's commit, its source kept.
+        let landed = w.commit("set_arrangement", vec![y.to_string()]);
+        let theirs = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(y, 1, 3)];
+        let fork = w.docs.get_mut(y).unwrap();
+        fork.runs = theirs.clone();
+        fork.history.insert(landed, theirs);
+        fork.staged.insert(landed, (v2.clone(), 15));
+        // The head `D.3`, "big " dropped.
+        w.member(&v3, vec![run(D, 1, 11)], Some(15));
+        w.trunk_head.insert(D.to_string(), v3.clone());
+        let (dialer, board, signer) = open(w);
+        let Answer::Document(meta) =
+            board.op(Some(&token()), &frames::doc_metadata(y)).expect("the read")
+        else {
+            panic!("the session stands")
+        };
+        assert_eq!(
+            (meta["base"].as_str(), meta["source"].as_str()),
+            (Some(v2.as_str()), Some(v1.as_str())),
+            "the premise — the landing moved the base and kept the source: {meta}"
+        );
+        dialer.clear();
+        let inputs = Inputs { head: a(&v3), sides: vec![Side::Fork(a(y))], ..race_inputs() };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        let metadata: Vec<String> = dialer
+            .frames("doc_metadata")
+            .iter()
+            .map(|f| f["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            metadata,
+            [D.to_string(), y.to_string()],
+            "the trunk's, then the fork's one read for its anchor"
+        );
+        assert_eq!(
+            merged.key.base,
+            a(&v2),
+            "the base the board records for the fork, never its source"
+        );
+        assert_eq!(merged.record.base, a(&v2));
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 11), run(y, 1, 3)],
+            "the cat sat!!!: the head's removal stands"
+        );
+        assert_eq!(
+            merged.families,
+            vec![Family::Own, Family::Window],
+            "the fork's own words a window onto it"
+        );
+        // LANDED in a fresh draft: its record verifies against the fork's
+        // recorded base, which nothing has moved since.
+        let session = sign_in(&board, &signer);
+        land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a current record");
+        assert_eq!(record.base, a(&v2));
+        assert_eq!(verify(&board, Some(&token()), &record).expect("verified"), Verdict::Equal);
+    }
+
+    /// A FORK's ANCHOR IS ITS RECORDED BASE, ELSE ITS SOURCE, EACH IN THE
+    /// DOCUMENT's CHAIN (skep #1106), read off the fork's one `doc_metadata`.
+    /// Another account's ALTERNATIVE `X2` — staged from its own draft `X1`,
+    /// itself staged from `D.1`, so its `source` is `X1` and its recorded
+    /// base the `D.1` it inherited — composes over `D.1`, nothing of `X1`
+    /// read (the mutant that reads the source first refuses it); a fork a
+    /// `version` minted, its source `D.1` and no base, composes over its
+    /// source. Refused exactly `BaseUnknown` with no image read: a fork
+    /// staged from `D.1` whose base its publication as an edition of its
+    /// own moved to that edition's first member — its base never passed
+    /// over for the source in the chain (the source-first mutant composes
+    /// it) — and one staged from another document's member, its base and
+    /// its source both there (the mutant that takes the anchor unchecked
+    /// walks either line, `HopUnrecorded`).
+    #[test]
+    fn a_forks_anchor_is_its_recorded_base_else_its_source_each_in_the_documents_chain() {
+        let v1 = format!("{D}.1");
+        let (x1, x2, minted) = ("1.0.2.0.72", "1.0.2.0.73", "1.0.2.0.74");
+        let (published, edition, of_z) = ("1.0.2.0.75", "1.0.2.0.76", "1.0.2.0.77");
+        let mut w = World::race();
+        w.doc(x1, false, "1.0.2", vec![run(D, 1, 7)]);
+        w.staged(x1, &v1, 11);
+        w.doc(x2, false, "1.0.2", vec![run(D, 1, 7)]);
+        w.staged(x2, &v1, 11);
+        w.docs.get_mut(x2).unwrap().source = Some(x1.to_string());
+        w.fork(minted, "1.0.2", &v1, vec![run(D, 1, 7)]);
+        // Staged from `D.1`, then published as an edition of its own, its
+        // base moved at the shot to the edition's first member.
+        w.doc(published, false, "1.0.2", vec![run(D, 1, 7)]);
+        w.staged(published, &v1, 11);
+        w.doc(edition, true, "1.0.2", vec![run(D, 1, 7)]);
+        w.member(&format!("{edition}.1"), vec![run(D, 1, 7)], None);
+        let shot = w.position;
+        w.docs.get_mut(published).unwrap().staged.insert(shot, (format!("{edition}.1"), 7));
+        w.text(Z, 1, "hello");
+        w.doc(Z, true, ACCOUNT, vec![run(Z, 1, 5)]);
+        w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
+        w.doc(of_z, false, "1.0.2", vec![run(Z, 1, 5)]);
+        w.staged(of_z, &format!("{Z}.1"), 5);
+        let (dialer, board, _) = open(w);
+        let fork = |text: &str| Side::Fork(a(text));
+        let the_big_cat = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)];
+        let merged = compose(&board, Some(&token()), &with_side(fork(x2)))
+            .expect("the alternative composes");
+        assert_eq!(merged.key.base, a(&v1), "the base the alternative inherited");
+        assert_eq!(m_runs(&merged), the_big_cat);
+        let metadata: Vec<String> = dialer
+            .frames("doc_metadata")
+            .iter()
+            .map(|f| f["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(metadata, [D.to_string(), x2.to_string()], "nothing of its source read");
+        let merged = compose(&board, Some(&token()), &with_side(fork(minted)))
+            .expect("the version's fork composes");
+        assert_eq!(merged.key.base, a(&v1), "a fork with no recorded base stands on its source");
+        assert_eq!(m_runs(&merged), the_big_cat);
+        for refused in [published, of_z] {
+            dialer.clear();
+            assert_eq!(
+                compose(&board, Some(&token()), &with_side(fork(refused))),
+                Err(Refusal::BaseUnknown(fork(refused))),
+                "{refused}"
+            );
+            assert_eq!(
+                dialer.ops(),
+                ["doc_metadata", "at:doc_metadata"],
+                "{refused}: the trunk's and the fork's, nothing imaged"
+            );
+        }
     }
 
     /// `image` IN PARTS: a head of three runs refused `image_too_large`
@@ -5506,6 +5658,63 @@ mod scripted {
         assert_eq!(frame["head"], json!({"at": v2, "extent": "15"}));
         assert!(frame.get("base").is_none());
         assert_eq!(dialer.world().standing(fresh), (None, None), "no base, no marker gained");
+    }
+
+    /// A RECORD NAMES NO POSITION FOR ITS FORK SIDE (skep #1106): the
+    /// merger's draft `Y`, staged from `T.1` of another account's trunk `T`
+    /// — a fork from `T`'s side — composes over its recorded base `T.1` and
+    /// is landed into itself, the landing moving its recorded base to the
+    /// head `T.2` in the same commit and keeping its source. `verify` reads
+    /// the fork as it stands, so the base its record names is no longer the
+    /// one the board's records derive: the record is faced, naming both
+    /// bases and that a record names no position for a fork side, never
+    /// verified — where the mutant that reads the fork's source first
+    /// derives `T.1` again and answers `Equal`.
+    #[test]
+    fn verify_faces_a_record_whose_fork_a_landing_has_moved_since() {
+        let (t, y) = ("1.0.2.0.64", "1.0.1.0.69");
+        let (v1, v2) = (format!("{t}.1"), format!("{t}.2"));
+        let mut w = World::new();
+        w.text(t, 1, "the cat sat");
+        w.text(t, 12, "big ");
+        let head = vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 7)];
+        w.doc(t, true, "1.0.2", head.clone());
+        w.member(&v1, vec![run(t, 1, 11)], None);
+        w.member(&v2, head, Some(11));
+        w.trunk_head.insert(t.to_string(), v2.clone());
+        w.doc(y, false, ACCOUNT, vec![run(t, 1, 7)]);
+        w.staged(y, &v1, 11);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs =
+            Inputs { doc: a(t), head: a(&v2), sides: vec![Side::Fork(a(y))], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert_eq!(merged.key.base, a(&v1), "the base the board records for the fork");
+        assert_eq!(m_runs(&merged), vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 3)], "the big cat");
+        let landed =
+            land(&board, &merged, draft_landing(&session, &signer, Some(a(y)))).expect("landed");
+        let Landed::Draft { into, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(into, &a(y), "landed into the fork itself");
+        let world = dialer.world();
+        assert_eq!(
+            (world.standing(y).0, world.docs[y].source.clone()),
+            (Some((v2.clone(), 15)), Some(v1.clone())),
+            "the landing moved the fork's base to the head and kept its source"
+        );
+        drop(world);
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a current record");
+        assert_eq!(record.base, a(&v1));
+        let err = verify(&board, Some(&token()), &record).expect_err("faced");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.contains(&format!("names the base {v1}"))
+                && face.state.contains(&format!("now derive {v2}")),
+            "{face:?}"
+        );
+        assert!(face.cause.contains("a record names no position for a fork side"), "{face:?}");
+        assert!(face.act.contains("cannot be checked against its fork as it stands"), "{face:?}");
     }
 
     /// The scripted board judges `set_arrangement` in the store's order.

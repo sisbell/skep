@@ -1506,8 +1506,11 @@ state, so it outlives the journal entry that recorded it, and it is
 served to every reader who may read the address named, whether or not
 they may read the source: an address is not secret, and a reader who
 wants more of the source asks the source under its own gate. A merge of
-a cross-account fork takes it as the fork's base (the merge record's
-case (j)) where it names a member of the trunk being merged.
+a cross-account fork takes the fork's anchor (the merge record's case
+(j)) from where the board records it standing: its `base` where the
+board records one — a staged draft, whose base each landing into it
+moves — else this source, where it names the trunk being merged or a
+member of its chain.
 
 `source_copied` is beside it, `null` exactly where `source` is: the
 number of content positions of the source the copy took, a decimal
@@ -1544,10 +1547,11 @@ undo restores. Both `null` where the board records no base: a document
 an alternative of a draft the board held no base for, a version member,
 the trunk itself; a draft whose own first publication minted its edition
 gains that edition's first member as its base at the shot. Kept in the
-board's state, carried by every checkpoint, the same at every position
-from the stage on, and served to every reader who may read the draft, as
-`source` is — never read off a record the client wrote and never the
-trunk's head where the board records none.
+board's state and carried by every checkpoint, so `/op-at` answers it as
+of any position — the base that stood there, whatever later publications
+and landings moved it to — and served to every reader who may read the
+draft, as `source` is — never read off a record the client wrote and
+never the trunk's head where the board records none.
 
 `merge` is THE MERGE THE DRAFT CARRIES, the marker beside the base: an
 object `{"sides": [addresses], "head": <address>, "head_copied": <nat>,

@@ -1187,8 +1187,11 @@ fn the_publication_references_state_the_shells_shapes() {
 /// from the bare document while it has no version, with the way on from
 /// that draft, and naming its `hop` where the board serves no count of the
 /// document's words before version 1, `hop_unrecorded` naming its `hop`,
-/// and the fork side's own refusal at its landing, `fork_base_moved`; it
-/// and MERGING say that a side begun from the document before its first
+/// and the fork side's own refusal at its landing, `fork_base_moved`, a
+/// fork its owner staged taking the landing at any head; it and MERGING
+/// say that a fork stands where the board records it — its recorded base,
+/// which a landing into it moves, else its source — that a side begun
+/// from the document before its first
 /// version composes over the document as it stood then, `base` the
 /// document itself, and that a draft of the document owner's account given
 /// as the fork side is refused `fork_of_owner`, to be given as the draft
@@ -1268,7 +1271,8 @@ fn the_merge_references_state_the_shells_shapes() {
     for said in [
         "a document never published has nothing to merge",
         "whose recorded base (doc_metadata(draft).base) is doc or a version of doc",
-        "whose source (doc_metadata(fork).source) is doc or a version of doc",
+        "whose recorded base (doc_metadata(fork).base), else its source (doc_metadata(fork).source), is doc or a version of doc",
+        "a landing into a fork staged so moves its base, and the fork is merged from where it now stands",
         "The base is read off the bases the board recorded, never off an address",
         "composes over doc as it stood before version 1, empty on most documents, base then doc itself",
         "while doc has no version yet it is refused base_unknown with reason bare_source, nothing to merge onto",
@@ -1316,7 +1320,8 @@ fn the_merge_references_state_the_shells_shapes() {
         "up from the version the side lies under, or from doc's first version for a side begun from doc itself",
         "base_unknown {side, reason, source?, hop?}",
         "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account — compose that one as a fork",
-        "and for a fork with no source, one the fork op minted, or one whose source is neither doc nor a version of it",
+        "and for a fork with neither a recorded base nor a source, one the fork op minted, or one whose recorded base, else its source, is neither doc nor a version of it",
+        "while a fork its owner staged — one doc_metadata(fork).base names — takes it at any head, its base moving there",
         "a draft of doc's owner's account given as fork is refused base_unknown with reason fork_of_owner — give it as draft",
         "reason fork_of_owner for a document of doc's owner's account given as fork, whose draft is the draft side — give it as draft",
         "reason bare_source, naming source (doc itself), for a draft of yours or a fork, of any account, begun from doc while doc has no version yet — nothing to merge onto: publish that draft, which lands version 1",

@@ -2618,24 +2618,37 @@ fn another_accounts_fork_is_composed_landed_taken_back_and_published_with_its_re
     sd.shutdown();
 }
 
-/// Checks that a fork is composed or refused by the source the board
-/// serves for it, before the head is read.
+/// Checks that a fork is composed or refused by where the board records it
+/// standing — its recorded base, else its source — before the head is
+/// read.
 ///
 /// Another account's `stage` of E.1 composes as its `version` does: `form`
 /// `fork`, `base` E.1. Its `version` of a private draft of the person's —
 /// whose source is that draft, no version of E — and a document its `fork`
-/// op minted, which has no source, are each refused exactly `base_unknown`
-/// with `reason` `base_unknown`; and its `stage` of Z, another published
-/// document of the person's, while Z's chain is empty, composed as Z's fork,
-/// is refused exactly `base_unknown` with `reason` `bare_source` naming Z as
-/// its `source` before Z's first version, nothing to merge onto — the
-/// board's position unmoved by every refusal — and once Z.1 stands composes
-/// over Z itself, its arrangement before version 1, and lands (the mutants
-/// that keep the draft side's owner test at the fork, answering
-/// `base_unknown` for another account's fork of the bare document, or keep
-/// refusing it once a version stands).
+/// op minted, which has neither a base nor a source, are each refused
+/// exactly `base_unknown` with `reason` `base_unknown`; and its `stage` of
+/// Z, another published document of the person's, while Z's chain is
+/// empty, composed as Z's fork, is refused exactly `base_unknown` with
+/// `reason` `bare_source` naming Z as its `source` before Z's first
+/// version, nothing to merge onto — the board's position unmoved by every
+/// refusal — and once Z.1 stands composes over Z itself, its arrangement
+/// before version 1, and lands (the mutants that keep the draft side's
+/// owner test at the fork, answering `base_unknown` for another account's
+/// fork of the bare document, or keep refusing it once a version stands).
+///
+/// A FORK ITS OWNER STAGED STANDS WHERE THE BOARD RECORDS IT (skep #1106):
+/// the agent stages S from E.1, writes " quietly" and lands the merge with
+/// E.2 into S itself, S's recorded base moving to E.2 and its source kept;
+/// the person publishes E.3, " jumps" taken out, and composes S as a fork:
+/// `base` E.2, where S now stands, and the landed words "the fox quietly",
+/// the head's removal standing (the mutant that reads the source first
+/// composes over E.1, " jumps" coming back as S's own words). And another
+/// account's ALTERNATIVE of its stage of E.1 — its source that draft, its
+/// recorded base the E.1 it inherited — composes over E.1 (the mutant that
+/// leaves the shell's head-read start on the source refuses it
+/// `base_unknown`).
 #[test]
-fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
+fn a_fork_is_composed_or_refused_by_where_the_board_records_it_standing() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -2676,6 +2689,55 @@ fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
         (Some("landed"), Some("fork"), Some(z.as_str()), Some(z1.as_str())),
         "once Z.1 stands, the fork of Z composes over Z itself: {report}"
     );
+    // The agent's own staged fork, landed into itself, then merged by the
+    // person over where it now stands.
+    let agent = agent_seat(&dir, &sd, &g);
+    let stage = agent.op(frames::stage(&f.e1, None));
+    let s = stage["addr"].as_str().expect("an ack_addr").to_string();
+    agent.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": stage["at"]}));
+    let landed = agent.call("merge.compose", json!({"session": agent.session, "doc": f.edition, "fork": s, "into": s})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (landed["outcome"].as_str(), landed["into"].as_str(), landed["base"].as_str(), landed["head"].as_str()),
+        (Some("landed"), Some(s.as_str()), Some(f.e1.as_str()), Some(f.e2.as_str())),
+        "the agent's merge landed into its own staged fork: {landed}"
+    );
+    let meta = g.op(frames::doc_metadata(&s));
+    assert_eq!(
+        (meta["base"].as_str(), meta["source"].as_str()),
+        (Some(f.e2.as_str()), Some(f.e1.as_str())),
+        "the premise — the landing moved S's base to E.2 and kept its source: {meta}"
+    );
+    let t = g.addr(frames::stage(&f.e2, None));
+    g.op(json!({"op": "delete", "doc": t, "p": {"subspace": "1", "ordinal": "8"}, "width": "6", "as_of": g.position()}));
+    page_panel(&g, &f, &t);
+    let published = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!(published["member"].as_str(), Some(e3.as_str()), "E.3, \" jumps\" taken out: {published}");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": s})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("fork"), Some(f.e2.as_str()), Some(e3.as_str())),
+        "composed over E.2, where S now stands: {report}"
+    );
+    let into = report["into"].as_str().expect("the fresh draft");
+    let width: u64 = report["runs"].as_array().unwrap().iter().map(|r| r["width"].as_u64().unwrap()).sum();
+    assert_eq!(g.text(into, width), "the fox quietly", "the head's removal of \" jumps\" stands: {report}");
+    // Another account's alternative of its stage of E.1: composed over the
+    // base it inherited, never refused for its source, a draft.
+    let alternative = addr_of(frames::stage(&staged, None));
+    let meta = g.op(frames::doc_metadata(&alternative));
+    assert_eq!(
+        (meta["base"].as_str(), meta["source"].as_str()),
+        (Some(f.e1.as_str()), Some(staged.as_str())),
+        "the premise — its source the draft, its recorded base the inherited E.1: {meta}"
+    );
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": alternative})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("fork"), Some(f.e1.as_str()), Some(e3.as_str())),
+        "the alternative composes over the base it inherited: {report}"
+    );
+    agent.shell.shutdown();
     g.shell.shutdown();
     sd.shutdown();
 }

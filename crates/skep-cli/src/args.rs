@@ -763,8 +763,10 @@ flags (a flag beats its env variable; a variable set empty is unset):
             <D.k.m>, or --draft <S> [--base <D.k>], or --fork <F>
             (another account's fork of a published version of D,
             readable to you — a draft of D's owner's own account is
-            refused here and goes as --draft; its base is the version
-            it was forked from, which the board serves)
+            refused here and goes as --draft; its base is read up
+            from where the board records it standing: the version a
+            landing into it last moved it to, else the one it was
+            forked from)
             [--head <D.h>] (else the
             feed's last trunk version)  [--journal <J>] (a private
             document of yours, else the account's private journal: a

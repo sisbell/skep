@@ -27,7 +27,9 @@
 //! board serves for it and published — and a fork of the bare document,
 //! taken before its first version, composed once a version stands over the
 //! document as it stood before it, its `base` the document itself, nothing
-//! written — and `--fork` naming the owner's own draft refused
+//! written — and a fork its owner staged and landed into merged from the
+//! base the board records for it, where it now stands, never its source —
+//! and `--fork` naming the owner's own draft refused
 //! `fork_of_owner`, exit 1, nothing written, that draft composing as
 //! `--draft`; and `--draft` WITHOUT `--base` — a draft `stage`
 //! minted off the base version merged over the base the board records for
@@ -834,6 +836,48 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
     assert!(r.err.contains(&format!("composed over the base {d2}: ")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// `--fork` STANDS WHERE THE BOARD RECORDS IT (skep #1106): the forker
+/// stages `S` from the base version `D.1` and lands `D.2`'s words in it by
+/// one `set_arrangement` naming `D.2` as its head and its base, as a
+/// merge's landing does, so `S`'s recorded base is `D.2` and its source
+/// still `D.1`; the claimant publishes `D.3`, "big " taken out. `skep merge
+/// --fork S` prints `base` `D.2`, where `S` now stands, and `D.3`'s words —
+/// the head's removal standing — nothing written (the mutant that reads the
+/// source first prints `D.1` and "big " back as `S`'s own addition).
+#[test]
+fn a_fork_its_owner_staged_is_merged_from_the_base_the_board_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, _daughter) = rig.race(&session);
+    let forker = rig.forker();
+    let staged = Rig::acked(rig.board.op(Some(&forker), &frames::stage(&base.to_string(), None)));
+    let s = addr(acked_addr(&staged).expect("the staged fork's address"));
+    let (d_s, s_s, head_s) = (d.to_string(), s.to_string(), head.to_string());
+    // The forker's landing: `D.2`'s words by identity, `D.2` its head and
+    // the base to record.
+    let runs: Vec<Value> = rig.image(&token, &head, 15).iter().map(|(i, w)| frames::shot_run(&d_s, i, w.parse().unwrap())).collect();
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&forker), &frames::set_arrangement(&s_s, &runs, as_of, Some((&head_s, 15)), Some((&head_s, 15)), None, None)));
+    let meta = rig.read(&token, &frames::doc_metadata(&s_s));
+    assert_eq!(
+        (meta["base"].as_str(), meta["source"].as_str()),
+        (Some(head_s.as_str()), Some(base.to_string().as_str())),
+        "the premise — the landing moved S's base to D.2 and kept its source: {meta}"
+    );
+    let third = rig.shot(&session, &d, Some((&head, 15)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 5, text: "cat sat" }]);
+    assert_eq!(third.to_string(), format!("{d}.3"), "the trunk's next member");
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--fork", &s_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!((v["base"].as_str(), v["head"].as_str()), (Some(head_s.as_str()), Some(third.to_string().as_str())), "composed over D.2, where S now stands: {v}");
+    assert_eq!(runs_of(&v), rig.image(&token, &third, 11), "D.3's words: the head's removal of \"big \" stands");
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "composing writes nothing");
     session.close().expect("close");
 }
 

@@ -146,12 +146,12 @@
 //! nothing sent, every part named whole by the library's one refusal
 //! (`owed_parts`), the same the `skep merge --publish` refusal comes from.
 //! So the claim is composed in one place, the panel's read of the marker at
-//! the open, at a confirm that finds the draft's base moved or at that
-//! keying (`shell/publication.rs`, **The claim**), and rides only where the
-//! marker's head is the trunk's head as read there; never at the draft or
-//! fork side, whose side is no member of the document's chain for a claim
-//! to supersede. After the acknowledgment THE MERGE RECORD, the library's
-//! `record_published` —
+//! the open, at a confirm that finds the draft's base or its marker moved or
+//! at that keying (`shell/publication.rs`, **The claim**), and rides only
+//! where the marker's head is the trunk's head as read there; never at the
+//! draft or fork side, whose side is no member of the document's chain for a
+//! claim to supersede. After the acknowledgment THE MERGE RECORD, the
+//! library's `record_published` —
 //! the member and position the board acknowledged, the claims read back at
 //! the daughter, the window parts' answers beside it, written once in the
 //! account's merge journal with its link beside it, or the standing one

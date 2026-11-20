@@ -23,12 +23,12 @@
 //! ⟨k⟩'s image is the first read's ([`Enumeration::base`]): a published
 //! member's positions never change, so key (iii) and the fold are decided
 //! at the re-read against the member the request's `base` names, read
-//! once. The draft's recorded base and its standing are the caller's to
-//! read again beside it ([`super::draft_base`], [`super::standing`]): a
-//! base moved since the panel is handed to the re-read in
-//! [`Inputs::base`], which images that member once, the first read's
-//! image serving no other, and a moved base or standing rides the same
-//! re-statement (D4 (b′)).
+//! once. The draft's recorded base, its standing and its merge marker are
+//! the caller's to read again beside it ([`super::draft_base`],
+//! [`super::standing`]): a base moved since the panel is handed to the
+//! re-read in [`Inputs::base`], which images that member once, the first
+//! read's image serving no other, and a moved base, standing or marker
+//! rides the same re-statement (D4 (b′)).
 //!
 //! **The request.** From the confirmed rows, the enumeration and the panel
 //! composed under the answers at the windows' parts before anything is
@@ -117,7 +117,7 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, EntryBody, MemberPositions, PublishBody, ShotBase, SlotElement};
 
 use crate::address::parse_address;
-use crate::board::answers::{self, LinkSpan};
+use crate::board::answers::{self, LinkSpan, MergeMarker};
 use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
@@ -195,20 +195,29 @@ pub struct Restatement {
     /// The draft's recorded base where it moved since the panel, as read.
     ///
     /// It differs from the one the panel tested against in member or extent
-    /// — another publication of the draft, or a merge landed in it. `None`
-    /// where it stands as it stood, and from [`restate`], which diffs the
-    /// enumeration and the panel alone.
+    /// — another publication of the draft, or a merge landed in it while it
+    /// stood on another base, the landing recording the head it was composed
+    /// on. `None` where it stands as it stood, and from [`restate`], which
+    /// diffs the enumeration and the panel alone.
     pub base: Option<Address>,
     /// The base's standing where it moved since the panel — a sibling's shot
     /// landing while the panel stood — as the caller typed it again; `None`
     /// where it stands as it stood, and from [`restate`], which diffs the
     /// enumeration and the panel alone.
     pub standing: Option<Standing>,
+    /// The draft's merge marker where it moved since the panel, as read.
+    ///
+    /// It differs from the one the panel was keyed on — a merge landed in
+    /// the draft, withdrawn from it or undone out of it since, none of which
+    /// need move its base — and is `Some(None)` where the draft now carries
+    /// none. `None` where it stands as it stood, and from [`restate`], which
+    /// diffs the enumeration and the panel alone.
+    pub marker: Option<Option<MergeMarker>>,
 }
 
 impl Restatement {
     fn is_empty(&self) -> bool {
-        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.parts.is_empty() && self.base.is_none() && self.standing.is_none()
+        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.parts.is_empty() && self.base.is_none() && self.standing.is_none() && self.marker.is_none()
     }
 }
 

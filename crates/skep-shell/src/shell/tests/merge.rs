@@ -69,11 +69,14 @@
 //! the `head_moved` race typed, nothing re-sent; the composition dying
 //! with its session; a merge landed in a panel's draft since its open
 //! re-stated at the confirm with the claim composed off the marker, landing
-//! at the next; and a landing over a panel read under another marker (skep
-//! #949): a panel opened before the compose landing the merge in the one
-//! call with its claim — the draft untouched, its words deleted, its base
-//! moved by the compose — the draft side named `also`, a selection the page
-//! passed held and re-stated, a moved base among what it states, a panel
+//! at the next — the landing moving the draft's base, or the draft already
+//! standing on the merge's head, its panel re-opened or not (skep #1051) — and
+//! a merge withdrawn or undone since the panel re-stated with no marker, no
+//! version then claiming it; and a landing over a panel read under another
+//! marker (skep #949): a panel opened before the compose landing the merge in
+//! the one call with its claim — the draft untouched, its words deleted, its
+//! base moved by the compose — the draft side named `also`, a selection the
+//! page passed held and re-stated, a moved base among what it states, a panel
 //! opened after the compose keeping its selection, a re-open and a second
 //! compose read under the marker the draft carries, links the merge brought
 //! onto a switched-on row re-stated with no run index beside them, and the
@@ -932,8 +935,8 @@ enum SinceTheCompose {
 /// answer `no_merge` naming the session, nothing sent. Where the row opened
 /// its own panel none stands after it, `publication.confirm` answering
 /// `no_panel`; the page's panel stands as the page left it, keyed on nothing,
-/// so its confirm re-states E.1.1's words gone from L, nothing sent (the
-/// mutants that publish the other hand's merge, or a withdrawn one, and
+/// so its confirm re-states the merge L now carries, E.1.2's, nothing sent
+/// (the mutants that publish the other hand's merge, or a withdrawn one, and
 /// record the composition as landed in it; that test the side alone and land
 /// E.1.1's merge on E.3; that keep the composition, whose undo takes the other
 /// device's landing back or answers for the withdrawn one; that stand the
@@ -997,7 +1000,7 @@ fn a_landing_over_a_draft_no_longer_carrying_its_merge_is_refused_naming_the_dra
         match since {
             SinceTheCompose::LandedUnderThePagesPanel => {
                 let restated = confirmed.unwrap_or_else(|r| panic!("{r}"));
-                assert_eq!(restated["outcome"].as_str(), Some("restated"), "the page's panel as the page left it, keyed on nothing: {restated}");
+                assert_eq!((restated["outcome"].as_str(), restated["marker"]["sides"].clone()), (Some("restated"), json!([e12])), "the page's panel as the page left it, keyed on nothing: {restated}");
             }
             _ => assert_eq!(confirmed.unwrap_err().name(), "no_panel", "{since:?}: the panel the row opened is not stood"),
         }
@@ -1332,13 +1335,15 @@ fn with_no_person_present_a_take_back_is_typed_at_its_own_write_and_a_gap_is_the
 /// L, staged from E.1 and behind, opens its panel over the whole draft. A
 /// SECOND DEVICE lands the merge of E.2 with E.1.1 in L — the draft's
 /// recorded base moving to the head E.2 and its marker set beside it. The
-/// confirm is `restated`, naming `base` E.2 and `standing: at_head`, the
-/// panel re-keyed on it, `selection` empty as the panel re-took what L now
-/// arranges, nothing sent; `publication.count` answers the claim composed
-/// off the marker; the next confirm lands E.3 with `supersede [E.1.1]`,
-/// holding the merged words (the mutant that re-keys the base alone
-/// publishes no claim; the one that keeps the held runs publishes the old
-/// words and no merge).
+/// confirm is `restated`, naming `base` E.2, `standing: at_head` and
+/// `marker` E.1.1's merge, the panel re-keyed on it, `selection` empty as
+/// the panel re-took what L now arranges, nothing sent; `publication.count`
+/// answers the claim composed off the marker and prices the request the
+/// next confirm sends, the open's request having been inert; the next
+/// confirm lands E.3 with `supersede [E.1.1]`, holding the merged words (the
+/// mutant that re-keys the base alone publishes no claim; the one that
+/// keeps the held runs publishes the old words and no merge; the one that
+/// keeps the open's price counts nothing).
 #[test]
 fn a_merge_landed_in_a_panels_draft_since_its_open_is_re_stated_and_lands_with_its_claim() {
     let dir = TempDir::new().unwrap();
@@ -1356,9 +1361,11 @@ fn a_merge_landed_in_a_panels_draft_since_its_open_is_re_stated_and_lands_with_i
     let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Restated", &restated);
     assert_eq!((restated["outcome"].as_str(), restated["base"].as_str(), restated["standing"].as_str(), restated["selection"].clone()), (Some("restated"), Some(f.e2.as_str()), Some("at_head"), json!([])), "the merge moved L's base to the head: {restated}");
+    assert_eq!(restated["marker"]["sides"], json!([f.e11]), "the merge marked beside the moved base: {restated}");
     assert_eq!(g.position(), before, "nothing sent");
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(counted["count"]["supersede"], json!([f.e11]), "the claim composed off the marker the re-read found: {counted}");
+    assert!(counted["price"]["body"].as_u64().is_some_and(|body| body > 0), "the count prices the request the next confirm sends, the open's having been inert: {counted}");
     let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     let e3 = format!("{}.3", f.edition);
     assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["supersede"].clone()), (Some("acknowledged"), Some(e3.as_str()), json!([f.e11])), "the next confirm lands on the moved base with the merge's claim: {acked}");
@@ -1366,6 +1373,127 @@ fn a_merge_landed_in_a_panels_draft_since_its_open_is_re_stated_and_lands_with_i
     assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" today") && text.len() == 19, "the merged words, not the held old ones: {text:?}");
     g.shell.shutdown();
     sd.shutdown();
+}
+
+/// Checks that a merge landed on the draft's own head is re-stated.
+///
+/// Against the daemon (skep #1051), in two cells. L is staged from the head E.2
+/// with " jumps" deleted, and the page's panel is opened over the whole of L,
+/// reading no merge. E.1.1's merge is then composed into L; the landing records
+/// E.2 as L's base, the base L already stood on, so the base pair is unchanged.
+/// In the second cell the page re-opens the panel, which takes the claim again
+/// and keeps the selection it read. The confirm answers `restated` with
+/// `marker` the merge L now carries, E.1.1 its side and E.2 its head, no `base`
+/// and no `standing`, `selection` empty as the panel re-takes what L arranges,
+/// nothing sent. `publication.count` then answers the claim and prices past the
+/// open's price, and the next confirm lands E.3 holding the merged words with
+/// `supersede [E.1.1]`. Mutants this kills: reading the marker only where the
+/// base moved publishes "the fox", in one cell with no claim and in the other
+/// claiming E.1.1; setting `base` at a moved marker alone names E.2; keeping
+/// the open's price counts the old request.
+#[test]
+fn a_merge_landed_on_the_drafts_own_head_since_the_panel_is_re_stated() {
+    let cell = |reopened: bool| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(&f.e2, None));
+        g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "6", "as_of": g.position()}));
+        let panel = page_panel(&g, &f, &l);
+        assert_eq!((panel["count"]["supersede"].clone(), panel["standing"].as_str()), (json!([]), Some("at_head")), "reopened {reopened}: the panel reads no merge: {panel}");
+        merged_into(&g, &f, &f.e11, &l);
+        if reopened {
+            let again = page_panel(&g, &f, &l);
+            assert_eq!(again["count"]["supersede"], json!([f.e11]), "the premise: the re-open takes the claim again: {again}");
+        }
+        let before = g.position();
+        let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        crate::shapes::assert_declared("Restated", &restated);
+        assert_eq!(restated["outcome"].as_str(), Some("restated"), "reopened {reopened}: the merge landed since the panel: {restated}");
+        crate::shapes::assert_declared("MergeMarker", &restated["marker"]);
+        assert_eq!((restated["marker"]["sides"].clone(), restated["marker"]["head"].as_str()), (json!([f.e11]), Some(f.e2.as_str())), "reopened {reopened}: the marker L carries: {restated}");
+        assert_eq!(
+            (restated.get("base"), restated.get("standing"), restated["selection"].clone()),
+            (None, None, json!([])),
+            "reopened {reopened}: the base and its standing unmoved, the selection re-taken: {restated}"
+        );
+        assert_eq!(g.position(), before, "reopened {reopened}: nothing sent");
+        let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        assert_eq!(counted["count"]["supersede"], json!([f.e11]), "reopened {reopened}: the claim composed off the marker the re-read found: {counted}");
+        let (opened, now) = (panel["price"]["body"].as_u64().unwrap(), counted["price"]["body"].as_u64().unwrap());
+        assert!(now > opened, "reopened {reopened}: the count prices the merged words and the claim, {now} against the open's {opened}: {counted}");
+        let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        let e3 = format!("{}.3", f.edition);
+        assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["supersede"].clone()), (Some("acknowledged"), Some(e3.as_str()), json!([f.e11])), "reopened {reopened}: {acked}");
+        assert_holds_the_merge(&g, &e3, &format!("reopened {reopened}"));
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(false);
+    cell(true);
+}
+
+/// Checks that a merge taken out of the draft is re-stated, never claimed.
+///
+/// Against the daemon (skep #1051), in two cells. L is staged from the head
+/// E.2, E.1.1's merge is composed into it, and the page's panel is opened over
+/// the whole of L, the claim riding. Then either `merge.withdraw` takes the
+/// merge out, keeping the words and re-sending the base unmoved, or
+/// `merge.undo` takes the landing back, re-recording the base L stood on
+/// before. The confirm answers `restated` with `marker` null, no `base` and
+/// `selection` empty, nothing sent, and `publication.count` answers no claim.
+/// After the withdrawal the next confirm lands E.3 holding the merged words
+/// with `supersede []`. After the undo L holds E.2's words again, and the next
+/// confirm is refused `inert`, `unchanged`. Mutants this kills: reading the
+/// marker only where the base moved claims E.1.1 for a merge L no longer
+/// carries, at once after the withdrawal and at the second confirm after the
+/// undo; re-keying without a re-statement sends that claim in the first call;
+/// keeping the open's inputs or marker in the panel re-states again or claims
+/// E.1.1 at the next confirm.
+#[test]
+fn a_merge_taken_out_since_the_panel_is_re_stated_and_lands_no_claim() {
+    let cell = |undone: bool| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(&f.e2, None));
+        merged_into(&g, &f, &f.e11, &l);
+        let panel = page_panel(&g, &f, &l);
+        assert_eq!(panel["count"]["supersede"], json!([f.e11]), "undone {undone}: the premise: the panel claims the merge: {panel}");
+        if undone {
+            let taken = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+            assert_eq!((taken["restored"].clone(), taken["marker"].clone()), (json!({"base": f.e2, "extent": 13}), Value::Null), "the premise: L's base as it stood, no marker put back: {taken}");
+        } else {
+            g.call("merge.withdraw", json!({"session": g.session, "draft": l})).unwrap_or_else(|r| panic!("{r}"));
+        }
+        assert!(g.op(frames::doc_metadata(&l))["merge"].is_null(), "undone {undone}: the premise: L carries no merge");
+        let before = g.position();
+        let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        crate::shapes::assert_declared("Restated", &restated);
+        assert_eq!(
+            (restated["outcome"].as_str(), restated.get("marker"), restated.get("base"), restated["selection"].clone()),
+            (Some("restated"), Some(&Value::Null), None, json!([])),
+            "undone {undone}: the merge taken out since the panel: {restated}"
+        );
+        assert_eq!(g.position(), before, "undone {undone}: nothing sent");
+        let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        assert_eq!(counted["count"]["supersede"], json!([]), "undone {undone}: no claim: {counted}");
+        let next = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        if undone {
+            assert_eq!((next["outcome"].as_str(), next["arm"].as_str(), next["inert"].as_str()), (Some("refused"), Some("inert"), Some("unchanged")), "L holds E.2's words, no claim: {next}");
+            assert_eq!(g.position(), before, "nothing sent");
+        } else {
+            let e3 = format!("{}.3", f.edition);
+            assert_eq!((next["outcome"].as_str(), next["member"].as_str(), next["supersede"].clone()), (Some("acknowledged"), Some(e3.as_str()), json!([])), "the merged words, no claim: {next}");
+            assert_holds_the_merge(&g, &e3, "withdrawn");
+        }
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(false);
+    cell(true);
 }
 
 /// Returns the page's panel over the whole of `draft`, before or after a

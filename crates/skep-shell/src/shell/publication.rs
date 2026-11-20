@@ -41,14 +41,14 @@
 //! answers `{count, price, rows, formatting, windows, parts, edition_links,
 //! p3_stands}` with the four numbers and
 //! the price over the rows as switched, PURE LOCAL — no frame sent, the
-//! price the open's request re-priced with the entries the switches add,
+//! price the panel's request re-priced with the entries the switches add,
 //! each end spelled by its stored slot's shape (an address form, an I-span
 //! form, the member-position form for a span on the draft's own words);
 //! `confirm` runs the re-read, the build, the price's verdict, the send and
 //! the landed test, and answers ONCE with the acknowledgment, the
-//! re-statement — a moved base or standing, a window part named since, an
-//! entry the board refused by its lineage among what it states — or a
-//! typed refusal;
+//! re-statement — a moved base, standing or merge marker, a window part
+//! named since, an entry the board refused by its lineage among what it
+//! states — or a typed refusal;
 //! `cancel` drops the standing panel, idempotent.
 //!
 //! **The panels** ([`Publications`]). One family per (board, principal): the
@@ -151,12 +151,18 @@
 //! corner names; `first`, the bare document while its chain is empty; or
 //! `superseded_first`, a draft begun from the bare document whose first
 //! member now stands — the shot lands beside that member, as its daughter,
-//! and the head does not move. `confirm` reads the base and types the
-//! standing again beside its re-read. A base that differs from the panel's
-//! in any way, member or extent — another publication of this draft, a
-//! merge landed in it since — is re-stated with the new `base`, nothing
-//! sent (D4 (b′); `Restated.base`), and the re-read and the panel are
-//! composed on it for the next confirm: the claim composed again off the
+//! and the head does not move. `confirm` reads the base, types the standing
+//! and reads the draft's merge marker again beside its re-read. A base that
+//! differs from the panel's in any way, member or extent — another
+//! publication of this draft, or a merge landed in it while it stood on
+//! another base, the landing recording the head it was composed on — is
+//! re-stated with the new `base`, and a marker other than the one the panel
+//! was keyed on — a merge landed in the draft, withdrawn from it or undone
+//! out of it since, none of which need move its base — with the new `marker`,
+//! null where the draft now carries none, each with nothing sent (D4 (b′),
+//! PUB-3.108; `Restated.base`, `Restated.marker`); the re-read and the panel
+//! are then composed on the draft as it stands for the next confirm, the
+//! count's price taken again over them: the claim composed again off the
 //! marker (**The claim**) and, where the open read the whole draft, the
 //! selection re-taken from the draft as it stands, since the draft's text
 //! moved under "publish all of this draft" (P4's command; PUB-3.108's "what
@@ -208,8 +214,12 @@
 //! re-states a moved standing first, so the race is met only between the
 //! re-read and the commit. The marker is read again, and the claim composed
 //! again from it, at a held panel's re-open with its standing, at a confirm
-//! that finds the draft's base moved (**The base**) and at a `merge.land`
-//! over a panel read under another marker (**The landing**).
+//! that finds the draft's base or its marker moved (**The base**) and at a
+//! `merge.land` over a panel read under another marker (**The landing**).
+//! Every confirm reads the marker, so a merge landed in the draft, withdrawn
+//! from it or undone out of it since the panel is re-stated before any shot,
+//! never published under the claim the panel was keyed on; a standing moved
+//! alone keeps that claim, the board's refusal then naming the newer head.
 //!
 //! **The landing** (`merge.land`, B3-S11's THE MERGE SCENE; skep #949, #956).
 //! The row lands through the family's panel of the draft a composition landed
@@ -274,6 +284,7 @@ use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed,
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 
+use super::history::marker_json;
 use super::merge::{is_daughter, is_trunk_member, next_trunk_member};
 use super::{optional, Shell, Write, Writer};
 use crate::events::EventBus;
@@ -296,10 +307,14 @@ pub(super) struct PanelState {
     pub(super) enumeration: lib::Enumeration,
     /// The panel, composed under the answers that stand.
     pub(super) panel: lib::Panel,
-    /// The request as built at the open — every private row OFF, every
-    /// window part a record names taken by its counterpart and every other
-    /// kept private — whose runs, places and body pieces the count's price
-    /// is taken over; `None` where that build was inert.
+    /// The request whose runs, places and body pieces the count prices.
+    ///
+    /// It is built with every private row off, every window part a record
+    /// names taken by its counterpart and every other kept private: at the
+    /// open, and again wherever the panel is composed again on what the
+    /// draft holds now — a re-open's windows re-read, a confirm's
+    /// re-statement before the send, a landing's keying. `None` where that
+    /// build was inert, or where nothing of the selection stands to build.
     base: Option<lib::Request>,
     /// The switches the page last sent (`count`, `confirm`).
     pub(super) switches: Switches,
@@ -319,14 +334,16 @@ pub(super) struct PanelState {
     left_behind: Vec<Address>,
     /// Whether the open read the whole draft, no selection passed.
     ///
-    /// A base that moves re-takes it (the module doc, **The base**).
+    /// A base or a merge marker that moves re-takes it (the module doc,
+    /// **The base**).
     whole: bool,
-    /// The merge marker the draft carried when the selection was read, read
-    /// before it; `None` at an unmarked draft and at the mint form.
+    /// The merge marker the draft carried when the selection was read.
     ///
-    /// A re-open keeps it with the selection it holds; a confirm or a landing
-    /// that keys the inputs on the draft as it stands replaces it (the module
-    /// doc, **The landing**).
+    /// It is read before the selection; `None` at an unmarked draft and at
+    /// the mint form. A re-open keeps it with the selection it holds; a
+    /// confirm that finds the draft's base or marker moved, and a landing
+    /// over another marker, key the inputs on the draft as it stands and
+    /// replace it (the module doc, **The base** and **The landing**).
     marker: Option<MergeMarker>,
 }
 
@@ -752,15 +769,15 @@ impl Shell {
         })
     }
 
-    /// Returns `state`'s inputs keyed on the draft as it stands: `base` its
-    /// recorded base and `marker` its merge marker, each read again.
+    /// Returns `state`'s inputs keyed on the draft as it stands.
     ///
-    /// A confirm comes here where `base` differs from the panel's (the module
-    /// doc, **The base**), a landing where `marker` differs from the panel's
-    /// (**The landing**). The claim is composed again off the marker, the
-    /// head probed as the open probes it; and where the open read the whole
-    /// draft the selection is the draft's whole arrangement as it stands, a
-    /// draft emptied since keeping the held runs.
+    /// `base` is the draft's recorded base and `marker` its merge marker,
+    /// each read again. A confirm comes here where `base` or `marker` differs
+    /// from the panel's (the module doc, **The base**), a landing where
+    /// `marker` does (**The landing**). The claim is composed again off the
+    /// marker, the head probed as the open probes it; and where the open read
+    /// the whole draft the selection is the draft's whole arrangement as it
+    /// stands, a draft emptied since keeping the held runs.
     ///
     /// # Errors
     ///
@@ -1272,14 +1289,15 @@ impl Shell {
     /// acknowledgment, the re-statement or a typed refusal (the module doc).
     ///
     /// Inside the one call: the standing hold asked before anything is
-    /// composed; at the document form the draft's base read again and its
-    /// standing typed again (**The base**); the panel composed under the
-    /// answers and the re-read composed under them as they carry onto its
-    /// windows, keyed on a base that moved, a difference — a moved base or
-    /// standing among them, beside the enumeration's or alone, and a window
-    /// part named since, whose answer is asked again unless it left the
-    /// words out — answered as the re-statement with nothing sent and the
-    /// panel re-stated for the next confirm; the build, a selection the
+    /// composed; at the document form the draft's base read again, its
+    /// standing typed again and its merge marker read again (**The base**);
+    /// the panel composed under the answers and the re-read composed under
+    /// them as they carry onto its windows, keyed on a base or a marker that
+    /// moved, a difference — a moved base, standing or marker among them,
+    /// beside the enumeration's or alone, and a window part named since,
+    /// whose answer is asked again unless it left the words out — answered
+    /// as the re-statement with nothing sent and the panel re-stated, and
+    /// priced again, for the next confirm; the build, a selection the
     /// draft has wholly left refused `selection_not_arranged` and an inert
     /// request refused `inert`; the price's verdict, `over_cap`; a head
     /// record that stands and cannot be read, or a claimed board that serves
@@ -1309,12 +1327,14 @@ impl Shell {
     /// `store_unreadable`, `no_account`; at the document form the base's
     /// re-read and the standing's,
     /// refused as `publication.open`'s step 4 — `base_unrecorded` with the
-    /// `publication` event's `refused` naming it (a base or a standing moved
+    /// `publication` event's `refused` naming it — then the marker's
+    /// re-read's, as the base read's (a base, a standing or a marker moved
     /// since the panel, `first` → `superseded_first` among them, is the
-    /// re-statement, never a refusal, a moved base's own reads — its marker,
-    /// the head probe, at a panel of the whole draft the draft's arrangement
-    /// — failing as `publication.open`'s steps 4 and 6 name them); then the
-    /// reads' and the send's faults as `publication.open` names them,
+    /// re-statement, never a refusal, the re-keying's own reads — the head
+    /// probe, at a panel of the whole draft the draft's arrangement — failing
+    /// as `publication.open`'s steps 4 and 6 name them); then the faults of
+    /// the reads, of the re-stated panel's pricing and of the send as
+    /// `publication.open` names them,
     /// `selection_not_arranged` naming run 0 among them where the draft
     /// arranges nothing of the held selection, the board term's read among
     /// them (`SessionEntry::signing_term`). A refusal of the composition or
@@ -1420,12 +1440,7 @@ impl Shell {
         state.inputs = inputs;
         state.marker = Some(marker.clone());
         state.standing = Some(standing);
-        state.base = match widest(&p, &state.inputs, &state.enumeration, &state.panel) {
-            // Nothing of the selection stands to price; the build then
-            // refuses it by name (`selection_not_arranged`).
-            Err(Fault::SelectionNotArranged { .. }) => None,
-            priced => priced.map_err(fault)?,
-        };
+        state.base = widest_arranged(&p, &state.inputs, &state.enumeration, &state.panel).map_err(fault)?;
         self.publications.stand(key.clone(), state.clone());
         Ok(owed.map(|restatement| {
             self.publication_event(session, &draft, "restated", json!({}));
@@ -1478,19 +1493,19 @@ impl Shell {
         };
         let p = signed.publisher(session);
         let fault = |f: Fault| self.fault(session, call, f);
-        // The base read again and its standing typed again (D4 (b′)): a base
-        // the board no longer records is refused as at the open, by name; a
-        // base or a standing that moved is re-stated below, a moved base
-        // re-keying the panel on it.
+        // The base read again, its standing typed again and the draft's
+        // merge marker read again (D4 (b′)): a base the board no longer
+        // records is refused as at the open, by name; a base, a standing or
+        // a marker that moved is re-stated below, a moved base or marker
+        // re-keying the panel on the draft as it stands. A standing moved
+        // alone keys nothing: the open's claim goes out for the board to
+        // judge against the head it names.
         let (standing, moved) = match &inputs.doc {
             Some(trunk) => {
                 let (base, standing) = self.typed_base_again(session, &p, call, trunk, &draft)?;
-                let moved = if Some(&base) == inputs.base.as_ref() {
-                    None
-                } else {
-                    let marker = self.draft_marker(session, &draft)?;
-                    Some((self.inputs_keyed(session, state, trunk, base, marker.as_ref())?, marker))
-                };
+                let marker = self.draft_marker(session, &draft)?;
+                let unmoved = Some(&base) == inputs.base.as_ref() && marker.as_ref() == state.marker();
+                let moved = if unmoved { None } else { Some((self.inputs_keyed(session, state, trunk, base, marker.as_ref())?, marker)) };
                 (Some(standing), moved)
             }
             None => (None, None),
@@ -1498,36 +1513,46 @@ impl Shell {
         // The panel composed under the answers confirmed, and the re-read
         // composed under them as they carry onto its windows: the two
         // diffed over one composition (B3-S11 P4). The re-read of a moved
-        // base runs over the inputs re-keyed on it, the panel's own for the
-        // next confirm.
+        // base or marker runs over the inputs re-keyed on it, the panel's
+        // own for the next confirm.
         let confirmed = Confirmed { switches, answers, left_out: state.left_out.clone() };
         let first = confirmed.compose(inputs, &state.enumeration);
         let first_panel = state.panel.composed(inputs, &first);
-        let rr = lib::reread(&p, moved.as_ref().map_or(inputs, |(keyed, _)| keyed), &first, &first_panel).map_err(fault)?;
-        // A moved base or standing rides the enumeration's re-statement
-        // where one stands, or is re-stated alone; a re-taken selection's
-        // own placements are no difference, its run indices the new list's.
+        let inputs_now = moved.as_ref().map_or(inputs, |(keyed, _)| keyed);
+        let rr = lib::reread(&p, inputs_now, &first, &first_panel).map_err(fault)?;
+        // A moved base, standing or marker rides the enumeration's
+        // re-statement where one stands, or is re-stated alone, so a re-key
+        // is always answered and never sent; a re-taken selection's own
+        // placements are no difference, its run indices the new list's.
         let mut restatement = rr.restatement;
         if standing != state.standing {
             restatement.get_or_insert_with(Restatement::default).standing = standing.clone();
         }
-        if let Some((moved, _)) = &moved {
-            let moved_base = restatement.get_or_insert_with(Restatement::default);
-            moved_base.base = moved.base.as_ref().map(|(member, _)| member.clone());
+        if let Some((moved, marker)) = &moved {
+            let keyed = restatement.get_or_insert_with(Restatement::default);
+            if moved.base != inputs.base {
+                keyed.base = moved.base.as_ref().map(|(member, _)| member.clone());
+            }
+            if marker.as_ref() != state.marker() {
+                keyed.marker = Some(marker.clone());
+            }
             if moved.selection != inputs.selection {
-                moved_base.selection.clear();
+                keyed.selection.clear();
             }
         }
         if let Some(restatement) = restatement {
             // The answers as they carry onto the re-read's parts: one at a
             // part named, un-named or re-named since asked again, unless it
-            // left the words out.
+            // left the words out; the count's price taken again over the
+            // panel re-composed.
+            let priced = widest_arranged(&p, inputs_now, &rr.enumeration, &rr.panel).map_err(fault)?;
             let (enumeration, panel) = (rr.enumeration, rr.panel);
             self.publications.update(key, |s| {
                 s.answers = enumeration.answers.clone();
                 s.enumeration = enumeration;
                 s.panel = panel;
                 s.standing = standing;
+                s.base = priced;
                 if let Some((moved, marker)) = moved {
                     s.inputs = moved;
                     s.marker = marker;
@@ -1747,6 +1772,22 @@ fn widest(p: &Publisher<'_>, inputs: &lib::Inputs, e: &lib::Enumeration, panel: 
     })
 }
 
+/// Returns the request the count prices a panel read again over.
+///
+/// It is the widest the defaults make (`widest`) over what the draft still
+/// arranges, `None` where nothing of the selection stands to price: the next
+/// build refuses it by name (`selection_not_arranged`).
+///
+/// # Errors
+///
+/// The build's other faults.
+fn widest_arranged(p: &Publisher<'_>, inputs: &lib::Inputs, e: &lib::Enumeration, panel: &lib::Panel) -> Result<Option<lib::Request>, Fault> {
+    match widest(p, inputs, e, panel) {
+        Err(Fault::SelectionNotArranged { .. }) => Ok(None),
+        priced => priced,
+    }
+}
+
 /// Refuses an `also` that does not name the family's other drafts.
 ///
 /// # Errors
@@ -1768,14 +1809,15 @@ fn part_key(text: &str) -> Option<PartKey> {
 
 /// Returns the price of the standing panel as switched, pure local.
 ///
-/// It is the open's request with the entries the switches add — the
-/// formatting line's marks into the member, each switched-on row's links
-/// into its destination — the job list's retractions and the count's
-/// read-withs, re-priced through the library's own price over the body as
-/// built; `Price::default()`, which admits, where the open's build was
-/// inert. An end is spelled by its stored slot's shape: the address form
-/// where every span is a unit span, the member-position form where any
-/// span lies on the draft's own words (priced as the request would spell
+/// It is the panel's request (`PanelState`'s `base`: the open's, or the one a
+/// later re-read built) with the entries the switches add — the formatting
+/// line's marks into the member, each switched-on row's links into its
+/// destination — the job list's retractions and the count's read-withs,
+/// re-priced through the library's own price over the body as built;
+/// `Price::default()`, which admits, where that build was inert or found
+/// nothing of the selection. An end is spelled by its stored slot's shape: the
+/// address form where every span is a unit span, the member-position form where
+/// any span lies on the draft's own words (priced as the request would spell
 /// it), the I-span form otherwise — an upper bound, as the price is.
 fn local_price(state: &PanelState) -> lib::Price {
     let Some(base) = &state.base else { return lib::Price::default() };
@@ -2090,6 +2132,9 @@ pub(super) fn restated_json(r: &Restatement, race: Option<&RaceKey>, lineage: Op
     }
     if let Some(standing) = &r.standing {
         put_standing(&mut v, standing);
+    }
+    if let Some(marker) = &r.marker {
+        v["marker"] = marker.as_ref().map_or(Value::Null, marker_json);
     }
     v
 }

@@ -787,8 +787,10 @@ each ceremony:
   `history.rs` THE RESTORE — a draft's past state made current over the
   merge's reader, the state mapped through the publication's
   correspondence records by the reads' mapping, and the take-backs' one
-  `set_arrangement` — its unit suite in `history/tests.rs` over the fake
-  board, its daemon walk in `tests/it/restore.rs`. Of the
+  `set_arrangement` — with the records' read and the mapping of images
+  that skep-shell's `text.diff` names, its unit suite in
+  `history/tests.rs` over the fake board, its daemon walk in
+  `tests/it/restore.rs`. Of the
   SURFACES the `skep merge` and `skep restore` commands are built —
   `skep-cli`'s `commands/merge.rs` and `commands/restore.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface
@@ -986,7 +988,9 @@ root re-exports counted as the module it is brought from (held by
 - `shell/text/diffing.rs` `text.diff`, what changed in a draft since a
   document that holds its content by identity: the reads — two images,
   the draft's text, the spans it no longer holds by identity — and the
-  answer, over `skep_client::text::diff`'s plan; it sends no write.
+  answer, over `skep_client::text::diff`'s plan, the two images mapped by
+  the mapping `shell/text.rs` hands it, `skep_client::history`'s; it sends
+  no write.
 - `shell/text/rows.rs` the rows of a landed `text.edit`'s and
   `text.move`'s answer, and of a `text.diff`'s: a text's lines counted,
   the pieces `edit`'s plan splices in step with its text, a text's line

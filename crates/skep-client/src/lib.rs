@@ -86,7 +86,10 @@
 //!   moved and stand again, the spans gone and the positions new,
 //!   `Identity::of`, and over two line tables the edit script, its hunks
 //!   and the notes a diff of two texts cannot make, `Identity::lines` — a
-//!   moved block told as moved and a re-typed one as re-typed.
+//!   moved block told as moved and a re-typed one as re-typed. A caller
+//!   comparing across a publication hands it both images mapped through
+//!   the person's correspondence records (`history`'s mapping, behind
+//!   `merge`), so words a shot re-minted pair with what they were.
 //!
 //! Behind the default-on `acting` feature — everything that signs or holds a
 //! key:
@@ -196,8 +199,12 @@
 //!   `past`, the state read at a position through the merge's reader and
 //!   mapped through the correspondence records so published words come back
 //!   as published; `restore`, the one `set_arrangement` of it, no base and
-//!   no merge, typed against the read. Behind `merge` because it rides that
-//!   module's reader and write; the command is skep-cli's `skep restore`.
+//!   no merge, typed against the read. Its records and its mapping serve a
+//!   comparison by identity too, the diff's (skep #1095): `records`, one
+//!   read of the records of several images' runs, and `mapped_image`, an
+//!   image mapped through them at its own spelling. Behind `merge` because
+//!   it rides that module's reader and write; the command is skep-cli's
+//!   `skep restore`.
 //!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save

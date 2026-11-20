@@ -36,16 +36,28 @@
 //! mark that records no base and no source, left behind by no publication
 //! and offered by none, and a diff since the version a draft was staged
 //! from; the mark of an empty draft; a link refused after the copy, the
-//! mark standing and diffed against; and a draft changed between the diff's
+//! mark standing and diffed against; a draft changed between the diff's
 //! two images, read again, and one that keeps changing refused (the
-//! shell's rows watched, and meddled with at a frame, `Watched`).
+//! shell's rows watched, and meddled with at a frame, `Watched`); a diff
+//! across the person's own publication — since a mark made before it, and
+//! of the mark since the draft — every re-minted word paired and an edit
+//! after it told alone, and a publication landing between the diff's
+//! reads; and a diff whose session the board ended, made under the re-open,
+//! its records read there too.
 
 use std::cell::Cell;
+
+use skep_client::board::Image;
 
 use super::super::text::{diff_through, edit_through, mark_through, move_through, Row, Rows};
 use super::publication::{ground, register};
 use super::*;
 use crate::sessions::Facts;
+
+/// The mapping of a diff whose images no record touches: the two as read.
+fn as_read(before: &Image, now: &Image) -> Result<(Image, Image), Refusal> {
+    Ok((before.clone(), now.clone()))
+}
 
 /// Returns the draft's text, read under `session`.
 fn text_of(shell: &Shell, session: &str, draft: &str) -> String {
@@ -738,7 +750,7 @@ fn a_mark_holds_its_drafts_identity_and_an_edit_and_a_move_are_told_by_the_diff_
     let moved = g.shell.call("text.move", &json!({"session": g.session, "doc": draft, "first": 4, "before": 2})).unwrap_or_else(|r| panic!("{r}"));
     let logged = calls_logged(&g.shell).len();
     let watched = Watched::over(&g.shell, |_, _| None);
-    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("TextDiffed", &answer);
     assert_eq!(
         answer,
@@ -759,7 +771,7 @@ fn a_mark_holds_its_drafts_identity_and_an_edit_and_a_move_are_told_by_the_diff_
     // A line deleted: read by identity, at the draft's own addresses.
     g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "keep this line as it is\n", "new": ""}]})).unwrap_or_else(|r| panic!("{r}"));
     let watched = Watched::over(&g.shell, |_, _| None);
-    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(
         answer["rows"],
         json!(["@@ -1,4 +1,3 @@", " 1\talpha = 1", "-2\tkeep this line as it is", "-3\tbeta = 2", " 2\ttail stays", "+3\tbeta = 20"]),
@@ -771,14 +783,14 @@ fn a_mark_holds_its_drafts_identity_and_an_edit_and_a_move_are_told_by_the_diff_
     assert!(watched.frames.borrow().iter().all(|frame| frame["op"] != "retrieve_v" || frame["specs"][0]["doc"] == draft), "no text of the mark read by position");
     // The counts alone read no text.
     let watched = Watched::over(&g.shell, |_, _| None);
-    let stat = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark, "stat": true})).unwrap_or_else(|r| panic!("{r}"));
+    let stat = diff_through(&watched, &g.session, &json!({"doc": draft, "since": mark, "stat": true}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("TextDiffed", &stat);
     assert_eq!((stat["bytes"].clone(), stat["shared"].as_str(), stat.get("rows"), stat.get("lines")), (json!({"new": "1", "gone": "24", "moved": "9"}), Some("30"), None, None), "{stat}");
     assert_eq!(watched.ops(), ["image", "image"], "one image of each document");
     // A document sharing nothing with the draft.
     let apart = draft_holding(&g.shell, &g.session, "other words\n");
     let watched = Watched::over(&g.shell, |_, _| None);
-    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": apart})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = diff_through(&watched, &g.session, &json!({"doc": draft, "since": apart}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((answer["shared"].as_str(), answer["bytes"]["gone"].as_str(), answer.get("rows")), (Some("0"), Some("12"), None), "{answer}");
     assert!(!watched.ops().contains(&"retrieve_i".to_string()), "nothing of it read");
     // A document the board does not register is the call's refusal.
@@ -939,7 +951,7 @@ fn a_draft_changed_between_the_diffs_two_images_is_read_again_and_one_that_keeps
         }
         None
     });
-    let answer = diff_through(&once, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = diff_through(&once, &g.session, &json!({"doc": draft, "since": mark}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(reads.get(), 2, "the draft read again");
     assert_eq!(answer["rows"], json!(["@@ -1,3 +1,3 @@", "-1\talpha = 1", "+1\tXalpha = 1", " 2\tkeep this line as it is", " 3\tbeta = 2"]), "the draft as the second round found it: {answer}");
     assert_eq!(answer["bytes"], json!({"new": "1", "gone": "0", "moved": "0"}));
@@ -949,10 +961,157 @@ fn a_draft_changed_between_the_diffs_two_images_is_read_again_and_one_that_keeps
         }
         None
     });
-    let answer = diff_through(&always, &g.session, &json!({"doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = diff_through(&always, &g.session, &json!({"doc": draft, "since": mark}), &as_read).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("TextRefused", &answer);
     assert_eq!(answer, json!({"outcome": "refused", "cause": "arrangement_moved", "doc": draft, "reads": 3}), "data: the draft kept moving");
     assert_eq!(text_of(&g.shell, &g.session, &draft), format!("XXXX{LINES}"), "the other writer's bytes, and nothing of the call's");
     g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns the draft `ground` stages from a fresh memberless edition,
+/// holding [`LINES`], and the edition.
+fn staged_lines(g: &super::publication::Ground) -> (String, String) {
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, LINES);
+    (draft, edition)
+}
+
+/// Publishes `draft` into `edition` as its next member, through the panel.
+fn publish(g: &super::publication::Ground, draft: &str, edition: &str) {
+    g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+}
+
+/// Checks a diff across the person's own publication (skep #1095).
+///
+/// A draft staged from a memberless edition is marked, then published: the
+/// shot re-windows the draft onto the member's words, while the mark keeps
+/// the draft's own. The diff since the mark is `unchanged`, and so is the
+/// mark's since the draft — a draft published since the document compared
+/// with it copied from it — the counts alone too: both images are mapped
+/// through the person's correspondence records, so every re-minted word
+/// pairs with what it was. One word replaced after it is told alone, its
+/// line gone and new, no `retyped` note, `shared` the draft's extent less
+/// the new word's width, the gone word read by identity at the member's
+/// addresses (the mutants that pass the images as read, or map `since`
+/// alone, answer `shared` `"0"`).
+#[test]
+fn a_diff_across_the_persons_own_publication_pairs_the_words_the_shot_re_minted() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let (draft, edition) = staged_lines(&g);
+    let mark = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"))["mark"].as_str().expect("the mark").to_string();
+    publish(&g, &draft, &edition);
+    let (now, marked) = (addresses(&g.shell, &g.session, &draft), addresses(&g.shell, &g.session, &mark));
+    assert!(now.iter().all(|a| a.starts_with(&format!("{edition}.0.1."))), "the premise: the draft re-windowed onto the member's words: {now:?}");
+    assert!(marked.iter().all(|a| a.starts_with(&format!("{draft}.0.1."))), "the premise: the mark keeps the draft's own: {marked:?}");
+    let diff = |args: Value| g.call("text.diff", args).unwrap_or_else(|r| panic!("{r}"));
+    let unchanged = diff(json!({"session": g.session, "doc": draft, "since": mark}));
+    crate::shapes::assert_declared("TextDiffUnchanged", &unchanged);
+    assert_eq!((unchanged["outcome"].as_str(), unchanged["since"].as_str()), (Some("unchanged"), Some(mark.as_str())), "{unchanged}");
+    let copied = diff(json!({"session": g.session, "doc": mark, "since": draft}));
+    assert_eq!(copied["outcome"], "unchanged", "the mark since the draft published after it: {copied}");
+    assert_eq!(diff(json!({"session": g.session, "doc": draft, "since": mark, "stat": true}))["outcome"], "unchanged", "the counts mapped too");
+
+    // One word replaced after the publication: told alone.
+    g.call("text.edit", json!({"session": g.session, "doc": draft, "edits": [{"old": "tail", "new": "end"}]})).unwrap_or_else(|r| panic!("{r}"));
+    let extent = addresses(&g.shell, &g.session, &draft).len();
+    assert_eq!(extent, LINES.len() - 1, "premise: four bytes gone, three new");
+    let answer = diff(json!({"session": g.session, "doc": draft, "since": mark}));
+    crate::shapes::assert_declared("TextDiffed", &answer);
+    assert_eq!(
+        (&answer["rows"], &answer["bytes"], answer["shared"].as_str(), &answer["lines"], answer.get("notes")),
+        (
+            &json!(["@@ -2,3 +2,3 @@", " 2\tkeep this line as it is", " 3\tbeta = 2", "-4\ttail stays", "+4\tend stays"]),
+            &json!({"new": "3", "gone": "4", "moved": "0"}),
+            Some((extent - 3).to_string().as_str()),
+            &json!({"added": "1", "removed": "1", "moved": "0"}),
+            None
+        ),
+        "{answer}"
+    );
+    let stat = diff(json!({"session": g.session, "doc": draft, "since": mark, "stat": true}));
+    assert_eq!((&stat["bytes"], &stat["shared"], stat.get("rows")), (&answer["bytes"], &answer["shared"], None), "{stat}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a publication landing between a diff's reads is mapped on
+/// both sides.
+///
+/// The draft is published as the diff images it — after `since`'s image,
+/// before the draft's first — so the mark's image holds the draft's own
+/// words and the draft's the member's. The records are read after the
+/// draft's last image, and the diff is `unchanged` (the mutant that reads
+/// the records before the draft is imaged finds none, and answers `shared`
+/// `"0"`).
+#[test]
+fn a_publication_landing_between_the_diffs_reads_is_mapped_on_both_sides() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let (draft, edition) = staged_lines(&g);
+    let mark = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"))["mark"].as_str().expect("the mark").to_string();
+    let published = Cell::new(false);
+    let publishing = Watched::over(&g.shell, |frame, _| {
+        if frame["op"] == "image" && frame["d"] == draft.as_str() && !published.replace(true) {
+            publish(&g, &draft, &edition);
+        }
+        None
+    });
+    let records = |before: &Image, now: &Image| g.shell.through_records(&g.session, before, now);
+    let answer = diff_through(&publishing, &g.session, &json!({"doc": draft, "since": mark}), &records).unwrap_or_else(|r| panic!("{r}"));
+    let imaged: Vec<Value> = publishing.frames.borrow().iter().filter(|frame| frame["op"] == "image").map(|frame| frame["d"].clone()).collect();
+    assert_eq!(imaged[..2], [json!(mark), json!(draft)], "the premise: `since` imaged before the publication, the draft after it");
+    assert!(addresses(&g.shell, &g.session, &draft).iter().all(|a| a.starts_with(&format!("{edition}.0.1."))), "the premise: the draft re-windowed");
+    assert!(addresses(&g.shell, &g.session, &mark).iter().all(|a| a.starts_with(&format!("{draft}.0.1."))), "the premise: the mark's image the draft's own words");
+    assert_eq!(answer["outcome"], "unchanged", "{answer}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a diff whose session the board ended reads its records under
+/// the re-open.
+///
+/// The feed quiet, the session's token is closed at the board, so the
+/// diff's first image is the first caller to meet the death: the shell ends
+/// the session and re-opens one, the diff's reads go on under the re-open,
+/// and its records' read, made after them, is made there too — the diff
+/// answers `unchanged`, never `session_died` (the mutant that reads the
+/// records under the session the call named meets that death).
+#[test]
+fn a_diff_whose_session_the_board_ended_reads_its_records_under_the_re_open() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let rx = signed.subscribe();
+    let board = signed.board_references().remove(0);
+    let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = draft_holding(&signed, &session, LINES);
+    let mark = signed.call("text.mark", &json!({"session": session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"))["mark"].as_str().expect("the mark").to_string();
+    // The feed widens the session's supplement and reads the new rows, then
+    // falls quiet: the diff is the first caller to meet the death.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (mut widened, mut quiet_since) = (false, Instant::now());
+    while !(widened && quiet_since.elapsed() > Duration::from_millis(500)) {
+        assert!(Instant::now() < deadline, "the session's supplement was never widened");
+        for event in rx.try_iter() {
+            widened |= event.name == EventName::Index && event.data["session"] == session;
+            quiet_since = Instant::now();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let token = signed.sessions.get(&session).unwrap().token.clone();
+    Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).session_close(&token).unwrap();
+    let answer = signed.call("text.diff", &json!({"session": session, "doc": draft, "since": mark})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(answer["outcome"], "unchanged", "{answer}");
+    let gone = signed.call("held", &json!({"session": session})).unwrap_err().to_value();
+    assert!(gone["reason"]["session"].is_string(), "the premise: the death was met and the session re-opened: {gone}");
+    signed.shutdown();
     sd.shutdown();
 }

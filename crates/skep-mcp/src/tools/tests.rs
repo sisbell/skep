@@ -844,6 +844,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
                 "shared \"0\": since shares nothing with the draft",
                 "arrangement_moved",
                 "call again",
+                "a publication re-minted pair with since",
             ],
         ),
         (
@@ -1343,10 +1344,11 @@ fn the_merge_references_state_the_shells_shapes() {
 /// as a whole number from 1; `diff_text`'s reference names the cap on the
 /// two texts, the plan's bound on their pairs, each figure of its rows and
 /// the re-typed threshold by their constants, each row and each note in its
-/// form, and that words a publication re-minted share nothing with a mark
-/// made before it, and its schema takes `stat` as a boolean and `hunk` as a
-/// whole number from 1; `mark_text`'s reference names the `marks` type as
-/// the client spells it; the instructions send an agent to the three
+/// form, and that both texts are mapped through the person's correspondence
+/// records so words a publication re-minted pair with `since`, and its
+/// schema takes `stat` as a boolean and `hunk` as a whole number from 1;
+/// `mark_text`'s reference names the `marks` type as the client spells it;
+/// the instructions send an agent to the three
 /// tools, and so do the EDITING TEXT topic, which names the review step
 /// too, the mark before the change and the diff after it, and the restore
 /// of an earlier state, and the OVERVIEW topic, which names each among the
@@ -1472,7 +1474,7 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "masked: true".to_string(),
         "no_such_hunk".to_string(),
         "since is never read whole".to_string(),
-        "words a publication re-minted after the mark was made share nothing with the mark".to_string(),
+        "words a publication re-minted pair with since, so only real edits show".to_string(),
     ] {
         assert!(said.contains(&spelled), "diff_text's reference says `{spelled}`: {said}");
     }

@@ -102,8 +102,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   shell's `text.diff`, which writes nothing: what changed in the draft
   since a document that holds its content by identity — a mark, the version
   it was staged from, a document it copied from — told by identity, so a
-  block moved shows as moved and text typed again is said re-typed. Its
-  result is the shell's answer on one line — the positions shared, the
+  block moved shows as moved and text typed again is said re-typed; both
+  texts are mapped through the person's correspondence records first, so
+  words a publication re-minted pair with `since` and only real edits show.
+  Its result is the shell's answer on one line — the positions shared, the
   bytes new, gone and moved, the lines added, removed and moved, the notes
   — then the hunks, one row a line: each under `@@ -a,b +c,d @@`, ` N`
   unchanged, `-N` gone, `+N` new, `>N` moved here, `<` where moved lines

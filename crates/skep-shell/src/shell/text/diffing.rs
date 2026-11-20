@@ -23,18 +23,33 @@
 //! `arrangement_moved`. `stat: true` reads no text: one image of each
 //! document, and the counts alone.
 //!
+//! **The mapping.** A publication between the two documents re-mints the
+//! draft's words — its shot leaves a draft arranging the member's
+//! I-addresses where it arranged its own, and homes a correspondence record
+//! for each pair — so once the draft's last image is read, BOTH images are
+//! mapped through the person's correspondence records, read once over the
+//! two (`skep_client::history::records` and `mapped_image`, the restore's
+//! mapping), and the pairs are those of the mapped images, on every path,
+//! `stat` too: words a publication re-minted pair with what they were,
+//! whether `since` is a mark made before it or the draft published since
+//! `doc` copied from it, and a publication landing between the reads finds
+//! both images mapped by the records it made. The caller hands the mapping
+//! in ([`diff`]); `Shell::text_diff`'s reads the records under the session
+//! the call stands under when it runs.
+//!
 //! **The text before.** `since` is never read whole. A position the draft
 //! still holds is told from the draft's text where it stands
 //! (`Identity::sources`), and only the spans the draft holds nowhere are
-//! read, by identity: `retrieve_i` of their I-addresses off `since`'s image,
-//! in parts ([`parts`]) no larger than the delivery budget, the wire's list
-//! cap and what the dialer's answer cap holds at the room a position takes
-//! (`frames::I_ITEM_ROOM`). A read by identity refuses whole where one span
-//! lies in a document the session may not read: every gone span of that
-//! origin is then told as one withheld value of its width, as a text read
-//! tells a withheld run, and the read is made again without them, once for
-//! each such origin. A position the board holds no value at is `unread`,
-//! never text (SP-14).
+//! read, by identity: `retrieve_i` of their I-addresses off `since`'s
+//! mapped image — a re-minted span's at the member's addresses, which hold
+//! the same values — in parts ([`parts`]) no larger than the delivery
+//! budget, the wire's list cap and what the dialer's answer cap holds at the
+//! room a position takes (`frames::I_ITEM_ROOM`). A read by identity
+//! refuses whole where one span lies in a document the session may not
+//! read: every gone span of that origin is then told as one withheld value
+//! of its width, as a text read tells a withheld run, and the read is made
+//! again without them, once for each such origin. A position the board
+//! holds no value at is `unread`, never text (SP-14).
 //!
 //! **The bounds** (SP-17). `since` past [`MAX_DRAFT_POSITIONS`] is refused
 //! `too_large` before any text is read, its text being told whole in memory
@@ -56,10 +71,14 @@
 //! `no_such_hunk`.
 //!
 //! **The cost** (SP-23). Three images and one read of the draft's text, as
-//! every text call makes, each made again where the draft moved; one read
-//! by identity for each part of the gone spans; and the plan's own cost over
-//! the two texts' lines. The call holds the draft's text and the text
-//! before, each within [`MAX_DRAFT_POSITIONS`].
+//! every text call makes, each made again where the draft moved; the
+//! records' read, one four-set read per distinct origin of the person's
+//! among the two images' runs for each `MAX_WIRE_LIST` spans of it and one
+//! `read_link` per hit homed in the person's documents, and the mapping, a
+//! walk of each run against the records; one read by identity for each part
+//! of the gone spans; and the plan's own cost over the two texts' lines. The
+//! call holds the draft's text and the text before, each within
+//! [`MAX_DRAFT_POSITIONS`].
 
 use std::collections::BTreeSet;
 
@@ -85,6 +104,14 @@ const DIFF_TRIES: usize = 3;
 ///
 /// Its envelope: `as_of`, the `items` member and `resp`.
 const ANSWER_ENVELOPE: usize = 64;
+
+/// The mapping a diff applies to its two images before it plans them.
+///
+/// It is handed `since`'s image and the draft's last, and answers the two
+/// mapped — through the person's correspondence records, as
+/// `Shell::text_diff`'s does — or the refusal that ends the call (the
+/// module doc's *The mapping*).
+pub(super) type Mapping<'m> = dyn Fn(&Image, &Image) -> Result<(Image, Image), Refusal> + 'm;
 
 /// What the call is asked: the two documents, and how much of the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,11 +362,13 @@ fn note(note: &Note) -> Value {
     }
 }
 
-/// Makes the diff `asked` through `calls`.
+/// Makes the diff `asked` through `calls`, its two images mapped by `map`.
 ///
 /// In order: `since` is imaged, and refused where its text would pass the
-/// cap; the draft is imaged and read ([`read_now`]); the identity is
-/// planned, and the counts answered where they are the whole answer —
+/// cap; the draft is imaged and read ([`read_now`]); the two images are
+/// mapped, `map` called once with `since`'s and the draft's last (the
+/// module doc's *The mapping*); the identity is planned over what it
+/// answers, and the counts answered where they are the whole answer —
 /// nothing changed, the counts alone asked, or nothing shared; the gone
 /// spans are read by identity ([`read_gone`]); the text before is told
 /// ([`text_before`]); and the lines are planned and their rows drawn.
@@ -347,9 +376,9 @@ fn note(note: &Note) -> Value {
 ///
 /// # Errors
 ///
-/// The board's verdict on a read, or the shell's refusal of it. Every other
-/// outcome is an [`Answer`].
-pub(super) fn diff(calls: &impl Calls, asked: &Asked<'_>) -> Result<Answer, Refusal> {
+/// The board's verdict on a read, or the shell's refusal of it; `map`'s
+/// refusal. Every other outcome is an [`Answer`].
+pub(super) fn diff(calls: &impl Calls, asked: &Asked<'_>, map: &Mapping<'_>) -> Result<Answer, Refusal> {
     let Asked { doc, since, stat, hunk } = *asked;
     let before = match image(calls, doc, since)? {
         Ok((before, _)) => before,
@@ -362,6 +391,7 @@ pub(super) fn diff(calls: &impl Calls, asked: &Asked<'_>) -> Result<Answer, Refu
         Ok(now) => now,
         Err(answer) => return Ok(answer),
     };
+    let (before, now) = map(&before, &now)?;
     let identity = match Identity::of(&before, &now) {
         Ok(identity) => identity,
         Err(Unplanned { pairs }) => return Ok(refused(doc, "too_large", json!({"what": "pairs", "pairs": pairs.to_string(), "cap": skep_client::text::diff::MAX_PAIRS.to_string()}))),

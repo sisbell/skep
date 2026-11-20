@@ -38,10 +38,12 @@
 //! module `mark`'s, made of this module's calls, its one burst and the line
 //! it settles. The fifth, `text.diff` — what changed in a draft since a
 //! document that holds its content by identity, told by identity, its moved
-//! lines shown as moved and its re-typed ones said — is the child module
-//! `diffing`'s, over `skep-client`'s plan and the child `rows`: it writes
-//! nothing, and asks no write door. The four rows that write keep one order
-//! to the first read ([`Shell::text_call`]).
+//! lines shown as moved and its re-typed ones said, the two images mapped
+//! through the person's correspondence records so words a publication
+//! re-minted pair with what they were (skep #1095) — is the child module
+//! `diffing`'s, over `skep-client`'s plan and mapping and the child `rows`:
+//! it writes nothing, and asks no write door. The four rows that write keep
+//! one order to the first read ([`Shell::text_call`]).
 //!
 //! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
 //! members first, each refused in another form before the session is looked
@@ -142,7 +144,8 @@ use std::cell::RefCell;
 
 use serde_json::{json, Map, Value};
 use skep_client::address::is_address_text;
-use skep_client::board::frames;
+use skep_client::board::{frames, Image};
+use skep_client::history;
 use skep_client::search::MAX_DELIVERY_ITEMS;
 use skep_client::text::shared;
 
@@ -1337,8 +1340,10 @@ impl Shell {
     /// #1091). The members are read (`diffing::Asked::read`), and the diff
     /// is made as a text call that writes nothing is ([`Shell::text_read`]),
     /// by the child module `diffing`: the two documents imaged, the draft's
-    /// text read, the spans it no longer holds read by identity, and the
-    /// lines planned and drawn.
+    /// text read, the two images mapped through the person's correspondence
+    /// records ([`Shell::through_records`], under the session the call
+    /// stands under when the mapping runs; skep #1095), the spans the draft
+    /// no longer holds read by identity, and the lines planned and drawn.
     ///
     /// # Errors
     ///
@@ -1348,11 +1353,52 @@ impl Shell {
     ///    (`diffing::Asked::read`);
     /// 2. `malformed_args` naming `session`, then `session_died` or
     ///    `session_ended` ([`Shell::session`]);
-    /// 3. the board's verdict on a read, or the shell's refusal of it — a
-    ///    death the call could not follow to a re-open among them.
+    /// 3. the board's verdict on a read of an image or of the draft's text,
+    ///    or the shell's refusal of it — a death the call could not follow
+    ///    to a re-open among them;
+    /// 4. the records' reads' ([`Shell::through_records`]): `unreadable`
+    ///    naming an origin of the person's the board withholds,
+    ///    `no_such_document`, the board's other verdicts verbatim, and
+    ///    `session_died` where a records' read itself met the death signal,
+    ///    answered as it stands; a halt where the board's records map words
+    ///    past the largest ordinal;
+    /// 5. the board's verdict on a read by identity, or the shell's refusal
+    ///    of it, as at step 3.
     pub(super) fn text_diff(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = diffing::Asked::read(args)?;
-        self.text_read("text.diff", args, |calls| diffing::diff(calls, &asked))
+        self.text_read("text.diff", args, |calls| {
+            let map = |before: &Image, now: &Image| {
+                let session = calls.session.borrow().clone();
+                self.through_records(&session, before, now)
+            };
+            diffing::diff(calls, &asked, &map)
+        })
+    }
+
+    /// Returns `before` and `now` mapped through the correspondence records
+    /// of the account the session `session` acts as: the mapping
+    /// [`Shell::text_diff`] hands its diff.
+    ///
+    /// The session is looked up by the reference the diff stands under when
+    /// the mapping runs ([`Under`]), so a diff whose earlier read was made
+    /// again under the restart arm's re-open reads the records under the
+    /// re-open too. The records are read once over both images, at the head
+    /// (`skep_client::history::records`), and each image is mapped through
+    /// them (`skep_client::history::mapped_image`). A session the board
+    /// named no account maps neither: no origin is the person's.
+    ///
+    /// # Errors
+    ///
+    /// [`Shell::session`]'s refusals; the records' reads' refusals as the
+    /// merge family's (`Shell::merge_refusal`) — `unreadable`,
+    /// `no_such_document`, `session_died` where a read met the death signal,
+    /// every other halt as itself; the halt of a record that maps words past
+    /// the largest ordinal.
+    pub(super) fn through_records(&self, session: &str, before: &Image, now: &Image) -> Result<(Image, Image), Refusal> {
+        let session = self.session(&Value::from(session))?;
+        let Some(account) = session.facts.account.as_deref() else { return Ok((before.clone(), now.clone())) };
+        let records = history::records(&session.board, &session.token, account, &[before, now]).map_err(|r| self.merge_refusal(&session, r))?;
+        Ok((history::mapped_image(before, &records)?, history::mapped_image(now, &records)?))
     }
 
     /// Makes a text call's edit under the session `args` names.
@@ -1462,20 +1508,22 @@ pub(super) fn mark_through(rows: &impl Rows, session: &str, account: &str, args:
     mark::mark(&Under::new(rows, session), &asked, account).map(Answer::into_value)
 }
 
-/// Makes `text.diff`'s diff of `args` through `rows`, under `session`.
+/// Makes `text.diff`'s diff of `args` through `rows`, under `session`, its
+/// two images mapped by `map`.
 ///
 /// It is the call as [`Shell::text_diff`] makes it past the session,
 /// through rows a suite hands it: the shell's own with another writer's
 /// change landed between two of the call's reads, where a real board gives
-/// no such moment to order.
+/// no such moment to order; `map` the shell's own ([`Shell::through_records`])
+/// or the two images as read.
 ///
 /// # Errors
 ///
 /// The members' refusal, and the diff's own.
 #[cfg(test)]
-pub(super) fn diff_through(rows: &impl Rows, session: &str, args: &Value) -> Result<Value, Refusal> {
+pub(super) fn diff_through(rows: &impl Rows, session: &str, args: &Value, map: &diffing::Mapping<'_>) -> Result<Value, Refusal> {
     let asked = diffing::Asked::read(args)?;
-    diffing::diff(&Under::new(rows, session), &asked).map(Answer::into_value)
+    diffing::diff(&Under::new(rows, session), &asked, map).map(Answer::into_value)
 }
 
 #[cfg(test)]

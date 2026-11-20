@@ -2,7 +2,9 @@
 //! records, and THE READS AND THE ONE WRITE over the crate's fake board —
 //! the frames in order, the position pre-check that reads nothing at a
 //! position, the published document refused at the one read, the write
-//! byte-checked, and the session's end at each of them typed.
+//! byte-checked, and the session's end at each of them typed. Beside them,
+//! the mapping of images at their own spelling and the one records' read
+//! over several images, the diff's.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -10,11 +12,11 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use skep_address::Address;
 
-use super::{covered, mapped, past, restore, Restored};
+use super::{covered, mapped, mapped_image, past, records, restore, Restored};
 use crate::address::parse_address;
 use crate::board::fake::{self, Fake};
 use crate::board::frames::{self, T_CORRESPONDENCE};
-use crate::board::Token;
+use crate::board::{whole_image, Image, Token};
 use crate::dial::{Request, Response};
 use crate::halt::Halt;
 use crate::merge::reads::OnEnd;
@@ -100,6 +102,92 @@ fn runs_no_record_names_pass_through_in_order() {
     assert_eq!(covered(&state, &records), 3);
     assert_eq!(mapped(&state, &[]), state);
     assert_eq!(covered(&state, &[]), 0);
+}
+
+// ── the mapping of images ────────────────────────────────────────────────
+
+/// A member of `E`'s chain, whose own words a deposit naming it mints under
+/// its chain, `M.0.1`.
+const M: &str = "1.0.1.0.64.1";
+
+/// Returns the image of `runs`, each an I-address prefix, a first ordinal
+/// and a width, in V order, decoded as a board's answer is.
+fn image(runs: &[(&str, u64, u64)]) -> Image {
+    let runs: Vec<Value> = runs.iter().map(|(prefix, first, width)| json!({"i_start": format!("{prefix}.{first}"), "width": width.to_string()})).collect();
+    whole_image(&json!({"resp": "runs", "as_of": 20, "runs": runs})).expect("an image")
+}
+
+/// A draft run a record covers in part comes back as the trunk's span where
+/// the record covers it and as its own words around it; a window no record
+/// names, and a run minted under a member's chain, keep their own prefixes —
+/// the member's never spelled as its trunk's, as the merge's runs spell it;
+/// the ordinals are tiled again from 1, the extent unchanged (the mutants
+/// that map through the merge's runs, keep the old ordinals, or drop a run
+/// answer another image).
+#[test]
+fn an_image_is_mapped_at_its_own_spelling_and_tiled_again_from_one() {
+    let (s, z, e, m) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"), format!("{M}.0.1"));
+    let before = image(&[(&s, 1, 10), (&z, 1, 4), (&m, 7, 3)]);
+    let records = [record(S, 1, span(S, 3, 5), span(E, 20, 5))];
+    let after = mapped_image(&before, &records).expect("mapped");
+    assert_eq!(after, image(&[(&s, 1, 2), (&e, 20, 5), (&s, 8, 3), (&z, 1, 4), (&m, 7, 3)]));
+    assert_eq!(after.runs().iter().map(|run| run.ordinal).collect::<Vec<_>>(), [1, 3, 8, 11, 15], "tiled again from 1");
+    assert_eq!((after.extent(), before.extent()), (17, 17), "the extent unchanged");
+    assert_eq!(after.runs()[4].prefix, m, "the member's own chain, never its trunk's");
+}
+
+/// Two mapped pieces I-adjacent on one chain are one run, and so are a
+/// mapped piece and a run of the trunk's words beside it; an image no record
+/// touches comes back equal (a board answers I-adjacent runs joined).
+#[test]
+fn mapped_pieces_adjacent_on_one_chain_are_one_run_and_an_untouched_image_is_itself() {
+    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
+    let adjoining = [record(S, 1, span(S, 1, 4), span(E, 20, 4)), record(S, 2, span(S, 5, 6), span(E, 24, 6))];
+    assert_eq!(mapped_image(&image(&[(&s, 1, 10)]), &adjoining), Ok(image(&[(&e, 20, 10)])));
+    let beside = image(&[(&s, 1, 4), (&e, 24, 6)]);
+    assert_eq!(mapped_image(&beside, &adjoining[..1]), Ok(image(&[(&e, 20, 10)])), "the re-minted words and the trunk's beside them");
+    let untouched = image(&[(&z, 1, 5), (&s, 1, 3), (&e, 40, 2)]);
+    assert_eq!(mapped_image(&untouched, &[]), Ok(untouched.clone()));
+    assert_eq!(mapped_image(&untouched, &[record(S, 1, span(S, 50, 4), span(E, 7, 4))]), Ok(untouched.clone()), "a record of positions it does not hold");
+    assert_eq!(mapped_image(&Image::default(), &adjoining), Ok(Image::default()));
+}
+
+/// A record mapping words past the largest ordinal is the board's fault,
+/// faced, never a panic or a wrapped sum: at the piece's first I-address,
+/// and at its last.
+#[test]
+fn a_record_mapping_past_the_largest_ordinal_is_faced_and_maps_nothing() {
+    let s = format!("{S}.0.1");
+    let faced = |answer: Result<Image, Halt>| matches!(answer, Err(Halt::Halt(face)) if face.state.contains("past the largest ordinal") && face.act.contains("board fault"));
+    let first = [record(S, 1, span(S, 1, 10), span(E, u64::MAX, 10))];
+    assert!(faced(mapped_image(&image(&[(&s, 5, 1)]), &first)), "the offset past the range");
+    let last = [record(S, 1, span(S, 1, 10), span(E, u64::MAX - 3, 10))];
+    assert!(faced(mapped_image(&image(&[(&s, 1, 10)]), &last)), "the piece's last I-address past the range");
+    assert!(mapped_image(&image(&[(&s, 1, 4)]), &last).is_ok(), "within the range, mapped");
+}
+
+/// THE RECORDS OF SEVERAL IMAGES, one read: the owned origin's spans of both
+/// images in one four-set query, a span two images hold asked once, the
+/// other account's hit never read, a record kept once; the death signal at
+/// the query and at a link's read is the typed session end (the mutants that
+/// read per image, or keep a span twice, ask another query).
+#[test]
+fn the_records_of_several_images_are_read_at_once_each_span_asked_once() {
+    let (s, z) = (format!("{S}.0.1"), format!("{Z}.0.1"));
+    let (mark, draft) = (image(&[(&s, 1, 11), (&z, 1, 4)]), image(&[(&s, 1, 11), (&s, 20, 3)]));
+    let fake = scripted();
+    let found = records(&fake::board(&fake), &token(), ACCOUNT, &[&mark, &draft]).expect("the records");
+    assert_eq!(found, vec![record(S, 1, span(S, 1, 11), span(E, 20, 11))]);
+    assert_eq!(fake.log(), ["POST /op find_links_ftt", "POST /op read_link", "POST /op read_link"], "one query, each owned hit read once");
+    let reads = served(&fake);
+    assert_eq!(reads[0].2["q"]["home"], frames::unit_span(S));
+    assert_eq!(reads[0].2["q"]["from"], json!([frames::i_span(&format!("{s}.1"), 11), frames::i_span(&format!("{s}.20"), 3)]), "each span once");
+    assert_eq!(records(&fake::board(&Fake::unread()), &token(), ACCOUNT, &[&image(&[(&z, 1, 4)]), &Image::default()]), Ok(Vec::new()), "no origin of the person's: nothing read");
+    for n in 1..=2 {
+        let dying = dying_at(n);
+        let answer = records(&fake::board(&dying), &token(), ACCOUNT, &[&mark, &draft]);
+        assert!(matches!(&answer, Err(Refusal::SessionEnded(Halt::Halt(face))) if face.act == OnEnd::Rerun.act()), "the death at read {n}: {answer:?}");
+    }
 }
 
 // ── the reads and the one write ──────────────────────────────────────────

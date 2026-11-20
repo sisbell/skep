@@ -954,12 +954,13 @@ pub(crate) fn i_runs(v: &Value, extent: u64) -> Option<Vec<IRun>> {
 
 /// A document's whole image: every run it arranges, in V order.
 ///
-/// Its invariant, kept by [`whole_image`], the one way one is made beside
-/// the empty image: the runs tile the content positions from 1 with no gap
-/// — each run's `ordinal` one past the positions before it — none holds no
-/// address, the last I-address of each lies within `u64`, and the positions
-/// together are [`Image::extent`], below `u64::MAX`, so the position one
-/// past a run's last is a `u64` too.
+/// Its invariant, kept by `Image::tiled`, the one constructor of every image
+/// but the empty one — [`whole_image`] decodes a board's answer through it,
+/// and `history::mapped_image` maps an image through it: the runs tile the
+/// content positions from 1 with no gap — each run's `ordinal` one past the
+/// positions before it — none holds no address, the last I-address of each
+/// lies within `u64`, and the positions together are [`Image::extent`],
+/// below `u64::MAX`, so the position one past a run's last is a `u64` too.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Image {
     /// The runs, in V order.
@@ -969,6 +970,25 @@ pub struct Image {
 }
 
 impl Image {
+    /// Returns the image of `pieces`, in V order, each a run's I-address
+    /// prefix, its first I-address's last component and its width.
+    ///
+    /// Each run's `ordinal` is the image's own, one past the positions
+    /// before it from 1, so no caller names one. `None` where a piece holds
+    /// no address, where a piece's last I-address passes `u64`, or where the
+    /// positions together reach `u64::MAX`: the type's invariant, held here.
+    pub(crate) fn tiled(pieces: impl IntoIterator<Item = (String, u64, u64)>) -> Option<Image> {
+        let (mut runs, mut extent) = (Vec::new(), 0u64);
+        for (prefix, first, width) in pieces {
+            first.checked_add(width.checked_sub(1)?)?;
+            // `extent` stays below `u64::MAX`, so the next ordinal is a `u64`.
+            let ordinal = extent + 1;
+            extent = extent.checked_add(width).filter(|extent| *extent < u64::MAX)?;
+            runs.push(IRun { prefix, first, width, ordinal });
+        }
+        Some(Image { runs, extent })
+    }
+
     /// Returns the runs, in V order.
     pub fn runs(&self) -> &[IRun] {
         &self.runs
@@ -991,10 +1011,10 @@ impl Image {
 /// or whose positions reach `u64::MAX`: the image is whole or absent, never
 /// a part read as the whole (SP-14).
 pub fn whole_image(v: &Value) -> Option<Image> {
-    let mut runs = i_runs(v, u64::MAX - 1)?;
-    runs.retain(|run| run.width > 0);
-    let extent = runs.last().map_or(0, |last| last.ordinal - 1 + last.width);
-    Some(Image { runs, extent })
+    let runs = i_runs(v, u64::MAX - 1)?;
+    Image::tiled(
+        runs.into_iter().filter(|run| run.width > 0).map(|run| (run.prefix, run.first, run.width)),
+    )
 }
 
 /// Returns the V-ordinal `atom` is arranged at among `runs`, in V order.

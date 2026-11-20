@@ -105,11 +105,12 @@ impl Board {
         self.sent.borrow().iter().map(|frame| frame["op"].as_str().unwrap_or_default().to_string()).collect()
     }
 
-    /// Returns the diff's outcome for `args` beside `doc` and `since`.
+    /// Returns the diff's outcome for `args` beside `doc` and `since`, the
+    /// two images planned as read.
     fn diff(&self, mut args: Value) -> Result<Answer, Refusal> {
         args["doc"] = Value::from(DOC);
         args["since"] = Value::from(SINCE);
-        Asked::read(&args).and_then(|asked| diff(self, &asked))
+        Asked::read(&args).and_then(|asked| diff(self, &asked, &as_read))
     }
 
     /// Returns the diff's answer for `args`, an answer that is data.
@@ -118,6 +119,12 @@ impl Board {
         assert!(!answer.is_error, "{}", answer.value);
         answer.into_value()
     }
+}
+
+/// The mapping of a diff no correspondence record touches: the two images
+/// as read.
+fn as_read(before: &Image, now: &Image) -> Result<(Image, Image), Refusal> {
+    Ok((before.clone(), now.clone()))
 }
 
 /// Returns the board's refusal of a read by identity over `document`.
@@ -503,7 +510,7 @@ fn the_texts_a_diff_tells_whole_are_held_to_the_cap_and_its_pairs_to_the_plans_b
             self.0.drop_held(held)
         }
     }
-    let asked = |args: &Value| Asked::read(args).and_then(|asked| diff(&Wide(&board), &asked));
+    let asked = |args: &Value| Asked::read(args).and_then(|asked| diff(&Wide(&board), &asked, &as_read));
     let answer = asked(&json!({"doc": DOC, "since": SINCE})).expect("an answer");
     assert_eq!(
         answer,
@@ -589,6 +596,51 @@ fn the_members_are_read_each_in_its_form_and_a_reads_refusal_is_the_calls() {
         }
     }
     let refusing = Refusing(RefCell::new(Vec::new()));
-    let refused = Asked::read(&in_form).and_then(|asked| diff(&refusing, &asked)).unwrap_err();
+    let refused = Asked::read(&in_form).and_then(|asked| diff(&refusing, &asked, &as_read)).unwrap_err();
     assert_eq!((refused.name(), refusing.0.borrow().len()), ("withheld", 1));
+}
+
+/// The two images are mapped once, after the draft's last image.
+///
+/// The mapping is handed `since`'s image and the draft's last — after the
+/// draft's text was read and it was imaged again, a round made again where
+/// the draft moved, or after the two images alone under `stat` — and the
+/// plan is made over what it answers: a mapping that sends both images to
+/// one stand-in identity answers `unchanged`, nothing read by identity; a
+/// mapping's refusal is the call's, nothing read past it (the mutants that
+/// map before the draft is read, map `since` alone, or plan the images as
+/// read answer otherwise).
+#[test]
+fn the_two_images_are_mapped_once_after_the_drafts_last_image_and_planned_as_mapped() {
+    let since = Doc::typed(SINCE, 1, EIGHT);
+    let (first, last) = (since.pick(&[1, 2, 3]), Doc::typed(DOC, 1, EIGHT));
+    let mut board = Board::of(&since, &first);
+    board.drafts.push(last.clone());
+    let seen: RefCell<Vec<(Vec<String>, Image, Image)>> = RefCell::new(Vec::new());
+    let stand_in = |before: &Image, now: &Image| -> Result<(Image, Image), Refusal> {
+        seen.borrow_mut().push((board.ops(), before.clone(), now.clone()));
+        Ok((now.clone(), now.clone()))
+    };
+    let asked = |args: Value| Asked::read(&args).and_then(|asked| diff(&board, &asked, &stand_in));
+    let answer = asked(json!({"doc": DOC, "since": SINCE})).expect("an answer");
+    assert_eq!(answer, Answer::data(json!({"outcome": "unchanged", "doc": DOC, "since": SINCE, "as_of": AT})), "planned as mapped");
+    let read = ["image", "image", "retrieve_doc_v_span_set", "retrieve_v", "image", "image", "retrieve_doc_v_span_set", "retrieve_v", "image"];
+    let image = |doc: &Doc| whole_image(&doc.image()).expect("an image");
+    assert_eq!(*seen.borrow(), [(read.map(String::from).to_vec(), image(&since), image(&last))], "once, after the draft's last image, the draft as it then stood");
+    assert_eq!(board.ops(), read, "nothing read past the mapping");
+    // The counts alone: mapped after the two images.
+    let board = Board::of(&since, &last);
+    seen.borrow_mut().clear();
+    let stand_in = |before: &Image, now: &Image| -> Result<(Image, Image), Refusal> {
+        seen.borrow_mut().push((board.ops(), before.clone(), now.clone()));
+        Ok((now.clone(), now.clone()))
+    };
+    let counted = Asked::read(&json!({"doc": DOC, "since": SINCE, "stat": true})).and_then(|asked| diff(&board, &asked, &stand_in)).expect("an answer");
+    assert_eq!(counted.value["outcome"], "unchanged");
+    assert_eq!(seen.borrow().iter().map(|(ops, ..)| ops.clone()).collect::<Vec<_>>(), [["image", "image"].map(String::from).to_vec()]);
+    // A mapping's refusal is the call's.
+    let board = Board::of(&since, &last);
+    let refusing = |_: &Image, _: &Image| -> Result<(Image, Image), Refusal> { Err(Refusal::shell(crate::refusal::Name::UNREADABLE, json!({"doc": "1.0.1.0.7"}))) };
+    let refused = Asked::read(&json!({"doc": DOC, "since": SINCE})).and_then(|asked| diff(&board, &asked, &refusing)).unwrap_err();
+    assert_eq!((refused.name(), board.ops().len()), ("unreadable", 5), "nothing read by identity");
 }

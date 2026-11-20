@@ -3,10 +3,9 @@
 //!
 //! The module stands behind the `merge` feature, riding the merge's reader
 //! and the one write the take-backs send (the `merge::undo` module): a
-//! restore is the same read at a position, the same records' read and
-//! mapping the undo sends its state through, and the same
-//! `set_arrangement`, with no base and no `merge`, at any position the
-//! board still answers.
+//! restore is the same read at a position, the same records' read the undo
+//! maps its state through, and the same `set_arrangement`, with no base and
+//! no `merge`, at any position the board still answers.
 //! Two calls make the restore, the reads apart from the write, so an
 //! embedder says what the draft will hold before anything is written; two
 //! more lend its records and its mapping to a comparison by identity:
@@ -28,12 +27,15 @@
 //!   origin's spans — `{home: [the origin], from: [the spans], ty: [the
 //!   correspondence class]}`, the twin fence's own read — each hit judged
 //!   off its address and read once, kept by `Record::of`. Then THE MAPPING
-//!   ([`mapped`]): each run walked from its first ordinal, the piece a record
-//!   covers mapped by `Record::map` to the published span it became — its
-//!   origin the TRUNK the record's `to` lies in — the piece no record covers
-//!   kept as read, I-adjacent pieces of one origin merged. A state in more
-//!   pieces than one write may name is [`Refusal::OverCap`], nothing sent.
-//! * [`restore`] — THE ONE WRITE: `set_arrangement` of the mapped runs,
+//!   ([`mapped_image`], the mapping of images below): the state's image
+//!   mapped at its own spelling, the words a record covers coming back as
+//!   the published span they became on the trunk's chain, the rest kept as
+//!   read, a run minted under a member's chain kept under that chain — the
+//!   runs the write sends, [`Past::written`]; [`Past::sent`] is the same
+//!   runs as the core's, each origin the trunk its words were minted under,
+//!   for drawing. A state in more runs than one write may name, counted on
+//!   the runs the write sends, is [`Refusal::OverCap`], nothing sent.
+//! * [`restore`] — THE ONE WRITE: `set_arrangement` of [`Past::written`],
 //!   `as_of` the first read's position, no `head`, no `base`, no `merge`, so
 //!   the board moves nothing of the draft's record — the base and the merge
 //!   marker stand as they are (wire.md §Arrangement, `set_arrangement`:
@@ -45,7 +47,9 @@
 //!   and a restore after the restore landed is a write of its own. No head
 //!   record is read first: the frame has no entry frame and signs nothing,
 //!   so SP-14's pre-check does not apply. Nothing of a merge record is
-//!   written or replaced.
+//!   written or replaced. Each run is as [`written_runs`] spells it: its own
+//!   first I-address, and its `origin` the document that minted it, a
+//!   member's version component kept (wire.md §Arrangement, `publish`).
 //! * [`records`] and [`mapped_image`] — THE RECORDS AND THE MAPPING OF
 //!   IMAGES, for the diff (`text.diff`; skep #1095). A publication re-mints
 //!   a draft's words, so a mark made before it, or a document that copied
@@ -87,15 +91,17 @@
 
 use std::collections::HashSet;
 
-use skep_address::Address;
+use serde_json::Value;
+use skep_address::{content_subspace, document_of, Address};
 
+use crate::address::parse_address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
 use crate::merge::reads::{
     records_of, runs_of, session_ended, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
 };
-use crate::merge::undo::{frame_runs, judge, Act};
+use crate::merge::undo::{judge, Act};
 use crate::merge::Run;
 use crate::publication::Record;
 
@@ -114,8 +120,20 @@ pub struct Past {
     pub as_of: u64,
     /// The arrangement as read at `at`, in V order.
     pub state: Vec<Run>,
-    /// The same, mapped through the records: what the write sends.
+    /// [`Past::written`] as the core's runs, for drawing.
+    ///
+    /// Each run's origin is the trunk its words were minted under, and
+    /// I-adjacent runs of one origin are one run, so a member's own words
+    /// stand here as the trunk's positions of the same ordinals: never what
+    /// the write sends.
     pub sent: Vec<Run>,
+    /// The state's image mapped through the records at its own spelling, in
+    /// V order: what the write sends.
+    ///
+    /// Each run lies on the chain that minted it — a deposit naming a member
+    /// on the member's — and the words a record covers on the trunk's chain
+    /// the record's `to` names ([`mapped_image`]).
+    pub written: Image,
     /// The correspondence records the mapping used, in the order they were
     /// read.
     pub records: Vec<Record>,
@@ -165,10 +183,13 @@ pub struct Restored {
 /// - the state's reads' at `at`: [`Refusal::HistoryReclaimed`],
 ///   [`Refusal::NotAPosition`], [`Refusal::NoSuchDocument`] for a draft that
 ///   did not exist then, [`Refusal::HistoryBusy`] past the retries,
-///   [`Refusal::TooFragmented`];
+///   [`Refusal::TooFragmented`]; a run that is no content I-address, or an
+///   image that reaches the largest ordinal, the board's fault, faced;
 /// - the records' reads' refusals at the head;
-/// - [`Refusal::OverCap`] where the mapped state is in more pieces than one
-///   write may name;
+/// - a record mapping the state past the largest ordinal, the board's
+///   fault, faced (SP-19);
+/// - [`Refusal::OverCap`] where the written runs are more than one write
+///   may name;
 /// - the death signal under the token at any read,
 ///   [`Refusal::SessionEnded`], its face saying to run this again; the
 ///   dialer's halts.
@@ -188,19 +209,37 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
     if at >= as_of {
         return Err(Refusal::NotPast { draft: draft.clone(), at, current: as_of });
     }
-    let state = runs_of(&reader.imaged(draft, Some(at))?.runs)?;
+    let imaged = reader.imaged(draft, Some(at))?;
+    let state = runs_of(&imaged.runs)?;
+    let pieces =
+        imaged.runs.into_iter().filter(|r| r.width > 0).map(|r| (r.prefix, r.first, r.width));
+    let read = Image::tiled(pieces).ok_or_else(|| {
+        Halt::face(
+            "the state's image cannot be held",
+            format!("the image of {draft} as of {at} arranges positions up to the largest ordinal"),
+            "this is a board fault; nothing was written",
+        )
+    })?;
     let records = records_of(&reader, account, &state)?;
-    let sent = mapped(&state, &records);
-    if sent.len() > SHOT_RUN_CAP {
-        return Err(Refusal::OverCap { runs: sent.len(), cap: SHOT_RUN_CAP });
+    // Every sum of a record's numbers is made here, checked (SP-19): the
+    // core's runs below are the mapped image's, never mapped again.
+    let written = mapped_image(&read, &records)?;
+    if written.runs().len() > SHOT_RUN_CAP {
+        return Err(Refusal::OverCap { runs: written.runs().len(), cap: SHOT_RUN_CAP });
     }
-    Ok(Past { draft: draft.clone(), at, as_of, state, sent, records, marker: meta.merge })
+    let sent = runs_of(written.runs())?;
+    Ok(Past { draft: draft.clone(), at, as_of, state, sent, written, records, marker: meta.merge })
 }
 
 /// Makes `past`'s state current: the one write under `token`.
 ///
+/// The write sets [`Past::written`], each run as [`written_runs`] spells
+/// it.
+///
 /// # Errors
 ///
+/// A run of [`Past::written`] that is no content I-address, the board's
+/// fault, faced with nothing sent ([`written_runs`]); then
 /// `arrangement_moved` as the board's verdict, [`Refusal::Halt`] with
 /// `Refused` saying the draft changed since it was read and nothing was
 /// changed, and asking a read of the draft and a restore typed at that
@@ -215,10 +254,10 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
 /// this again; a lost acknowledgment as the dialer's halt, with no re-ask —
 /// the embedder reads first on a re-run.
 pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Refusal> {
-    let Past { draft, at, as_of, sent, .. } = past;
+    let Past { draft, at, as_of, written, .. } = past;
     let frame = frames::set_arrangement(
         &draft.to_string(),
-        &frame_runs(sent)?,
+        &written_runs(written)?,
         *as_of,
         None,
         None,
@@ -231,6 +270,40 @@ pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Re
     };
     let position = judge(&v, draft, *as_of, Act::Restore)?;
     Ok(Restored { draft: draft.clone(), at: *at, position })
+}
+
+/// Returns `image`'s runs as the restore's one write spells them.
+///
+/// Each is `frames::shot_run` of the run's own first I-address in its one
+/// spelling, its width, and its `origin`: the document that minted it,
+/// version component and all — for a deposit naming a member, the member
+/// (wire.md §Arrangement, `publish`: "`origin` must be the document that
+/// minted the run's addresses"). A run minted under a member's chain is
+/// written as itself, never as the trunk's position of the same ordinal.
+///
+/// # Errors
+///
+/// A run whose first I-address is no content I-address, the board's fault,
+/// faced: an image is a board's answer, or one mapped from it.
+pub fn written_runs(image: &Image) -> Result<Vec<Value>, Halt> {
+    image
+        .runs()
+        .iter()
+        .map(|run| {
+            let named = format!("{}.{}", run.prefix, run.first);
+            let spelled = parse_address(&named)
+                .filter(|a| a.subspace() == Some(&content_subspace()))
+                .and_then(|a| Some((document_of(&a)?, a)));
+            let (origin, i_start) = spelled.ok_or_else(|| {
+                Halt::face(
+                    "an image run is no content I-address",
+                    format!("`{named}` is no address in the content subspace"),
+                    "this is a board fault; nothing was written",
+                )
+            })?;
+            Ok(frames::shot_run(&origin.to_string(), &i_start.to_string(), run.width))
+        })
+        .collect()
 }
 
 /// Reads the correspondence records of `account`'s own origins among the
@@ -289,7 +362,7 @@ pub fn mapped_image(image: &Image, records: &[Record]) -> Result<Image, Halt> {
         Halt::face(
             "a correspondence record maps words past the largest ordinal",
             "the record's published span, at the offset of a piece it covers, passes the range of an I-address",
-            "this is a board fault; nothing was compared",
+            "this is a board fault; nothing was compared or written",
         )
     };
     let mut pieces: Vec<(String, u64, u64)> = Vec::with_capacity(image.runs().len());

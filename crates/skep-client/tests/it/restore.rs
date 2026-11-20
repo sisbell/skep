@@ -22,17 +22,20 @@
 //! carry the TRUNK as their origin, the restored image is the member's
 //! identity, the bytes are the old text, a link made on the published words
 //! is found at the restored place, and a second shot sends them by
-//! reference with no fresh identity.
+//! reference with no fresh identity. A member's own words — a deposit
+//! naming the member, minted under its chain, staged into a draft — come
+//! back as themselves, never as the trunk's word of the same ordinal.
 
 use serde_json::{json, Value};
 use skep_address::Address;
-use skep_client::board::{acked_addr, acked_at, frames, AtAnswer, Token};
+use skep_client::board::{acked_addr, acked_at, frames, AtAnswer, Token, T_ENROLL};
 use skep_client::halt::Halt;
 use skep_client::history::{past, restore, Restored};
 use skep_client::merge::{compose, land, Inputs, Landed, Landing, Refusal, Run, Side};
+use skep_identity::entry_body_insert;
 
-use crate::common::{insert_text, mint};
-use crate::merge::{acked, addr, as_image, image, m_of, mark, merger, publish_with_place, published_document, read, shot, text_of, Rig, Staged};
+use crate::common::{insert_text, mint, typed_at};
+use crate::merge::{acked, addr, as_image, attest, image, m_of, mark, merger, publish_with_place, published_document, read, shot, text_of, Rig, Staged};
 
 /// The claimant's account on a notebook.
 const ACCOUNT: &str = "1.0.1";
@@ -272,5 +275,40 @@ fn words_a_publication_made_public_come_back_as_the_published_words_they_became(
     let e2 = shot(&rig.board, &session, &rig.device, &rig.bare, &e, Some((&e1, 11)), &[Staged::Own { from: 1, text: "hello world" }]);
     assert_eq!(e2.to_string(), format!("{e}.2"));
     assert_eq!(image(&rig.board, &token, &e2, 11), vec![(format!("{e}.0.1.1"), 11)], "no fresh identity");
+    session.close().expect("close");
+}
+
+/// A member's own words come back as themselves.
+///
+/// `e.1` holds "abc", the trunk's words, and "z", a declared deposit naming
+/// the member and so minted under its chain; `s` is staged from `e.1`, typed
+/// into, and restored to the stage's state: the image is the stage's runs
+/// again and the bytes are the deposit's, never the trunk's "a" of the same
+/// ordinal.
+#[test]
+fn a_members_own_words_come_back_as_themselves() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let e = published_document(&rig.board, &session, &rig.device);
+    let e1 = shot(&rig.board, &session, &rig.device, &rig.bare, &e, None, &[Staged::Fresh { text: "abc" }]);
+    let as_of = typed_at(&rig.board, &token, &e1.to_string());
+    let mut deposit = json!({"op": "insert", "doc": e1.to_string(), "at": {"subspace": "1", "ordinal": "4"}, "values": ["z"], "deposit": T_ENROLL, "as_of": as_of});
+    // The entry frame of an insert names the trunk, whichever member the
+    // frame names.
+    deposit["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), &e, &entry_body_insert(Some(&addr(T_ENROLL)), b"z".chunks(1)));
+    acked(session.op(&deposit));
+    let theirs = vec![(format!("{e}.0.1.1"), 3), (format!("{e1}.0.1.1"), 1)];
+    assert_eq!(image(&rig.board, &token, &e1, 4), theirs, "the premise: the deposit minted under the member's chain");
+    let staged = acked(rig.board.op(Some(&rig.bare), &frames::stage(&e1.to_string(), None)));
+    let s = addr(acked_addr(&staged).expect("the staged draft"));
+    let staged_at = acked_at(&staged).expect("the stage's position");
+    assert_eq!(image(&rig.board, &token, &s, 4), theirs, "the stage copies the member's words by identity");
+    insert_text(&rig.board, &rig.bare, &s.to_string(), 5, "!");
+    let p = past(&rig.board, &token, ACCOUNT, &s, staged_at).expect("the past read");
+    assert_eq!(p.state, vec![Run::new(e.clone(), 1, 3), Run::new(e.clone(), 1, 1)], "the core's runs spell the deposit as the trunk's first word");
+    restore(&rig.board, &token, &p).expect("restored");
+    assert_eq!(image(&rig.board, &token, &s, 4), theirs, "the stage's runs again");
+    assert_eq!(text_of(&rig, &token, &s, 4), "abcz", "the deposit's bytes");
     session.close().expect("close");
 }

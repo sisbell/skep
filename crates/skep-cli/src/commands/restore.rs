@@ -43,7 +43,8 @@ use skep_client::address::parse_address;
 use skep_client::board::{Board, Scope};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
-use skep_client::history::{past, restore as make_current, Past, Restored};
+use skep_client::halt::Halt;
+use skep_client::history::{past, restore as make_current, written_runs, Past, Restored};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{
@@ -140,7 +141,7 @@ fn run(board: &Board, session: &Session<'_>, asked: &Asked) -> Result<(), Stop> 
     say_past(&p);
     let restored = make_current(board, session.token(), &p).map_err(|r| refused(r, Step::Restore))?;
     say_restored(&p, &restored);
-    data_verbatim(report(&p, &restored).to_string().as_bytes())?;
+    data_verbatim(report(&p, &restored)?.to_string().as_bytes())?;
     Ok(())
 }
 
@@ -149,7 +150,7 @@ fn run(board: &Board, session: &Session<'_>, asked: &Asked) -> Result<(), Stop> 
 /// words they became — and the merge marker where one stands, with the
 /// withdrawal named beside it.
 fn say_past(p: &Past) {
-    let (extent, runs, covered) = (p.extent(), p.sent.len() as u64, p.covered());
+    let (extent, runs, covered) = (p.extent(), p.written.runs().len() as u64, p.covered());
     talk(format!(
         "at position {} {} held {extent} position{} in {runs} run{}{}",
         p.at,
@@ -189,29 +190,26 @@ fn say_restored(p: &Past, r: &Restored) {
 }
 
 /// Returns the restore as the report carries it (the module's doc).
-fn report(p: &Past, r: &Restored) -> Value {
-    let runs: Vec<Value> = p
-        .sent
-        .iter()
-        .map(|run| {
-            json!({
-                "origin": run.origin.to_string(),
-                "i_start": run.address_at(0).map(|a| a.to_string()),
-                "width": run.width.to_string(),
-            })
-        })
-        .collect();
-    json!({
+///
+/// Its `runs` are the write's own, spelled by the library's one speller of
+/// them (`written_runs`).
+///
+/// # Errors
+///
+/// A run of `p.written` that is no content I-address, the board's fault,
+/// faced: never after the write, which spelled the same runs.
+fn report(p: &Past, r: &Restored) -> Result<Value, Halt> {
+    Ok(json!({
         "act": "restore",
         "draft": r.draft.to_string(),
         "at": r.at,
         "as_of": p.as_of,
         "position": r.position,
-        "runs": runs,
+        "runs": written_runs(&p.written)?,
         "extent": p.extent(),
         "covered": p.covered(),
         "marker": p.marker.as_ref().map(|m| json!({"at": m.at, "head": m.head, "head_copied": m.head_copied.map(|c| c.to_string()), "sides": m.sides})),
-    })
+    }))
 }
 
 /// Returns the plural's `s` where `n` is not one.
@@ -220,5 +218,42 @@ fn plural(n: u64) -> &'static str {
         ""
     } else {
         "s"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_client::board::whole_image;
+    use skep_client::merge::Run;
+
+    use super::*;
+
+    /// The report's runs are the ones the write sent, each under its own
+    /// chain.
+    ///
+    /// A member's own words keep the member as their `origin` and their own
+    /// I-address, where the core's runs of the same state spell them as the
+    /// trunk's word of the same ordinal (the mutant that reports the core's
+    /// runs names one run of the trunk).
+    #[test]
+    fn the_reports_runs_are_the_runs_the_write_sent() {
+        let (e, m) = ("1.0.1.0.64", "1.0.1.0.64.1");
+        let a = |text: &str| parse_address(text).expect("an address");
+        let held = json!({"resp": "runs", "runs": [{"i_start": format!("{e}.0.1.1"), "width": "2"}, {"i_start": format!("{m}.0.1.3"), "width": "1"}]});
+        let state = vec![Run::new(a(e), 1, 3)];
+        let written = whole_image(&held).expect("an image");
+        let p = Past {
+            draft: a("1.0.1.0.66"),
+            at: 12,
+            as_of: 20,
+            state: state.clone(),
+            sent: state,
+            written,
+            records: Vec::new(),
+            marker: None,
+        };
+        let r = Restored { draft: a("1.0.1.0.66"), at: 12, position: 21 };
+        let runs = json!([{"origin": e, "i_start": format!("{e}.0.1.1"), "width": "2"}, {"origin": m, "i_start": format!("{m}.0.1.3"), "width": "1"}]);
+        assert_eq!(report(&p, &r).expect("the report")["runs"], runs);
     }
 }

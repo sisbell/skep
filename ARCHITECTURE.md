@@ -786,9 +786,9 @@ each ceremony:
   daemon walk in `tests/it/merge.rs`. Beside it under the same feature,
   `history.rs` THE RESTORE — a draft's past state made current over the
   merge's reader, the state mapped through the publication's
-  correspondence records by the reads' mapping, and the take-backs' one
-  `set_arrangement` — with the records' read and the mapping of images
-  that skep-shell's `text.diff` names, its unit suite in
+  correspondence records by its own mapping of images, and the
+  take-backs' one `set_arrangement` — with the records' read and that
+  mapping, which skep-shell's `text.diff` names too, its unit suite in
   `history/tests.rs` over the fake board, its daemon walk in
   `tests/it/restore.rs`. Of the
   SURFACES the `skep merge` and `skep restore` commands are built —

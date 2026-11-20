@@ -616,6 +616,68 @@ fn every_arrangement_reader_of_a_bare_address_answers_the_trunk_head() {
     sd.shutdown();
 }
 
+/// PUB-2.66 over the wire: the arrangement a published document held before
+/// its first version, served where a read asks (wire.md §Head-float). An
+/// edition takes `abc` while memberless, and version 1 is published off it
+/// holding `ab`. `image` of the bare edition floats to version 1's two
+/// positions; with `own: true` it answers the edition's own three, and
+/// `doc_metadata` answers their count as `own_count` — the same through
+/// `/op-at` at a position after version 1. The guest reads the own image of
+/// the published edition, and is refused `withheld` on the own image of a
+/// private draft exactly as on the plain one.
+#[test]
+fn a_published_documents_arrangement_from_before_version_1_is_served_where_a_read_asks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+
+    let e = published_edition(port, &signed);
+    let first = deposit_text(port, &signed, &e, 1, "abc");
+    let v1 = shot(port, &signed, &e, None, None, &[run(&e, &first, 2)]);
+    assert_eq!(v1, format!("{e}.1"), "version 1");
+    let at = head(port);
+    let image_frame = |doc: &str, own: bool| {
+        let own = if own { r#","own":true"# } else { "" };
+        format!(r#"{{"d":"{doc}","op":"image"{own},"region":[{{"start":"1.1","width":"0.3"}}]}}"#)
+    };
+    let runs_of = |v: &Value| -> Vec<(String, String)> {
+        expect_resp(v, "runs")["runs"]
+            .as_array()
+            .expect("runs")
+            .iter()
+            .map(|r| {
+                let field = |name: &str| r[name].as_str().expect(name).to_string();
+                (field("i_start"), field("width"))
+            })
+            .collect()
+    };
+    let own_count = |v: &Value| expect_resp(v, "doc_metadata")["own_count"].clone();
+    let meta_frame = format!(r#"{{"doc":"{e}","op":"doc_metadata"}}"#);
+    let floated = vec![(first.clone(), "2".to_string())];
+    let own = vec![(first.clone(), "3".to_string())];
+    assert_eq!(runs_of(&op(port, None, &image_frame(&e, false))), floated, "version 1's `ab`");
+    assert_eq!(
+        runs_of(&op(port, None, &image_frame(&e, true))),
+        own,
+        "the edition's own `abc`, read by the guest"
+    );
+    assert_eq!(own_count(&op(port, None, &meta_frame)), Value::String("3".into()));
+    // The same three reads through `/op-at`, at the position after version 1.
+    assert_eq!(runs_of(&op_at_ok(port, None, at, &image_frame(&e, false))), floated);
+    assert_eq!(runs_of(&op_at_ok(port, None, at, &image_frame(&e, true))), own);
+    assert_eq!(own_count(&op_at_ok(port, None, at, &meta_frame)), Value::String("3".into()));
+    // The flag opens no document its reader may not read.
+    let d = draft_with(port, &bare, "xyz");
+    for own in [false, true] {
+        let v = op(port, None, &image_frame(&d, own));
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("withheld"), "own: {own}: {v}");
+    }
+    sd.shutdown();
+}
+
 /// PUB-2.49 on the POINTWISE PAIR (wire.md §Head-float, as built since
 /// `32b70bc`; owner 2026-09-25): `project` and `discoverable_from` on a bare
 /// published address answer the HEAD member's arrangement — the link is read

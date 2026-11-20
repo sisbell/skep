@@ -372,6 +372,7 @@ fn fixture(name: &str) -> Response {
             base: None,
             base_copied: None,
             merge: None,
+            own_count: n(5),
             at: Some(Seq(7)),
             time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
@@ -391,6 +392,7 @@ fn fixture(name: &str) -> Response {
             base: Some(a(&[1, 0, 1, 0, 1, 1])),
             base_copied: Some(n(5)),
             merge: None,
+            own_count: n(5),
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(9),
@@ -412,6 +414,7 @@ fn fixture(name: &str) -> Response {
             base: None,
             base_copied: None,
             merge: None,
+            own_count: n(5),
             at: None,
             time: None,
             as_of: Seq(9),
@@ -420,7 +423,8 @@ fn fixture(name: &str) -> Response {
         // skep #764): a `set_arrangement` composed on version 2 at six
         // positions moved its base there and put the marker beside it — the
         // one side merged, the head at the extent read, the landing's
-        // position — its `source_copied` the five its stage copied.
+        // position — its `source_copied` the five its stage copied, and
+        // its `own_count` the seven positions the landing left it holding.
         "doc_metadata_marked" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 64]),
             published: false,
@@ -437,6 +441,7 @@ fn fixture(name: &str) -> Response {
                 head_copied: n(6),
                 at: Seq(14),
             }),
+            own_count: n(7),
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(15),

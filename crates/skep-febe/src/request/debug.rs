@@ -163,9 +163,12 @@ impl fmt::Debug for Op {
             Op::FindDocsContaining { regions } => {
                 f.debug_struct("FindDocsContaining").field("regions", regions).finish()
             }
-            Op::Image { d, region } => {
-                f.debug_struct("Image").field("d", d).field("region", region).finish()
-            }
+            Op::Image { d, region, own } => f
+                .debug_struct("Image")
+                .field("d", d)
+                .field("region", region)
+                .field("own", own)
+                .finish(),
             Op::FindLinksV { d, region } => {
                 f.debug_struct("FindLinksV").field("d", d).field("region", region).finish()
             }

@@ -20,7 +20,7 @@ use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, OriginalEntry, PublishTarget, View};
 use skep_retrieval::{
-    CorrPair, Deletions, DeliveryItem, Flagged, Operand, RegionSpec, SpanFault, Spec,
+    CompareRegion, CorrPair, Deletions, DeliveryItem, Flagged, Operand, RegionSpec, SpanFault, Spec,
 };
 use skep_util::json::{hex_string, obj};
 
@@ -474,14 +474,21 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::ShowDeletions { d_a, d_b } => {
             (op_name(OpKind::ShowDeletions), vec![("d_a", j_addr(d_a)), ("d_b", j_addr(d_b))])
         }
-        Op::Compare { rho1, rho2 } => {
-            (op_name(OpKind::Compare), vec![("rho1", j_regions(rho1)), ("rho2", j_regions(rho2))])
-        }
+        Op::Compare { rho1, rho2 } => (
+            op_name(OpKind::Compare),
+            vec![("rho1", j_compare_regions(rho1)), ("rho2", j_compare_regions(rho2))],
+        ),
         Op::FindDocsContaining { regions } => {
             (op_name(OpKind::FindDocsContaining), vec![("regions", j_regions(regions))])
         }
-        Op::Image { d, region } => {
-            (op_name(OpKind::Image), vec![("d", j_addr(d)), ("region", j_spans(region))])
+        // `own` is written only where set, so a frame that asks nothing of
+        // it keeps the canonical form it had without the member.
+        Op::Image { d, region, own } => {
+            let mut pairs = vec![("d", j_addr(d)), ("region", j_spans(region))];
+            if *own {
+                pairs.push(("own", Value::Bool(true)));
+            }
+            (op_name(OpKind::Image), pairs)
         }
         Op::FindLinksV { d, region } => {
             (op_name(OpKind::FindLinksV), vec![("d", j_addr(d)), ("region", j_spans(region))])
@@ -746,11 +753,15 @@ pub(super) fn j_response(r: &Response) -> Value {
         // draft among them. `merge` (the landing lane) is a payload option
         // over the marker beside them: the sides, the head, the head's
         // extent as read and the position the marker was put on the
-        // document, null where the draft carries no merge. `at`, `time` and
-        // `time_from` are the age of the address named, as `link_value`
-        // carries a link's: the mint position off the world's map, null for
-        // an address a build before it minted; the time and its source null
-        // together where no testimony holds a reading.
+        // document, null where the draft carries no merge. `own_count` is
+        // the content count of the address named's own arrangement, a
+        // decimal string, never null and never floated: for a bare published
+        // document whose chain has a member, the count of the arrangement it
+        // held before its first version. `at`, `time` and `time_from` are
+        // the age of the address named, as `link_value` carries a link's:
+        // the mint position off the world's map, null for an address a build
+        // before it minted; the time and its source null together where no
+        // testimony holds a reading.
         Response::DocMetadata {
             doc,
             published,
@@ -762,6 +773,7 @@ pub(super) fn j_response(r: &Response) -> Value {
             base,
             base_copied,
             merge,
+            own_count,
             at,
             time,
             as_of,
@@ -791,6 +803,7 @@ pub(super) fn j_response(r: &Response) -> Value {
                 ("base", base.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("base_copied", base_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("merge", merge.as_ref().map(j_marker).unwrap_or(Value::Null)),
+                ("own_count", j_nat(own_count)),
                 ("at", at.map(j_seq).unwrap_or(Value::Null)),
                 ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
                 ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),
@@ -1110,6 +1123,23 @@ fn j_region(r: &RegionSpec) -> Value {
 
 fn j_regions(rs: &[RegionSpec]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
+}
+
+/// Renders one region of a `compare` operand: [`j_region`]'s two members,
+/// and `own: true` where the region is read as named — never `false`, so an
+/// unflagged region renders exactly as a plain one.
+///
+/// It is [`p_compare_region`](super::p_compare_region)'s inverse.
+fn j_compare_region(r: &CompareRegion) -> Value {
+    let mut pairs = vec![("doc", j_addr(&r.region.doc)), ("spans", j_spans(&r.region.spans))];
+    if r.own {
+        pairs.push(("own", Value::Bool(true)));
+    }
+    obj(pairs)
+}
+
+fn j_compare_regions(rs: &[CompareRegion]) -> Value {
+    Value::Array(rs.iter().map(j_compare_region).collect())
 }
 
 /// The canonical rendering of a position-value sequence into wire items.

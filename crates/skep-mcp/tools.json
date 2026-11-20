@@ -151,7 +151,7 @@
     },
     {
       "name": "doc_metadata",
-      "description": "A document's publication record: doc (the trunk a version member projects to), published, owner, birth (its first version), source (what a version or a stage minted it sharing: a fork's parent, a staged draft's source), base (a staged draft's recorded base: the version its next publication lands after, moved to the member each publication of it makes; null for a draft never staged), and merge (the marker of a merge landed in the draft). Read a draft's base here, or ask publication_standing where it stands, before you publish it. Response: doc_metadata; refused withheld for a document you may not read, doc_not_registered for none. Full reference: help(\"doc_metadata\").",
+      "description": "A document's publication record: doc (the trunk a version member projects to), published, owner, birth (its first version), source (what a version or a stage minted it sharing: a fork's parent, a staged draft's source), base (a staged draft's recorded base: the version its next publication lands after, moved to the member each publication of it makes; null for a draft never staged), merge (the marker of a merge landed in the draft), and own_count (the content positions the address named holds itself, never its head's). Read a draft's base here, or ask publication_standing where it stands, before you publish it. Response: doc_metadata; refused withheld for a document you may not read, doc_not_registered for none. Full reference: help(\"doc_metadata\").",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1513,6 +1513,10 @@
                   "pattern": "^[0-9]+(\\.[0-9]+)*$",
                   "description": "Document address."
                 },
+                "own": {
+                  "type": "boolean",
+                  "description": "True reads doc's own arrangement, never its head: for a published document with versions, what it held before version 1. Absent, false."
+                },
                 "spans": {
                   "type": "array",
                   "items": {
@@ -1550,6 +1554,10 @@
                   "type": "string",
                   "pattern": "^[0-9]+(\\.[0-9]+)*$",
                   "description": "Document address."
+                },
+                "own": {
+                  "type": "boolean",
+                  "description": "True reads doc's own arrangement, never its head: for a published document with versions, what it held before version 1. Absent, false."
                 },
                 "spans": {
                   "type": "array",
@@ -1663,6 +1671,10 @@
               "required": ["start", "width"],
               "additionalProperties": false
             }
+          },
+          "own": {
+            "type": "boolean",
+            "description": "True reads d's own arrangement, never its head: for a published document with versions, the words it held before version 1, which a draft begun then was copied from. Absent, false."
           }
         },
         "required": ["d", "region"],
@@ -3246,7 +3258,7 @@
     },
     {
       "topic": "doc_metadata",
-      "text": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), source (the version member or bare document the address named was born sharing, where a version or a stage minted it — a fork's parent, or a staged draft's source, read by whoever may read it; null otherwise), base with base_copied (a staged draft's recorded base — the member or memberless document its next publication lands after, moved by the board to the member each publication of the draft makes and to the head each set_arrangement names a base for — and the content positions the copy took of it; null where the board records no base: a draft never staged, an alternative of such a draft, a member, a trunk), and merge (the marker of the merge a draft carries beside that base: sides, head, head_copied and at, the position the marker was first put on the draft — set by a set_arrangement that recorded a base and a merge, put back with its at kept by one whose merge names that at, inherited by a stage of a marked draft at the stage's own position, cleared by the publication that moves the base; null where the draft carries none). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered."
+      "text": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), source (the version member or bare document the address named was born sharing, where a version or a stage minted it — a fork's parent, or a staged draft's source, read by whoever may read it; null otherwise), base with base_copied (a staged draft's recorded base — the member or memberless document its next publication lands after, moved by the board to the member each publication of the draft makes and to the head each set_arrangement names a base for — and the content positions the copy took of it; null where the board records no base: a draft never staged, an alternative of such a draft, a member, a trunk), and merge (the marker of the merge a draft carries beside that base: sides, head, head_copied and at, the position the marker was first put on the draft — set by a set_arrangement that recorded a base and a merge, put back with its at kept by one whose merge names that at, inherited by a stage of a marked draft at the stage's own position, cleared by the publication that moves the base; null where the draft carries none), and own_count (the content count of the address named's own arrangement, never floated to its head: for a published document with versions, the positions it held before version 1, frozen since its mint, which image and compare read with own: true; 0 on most documents). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered."
     },
     {
       "topic": "set_arrangement",

@@ -401,7 +401,17 @@ pub enum Response {
     /// board stamped on the draft, its `at` kept (skep #870), inherited by a
     /// `stage` of a marked draft at the stage's own position, cleared by the
     /// shot that moves the base — and `None` where the draft carries none or
-    /// the board records no base at all; served as `base` is.
+    /// the board records no base at all; served as `base` is. `own_count` is
+    /// the content count of the ADDRESS NAMED's own arrangement, never
+    /// floated (M5's `content_count`, read off the address named): a version
+    /// member's, a draft's or a private document's own count, and for a bare
+    /// published document whose chain has a member the count of the
+    /// arrangement it held before its first version, frozen since that
+    /// version's mint (PUB-2.66) — what a draft begun before version 1 was
+    /// copied from, and which `image` and a `compare` region read as named
+    /// serve. `0` on most documents: a published document is born empty and
+    /// takes words of its own only by a declared deposit before its first
+    /// version. Served as `source` is.
     DocMetadata {
         /// The trunk document the argument projects to.
         doc: Address,
@@ -425,6 +435,8 @@ pub enum Response {
         base_copied: Option<Nat>,
         /// Beside `base`, the merge the draft carries, where it carries one.
         merge: Option<Marker>,
+        /// The content count of the address named's own arrangement.
+        own_count: Nat,
         /// The position of the commit that minted the address named.
         at: Option<Seq>,
         /// The transport's testimony of when `at` committed.

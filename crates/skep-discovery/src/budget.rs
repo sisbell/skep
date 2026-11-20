@@ -21,7 +21,9 @@
 ///   depends on the region asked and not on `d` alone — counted a run at a
 ///   time as M5's lazy resolution is pulled, the granularity M6's coverage
 ///   budget counts at, and that read's card states what the count leaves M8
-///   holding;
+///   holding; [`crate::image_named_on`] counts the same, of `d`'s own
+///   arrangement where `image_on` counts its reading surface's, in the one
+///   body the two share;
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
 ///   joins the coverage against the content runs alone; its product is held
 ///   at [`MAX_ANSWER_SPANS`], not at this constant's square;

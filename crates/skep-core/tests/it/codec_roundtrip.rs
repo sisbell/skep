@@ -23,8 +23,8 @@ use skep_links::{
 };
 use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, RegionSpec,
-    SpanFault, Spec,
+    CompareRegion, CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged,
+    LineNumbers, RegionSpec, SpanFault, Spec,
 };
 use skep_core::codec::JsonCodec;
 
@@ -566,8 +566,22 @@ fn all_requests() -> Vec<Request> {
         rq(
             None,
             Op::Compare {
-                rho1: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }],
-                rho2: vec![RegionSpec { doc: d2(), spans: vec![cspan(1, 5)] }],
+                rho1: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }.into()],
+                rho2: vec![RegionSpec { doc: d2(), spans: vec![cspan(1, 5)] }.into()],
+            },
+        ),
+        // A region read as named beside one that floats, in one operand.
+        rq(
+            None,
+            Op::Compare {
+                rho1: vec![
+                    CompareRegion {
+                        region: RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] },
+                        own: true,
+                    },
+                    RegionSpec { doc: d2(), spans: vec![cspan(1, 2)] }.into(),
+                ],
+                rho2: vec![RegionSpec { doc: d3(), spans: vec![cspan(1, 5)] }.into()],
             },
         ),
         rq(
@@ -576,7 +590,8 @@ fn all_requests() -> Vec<Request> {
                 regions: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }],
             },
         ),
-        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)] }),
+        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: false }),
+        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: true }),
         rq(None, Op::FindLinksV { d: d1(), region: vec![cspan(1, 5)] }),
         rq(
             None,
@@ -1688,6 +1703,68 @@ fn the_publication_flag_reads_absent_null_true_and_false() {
     }
 }
 
+/// The read-as-named member, `own`, reads absent, `null` and `false` alike
+/// as unset and `true` as set — on `image`, and on each region of a
+/// `compare` operand, region by region — and the canonical frame carries it
+/// only where set, so a frame that asks nothing of it marshals exactly as a
+/// frame without the member. A non-boolean is refused, never coerced, and
+/// `find_docs_containing`, whose regions never float, refuses the member as
+/// an unknown field.
+#[test]
+fn the_read_as_named_member_rides_image_and_each_compare_region_and_nothing_else() {
+    let codec = JsonCodec;
+    let span = r#"{"start":"1.1","width":"0.5"}"#;
+    let image = |own: &str| format!(r#"{{"d":"1.0.1.0.1","op":"image","region":[{span}]{own}}}"#);
+    let own_of = |frame: &str| match parse_ok(&codec, frame.as_bytes()).op {
+        Op::Image { own, .. } => own,
+        other => panic!("expected an image, got {other:?}"),
+    };
+    for (member, set) in [
+        ("", false),
+        (r#","own":null"#, false),
+        (r#","own":false"#, false),
+        (r#","own":true"#, true),
+    ] {
+        assert_eq!(own_of(&image(member)), set, "image{member}");
+        let canonical: Value = serde_json::from_slice(
+            &codec.marshal_request(&parse_ok(&codec, image(member).as_bytes())),
+        )
+        .expect("canonical is JSON");
+        assert_eq!(canonical.get("own").is_some(), set, "written only where set: {canonical}");
+    }
+    assert!(codec.parse(image(r#","own":"yes""#).as_bytes()).is_err(), "a string flag");
+    let region = |doc: &str, own: &str| format!(r#"{{"doc":"{doc}"{own},"spans":[{span}]}}"#);
+    let frame = format!(
+        r#"{{"op":"compare","rho1":[{},{}],"rho2":[{}]}}"#,
+        region("1.0.1.0.1", r#","own":true"#),
+        region("1.0.1.0.64", r#","own":false"#),
+        region("1.0.1.0.65", ""),
+    );
+    let Op::Compare { rho1, rho2 } = parse_ok(&codec, frame.as_bytes()).op else {
+        panic!("expected a compare");
+    };
+    let flags: Vec<bool> = rho1.iter().chain(&rho2).map(|r| r.own).collect();
+    assert_eq!(flags, [true, false, false], "region by region");
+    let canonical: Value =
+        serde_json::from_slice(&codec.marshal_request(&rq(None, Op::Compare { rho1, rho2 })))
+            .expect("canonical is JSON");
+    assert_eq!(canonical["rho1"][0]["own"], Value::Bool(true));
+    assert!(
+        canonical["rho1"][1].get("own").is_none() && canonical["rho2"][0].get("own").is_none(),
+        "{canonical}"
+    );
+    let bad =
+        format!(r#"{{"op":"compare","rho1":[{}],"rho2":[]}}"#, region("1.0.1.0.1", r#","own":1"#));
+    assert!(codec.parse(bad.as_bytes()).is_err(), "a numeric flag");
+    let find = format!(
+        r#"{{"op":"find_docs_containing","regions":[{}]}}"#,
+        region("1.0.1.0.1", r#","own":true"#)
+    );
+    let refused = codec.parse(find.as_bytes()).expect_err("find_docs_containing takes no `own`");
+    let detail = refused.detail.unwrap_or_default();
+    assert!(detail.contains("unknown field 'own'"), "{detail}");
+}
+
 /// Every non-rejected `Response` shape, built fresh on each call so
 /// determinism can be checked across two independent constructions
 /// (`Response` derives no `Clone`, deliberately).
@@ -1896,6 +1973,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base: None,
                 base_copied: None,
                 merge: None,
+                own_count: n(5),
                 at: Some(Seq(7)),
                 time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
@@ -1918,6 +1996,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base: Some(a(&[1, 0, 1, 0, 1, 1])),
                 base_copied: Some(n(5)),
                 merge: None,
+                own_count: n(5),
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(9),
@@ -1940,6 +2019,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 base: None,
                 base_copied: None,
                 merge: None,
+                own_count: n(5),
                 at: None,
                 time: None,
                 as_of: Seq(9),
@@ -1967,6 +2047,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     head_copied: n(6),
                     at: Seq(14),
                 }),
+                own_count: n(7),
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(15),
@@ -2094,6 +2175,11 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
         "{marked}"
     );
     assert_eq!(marked["base"], Value::String("1.0.1.0.1.2".into()), "the base the landing recorded: {marked}");
+    // The own count: the address named's own content count, a decimal
+    // string on every answer, never null.
+    for (answer, count) in [(&member, "5"), (&staged, "5"), (&fork, "5"), (&marked, "7")] {
+        assert_eq!(answer["own_count"], Value::String(count.into()), "{answer}");
+    }
     // The landing's ack (skep #764): `head_moved` rides only where told.
     let acks: Vec<Value> = all_responses()
         .into_iter()

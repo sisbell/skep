@@ -31,7 +31,8 @@
 //! families needs no transaction and is answered off the one snapshot the
 //! read dispatch pins; M10 composes three, the publication reads:
 //! [`Op::DocMetadata`] (M3's publication bit, owner and chain with M5's
-//! frozen birth extent, shot terms, fork source and draft base),
+//! frozen birth extent, shot terms, fork source, draft base and own content
+//! count),
 //! [`Op::EditionClaims`]
 //! (the world's edition-claim class under the door's home rule) and
 //! [`Op::UniversalGrants`] (the grant fold's live universal index narrowed
@@ -269,10 +270,12 @@ pub use skep_namespace::PrincipalId; // M3
                                      // each number of a `LineNumbers` is
                                      // a `Flagged`, so marshaling any of
                                      // the three answers means naming the
-                                     // element it yields.
+                                     // element it yields; and
+                                     // `CompareRegion`, without which
+                                     // `Op::Compare` is unbuildable.
 pub use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, Operand,
-    RegionSpec, SpanFault, Spec,
+    CompareRegion, CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged,
+    LineNumbers, Operand, RegionSpec, SpanFault, Spec,
 };
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
 // two-form endset slot naming `Op::MakeLink`'s three slots and

@@ -138,13 +138,13 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
         Op::ShowOrigin { doc: version.clone(), span: vspan(1, 1, 1) },
         Op::ShowDeletions { d_a: draft.clone(), d_b: version.clone() },
         Op::Compare {
-            rho1: vec![RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![RegionSpec { doc: version, spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 2)] }.into()],
+            rho2: vec![RegionSpec { doc: version, spans: vec![vspan(1, 1, 2)] }.into()],
         },
         Op::FindDocsContaining {
             regions: vec![RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
-        Op::Image { d: draft.clone(), region: region() },
+        Op::Image { d: draft.clone(), region: region(), own: false },
         Op::FindLinksV { d: draft.clone(), region: region() },
         Op::FindLinksFtt { q: q() },
         Op::CountV { d: draft.clone(), region: region() },

@@ -730,7 +730,8 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
         extent *= 2;
     }
     let whole = || vspan(1, 1, extent);
-    let image = runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![whole()] }));
+    let image =
+        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![whole()], own: false }));
     assert_eq!(image.len(), run_count as usize, "every position its own run: {image:?}");
     assert!(
         image.iter().all(|r| *r.width() == nat(1))

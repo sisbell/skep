@@ -11,9 +11,11 @@
 //!   base the shot recorded among them (`M5State::shot_terms`; signed-ops
 //!   D25; skep #1111), for a document a `version` or a `stage` minted, the
 //!   source it was made from and the count of it the copy took
-//!   (`M5State::fork_source`, `M5State::fork_source_copied`), and for a
+//!   (`M5State::fork_source`, `M5State::fork_source_copied`), for a
 //!   draft the board records a base for, that base with the extent its copy
-//!   took (`M5State::draft_base`; the staging act, B3-S10);
+//!   took (`M5State::draft_base`; the staging act, B3-S10), and for every
+//!   address its own content count, never floated (`M5State::content_count`;
+//!   PUB-2.66);
 //! * [`Op::EditionClaims`] takes the world's edition-claim class and keeps
 //!   the rows whose home the caller reads — [`require_registered_document`]
 //!   is the refusal that bounds it;

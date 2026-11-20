@@ -214,8 +214,8 @@ fn run_compare_pair(
             };
             RegionSpec { doc: d.clone(), spans }
         };
-    let rho1 = vec![region_of(cx, a.doc, &da, &a.window)];
-    let rho2 = vec![region_of(cx, b.doc, &db, &b.window)];
+    let rho1 = vec![region_of(cx, a.doc, &da, &a.window).into()];
+    let rho2 = vec![region_of(cx, b.doc, &db, &b.window).into()];
     let rep = match cx.rig.exec(Op::Compare { rho1, rho2 }) {
         Response::Compare { rep, .. } => rep,
         other => {
@@ -504,7 +504,7 @@ fn identity_pairs(
     };
     let image = |pos: &str| -> Option<skep_address::Address> {
         let span = parse_vpos(pos)?.region(1).span()?;
-        match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span] }) {
+        match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span], own: false }) {
             Response::Runs { runs, .. } => runs.first().map(|r| r.i_start().clone()),
             _ => None,
         }

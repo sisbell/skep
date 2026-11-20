@@ -14,8 +14,8 @@
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::HasM5;
 use skep_retrieval::{
-    CompareError, Delivery, FindError, LinesError, Operand, Query, RegionSpec, RetrieveError,
-    SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
+    CompareError, CompareRegion, Delivery, FindError, LinesError, Operand, Query, RegionSpec,
+    RetrieveError, SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
 };
 
 use crate::common::*;
@@ -202,6 +202,22 @@ fn every_operation_prices_its_walk_against_the_arrangement_it_walks() {
     assert_eq!(
         ok_of(q.find_docs_containing(&[region_spec(pdoc(), vec![past_end(); past_budget])])),
         Vec::<Address>::new()
+    );
+    // A COMPARE region flagged `own` is walked over pdoc's own arrangement,
+    // so it is priced against that one run: the same spans are admitted,
+    // where the unflagged region, priced against the head, is refused.
+    let region = |own: bool| {
+        vec![CompareRegion {
+            region: region_spec(pdoc(), vec![past_end(); past_budget]),
+            own,
+        }]
+    };
+    assert!(ok_of(q.compare_named(&region(true), &[])).is_empty());
+    assert_eq!(
+        err_of(q.compare_named(&region(false), &[])),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
     );
 }
 

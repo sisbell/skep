@@ -11,7 +11,7 @@ use skep_discovery::{Cursor, FourSet};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{AlsoPlaces, Endset, PublishDeposits, PublishTarget, SlotArg, View};
 use skep_namespace::{PrincipalId, WellKnownSlot};
-use skep_retrieval::{RegionSpec, Spec};
+use skep_retrieval::{CompareRegion, RegionSpec, Spec};
 
 /// One parsed FEBE request: its operation, idempotency key and attestation.
 ///
@@ -123,7 +123,8 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 ///
 /// Its args are in M1/M5/M7/M8 types, in the namespace's, the content
 /// store's and the retrieval queries' (`PrincipalId`, `Val`, `Spec`,
-/// `RegionSpec`), and in this crate's own [`SuccessorSpec`] and [`ISpan`];
+/// `RegionSpec`, `CompareRegion`), and in this crate's own [`SuccessorSpec`]
+/// and [`ISpan`];
 /// the principal comes from the session, never the wire.
 ///
 /// A value, because [`OperationSurface::execute`] consumes one: a transport
@@ -587,12 +588,29 @@ pub enum Op {
     /// SHOWDELETIONS (ASN-0075).
     ShowDeletions { d_a: Address, d_b: Address },
     /// COMPARE / SHOWRELATIONOF2VERSIONS (ASN-0122).
-    Compare { rho1: Vec<RegionSpec>, rho2: Vec<RegionSpec> },
+    ///
+    /// Each region carries its own flag ([`CompareRegion`]): unset, the
+    /// region reads its document's reading surface, as every COMPARE region
+    /// floats (PUB-2.49); set, the arrangement of the address it names — at a
+    /// bare published document whose chain has a member, the arrangement it
+    /// held before its first version (PUB-2.66), the base a draft begun
+    /// before version 1 was copied from. The flag rides the region it reads,
+    /// so it cannot name a region the operand does not hold. Each region's
+    /// document is consulted whichever arrangement it reads
+    /// ([`Op::doc_arguments`]): whoever may read the document reads either.
+    Compare { rho1: Vec<CompareRegion>, rho2: Vec<CompareRegion> },
     /// FINDDOCSCONTAINING (ASN-0124).
     FindDocsContaining { regions: Vec<RegionSpec> },
     // ── link discovery reads (→ M8) ──
     /// V→I image of a region (ASN-0098 companion).
-    Image { d: Address, region: Vec<Span> },
+    ///
+    /// `own` picks the arrangement the region resolves through: unset, `d`'s
+    /// reading surface, as every region read floats (PUB-2.49, PUB-2.53);
+    /// set, `d`'s own arrangement — at a bare published `d` whose chain has a
+    /// member, the arrangement it held before its first version (PUB-2.66),
+    /// and everywhere else the same answer the unset flag gives. `d` is the
+    /// doc-argument either way, so whoever may read `d` reads both.
+    Image { d: Address, region: Vec<Span>, own: bool },
     /// Content-region link discovery (foundation ∩ active).
     FindLinksV { d: Address, region: Vec<Span> },
     /// Four-set descriptor query (ASN-0121).
@@ -671,8 +689,14 @@ pub enum Op {
     /// It answers a document's publication state, its owner account, and its
     /// birth version with that version's birth extent — what a client's own
     /// PUB-3.19 admission test needs — and, of the address named, its shot
-    /// terms and its fork source (below). `doc` is a doc-argument (PUB-6.1):
-    /// unreadable ⟹ `withheld` (fail-open at the consult, PUB-6.12). It must
+    /// terms, its fork source (below) and its own content count, never
+    /// floated: for a bare published document whose chain has a member, the
+    /// count of the arrangement it held before its first version (PUB-2.66).
+    /// That count is a sum over the address's content runs, the one part of
+    /// this answer whose cost grows with the document's fragmentation — what
+    /// the span-set read pays for its content extent. `doc` is a doc-argument
+    /// (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the consult,
+    /// PUB-6.12). It must
     /// also be a registered document: unregistered, or any other tier, ⟹
     /// `DocNotRegistered` — M10's own refusal, like [`Op::EditionClaims`]'s,
     /// since this read composes its answer from more than one store and so
@@ -1179,7 +1203,7 @@ impl Op {
             | Op::LineNumbers { doc, .. } => vec![doc],
             Op::ShowOrigin { doc, .. } => vec![doc],
             Op::ShowDeletions { d_a, d_b } => vec![d_a, d_b],
-            Op::Compare { rho1, rho2 } => rho1.iter().chain(rho2).map(|r| &r.doc).collect(),
+            Op::Compare { rho1, rho2 } => rho1.iter().chain(rho2).map(|r| &r.region.doc).collect(),
             Op::FindDocsContaining { regions } => regions.iter().map(|r| &r.doc).collect(),
             Op::Image { d, .. }
             | Op::FindLinksV { d, .. }

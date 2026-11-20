@@ -690,8 +690,9 @@ pub(crate) fn withheld_origin(v: &Value) -> Option<&str> {
 /// `source_copied`, the count of it the copy took, a staged draft's
 /// recorded base — `base`, the member or bare document its next publication
 /// lands after, and `base_copied`, the extent the copy took of it (the
-/// staging act, B3-S10) — and the merge marker beside the base, `merge` —
-/// each `None` where the address carries none.
+/// staging act, B3-S10) — the merge marker beside the base, `merge` — each
+/// `None` where the address carries none — and `own_count`, the address
+/// named's own content count.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -725,6 +726,14 @@ pub(crate) struct Metadata {
     /// cleared by one naming a base and no merge and by the `publish` that
     /// moves the base; `None` where the draft carries none.
     pub(crate) merge: Option<MergeMarker>,
+    /// The content count of the address named's own arrangement, never
+    /// floated (wire.md §The response envelope, `doc_metadata`'s
+    /// `own_count`): for a bare published document whose chain has a
+    /// member, the count of the arrangement it held before its first
+    /// version, which a draft begun before version 1 was copied from;
+    /// `None` where the answer carries no such count, a board that serves
+    /// none.
+    pub(crate) own_count: Option<u64>,
     /// The position of the commit that minted the address named — a version
     /// member its own mint (wire.md §The response envelope, `doc_metadata`,
     /// "the age of the address named"); `None` where the board serves
@@ -818,6 +827,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         base: v["base"].as_str().map(str::to_string),
         base_copied: count("base_copied"),
         merge: marker_of(v),
+        own_count: count("own_count"),
         at: v["at"].as_u64(),
     })
 }
@@ -1062,9 +1072,10 @@ mod tests {
         assert!(claims[0].to[0].is_unit(), "a unit span at the document");
         // `<!-- wire: response doc_metadata -->`: the member's own mint at 7,
         // its shot made against the memberless document.
-        let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
+        let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
         assert_eq!((meta.at, meta.placed, meta.base_extent, meta.published, meta.owner.as_str()), (Some(7), Some(5), Some(3), true, "1.0.1"));
         assert_eq!(meta.shot_base.as_deref(), Some("1.0.1.0.1"), "the shot's recorded base");
+        assert_eq!(meta.own_count, Some(5), "the member's own count");
         assert_eq!(
             (meta.base, meta.base_copied, meta.source, meta.source_copied),
             (None, None, None, None),
@@ -1073,9 +1084,21 @@ mod tests {
         // `<!-- wire: response doc_metadata_unborn -->`: a staged draft, its
         // base the member copied and `base_copied` what the copy took, its
         // `source_copied` the same five.
-        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
+        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
         assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
         assert_eq!((staged.source_copied, staged.shot_base), (Some(5), None), "the copy's count; no shot minted it");
+        // An answer without `own_count` — a board that serves no such count —
+        // reads it as `None`, and everything else as before.
+        let mut older = json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"});
+        let served = metadata(&older).expect("a doc_metadata answer");
+        older.as_object_mut().expect("an object").remove("own_count");
+        let older = metadata(&older).expect("a doc_metadata answer without the member");
+        assert_eq!(older.own_count, None, "no count served");
+        assert_eq!(
+            Metadata { own_count: Some(5), ..older },
+            served,
+            "the member is the only difference"
+        );
         // `<!-- wire: response line_numbers -->` and `line_numbers_masked`:
         // a line, a start beside a line that names none, the count.
         let numbered = |masked: bool| json!({"as_of":9,"count":{"masked":masked,"n":"2"},"lines":[{"masked":masked,"start":{"ordinal":"3","subspace":"1"}},null],"positions":[{"line":"2","masked":masked}],"resp":"line_numbers"});

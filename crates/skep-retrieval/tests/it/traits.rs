@@ -18,9 +18,9 @@ use std::collections::{HashMap, HashSet};
 use skep_arrangement::AsOf;
 use skep_arrangement::VSpec;
 use skep_retrieval::{
-    CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
-    FindError, LineNumbers, LinesError, Operand, OriginError, Query, RegionSpec, RetrieveError,
-    SpanFault, Spec,
+    CompareError, CompareRegion, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem,
+    ExtentError, FindError, LineNumbers, LinesError, Operand, OriginError, Query, RegionSpec,
+    RetrieveError, SpanFault, Spec,
 };
 
 use crate::common::*;
@@ -70,6 +70,12 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&region)
         .expect("RegionSpec serializes")
         .is_empty());
+    assert!(!bincode::serialize(&CompareRegion {
+        region: region.clone(),
+        own: true
+    })
+    .expect("CompareRegion serializes")
+    .is_empty());
     // CorrPair: field-by-field marshaling (no whole-value Serialize).
     let rep = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
@@ -248,16 +254,31 @@ fn the_fault_vocabularies_key_a_map_a_consumer_could_not_key_itself() {
 
 #[test]
 fn a_request_keys_a_set_as_its_m5_twin_does() {
-    // §Public interface derive policy: `Spec` and `RegionSpec` carry `Hash`
-    // for the reason the fault vocabularies do — a consumer keying by one
-    // cannot supply the impl — and because M5's `VSpec`, the same shape one
-    // seam over, already does. Collapsing COMPARE's redundant repeated
-    // windows before sending is the consumer.
+    // §Public interface derive policy: `Spec`, `RegionSpec` and
+    // `CompareRegion` carry `Hash` for the reason the fault vocabularies do —
+    // a consumer keying by one cannot supply the impl — and because M5's
+    // `VSpec`, the same shape one seam over, already does. Collapsing
+    // COMPARE's redundant repeated windows before sending is the consumer.
     let mut regions: HashSet<RegionSpec> = HashSet::new();
     regions.insert(region_spec(doc1(), vec![vspan(1, 1, 1)]));
     regions.insert(region_spec(doc1(), vec![vspan(1, 1, 1)])); // the repeat collapses
     regions.insert(region_spec(doc2(), vec![vspan(1, 1, 1)]));
     assert_eq!(regions.len(), 2);
+    // A region read as named and the same region floating are two requests.
+    let flagged = |own: bool| CompareRegion {
+        region: region_spec(doc1(), vec![vspan(1, 1, 1)]),
+        own,
+    };
+    let compared: HashSet<CompareRegion> = HashSet::from([
+        flagged(true),
+        flagged(false),
+        region_spec(doc1(), vec![vspan(1, 1, 1)]).into(),
+    ]);
+    assert_eq!(
+        compared.len(),
+        2,
+        "`From<RegionSpec>` builds the unset form"
+    );
     let specs: HashSet<Spec> = HashSet::from([spec(doc1(), vspan(1, 1, 1))]);
     assert!(specs.contains(&spec(doc1(), vspan(1, 1, 1))));
 }

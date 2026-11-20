@@ -146,7 +146,10 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
         (
             Op::Compare {
-                rho1: vec![RegionSpec { doc: doc(), spans: vec![vspan()] }],
+                rho1: vec![CompareRegion {
+                    region: RegionSpec { doc: doc(), spans: vec![vspan()] },
+                    own: true,
+                }],
                 rho2: vec![],
             },
             true,
@@ -157,7 +160,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             },
             true,
         ),
-        (Op::Image { d: doc(), region: vec![vspan()] }, true),
+        (Op::Image { d: doc(), region: vec![vspan()], own: false }, true),
         (Op::FindLinksV { d: doc(), region: vec![vspan()] }, true),
         (Op::FindLinksFtt { q: q() }, true),
         (Op::CountV { d: doc(), region: vec![vspan()] }, true),
@@ -296,13 +299,19 @@ fn doc_arguments_run_in_declaration_order() {
     let op = Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d1, &d2]);
     let op = Op::Compare {
-        rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![vspan()] }],
+        rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![vspan()] }.into()],
         rho2: vec![
-            RegionSpec { doc: d3.clone(), spans: vec![] },
-            RegionSpec { doc: d1.clone(), spans: vec![] },
+            CompareRegion { region: RegionSpec { doc: d3.clone(), spans: vec![] }, own: true },
+            RegionSpec { doc: d1.clone(), spans: vec![] }.into(),
         ],
     };
-    assert_eq!(op.doc_arguments(), vec![&d2, &d3, &d1]);
+    assert_eq!(
+        op.doc_arguments(),
+        vec![&d2, &d3, &d1],
+        "a region read as named is consulted as a floating one is"
+    );
+    let op = Op::Image { d: d3.clone(), region: vec![vspan()], own: true };
+    assert_eq!(op.doc_arguments(), vec![&d3], "the image read as named consults `d`");
     let op = Op::Project { a: d1.clone(), slot: 1, d: d3.clone() };
     assert_eq!(op.doc_arguments(), vec![&d3], "the dual row consults `d`, never the link");
     // Lane 3.4: the two publication reads that take a document each consult

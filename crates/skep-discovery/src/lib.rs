@@ -84,20 +84,23 @@
 //! so the cursor names the home to resume in, survives orphaning, and M8
 //! pages with no index of its own.
 //!
-//! Every arrangement read here but one is of `d`'s READING SURFACE — M5's
+//! Every arrangement read here but two is of `d`'s READING SURFACE — M5's
 //! `reading_surface`, the one place HEAD-FLOAT is decided (PUB-2.49,
 //! PUB-2.50, PUB-2.53), which states what each kind of address answers
 //! from. The region family floats through [`image_on`], and the pointwise
 //! pair each through its own read of the runs, so all of them read one
-//! arrangement for `d`. The one that does not float is
-//! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
-//! arrangement and refuses every published target, so on every `d` DELETE
-//! admits, `d` IS its reading surface. On a published `d` DELETE refuses and
-//! the preview still answers — a gap, stated on the preview, and not a
-//! decision — and on a BARE published `d` that has a member, `d` and its
-//! reading surface part as well: the preview reads `d`'s own arrangement,
-//! every reader of `d` its trunk head. A version member is its own reading
-//! surface, and so is a published document with no member yet.
+//! arrangement for `d`. The two that do not float read `d`'s own
+//! arrangement. [`image_named_on`] does so by design: at a bare published
+//! `d` that has a member it answers the arrangement `d` held before its first
+//! version, which a draft begun before version 1 was copied from (PUB-2.66).
+//! [`delete_orphans_on`] previews DELETE, which edits `d`'s own arrangement
+//! and refuses every published target, so on every `d` DELETE admits, `d` IS
+//! its reading surface. On a published `d` DELETE refuses and the preview
+//! still answers — a gap, stated on the preview, and not a decision — and on
+//! a BARE published `d` that has a member, `d` and its reading surface part
+//! as well: the preview reads `d`'s own arrangement, every floating reader of
+//! `d` its trunk head. A version member is its own reading surface, and so is
+//! a published document with no member yet.
 //!
 //! ## The home rule
 //!
@@ -141,8 +144,9 @@
 //!   answer alike.
 //!
 //! Neither is the PER-RUN MASK (PUB-6.41, M6's `retrieve_v_masked`), which
-//! withholds in place; nothing here applies it. [`image_on`] alone takes no
-//! predicate: its answer names I-runs and no link. The division of labour: a
+//! withholds in place; nothing here applies it. [`image_on`] and
+//! [`image_named_on`] alone take no predicate: their answers name I-runs and
+//! no link. The division of labour: a
 //! NAMED document's own readability is the caller's consult, before
 //! dispatch; the homes of the links an answer is built from — each link whose
 //! contribution it carries, an address, a count or an endset alike
@@ -267,6 +271,10 @@
 //!   region's whole walk held to `MAX_IMAGE_RUNS²` ahead of the first pull,
 //!   and the runs it pulls to `MAX_IMAGE_RUNS`, the one past that refused
 //!   before the next is built.
+//! * [`image_named_on`] — [`image_on`]'s reads and budgets, over `d`'s own
+//!   arrangement in place of its reading surface: one read of M5's `#runs`
+//!   for `d`'s own content and, per region span, one lazy `iter_resolve` of
+//!   `d`'s own run-list, held to the same square and the same budget.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
 //!   extents at the three v1 slots, then, per candidate home, one test of
@@ -437,7 +445,8 @@ mod types;
 mod sets;
 // A region's shape — its constructor and its gate — and `image_on`, its V→I
 // resolution: the region resolver every region-family read chains into M7's
-// matcher.
+// matcher; and `image_named_on`, the same resolution over `d`'s own
+// arrangement.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v`, the count by
 // home and RETRIEVEENDSETS, read out of one selection index home by home —
@@ -458,7 +467,7 @@ mod lineage;
 
 pub use budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS};
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec};
-pub use image::{content_vspan, image_on};
+pub use image::{content_vspan, image_named_on, image_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{

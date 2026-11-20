@@ -6,6 +6,10 @@
 //! M5; it names no link, stabs nothing and asks no reader, so it is the
 //! family's resolver and not a member.
 //!
+//! Its twin, `image_named_on`, resolves the region through `d`'s own
+//! arrangement instead, behind the same gates and budgets: the one image
+//! that does not float, and no family's resolver.
+//!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the module that judges a region is the
 //! module that publishes how to build one.
@@ -14,6 +18,7 @@ use num_traits::ToPrimitive;
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
 use skep_kernel::Snapshot;
+use skep_namespace::M3State;
 
 use crate::budget::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::types::QueryError;
@@ -134,18 +139,67 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// the one place the float is decided. The whole region family inherits it
 /// through this function: `findlinks_v`, `count_v`, `window_v` and
 /// `retrieve_endsets` float exactly as `image` does. The document gate runs
-/// on the address named, ahead of the float (PUB-6.37).
+/// on the address named, ahead of the float (PUB-6.37). [`image_named_on`]
+/// is the same resolution over `d`'s own arrangement, which does not float.
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
 ) -> Result<Vec<Run>, QueryError> {
-    let w = s.world();
+    image_of(s.world(), d, region, reading_surface)
+}
+
+/// Returns the V→I image of `region` through `d`'s own arrangement.
+///
+/// It is [`image_on`] save for the arrangement it reads: `d`'s own, never
+/// its reading surface. The gates, the run budget and its square, the
+/// refusals and their order, and the answer's shape are [`image_on`]'s, each
+/// priced and pulled over `d`'s own arrangement where `image_on` reads `d`'s
+/// reading surface. The two part at exactly a bare published `d` whose chain
+/// has a member: there this answers the arrangement `d` held before its first
+/// version — frozen since that version's mint, a published document refusing
+/// every in-place edit and a declared deposit landing on the head (PUB-2.66)
+/// — where `image_on` answers the head (PUB-2.53). That arrangement is what a
+/// draft begun before version 1 was copied from, and what a shot naming `d`
+/// as its base reads its extent against. A version member, a private document
+/// and a memberless published document are each their own reading surface,
+/// and the two answer alike.
+///
+/// The document gate runs on the address named, as `image_on`'s does
+/// (PUB-6.37). No region-family read resolves through this: they float.
+///
+/// # Errors
+///
+/// [`image_on`]'s, in its order: [`QueryError::DocNotRegistered`], then
+/// [`QueryError::BadRegion`], then [`QueryError::ImageTooLarge`] for a walk
+/// past the square or runs past the budget of `d`'s own arrangement.
+pub fn image_named_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+) -> Result<Vec<Run>, QueryError> {
+    image_of(s.world(), d, region, |_, named| named.clone())
+}
+
+/// Returns the image of `region` over the arrangement `surface` picks for `d`.
+///
+/// It is the gates and the resolution both images run: the document gate,
+/// then the region gate, then `surface` asked of `d` — after both gates, so
+/// it is asked of a registered document alone (PUB-6.37) — then the run
+/// budget's square and the budget over what that arrangement holds. One
+/// body, so the two images cannot come apart in what they refuse or in which
+/// order.
+fn image_of<W: DiscoveryWorld>(
+    w: &W,
+    d: &Address,
+    region: &[Span],
+    surface: impl FnOnce(&M3State, &Address) -> Address,
+) -> Result<Vec<Run>, QueryError> {
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
     }
     check_region(region)?;
-    let surface = reading_surface(w.m3(), d);
+    let surface = surface(w.m3(), d);
     // The surface's run count, off M5's own `#runs` — one map lookup, reading
     // no run — because the walk is priced against it: M5's card on
     // `iter_resolve` names `#runs` that walk's ceiling.

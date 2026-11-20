@@ -20,8 +20,9 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    Base, DeliveryItem, Op, PublishDeposits, PublishTarget, RejectCode, Run, SessionId, Shot,
-    ShotRun, Spec, UniversalGrant, UniversalIndexRow, FROM, TO, TYPE,
+    Address, Base, CompareRegion, DeliveryItem, Op, PublishDeposits, PublishTarget, RegionSpec,
+    RejectCode, Run, SessionId, Shot, ShotRun, Spec, UniversalGrant, UniversalIndexRow, Val, FROM,
+    TO, TYPE,
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -310,6 +311,93 @@ fn doc_metadata_serves_the_count_a_copy_took_and_the_base_a_shot_recorded() {
         let (source, copied, _) = meta(doc);
         assert_eq!((source, copied), (None, None), "{what}: no source and no count");
     }
+}
+
+/// THE ARRANGEMENT A PUBLISHED DOCUMENT HELD BEFORE ITS FIRST VERSION
+/// (PUB-2.66), served un-floated where a request asks. An edition takes
+/// `a b c` while memberless, a draft is staged off it, and the birth shot
+/// mints version 1 holding `a b` alone. Named the edition, `image` and a
+/// `compare` region float to the head; with `own` set they read the
+/// edition's own three — what the draft was copied from — and
+/// `doc_metadata` answers that count as `own_count`. A later deposit naming
+/// the edition lands in the head and leaves the edition's own arrangement
+/// where it was. Wherever the address named is its own reading surface —
+/// version 1, the draft — the flag changes nothing.
+#[test]
+fn a_published_documents_arrangement_from_before_version_1_is_read_where_a_request_asks() {
+    let fx = setup();
+    let own_count =
+        |doc: &Address| match ex(&fx.febe, fx.user, Op::DocMetadata { doc: doc.clone() }) {
+            skep_febe::Response::DocMetadata { own_count, .. } => own_count,
+            other => panic!("doc_metadata answers: {other:?}"),
+        };
+    let image = |d: &Address, own: bool| {
+        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own }))
+    };
+    let edition = create_edition(&fx);
+    let (start, _) = deposit3(&fx, &edition);
+    let (draft, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: edition.clone() }));
+    let run_of = |width: u32| Run::new(start.clone(), nat(width)).expect("a content run");
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun { origin: edition.clone(), run: run_of(2) }],
+    };
+    let (version, _) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Publish {
+            target: PublishTarget::Document(edition.clone()),
+            shot: birth,
+            places: vec![],
+            also_places: vec![],
+            deposits: PublishDeposits::default(),
+        },
+    ));
+    assert_eq!(image(&edition, false), vec![run_of(2)], "the head's `a b`");
+    assert_eq!(image(&edition, true), vec![run_of(3)], "the edition's own `a b c`");
+    for doc in [&version, &draft] {
+        assert_eq!(image(doc, true), image(doc, false), "{doc:?} is its own reading surface");
+    }
+    let covered = |own: bool| {
+        let edition = CompareRegion {
+            region: RegionSpec { doc: edition.clone(), spans: vec![vspan(1, 1, 3)] },
+            own,
+        };
+        let draft = RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 3)] };
+        compare(ex(
+            &fx.febe,
+            fx.user,
+            Op::Compare { rho1: vec![edition], rho2: vec![draft.into()] },
+        ))
+        .iter()
+        .fold(nat(0), |sum, pair| sum + &pair.width)
+    };
+    assert_eq!(covered(true), nat(3), "the draft's `c` pairs the edition's own");
+    assert_eq!(covered(false), nat(2), "and not the head's");
+    assert_eq!(
+        (own_count(&edition), own_count(&version), own_count(&draft)),
+        (nat(3), nat(2), nat(3))
+    );
+    // A deposit naming the edition lands in the head alone.
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: edition.clone(),
+            at: vp(1, 3),
+            values: vec![Val::new(vec![b'd'])],
+            deposit: declared(),
+            as_of: head(&fx),
+        },
+    ));
+    assert_eq!(
+        (own_count(&edition), own_count(&version)),
+        (nat(3), nat(3)),
+        "the edition's own arrangement stays frozen; the head grows"
+    );
 }
 
 /// PUB-8.46 and the registration refusal M10 ORIGINATES: the two publication
@@ -709,7 +797,11 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
     let draft = create_doc(&fx);
     let (draft_start, _) = insert3(&fx, &draft); // a b c at ordinals 1..3, one run
     let image = |d: &skep_address::Address| {
-        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)] }))
+        runs(ex(
+            &fx.febe,
+            fx.user,
+            Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own: false },
+        ))
     };
     let text = |d: &skep_address::Address| -> Vec<u8> {
         let spec = Spec { doc: d.clone(), span: vspan(1, 1, 3) };
@@ -792,7 +884,11 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     // The image of `[from, from + width)`: every placement, in V-order, so a
     // run the member holds twice is answered twice.
     let image_at = |d: &skep_address::Address, from: u32, width: u32| {
-        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, from, width)] }))
+        runs(ex(
+            &fx.febe,
+            fx.user,
+            Op::Image { d: d.clone(), region: vec![vspan(1, from, width)], own: false },
+        ))
     };
     let image = |d: &skep_address::Address, width: u32| image_at(d, 1, width);
     let a = Run::new(draft_start.clone(), nat(1)).expect("a");

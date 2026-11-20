@@ -83,7 +83,10 @@ fn a_request_is_built_spelling_one_crate() {
         Op::Reinstate { doc: doc.clone(), at, runs: vec![shot_run], as_of: Seq(7) },                       // M5
         Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
         Op::Compare {
-            rho1: vec![RegionSpec { doc: doc.clone(), spans: vec![span] }],
+            rho1: vec![CompareRegion {
+                region: RegionSpec { doc: doc.clone(), spans: vec![span] },
+                own: true,
+            }], // M6
             rho2: vec![],
         },
         Op::FindLinksFtt { q: q.clone() }, // M8

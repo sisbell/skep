@@ -211,8 +211,8 @@ fn the_document_family_answers_end_to_end() {
         &fx.febe,
         fx.user,
         Op::Compare {
-            rho1: vec![RegionSpec { doc: edition.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![RegionSpec { doc: version.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: edition.clone(), spans: vec![vspan(1, 1, 2)] }.into()],
+            rho2: vec![RegionSpec { doc: version.clone(), spans: vec![vspan(1, 1, 2)] }.into()],
         },
     ));
     assert!(!rep.0.is_empty(), "the edition and its version share address-equal content");
@@ -441,7 +441,12 @@ fn the_link_family_answers_end_to_end() {
 
     // Region family (foundation ∩ active).
     assert!(
-        !runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: region.clone() })).is_empty(),
+        !runs(ex(
+            &fx.febe,
+            fx.user,
+            Op::Image { d: d.clone(), region: region.clone(), own: false }
+        ))
+        .is_empty(),
         "the region has a V→I image"
     );
     assert_eq!(count(ex(&fx.febe, fx.user, Op::CountV { d: d.clone(), region: region.clone() })), 2);

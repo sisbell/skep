@@ -60,13 +60,21 @@
 //! from the head and FINDDOCSCONTAINING from itself — the seam the PUB lane's
 //! report records, and one each card states on its own side.
 //!
+//! COMPARE alone reads either way, region by region: a region a
+//! [`CompareRegion`] flags `own` reads the address named, through
+//! [`Query::compare_named`], beside regions that float. At a bare published
+//! address whose chain has a member that is the arrangement it held before
+//! its first version, frozen since that version's mint — what a draft begun
+//! before version 1 was copied from (PUB-2.66).
+//!
 //! REGISTERED-EMPTY FOLLOWS THE FLOAT. The empty form the section above names
 //! is decided of the arrangement an operation READS — for the six that
 //! float, the reading surface, not the address named: a bare published
 //! address whose own arrangement holds nothing answers its head's content
 //! once it has a head, and SHOWORIGIN's `EmptySubspace` is the surface's
 //! subspace unoccupied. SHOWDELETIONS and FINDDOCSCONTAINING read the named
-//! address's own arrangement, so theirs is decided of it.
+//! address's own arrangement, so theirs is decided of it, as a COMPARE
+//! region flagged `own` is.
 //!
 //! ## No state, no fold
 //!
@@ -209,6 +217,6 @@ pub use error::{
 };
 pub use query::{Query, RetrievalWorld};
 pub use types::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged, LineNumbers, RegionSpec,
-    Spec,
+    CompareRegion, CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Flagged,
+    LineNumbers, RegionSpec, Spec,
 };

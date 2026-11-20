@@ -1578,6 +1578,25 @@ board checks that the head is a registered member of the draft's chain
 and nothing against the runs. Served as `base` is; a client that decodes neither `base` nor
 `merge` ignores both.
 
+`own_count` is THE ADDRESS NAMED'S OWN CONTENT COUNT, a decimal string,
+always present: the number of content positions in the arrangement of
+the address itself, never floated to a head (§The publish shot and
+head-float, head-float). For a version member, a draft or a private
+document it is that document's own count. For a bare published document
+whose chain has a member it is the count of the arrangement the document
+held before its first version — what its declared deposits placed while
+it had no member — frozen since that version's mint, since a published
+document refuses every in-place edit and a later deposit lands in the
+head. That arrangement is what a draft begun before version 1 was copied
+from, and what a shot naming the bare document as its base reads
+`base_extent` against; `image` and a `compare` region carrying `own`
+read it (§Link discovery reads, §Content & provenance reads). On most
+documents it is `"0"`: a published document is born empty and holds
+words of its own only by a declared deposit before its first version, so
+a client reads the arrangement only where this count is above `0`. Its
+cost is a sum over the address's content runs, as the content extent of
+`retrieve_doc_v_span_set` is. Served as `source` is.
+
 `at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
 `link_value` carries a link's: `at` the position of the commit that
 minted it — a version member answers ITS OWN mint, the one member of
@@ -1597,35 +1616,36 @@ answer `at: 0`, the genesis coordinate, with no time.
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
 placing five positions minted from the memberless document taken at
 three — its `shot_base` that document — a shot member, so `source` is
-`null` and the board records no base for it — the shot at 7, its row
-still in the feed:
+`null` and the board records no base for it, its own arrangement the
+five positions the shot placed — the shot at 7, its row still in the
+feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
+{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
 ```
 
 A private draft the staging act minted at 8 off that birth version —
 `source` the member copied and `source_copied` the five positions the
 copy took, `base` that member and `base_copied` the same five, so a
-`publish` off it carries `base_extent` 5 — whose feed line is gone,
-dated by the hour's anchor:
+`publish` off it carries `base_extent` 5, and its own count the same
+five — whose feed line is gone, dated by the hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
 `version` off `1.0.1.0.1` while `1.0.1.0.1.1` headed its chain, so born
 sharing that member, which is its `source`, the five positions its copy
-took its `source_copied`; its own chain has no member, no shot minted it
-and no staging act recorded a base for it — and minted by a build before
-the position map, so its age is unknown:
+took its `source_copied` and its own count; its own chain has no member,
+no shot minted it and no staging act recorded a base for it — and minted
+by a build before the position map, so its age is unknown:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
+{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
 ```
 
 The staged draft above after a merge's landing: a `set_arrangement` at
@@ -1635,11 +1655,12 @@ and put the marker beside it — the draft stands behind nothing until
 version 3 is published, when the landing's ack tells it (`ack`'s
 `head_moved`), and the marker ends at the draft's next `publish`; its
 `source_copied` is still the five its stage copied, beside the six the
-landing moved `base_copied` to:
+landing moved `base_copied` to, and the landing left it holding seven
+positions, its `own_count`:
 
 <!-- wire: response doc_metadata_marked -->
 ```json
-{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"own_count":"7","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2641,8 +2662,9 @@ hole.
 
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
-latest trunk member — and never the pre-chain arrangement a shot
-superseded: `retrieve_v`, `line_numbers`, `retrieve_doc_v_span`,
+latest trunk member — and not the pre-chain arrangement a shot
+superseded, unless the request asks for it (below): `retrieve_v`,
+`line_numbers`, `retrieve_doc_v_span`,
 `retrieve_doc_v_span_set`, `show_origin`, `compare`, the whole region
 family — `image`, `find_links_v`, `count_v`, `window_v`,
 `count_v_by_home`, `find_links_v_history`, `retrieve_endsets` — and the
@@ -2659,9 +2681,24 @@ carries what the client re-supplies of it. A private document is
 untouched: it has no chain, and a stamped member under one does not
 move it. The registration check runs on the address named, ahead of
 the float (PUB-6.37). NOT floated, pinned as the seam it is:
-`show_deletions`, `find_docs_containing`, `delete_orphans`, and `copy`'s
-source spans read the address named — a client comparing versions names
-the members.
+`show_deletions`, `find_docs_containing`, `delete_orphans`, `copy`'s
+source spans, and `image` and each `compare` region carrying `own: true`
+read the address named — a client comparing versions names the members.
+
+The pre-chain arrangement is KEPT, and `own` is how a reader asks for
+it (PUB-2.66). Once a published document has a member, its own
+arrangement is frozen: an in-place edit is refused on every address of
+the chain, and a declared deposit lands in the head. It is what a draft
+begun before version 1 was copied from, and what a shot naming the bare
+document as its base reads `base_extent` against. `image` with
+`own: true`, and a `compare` region with `own: true`, read it
+un-floated; `doc_metadata`'s `own_count` is its count, `"0"` on most
+documents, so a client reads it only where that count is above `0`. On
+every other address — a version
+member, a draft, a private document, a memberless published document —
+the address named is its own reading surface and `own` changes nothing.
+The read check is the one the document's other reads take: whoever may
+read the document reads this arrangement too.
 
 **The deposit cell** (PUB-2.65, PUB-2.66). A declared deposit into a
 published chain — `insert` with `deposit` naming a deposit-class type
@@ -3676,6 +3713,9 @@ positions the copy took of it, recorded by `stage` and moved by every
 `publish` naming the draft as its rendering `draft` without `keep_base`
 and by every `set_arrangement` naming a `base` — `null` together where
 it records none;
+`own_count` is the address named's own content count, never floated —
+for a published document with versions, the count of what it held
+before version 1, which `image` and `compare` read with `own`;
 `at`, `time` and `time_from` are the age of the address named — the
 position of the commit that minted it, kept in the board's state, and
 the daemon's testimony of when it committed (§The response envelope,
@@ -5884,8 +5924,28 @@ directions. → `deletions`.
 {"op":"compare","rho1":[{"doc":"1.0.1.0.1","spans":[{"start":"1.1","width":"0.5"}]}],"rho2":[{"doc":"1.0.1.0.64","spans":[{"start":"1.1","width":"0.5"}]}]}
 ```
 
+A region may carry `own: true`: it reads the arrangement of the
+document it names, never that document's head (§The publish shot and
+head-float). For a published document with versions that is the
+arrangement it held before version 1; on every other document it reads
+as the region without the member reads. The member rides each region on
+its own, so one operand can read a base as named beside regions that
+float; absent, `null` and `false` alike leave it unset, and the canonical
+form carries it only where set. A pair's foot names the region's document
+either way, so a client asking for one document both ways puts the two
+regions in different operands, where the slot tells them apart, or in
+different requests. Every region's document is checked by the read
+predicate whichever arrangement it reads. Here the first document's own
+arrangement is compared with a draft's:
+
+<!-- wire: request compare -->
+```json
+{"op":"compare","rho1":[{"doc":"1.0.1.0.1","own":true,"spans":[{"start":"1.1","width":"0.3"}]}],"rho2":[{"doc":"1.0.1.0.64","spans":[{"start":"1.1","width":"0.3"}]}]}
+```
+
 **`find_docs_containing`** — the documents whose arrangements contain the
-given regions' content. → `addrs`.
+given regions' content. Its regions read the address named and carry no
+`own`: the member is refused as an unknown field. → `addrs`.
 
 <!-- wire: request find_docs_containing -->
 ```json
@@ -5902,6 +5962,21 @@ at those positions). → `runs`.
 <!-- wire: request image -->
 ```json
 {"d":"1.0.1.0.1","op":"image","region":[{"start":"1.1","width":"0.5"}]}
+```
+
+With `own: true` the region resolves through `d`'s own arrangement,
+never its head (§The publish shot and head-float): for a published
+document with versions, the arrangement it held before version 1, which
+`doc_metadata`'s `own_count` counts; on every other document the answer
+is the one without the member. The refusals, their order and the run
+budget are the same, priced over the arrangement read, and `d` is
+checked by the read predicate as it is without the member. Absent,
+`null` and `false` alike leave it unset, and the canonical form carries
+it only where set:
+
+<!-- wire: request image -->
+```json
+{"d":"1.0.1.0.1","op":"image","own":true,"region":[{"start":"1.1","width":"0.3"}]}
 ```
 
 **`find_links_v`** — the active links whose endsets touch the region.

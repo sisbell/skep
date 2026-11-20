@@ -3,7 +3,7 @@
 //!
 //! Every M6-owned request/result type here is a plain all-`pub`-field value
 //! carrying **`Clone + Debug + PartialEq + Eq`**, plus `Serialize` wherever
-//! its leaves carry it. The two REQUEST types add `Hash`, as M5's `VSpec` —
+//! its leaves carry it. The three REQUEST types add `Hash`, as M5's `VSpec` —
 //! the same shape one seam over — does, and for the reason the fault
 //! vocabularies give: a consumer keying by a request cannot supply the impl
 //! (both the trait and the type are foreign to it), and a caller collapsing
@@ -63,7 +63,8 @@ pub struct Spec {
 /// ASN-0122's spec-set `ρ`) and FINDDOCSCONTAINING (the `(d_j, W_j)` of
 /// ASN-0124's **vspec-set** `Q`, whose `W_j` is a **V-region** — FD-CONVEX is
 /// why it is multi-span: a single span's convex denotation cannot name
-/// scattered fragments exactly). Both take `&[RegionSpec]`.
+/// scattered fragments exactly). Both take `&[RegionSpec]`, and COMPARE also
+/// takes each region beside the arrangement it reads ([`CompareRegion`]).
 ///
 /// "Region" is two corpus words, and this type sits under both. ASN-0124 FD-Q
 /// calls the pair `(d_j, W_j)` itself a document-scoped V-REGION, so the
@@ -78,6 +79,39 @@ pub struct Spec {
 pub struct RegionSpec {
     pub doc: Address,
     pub spans: Vec<Span>,
+}
+
+/// One region of a COMPARE operand, with the arrangement its spans read.
+///
+/// `region` is the `(dᵢ, Sᵢ)` a [`RegionSpec`] names, and `own` picks the
+/// arrangement its spans resolve against. Unset, the reading surface of
+/// `region.doc`, as every region of [`Query::compare`] reads (crate doc,
+/// *Which arrangement an operation answers from*). Set, the arrangement of the
+/// address named itself. The two part at exactly a bare published document
+/// whose chain has a member: the unset flag reads the trunk head (PUB-2.53),
+/// the set flag the arrangement the document held before its first version —
+/// frozen since that version's mint, a published document refusing every
+/// in-place edit and a declared deposit landing on the head (PUB-2.66). That
+/// arrangement is what a draft begun before version 1 was copied from, and
+/// what a shot naming the bare document as its base reads its extent against.
+/// Everywhere else the address named is its own reading surface, and the flag
+/// changes nothing.
+///
+/// The flag rides each region, so one operand can read a base region as named
+/// beside regions that float. `From<RegionSpec>` builds the unset form.
+///
+/// [`Query::compare`]: crate::Query::compare
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct CompareRegion {
+    pub region: RegionSpec,
+    pub own: bool,
+}
+
+/// Converts a region into the COMPARE region that reads its reading surface.
+impl From<RegionSpec> for CompareRegion {
+    fn from(region: RegionSpec) -> CompareRegion {
+        CompareRegion { region, own: false }
+    }
 }
 
 /// An item of a delivery. A DELIVERED run gives one `Content` item per atom

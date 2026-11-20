@@ -16,9 +16,9 @@ use skep_arrangement::{published_target, trunk_of, AsOf, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
-    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_on,
-    in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
-    HomeCounts, LinkRows,
+    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_named_on,
+    image_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on,
+    window_v_on, HomeCounts, LinkRows,
 };
 use skep_kernel::{Attestation, Seq};
 use skep_links::{Deposited, Invalid, LinkRec};
@@ -651,9 +651,13 @@ where
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Deletions { rep, as_of })
             }
+            // Each region reads where its flag says: its reading surface, or
+            // the address it names. Every region's document was consulted
+            // above, whichever arrangement it reads.
             Op::Compare { rho1, rho2 } => {
-                let rep =
-                    Query::new(&snap).compare(&rho1, &rho2).map_err(|e| lower_read(kind, e))?;
+                let rep = Query::new(&snap)
+                    .compare_named(&rho1, &rho2)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Compare { rep, as_of })
             }
             Op::FindDocsContaining { regions } => {
@@ -667,8 +671,11 @@ where
             }
             // ── link discovery reads (→ M8, §2): M8's *_on reads over M10's
             //    one snapshot.
-            Op::Image { d, region } => {
-                let runs = image_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
+            // `own` picks the arrangement: `d`'s reading surface, or `d`'s
+            // own. `d` was consulted above either way.
+            Op::Image { d, region, own } => {
+                let image = if own { image_named_on } else { image_on };
+                let runs = image(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Runs { runs, as_of })
             }
             // The result-set family: every reader drops each link whose home
@@ -779,10 +786,15 @@ where
             // either rides with them. The mint position is read off the
             // address named too (M3's position map; D6): a member answers
             // its own mint, the document its own, and the time is the
-            // transport's to add.
+            // transport's to add. So is the own count: M5's `content_count`
+            // of the address named, which never floats, so a bare published
+            // document whose chain has a member answers the count of the
+            // arrangement it held before its first version (PUB-2.66) — the
+            // one field here whose read walks runs.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
+                let own_count = world.m5().content_count(&doc);
                 let terms = world.m5().shot_terms(&doc).cloned();
                 let source = world.m5().fork_source(&doc).cloned();
                 let source_copied = world.m5().fork_source_copied(&doc).cloned();
@@ -809,6 +821,7 @@ where
                     base,
                     base_copied,
                     merge,
+                    own_count,
                     at,
                     time: None,
                     as_of,

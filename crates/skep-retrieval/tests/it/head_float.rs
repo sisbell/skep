@@ -1,15 +1,109 @@
 //! Which arrangement an operation answers from (crate doc): a published
 //! address floats to its trunk head, a pinned member answers its own, and
 //! registered-empty is decided of the surface — every floating operation
-//! moving with the head, and FINDDOCSCONTAINING not.
+//! moving with the head, and FINDDOCSCONTAINING not; and a COMPARE region
+//! flagged `own` reads the address named.
 
-use skep_address::{Address, SpanSet};
+use skep_address::{Address, Nat, Span, SpanSet};
 use skep_arrangement::AsOf;
-use skep_arrangement::{HasM5, Vstream};
+use skep_arrangement::{HasM5, Run, Shot, ShotRun, VSpec, Vstream};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Delivery, OriginError, Query};
+use skep_retrieval::{CompareError, CompareRegion, CompareReport, Delivery, OriginError, Query};
 
 use crate::common::*;
+
+/// A COMPARE region naming `doc`'s `spans`, read as named where `own` is set.
+fn named(doc: Address, spans: Vec<Span>, own: bool) -> CompareRegion {
+    CompareRegion {
+        region: region_spec(doc, spans),
+        own,
+    }
+}
+
+/// The positions a report's pairs cover, summed.
+fn covered(rep: &CompareReport) -> Nat {
+    rep.iter().fold(n(0), |sum, pair| sum + &pair.width)
+}
+
+#[test]
+fn a_region_read_as_named_answers_the_arrangement_its_document_held_before_version_1() {
+    // The arrangement a bare published document held before its first
+    // version is kept, frozen since that version's mint, and a COMPARE region
+    // flagged `own` reads it: pdoc holds `a b c`, a private draft copies all
+    // three, and the birth shot mints version 1 holding `a b` alone. Named
+    // pdoc, an unflagged region floats to the head and holds no `c`; flagged,
+    // it reads pdoc's own three and pairs the `c` the draft holds.
+    let k = mem_kernel();
+    let vs = deposit3(&k); // pdoc = [a, b, c], memberless
+    vs.copy(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        &[VSpec {
+            source: pdoc(),
+            span: vspan(1, 1, 3),
+        }],
+        AsOf::Typed(k.current_seq()),
+    )
+    .expect("the draft copies pdoc before its first version"); // doc1 = [pca1, pca2, pca3]
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun {
+            origin: pdoc(),
+            run: Run::new(pca(1), n(2)).expect("a content run"),
+        }],
+    };
+    let (head, _) = vs
+        .publish(P1, &pdoc(), &birth, &|_: &World, _: &Address| true)
+        .expect("the birth shot commits");
+    assert_eq!(head, vdoc(), "version 1");
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // The premise: pdoc's own arrangement keeps three, its head holds two.
+    assert_eq!(s.world().m5().content_count(&pdoc()), n(3));
+    assert_eq!(s.world().m5().content_count(&vdoc()), n(2));
+    let draft = || {
+        vec![CompareRegion::from(region_spec(
+            doc1(),
+            vec![vspan(1, 1, 3)],
+        ))]
+    };
+    let floated = ok_of(q.compare_named(&[named(pdoc(), vec![vspan(1, 1, 3)], false)], &draft()));
+    assert_eq!(covered(&floated), n(2), "the head's `a b`, and no `c`");
+    assert_eq!(
+        floated,
+        ok_of(q.compare(
+            &[region_spec(pdoc(), vec![vspan(1, 1, 3)])],
+            &[region_spec(doc1(), vec![vspan(1, 1, 3)])]
+        )),
+        "an unflagged region reads as `compare` reads it"
+    );
+    let own = ok_of(q.compare_named(&[named(pdoc(), vec![vspan(1, 1, 3)], true)], &draft()));
+    assert_eq!(covered(&own), n(3), "pdoc's own `a b c`, the `c` paired");
+    assert!(own
+        .iter()
+        .all(|pair| pair.d1 == pdoc() && pair.d2 == doc1() && pair.u1 == pair.u2));
+    // Wherever the address named is its own reading surface — a version
+    // member, a private document — the flag changes nothing.
+    for doc in [vdoc(), doc1()] {
+        assert_eq!(
+            ok_of(q.compare_named(&[named(doc.clone(), vec![vspan(1, 1, 3)], true)], &draft())),
+            ok_of(q.compare_named(&[named(doc.clone(), vec![vspan(1, 1, 3)], false)], &draft())),
+            "{doc:?}"
+        );
+    }
+    // The gate runs on the address named, flagged or not.
+    assert_eq!(
+        err_of(q.compare_named(
+            &[named(unregistered(), vec![vspan(1, 1, 1)], true)],
+            &draft()
+        )),
+        CompareError::DocNotRegistered(unregistered())
+    );
+}
 
 #[test]
 fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {

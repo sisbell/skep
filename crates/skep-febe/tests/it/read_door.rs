@@ -26,9 +26,9 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    consult_read, enc, validate, Address, DeliveryItem, Deposit, EditionClaim, Flagged, FourSet,
-    LineNumbers, Op, OpKind, RegionSpec, RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet,
-    Spec, Tumbler, Val, View, FROM, TO,
+    consult_read, enc, validate, Address, CompareRegion, DeliveryItem, Deposit, EditionClaim,
+    Flagged, FourSet, LineNumbers, Op, OpKind, RegionSpec, RejectCode, Response, SlotArg, SlotSpec,
+    Span, SpanSet, Spec, Tumbler, Val, View, FROM, TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -115,10 +115,22 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
         // Across an op's lists: rho1's regions before rho2's.
         (
             Op::Compare {
-                rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![first_span()] }],
-                rho2: vec![RegionSpec { doc: d1.clone(), spans: vec![first_span()] }],
+                rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![first_span()] }.into()],
+                rho2: vec![RegionSpec { doc: d1.clone(), spans: vec![first_span()] }.into()],
             },
             &d2,
+        ),
+        // A region read as named is consulted as a floating one is: the
+        // flag picks an arrangement, never the document's gate.
+        (
+            Op::Compare {
+                rho1: vec![CompareRegion {
+                    region: RegionSpec { doc: d1.clone(), spans: vec![first_span()] },
+                    own: true,
+                }],
+                rho2: vec![RegionSpec { doc: d2.clone(), spans: vec![first_span()] }.into()],
+            },
+            &d1,
         ),
         // Within a list, by index.
         (
@@ -140,7 +152,8 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
             &d2,
         ),
         // The region family's `d`.
-        (Op::Image { d: d1.clone(), region: vec![first_span()] }, &d1),
+        (Op::Image { d: d1.clone(), region: vec![first_span()], own: false }, &d1),
+        (Op::Image { d: d1.clone(), region: vec![first_span()], own: true }, &d1),
         (Op::FindLinksV { d: d1.clone(), region: vec![first_span()] }, &d1),
         (Op::CountV { d: d1.clone(), region: vec![first_span()] }, &d1),
         (Op::WindowV { d: d1.clone(), region: vec![first_span()], cur: None, n: 1 }, &d1),

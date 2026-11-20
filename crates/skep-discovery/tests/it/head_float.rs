@@ -1,19 +1,118 @@
 //! HEAD-FLOAT (PUB-2.49, PUB-2.50, PUB-2.53) — which arrangement a read
 //! answers from, the law the crate doc states for every read but the
-//! preview: a bare published address floats to its trunk head, a pinned
-//! version member answers its own, and registered-empty is decided of the
-//! reading surface — asked of the region family and the pointwise pair
-//! alike, and of both subspaces discoverability reads. What a budget counts
-//! on a head is stated in `region` and in `pointwise`, and the preview,
-//! which does not float, in `survival`.
+//! preview and the named image: a bare published address floats to its
+//! trunk head, a pinned version member answers its own, and registered-empty
+//! is decided of the reading surface — asked of the region family and the
+//! pointwise pair alike, and of both subspaces discoverability reads. What a
+//! budget counts on a head is stated in `region` and in `pointwise`, and the
+//! preview, which does not float, in `survival`. The named image, which does
+//! not float either, is asked here beside `image_on`.
 
 use crate::common;
 
 use common::*;
-use skep_arrangement::{HasM5, Vstream};
-use skep_discovery::{FROM, TO, TYPE};
+use skep_arrangement::{HasM5, Shot, ShotRun, Vstream};
+use skep_discovery::{image_named_on, image_on, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE};
 use skep_links::{enc, LinkWriter};
 use skep_namespace::PrincipalId;
+
+/// §1 — the one image that does not float. A published document takes
+/// `a b c` while memberless, and its birth shot mints version 1 holding
+/// `a b` alone, by reference to the document's own I-space. Named the bare
+/// address, `image_on` answers the head's two; `image_named_on` answers the
+/// three the document's own arrangement keeps, frozen since the shot. Where
+/// the address named is its own reading surface — the head, a private
+/// document, a memberless published document — the two answer alike.
+#[test]
+fn the_named_image_reads_what_a_published_document_held_before_version_1() {
+    let k = kernel();
+    seed_published_content(&k, &pdoc(), 3); // memberless: pdoc's own pca(1..=3)
+    seed_content(&k, &doc1(), 2);
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun {
+            origin: pdoc(),
+            run: run(&pca(1), 2),
+        }],
+    };
+    let (head, _) = Vstream::new(&k)
+        .publish(SYS, &pdoc(), &birth, &EVERYONE)
+        .expect("the birth shot commits");
+    assert_eq!(head, phead(), "version 1");
+    let snap = k.snapshot();
+    let region = [vspan(1, 1, 3)];
+    assert_eq!(
+        image_on(&snap, &pdoc(), &region),
+        Ok(vec![run(&pca(1), 2)]),
+        "the head's `a b`"
+    );
+    assert_eq!(
+        image_named_on(&snap, &pdoc(), &region),
+        Ok(vec![run(&pca(1), 3)]),
+        "pdoc's own `a b c`"
+    );
+    for d in [phead(), doc1()] {
+        assert_eq!(
+            image_named_on(&snap, &d, &region),
+            image_on(&snap, &d, &region),
+            "{d:?}"
+        );
+    }
+    let memberless = kernel();
+    seed_published_content(&memberless, &pdoc(), 3);
+    let snap = memberless.snapshot();
+    assert_eq!(
+        image_named_on(&snap, &pdoc(), &region),
+        image_on(&snap, &pdoc(), &region),
+        "a memberless published document is its own reading surface"
+    );
+}
+
+/// §1 — the named image refuses as `image_on` does, in its order, each
+/// budget priced over the arrangement it reads: a head fragmented past the
+/// run budget refuses `image_on` and not `image_named_on`, whose one run of
+/// the document's own is all it walks; a private document fragmented past
+/// it refuses both.
+#[test]
+fn the_named_image_keeps_the_gates_and_budgets_over_its_own_arrangement() {
+    // pdoc's own arrangement: one run of two; its head: MAX + 1 runs.
+    let k = fragmented_head_world(MAX_IMAGE_RUNS + 1);
+    let snap = k.snapshot();
+    let whole = [vspan(1, 1, MAX_IMAGE_RUNS as u32 + 1)];
+    assert_eq!(
+        image_on(&snap, &pdoc(), &whole),
+        Err(QueryError::ImageTooLarge)
+    );
+    assert_eq!(
+        image_named_on(&snap, &pdoc(), &whole),
+        Ok(vec![run(&pca(1), 2)])
+    );
+    for named in [image_on::<World>, image_named_on::<World>] {
+        assert_eq!(
+            named(&snap, &unregistered_doc(), &whole),
+            Err(QueryError::DocNotRegistered)
+        );
+        assert_eq!(
+            named(&snap, &pdoc(), &[vspan(2, 1, 1)]),
+            Err(QueryError::BadRegion)
+        );
+    }
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let (past, _) = doc2_past_the_run_budget_at_two_run_counts(&k);
+    let region = [vspan(1, 1, MAX_IMAGE_RUNS as u32 + 1)];
+    assert_eq!(
+        image_on(&past, &doc2(), &region),
+        Err(QueryError::ImageTooLarge)
+    );
+    assert_eq!(
+        image_named_on(&past, &doc2(), &region),
+        Err(QueryError::ImageTooLarge)
+    );
+}
 
 /// §1 — HEAD-FLOAT on every region read, not only the two the pointwise
 /// pair's head-float law composes with: `image_on` states that the whole

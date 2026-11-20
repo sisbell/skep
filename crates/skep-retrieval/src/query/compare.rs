@@ -27,7 +27,7 @@ use crate::budget::{
     Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_WALK_STEPS,
 };
 use crate::error::{CompareError, Operand};
-use crate::types::{CompareReport, CorrPair, RegionSpec};
+use crate::types::{CompareRegion, CompareReport, CorrPair, RegionSpec};
 use crate::vspan::{gate_vspan, walk_price, Subspace};
 
 impl<W: RetrievalWorld> Query<'_, W> {
@@ -49,7 +49,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// doc, *Which arrangement an operation answers from*), asked as each
     /// region resolves; the gate runs on the address named, and the feet
     /// still NAME the document the caller asked about while the positions
-    /// they carry are the surface's.
+    /// they carry are the surface's. [`Query::compare_named`] is the form
+    /// that reads a region as named instead.
     ///
     /// Whole for two readable arguments (PUB-6.15): correspondences whose
     /// shared content originates in an unreadable document are INCLUDED; no
@@ -102,13 +103,59 @@ impl<W: RetrievalWorld> Query<'_, W> {
         rho1: &[RegionSpec],
         rho2: &[RegionSpec],
     ) -> Result<CompareReport, CompareError> {
+        self.compare_over(rho1, rho2)
+    }
+
+    /// Runs COMPARE with each region read where its flag says.
+    ///
+    /// It is [`Query::compare`] — the same gate, the same budgets, the same
+    /// join and presentation, in the same order — save one thing: a region
+    /// whose [`CompareRegion::own`] is set resolves against the arrangement of
+    /// the address it names rather than its reading surface (the type's card
+    /// says where the two part). Both of the operand's passes ask it, so the
+    /// region's walk is priced against the arrangement it walks, and its
+    /// blocks are that arrangement's runs. An unset region reads exactly as
+    /// `compare` reads it. The gate runs on the address named either way, so
+    /// a flagged region of an unregistered document is refused as an
+    /// unflagged one is.
+    ///
+    /// **One name, two arrangements.** A foot names the region's document
+    /// whichever arrangement its position is in, so the slot is what tells a
+    /// flagged region's feet from an unflagged one's. Across the two operands
+    /// it does: a pair's first foot comes from `rho1`, its second from `rho2`.
+    /// Within one operand it does not, and an operand naming one document
+    /// both flagged and unflagged reports feet from two position spaces under
+    /// one name — a caller wanting both of one document puts them in
+    /// separate operands or separate requests.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`Query::compare`] states, in its order: the gate's, over
+    /// `rho1` and then `rho2`, then [`CompareError::TooManyBlocks`] priced and
+    /// counted against each region's own surface, then
+    /// [`CompareError::TooManyPairs`].
+    pub fn compare_named(
+        &self,
+        rho1: &[CompareRegion],
+        rho2: &[CompareRegion],
+    ) -> Result<CompareReport, CompareError> {
+        self.compare_over(rho1, rho2)
+    }
+
+    /// Runs COMPARE over two operands of one region form: the one body both
+    /// public forms run, so their gate, budgets and order cannot come apart.
+    fn compare_over<R: OperandRegion>(
+        &self,
+        rho1: &[R],
+        rho2: &[R],
+    ) -> Result<CompareReport, CompareError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         // BOTH operands whole, before either resolves.
         gate_spec_set(m3, Operand::First, rho1)?;
         gate_spec_set(m3, Operand::Second, rho2)?;
-        // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — each region against its
-        // reading surface, each operand within the operand budget.
+        // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — each region against the
+        // surface it reads, each operand within the operand budget.
         let p = resolve_blocks(m3, m5, rho1).map_err(|OverBudget| CompareError::TooManyBlocks {
             operand: Operand::First,
         })?;
@@ -119,6 +166,55 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // within the pair budget.
         let pairs = interval_join(&p, &q).map_err(|OverBudget| CompareError::TooManyPairs)?;
         Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
+    }
+}
+
+/// One region of a COMPARE operand as the walk reads it: the region named,
+/// and the arrangement its spans resolve against.
+///
+/// A [`RegionSpec`] reads its document's reading surface, as every region of
+/// [`Query::compare`] does; a [`CompareRegion`] reads that, or the address
+/// named where its `own` is set. Both passes of [`resolve_blocks`] ask
+/// [`OperandRegion::surface`] of the region they consume, so a region is
+/// priced against the arrangement it is walked over, and the choice between
+/// the two is made in this one place.
+trait OperandRegion {
+    /// Returns the region named: its document and its spans.
+    fn named(&self) -> &RegionSpec;
+
+    /// Returns the arrangement this region's spans resolve against.
+    ///
+    /// **Precondition.** The region's document is registered (PUB-6.37):
+    /// [`reading_surface`] is contracted to registered documents and is total
+    /// rather than panicking, so an ungated region would resolve against its
+    /// own arrangement and answer.
+    fn surface(&self, m3: &M3State) -> Address;
+}
+
+/// A plain region reads its document's reading surface (PUB-2.49).
+impl OperandRegion for RegionSpec {
+    fn named(&self) -> &RegionSpec {
+        self
+    }
+
+    fn surface(&self, m3: &M3State) -> Address {
+        reading_surface(m3, &self.doc)
+    }
+}
+
+/// A flagged region reads the address named; an unflagged one, as a plain
+/// region reads.
+impl OperandRegion for CompareRegion {
+    fn named(&self) -> &RegionSpec {
+        &self.region
+    }
+
+    fn surface(&self, m3: &M3State) -> Address {
+        if self.own {
+            self.region.doc.clone()
+        } else {
+            self.region.surface(m3)
+        }
     }
 }
 
@@ -137,12 +233,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
 /// content-subspace), rejected loudly rather than resolved to nothing: a span
 /// that merely DENOTES link positions from a content start is always legal,
 /// and `resolve` clips it.
-fn gate_spec_set(
+fn gate_spec_set<R: OperandRegion>(
     m3: &M3State,
     operand: Operand,
-    regions: &[RegionSpec],
+    regions: &[R],
 ) -> Result<(), CompareError> {
-    for (region, r) in regions.iter().enumerate() {
+    for (region, r) in regions.iter().map(OperandRegion::named).enumerate() {
         if !m3.is_registered_document(&r.doc) {
             return Err(CompareError::DocNotRegistered(r.doc.clone()));
         }
@@ -255,11 +351,12 @@ impl<'a> Block<'a> {
 /// that gate ride here.
 ///
 /// The REGISTRY clause rides furthest: every other `reading_surface` call in
-/// the crate sits in the body of the operation that gated, while this
-/// function's calls float where [`Query::compare`] gated. `reading_surface`
-/// is contracted to registered documents (PUB-6.37) and is TOTAL rather than
-/// panicking, so an ungated region would not stop here — it would resolve
-/// against its own arrangement and answer.
+/// the crate sits in the body of the operation that gated, while the calls
+/// this function makes through [`OperandRegion::surface`] float where
+/// [`Query::compare`] gated. `reading_surface` is contracted to registered
+/// documents (PUB-6.37) and is TOTAL rather than panicking, so an ungated
+/// region would not stop here — it would resolve against its own arrangement
+/// and answer.
 ///
 /// The ZERO-FREE start puts `ordinal ≥ 1` at every span, so the cursor M6
 /// opens at the span's own ordinal IS the resolution's `max(ordinal, 1)` and M6
@@ -273,28 +370,32 @@ impl<'a> Block<'a> {
 /// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
 /// to the document of the region that named it.
 ///
-/// EACH REGION'S READING SURFACE IS ASKED HERE, of M3, at the point it is
-/// consumed (crate doc, *Which arrangement an operation answers from*): the
-/// arrangement RESOLVED is the surface's, while the block's document — the
-/// foot a correspondence reports — stays the one the region NAMED. The two
-/// are bound by the region they both come from, so a region can be paired
-/// with no arrangement but its own: a block whose `doc` is one document and
-/// whose runs are another's — feet naming one document with positions from
-/// another, the X12 R1 failure — is not a thing this walk can build.
-fn resolve_blocks<'a>(
+/// EACH REGION'S SURFACE IS ASKED HERE, of M3, at the point it is consumed,
+/// in both passes ([`OperandRegion::surface`]; crate doc, *Which arrangement
+/// an operation answers from*): the arrangement RESOLVED is the surface's —
+/// the region's reading surface, or the address named for a region read as
+/// named — while the block's document — the foot a correspondence reports —
+/// stays the one the region NAMED. The two are bound by the region they both
+/// come from, so a region can be paired with no arrangement but its own: a
+/// block whose `doc` is one document and whose runs are another's — feet
+/// naming one document with positions from another, the X12 R1 failure — is
+/// not a thing this walk can build. And the price pass asks each region the
+/// same surface the walk pass resolves, so no region is priced against one
+/// arrangement and walked over another.
+fn resolve_blocks<'a, R: OperandRegion>(
     m3: &M3State,
     m5: &M5State,
-    regions: &'a [RegionSpec],
+    regions: &'a [R],
 ) -> Result<Vec<Block<'a>>, OverBudget> {
     // What the operand NAMES, refused before its first span is walked: its
     // spans, one resolution apiece (MAX_COMPARE_OPERAND_BLOCKS' card), and
-    // their walks' price against each region's reading surface — the
-    // arrangement the walk below resolves (MAX_WALK_STEPS' card).
+    // their walks' price against each region's surface — the arrangement the
+    // walk below resolves (MAX_WALK_STEPS' card).
     let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     let mut steps_priced = Count::against(MAX_WALK_STEPS);
-    for r in regions {
-        let surface = reading_surface(m3, &r.doc);
-        for span in &r.spans {
+    for region in regions {
+        let surface = region.surface(m3);
+        for span in &region.named().spans {
             spans_handed.admit(1)?;
             steps_priced.admit(walk_price(m5, &surface, span))?;
         }
@@ -302,8 +403,9 @@ fn resolve_blocks<'a>(
     // What the walk PRODUCES, counted as it is produced.
     let mut out = Vec::new();
     let mut blocks_built = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
-    for r in regions {
-        let surface = reading_surface(m3, &r.doc);
+    for region in regions {
+        let surface = region.surface(m3);
+        let r = region.named();
         for span in &r.spans {
             // M5's own shape reader, the one its resolution folds every span
             // through — so this let-else is LIVE: a span it declines

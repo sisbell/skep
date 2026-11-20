@@ -73,7 +73,7 @@ use skep_links::{
     OriginalEntry, PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
 };
 use skep_namespace::{PrincipalId, WellKnownSlot};
-use skep_retrieval::{RegionSpec, Spec};
+use skep_retrieval::{CompareRegion, RegionSpec, Spec};
 use skep_util::json::{hex_nibble, obj};
 
 pub use marshal::{credential_refused_reply, key_set_reply, op_name, registry_refused_reply};
@@ -770,9 +770,21 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "show_deletions" => {
             Op::ShowDeletions { d_a: fields.addr("d_a")?, d_b: fields.addr("d_b")? }
         }
-        "compare" => Op::Compare { rho1: fields.regions("rho1")?, rho2: fields.regions("rho2")? },
+        // Each `compare` region may carry `own`, read as named where set
+        // (wire.md §Content & provenance reads); `find_docs_containing`'s
+        // regions take no such member.
+        "compare" => Op::Compare {
+            rho1: fields.compare_regions("rho1")?,
+            rho2: fields.compare_regions("rho2")?,
+        },
         "find_docs_containing" => Op::FindDocsContaining { regions: fields.regions("regions")? },
-        "image" => Op::Image { d: fields.addr("d")?, region: fields.spans("region")? },
+        // `image`'s `own` reads `d`'s own arrangement where set (wire.md §Link
+        // discovery reads); absent, `null` and `false` alike float.
+        "image" => Op::Image {
+            d: fields.addr("d")?,
+            region: fields.spans("region")?,
+            own: fields.flag("own")?,
+        },
         "find_links_v" => Op::FindLinksV { d: fields.addr("d")?, region: fields.spans("region")? },
         "find_links_ftt" => Op::FindLinksFtt { q: fields.fourset("q")? },
         "count_v" => Op::CountV { d: fields.addr("d")?, region: fields.spans("region")? },
@@ -1138,6 +1150,17 @@ impl Fields {
 
     fn regions(&mut self, k: &'static str) -> PResult<Vec<RegionSpec>> {
         self.field(k, |v| p_list(v, p_region))
+    }
+
+    /// Takes a `compare` operand: one wire list of regions, each of which
+    /// may carry `own` ([`p_compare_region`]).
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is missing, or its list or a region in it
+    /// is refused ([`p_list`], [`p_compare_region`]).
+    fn compare_regions(&mut self, k: &'static str) -> PResult<Vec<CompareRegion>> {
+        self.field(k, |v| p_list(v, p_compare_region))
     }
 
     fn vals(&mut self, k: &'static str) -> PResult<Vec<Val>> {
@@ -2268,7 +2291,41 @@ fn p_ispan(v: &Value) -> PResult<ISpan> {
 }
 
 fn p_region(v: &Value) -> PResult<RegionSpec> {
-    let m = p_obj(v, &["doc", "spans"])?;
+    region_of(p_obj(v, &["doc", "spans"])?)
+}
+
+/// Parses one region of a `compare` operand (wire.md §Content & provenance
+/// reads, `compare`).
+///
+/// It is [`p_region`]'s `doc` and `spans` beside an optional `own` — absent,
+/// `null` and `false` alike unset, as every flag on the wire reads — so a
+/// region is read as named only where it says so. The member is `compare`'s
+/// alone: `find_docs_containing`'s regions never float, and [`p_region`]
+/// refuses `own` there as an unknown field.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of `doc`, `own` and `spans` alone,
+/// where `doc` or `spans` is missing or refused, or where `own` is present
+/// and no boolean.
+fn p_compare_region(v: &Value) -> PResult<CompareRegion> {
+    let m = p_obj(v, &["doc", "own", "spans"])?;
+    let region = region_of(m)?;
+    let own = match m.get("own") {
+        None | Some(Value::Null) => false,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| PErr("own: expected true or false".into()))?,
+    };
+    Ok(CompareRegion { region, own })
+}
+
+/// Reads a region's `doc` and `spans` off an object whose keys are checked.
+///
+/// # Errors
+///
+/// A [`PErr`] where either member is missing or refused.
+fn region_of(m: &Map<String, Value>) -> PResult<RegionSpec> {
     Ok(RegionSpec {
         doc: field(m, "doc", p_addr)?,
         spans: field(m, "spans", |v| p_list(v, p_span))?,

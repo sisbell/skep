@@ -52,7 +52,11 @@
 //! `doc_metadata` after 64 reads, nothing composed or landed (SP-17).
 //! Another account's draft staged from the bare document, and a draft or a
 //! fork lying in no member of `doc`'s chain, is refused before that read as
-//! the library refuses it, `base_unknown` with `reason` `base_unknown`.
+//! the library refuses it, `base_unknown` with `reason` `base_unknown`. A
+//! fork of `doc`'s owner's own account — the owner's draft, which is the
+//! draft side, its words re-minted at the shot — is refused by the
+//! composition, `base_unknown` with `reason` `fork_of_owner`, nothing
+//! landed.
 //! Where a side starts names no base: the library derives the base from
 //! the bases the board recorded up the side's line, so a side begun before
 //! the document's first version — a daughter published beside version 1,
@@ -586,10 +590,12 @@ fn draft_start(doc: &Address, draft: &Address, base: Option<&Address>) -> Result
 ///
 /// It is the head read's start at the fork side, decided off the fork's one
 /// `doc_metadata` read, as the library reads the fork's anchor
-/// (`skep_client::merge::compose`, the fork's `source`): no owner is tested,
-/// since a fork is a document of any account the board serves a source for.
-/// A fork taken from `doc` itself — before its first version, whether or
-/// not one stands since — starts at `doc`.
+/// (`skep_client::merge::compose`, the fork's `source`). It is answered for
+/// a fork of any account, the composition refusing one of `doc`'s owner's
+/// own account itself, `fork_of_owner` — the owner's draft is the draft
+/// side — as it refuses another account's draft at the draft side. A fork
+/// taken from `doc` itself — before its first version, whether or not one
+/// stands since — starts at `doc`.
 ///
 /// # Errors
 ///
@@ -806,6 +812,7 @@ impl Shell {
             R::Unreadable(doc) => Refusal::shell(Name::UNREADABLE, json!({"doc": s(&doc)})),
             R::NoSuchDocument(doc) => Refusal::shell(Name::NO_SUCH_DOCUMENT, json!({"doc": s(&doc)})),
             R::BaseUnknown(side) => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "base_unknown"})),
+            R::ForkOfOwner { fork } => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(&fork), "reason": "fork_of_owner"})),
             R::BareSource { side, source, hop } => {
                 let mut detail = json!({"side": s(side.address()), "reason": "bare_source", "source": s(&source)});
                 if let Some(hop) = hop {
@@ -933,10 +940,12 @@ impl Shell {
     ///    itself) — nothing to merge onto: publish the draft, which lands
     ///    version 1 — nothing composed;
     /// 5. the composition's (`skep_client::merge::compose`): `base_unknown`
-    ///    with its reason — `hop_unrecorded` naming the `hop` on the side's
-    ///    line the board records no base for, `bare_source` with the `hop`
-    ///    where the board serves no count of the document's arrangement from
-    ///    before its first version (an older board), `base_unknown` —
+    ///    with its reason — `fork_of_owner` where the fork side is of
+    ///    `doc`'s owner's own account, the owner's draft being the draft
+    ///    side, `hop_unrecorded` naming the `hop` on the side's line the
+    ///    board records no base for, `bare_source` with the `hop` where the
+    ///    board serves no count of the document's arrangement from before
+    ///    its first version (an older board), `base_unknown` —
     ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
     ///    with its arm, the board's verdicts verbatim; then `over_cap` where
     ///    M passes the cap, nothing landed;

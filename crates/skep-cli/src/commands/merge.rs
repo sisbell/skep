@@ -12,11 +12,13 @@
 //! member on its line, never from an address (`--base` names it only to be
 //! checked, and one the board's records do not derive is refused), the
 //! report's `sides` carrying the position the draft was read at, which a
-//! verifier reads the draft and its recorded base as of; or a fork of the
-//! document, whose base is derived so from the source the board serves for
-//! it (`doc_metadata`'s `source`) — a side begun from the bare document
-//! before its first version, a draft or a fork unpublished or a member
-//! published beside version 1, composing over the document's own
+//! verifier reads the draft and its recorded base as of; or another
+//! account's fork of the document, whose base is derived so from the source
+//! the board serves for it (`doc_metadata`'s `source`), a document of the
+//! owner's own account given as `--fork` refused `fork_of_owner`, the
+//! owner's draft being the `--draft` side — a side begun from the bare
+//! document before its first version, a draft or a fork unpublished or a
+//! member published beside version 1, composing over the document's own
 //! arrangement from before that version, the report's `base` the document
 //! itself — and the head where the feed walk should not supply it; the
 //! command composes the merge under the rules — every read at one board

@@ -1190,7 +1190,9 @@ fn the_publication_references_state_the_shells_shapes() {
 /// and the fork side's own refusal at its landing, `fork_base_moved`; it
 /// and MERGING say that a side begun from the document before its first
 /// version composes over the document as it stood then, `base` the
-/// document itself. The compose reference and MERGING name every gap kind
+/// document itself, and that a draft of the document owner's account given
+/// as the fork side is refused `fork_of_owner`, to be given as the draft
+/// side. The compose reference and MERGING name every gap kind
 /// the shell's `GapKind` spells;
 /// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
 /// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
@@ -1271,6 +1273,7 @@ fn the_merge_references_state_the_shells_shapes() {
         "composes over doc as it stood before version 1, empty on most documents, base then doc itself",
         "while doc has no version yet it is refused base_unknown with reason bare_source, nothing to merge onto",
         "refused base_unknown, nothing written",
+        "a draft of doc's owner's account given as fork is refused base_unknown with reason fork_of_owner — give it as draft",
         "reason hop_unrecorded names the hop",
         "A gap is settled by EDITING THE DRAFT",
         "resolved_by agent",
@@ -1314,6 +1317,8 @@ fn the_merge_references_state_the_shells_shapes() {
         "base_unknown {side, reason, source?, hop?}",
         "reason base_unknown for a draft never staged, one staged from a draft with no recorded base or from another document, or a draft of another account — compose that one as a fork",
         "and for a fork with no source, one the fork op minted, or one whose source is neither doc nor a version of it",
+        "a draft of doc's owner's account given as fork is refused base_unknown with reason fork_of_owner — give it as draft",
+        "reason fork_of_owner for a document of doc's owner's account given as fork, whose draft is the draft side — give it as draft",
         "reason bare_source, naming source (doc itself), for a draft of yours or a fork, of any account, begun from doc while doc has no version yet — nothing to merge onto: publish that draft, which lands version 1",
         "naming the hop, the version on the side's line published from doc, where the side's own base or source is not doc",
         "reason hop_unrecorded, naming the hop, a version on the side's line the board records no base for, its base never taken from its address",

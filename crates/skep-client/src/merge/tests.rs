@@ -1754,7 +1754,8 @@ mod scripted {
         /// A member of a chain with its shot terms, its `shot_base` the base
         /// the minting rule names (`skep-arrangement`'s `shot_admission`):
         /// none for `D.1` (the birth shape), `D.k−1` for a later trunk
-        /// member `D.k`, the address parent for a daughter.
+        /// member `D.k`, the address parent for a daughter. It is its
+        /// trunk's owner's, the merger's where the world holds no trunk.
         fn member(&mut self, text: &str, runs: Vec<Run>, base_extent: Option<u64>) {
             let placed = runs.iter().map(|r| r.width).sum();
             let trunk = crate::address::document_of(text).expect("a member's trunk");
@@ -1765,7 +1766,8 @@ mod scripted {
                 [k] => Some(format!("{trunk}.{}", k - 1)),
                 _ => Some(text[..text.rfind('.').unwrap()].to_string()),
             };
-            self.doc(text, true, ACCOUNT, runs);
+            let owner = self.docs.get(&trunk).map_or_else(|| ACCOUNT.to_string(), |d| d.owner.clone());
+            self.doc(text, true, &owner, runs);
             let d = self.docs.get_mut(text).unwrap();
             d.placed = Some(placed);
             d.base_extent = base_extent;
@@ -3119,7 +3121,12 @@ mod scripted {
     /// minted it (no source) or where its source lies in another document;
     /// `Unreadable` where the merger may not read the fork at all. A base
     /// the caller names beside a fork side refuses `ForkBaseNamed` before
-    /// any read. (A draft or a fork begun from the bare document composes
+    /// any read. A fork is ANOTHER ACCOUNT'S document (skep #1107): one of
+    /// the trunk owner's own account — the merger's staged draft, alone or
+    /// beside the draft side — refuses `ForkOfOwner` after the trunk's
+    /// metadata alone, one in `D`'s own tree refuses `BaseUnknown` before
+    /// any read, and a sub-account's composes, the account compared
+    /// exactly. (A draft or a fork begun from the bare document composes
     /// over its own arrangement: `every_side_whose_line_ends_at_the_document_composes_over_it`.)
     #[test]
     fn a_foreign_side_or_a_side_without_a_served_base_refuses_before_any_image() {
@@ -3145,6 +3152,13 @@ mod scripted {
         w.doc(unstaged, false, ACCOUNT, vec![run(D, 1, 11)]);
         w.doc(of_z_draft, false, ACCOUNT, vec![run(Z, 1, 5)]);
         w.staged(of_z_draft, &format!("{Z}.1"), 5);
+        // A second draft of the merger's staged from `D.1`, " sat" removed,
+        // and the agent space's fork of `D.1` that did the same: a
+        // sub-account's document, another account's.
+        let (second, agents) = ("1.0.1.0.69", "1.0.1.1.0.70");
+        w.doc(second, false, ACCOUNT, vec![run(D, 1, 7)]);
+        w.staged(second, &format!("{D}.1"), 11);
+        w.fork(agents, "1.0.1.1", &format!("{D}.1"), vec![run(D, 1, 7)]);
         let (dialer, board, _) = open(w);
         let with =
             |sides: Vec<Side>, base: Option<Address>| Inputs { sides, base, ..race_inputs() };
@@ -3214,6 +3228,30 @@ mod scripted {
             "the trunk's metadata, then the draft's for its base at the one position, and nothing after"
         );
         refuses(draft(of_z_draft), None, Refusal::BaseUnknown(draft(of_z_draft)));
+        // A FORK is another account's document (skep #1107): the merger's
+        // own draft `S` named as a fork refuses `ForkOfOwner` after the
+        // trunk's metadata alone, and so does a second draft of the owner's
+        // named as a fork beside the draft side, which `TwoDrafts` would
+        // otherwise never see; a fork in `D`'s own tree refuses
+        // `BaseUnknown` with no read at all; the agent space's fork, a
+        // sub-account's, composes.
+        refuses(fork(S), None, Refusal::ForkOfOwner { fork: a(S) });
+        assert_eq!(dialer.ops(), ["doc_metadata"], "the trunk's metadata, and nothing after");
+        let beside = vec![draft(S), fork(second)];
+        assert_eq!(
+            compose(&board, Some(&token()), &with(beside, None)),
+            Err(Refusal::ForkOfOwner { fork: a(second) })
+        );
+        for in_tree in [D.to_string(), format!("{D}.1"), format!("{D}.1.1"), format!("{D}.1.0.1.3")] {
+            refuses(fork(&in_tree), None, Refusal::BaseUnknown(fork(&in_tree)));
+            assert!(dialer.ops().is_empty(), "no read: {:?}", dialer.ops());
+        }
+        let theirs = compose(&board, Some(&token()), &with(vec![fork(agents)], None))
+            .expect("a sub-account's fork composes");
+        assert_eq!(m_runs(&theirs), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)], "the big cat");
+        assert_eq!(theirs.key.base, a(&format!("{D}.1")), "the fork's served source");
+        let said = Refusal::ForkOfOwner { fork: a(S) }.to_string();
+        assert!(said.contains("not another account's fork") && said.contains("as the draft side"), "{said}");
         let two = vec![
             Side::Draft { at: a(S), position: None },
             Side::Draft { at: a("1.0.1.0.67"), position: None },
@@ -5416,42 +5454,56 @@ mod scripted {
     /// composed on another head than its source as `fork_base_moved`,
     /// refused by name with the source, the head and the way out, nothing
     /// written; a fork whose source IS the head is admitted, gaining no base
-    /// and no marker.
+    /// and no marker. The forks are the merger's, landed into by their
+    /// owner, and the trunk `T` another account's: a fork is another
+    /// account's document, and one of the trunk owner's own account is
+    /// refused `ForkOfOwner` (skep #1107).
     #[test]
     fn a_fork_is_refused_fork_base_moved_and_admitted_where_its_source_is_the_head() {
-        let (moved, fresh) = ("1.0.1.0.69", "1.0.1.0.70");
-        let mut w = World::race();
-        // A fork of version 1 that removed " sat", and a fork of version 2
-        // that did the same.
-        w.fork(moved, ACCOUNT, &format!("{D}.1"), vec![run(D, 1, 7)]);
-        w.fork(fresh, ACCOUNT, &format!("{D}.2"), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)]);
+        let (t, moved, fresh) = ("1.0.2.0.64", "1.0.1.0.69", "1.0.1.0.70");
+        let (v1, v2) = (format!("{t}.1"), format!("{t}.2"));
+        // Another account's trunk in the race's shape — the base `T.1` "the
+        // cat sat", the head `T.2` adding "big " at `T·4|T·5` — and the
+        // merger's two forks of it: one of version 1 that removed " sat",
+        // and one of version 2 that did the same.
+        let mut w = World::new();
+        w.text(t, 1, "the cat sat");
+        w.text(t, 12, "big ");
+        let head = vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 7)];
+        w.doc(t, true, "1.0.2", head.clone());
+        w.member(&v1, vec![run(t, 1, 11)], None);
+        w.member(&v2, head, Some(11));
+        w.trunk_head.insert(t.to_string(), v2.clone());
+        w.fork(moved, ACCOUNT, &v1, vec![run(t, 1, 7)]);
+        w.fork(fresh, ACCOUNT, &v2, vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 3)]);
         let (dialer, board, signer) = open(w);
         let session = sign_in(&board, &signer);
-        let merged = compose(&board, Some(session.token()), &Inputs { sides: vec![Side::Fork(a(moved))], ..race_inputs() }).expect("composed");
-        assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)], "the big cat");
+        let inputs = |fork: &str| Inputs { doc: a(t), head: a(&v2), sides: vec![Side::Fork(a(fork))], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs(moved)).expect("composed");
+        assert_eq!(m_runs(&merged), vec![run(t, 1, 4), run(t, 12, 4), run(t, 5, 3)], "the big cat");
         let rows = dialer.world().rows.len();
         dialer.clear();
         assert_eq!(
             land(&board, &merged, draft_landing(&session, &signer, Some(a(moved)))),
-            Err(Refusal::ForkBaseMoved { fork: a(moved), source: a(&format!("{D}.1")), head: a(&format!("{D}.2")) })
+            Err(Refusal::ForkBaseMoved { fork: a(moved), source: a(&v1), head: a(&v2) })
         );
         let frame = &dialer.frames("set_arrangement")[0];
         assert!(frame.get("base").is_none(), "a fork records no base: {frame}");
         assert_eq!(frame["merge"], json!({"sides": []}));
-        assert_eq!(dialer.world().docs.get(moved).unwrap().runs, vec![run(D, 1, 7)], "nothing written");
+        assert_eq!(dialer.world().docs.get(moved).unwrap().runs, vec![run(t, 1, 7)], "nothing written");
         assert_eq!(dialer.world().rows.len(), rows);
         assert!(dialer.frames("insert").is_empty(), "no record");
-        let said = Refusal::ForkBaseMoved { fork: a(moved), source: a(&format!("{D}.1")), head: a(&format!("{D}.2")) }.to_string();
-        assert!(said.contains(&format!("forked from {D}.1")) && said.contains(&format!("fork {D}.2 afresh")), "{said}");
+        let said = Refusal::ForkBaseMoved { fork: a(moved), source: a(&v1), head: a(&v2) }.to_string();
+        assert!(said.contains(&format!("forked from {v1}")) && said.contains(&format!("fork {v2} afresh")), "{said}");
         // The fork of the head: admitted, nothing moved.
-        let merged = compose(&board, Some(session.token()), &Inputs { sides: vec![Side::Fork(a(fresh))], ..race_inputs() }).expect("composed");
-        assert_eq!(merged.key.base, a(&format!("{D}.2")), "the fork's source is the head, so the base is the head");
+        let merged = compose(&board, Some(session.token()), &inputs(fresh)).expect("composed");
+        assert_eq!(merged.key.base, a(&v2), "the fork's source is the head, so the base is the head");
         dialer.clear();
         let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(fresh)))).expect("landed");
         let Landed::Draft { into, head_moved, .. } = &landed else { panic!("{landed:?}") };
         assert_eq!((into.to_string(), head_moved.clone()), (fresh.to_string(), None));
         let frame = &dialer.frames("set_arrangement")[0];
-        assert_eq!(frame["head"], json!({"at": format!("{D}.2"), "extent": "15"}));
+        assert_eq!(frame["head"], json!({"at": v2, "extent": "15"}));
         assert!(frame.get("base").is_none());
         assert_eq!(dialer.world().standing(fresh), (None, None), "no base, no marker gained");
     }

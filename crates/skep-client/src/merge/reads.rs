@@ -74,10 +74,12 @@
 //! (skep #761). The prior records' lookup after the shape's reads reads the
 //! journal, not a draft, and stays at the head. A side
 //! whose base the library cannot read — a member of another document or the
-//! bare document itself, a draft of an account other than the trunk
-//! owner's, a draft the board records no base for, a fork no `version`
-//! minted or one taken from another document (decision 15) — refuses
-//! before the first `image`, as does a side whose line passes a hop the
+//! bare document itself, a fork in the document's own tree, a draft of an
+//! account other than the trunk owner's, a draft the board records no base
+//! for, a fork no `version` minted or one taken from another document
+//! (decision 15) — refuses before the first `image`, as does a fork of the
+//! trunk owner's own account, whose draft is the draft side and never a
+//! fork ([`Refusal::ForkOfOwner`]), a side whose line passes a hop the
 //! board records no parent for, and a side begun before the document's
 //! first version where the board serves no `own_count`, its base an
 //! arrangement this board does not count ([`Refusal::BareSource`]); a side
@@ -230,6 +232,15 @@ pub enum Side {
     },
     /// A cross-owner fork of the document (§1.2 shape (4), case (j)).
     ///
+    /// It is another account's document, whose words the merge keeps as
+    /// windows onto it. One of the trunk owner's own account is refused
+    /// [`Refusal::ForkOfOwner`] before any `image`: the owner's draft is the
+    /// [`Side::Draft`] side, whose words the shot re-mints as the document's
+    /// own. The account is compared exactly, so a sub-account's or an
+    /// agent's document stays a fork. One in the document's own tree — the
+    /// document, a member of its chain or an address within either — is
+    /// refused [`Refusal::BaseUnknown`] before any read.
+    ///
     /// Its anchor is the source the board serves for it — the `source`
     /// member of its `doc_metadata`, the version member or the bare
     /// document the fork was born sharing — and the merge's base is derived
@@ -289,7 +300,7 @@ pub enum Role {
     Alternative,
     /// A draft of the trunk owner's account.
     Draft,
-    /// A cross-owner fork.
+    /// A cross-owner fork, of an account other than the trunk owner's.
     Fork,
 }
 
@@ -402,12 +413,28 @@ pub enum Refusal {
     /// A side whose base the library cannot read, refused before any `image`.
     ///
     /// It is a member of another document, the bare document itself or an
-    /// address within a member, a draft of an account other than the trunk
-    /// owner's, a draft the board records no base for — never staged, or
-    /// minted by `fork` or `create_new_document` — or whose recorded base
-    /// lies in another document, or a fork no `version` minted or one taken
-    /// from another document (decision 15; no interim).
+    /// address within a member, a fork in the document's own tree — the
+    /// document, a member of its chain or an address within either — a
+    /// draft of an account other than the trunk owner's, a draft the board
+    /// records no base for — never staged, or minted by `fork` or
+    /// `create_new_document` — or whose recorded base lies in another
+    /// document, or a fork no `version` minted or one taken from another
+    /// document (decision 15; no interim).
     BaseUnknown(Side),
+    /// A fork side that lies in the trunk owner's own account.
+    ///
+    /// A fork is another account's document (§1.2 shape (4), case (j)),
+    /// its words kept as windows onto it; the owner's own draft is the
+    /// draft side (shape (2)), whose words the shot re-mints as the
+    /// document's own. So a document of the owner's account named as a fork
+    /// — a draft the owner staged from a version, its `source` in the chain
+    /// — is refused after the trunk's metadata and before any other read,
+    /// to be named as the draft side instead. The account is compared
+    /// exactly: a sub-account's or an agent's document is another account's.
+    ForkOfOwner {
+        /// The fork side's address.
+        fork: Address,
+    },
     /// A side begun before the document's first version whose base cannot
     /// be read, refused before any `image`.
     ///
@@ -825,7 +852,8 @@ impl From<Halt> for Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Refusal::BaseUnknown(side) => write!(f, "the base of the side {} cannot be read: a side is a version of the document, a draft of the document owner's account the board records a base for (one `stage` minted), or a fork of one of the document's versions", side.address()),
+            Refusal::BaseUnknown(side) => write!(f, "the base of the side {} cannot be read: a side is a version of the document, a draft of the document owner's account the board records a base for (one `stage` minted), or another account's fork of one of the document's versions", side.address()),
+            Refusal::ForkOfOwner { fork } => write!(f, "{fork} is of the document owner's own account, not another account's fork: name the owner's draft as the draft side; nothing was merged"),
             Refusal::BareSource { side, source, hop } => {
                 write!(f, "the {} {} ", side.noun(), side.address())?;
                 match hop {
@@ -1797,13 +1825,16 @@ pub(super) struct Readings {
 /// - two drafts, [`Refusal::TwoDrafts`];
 /// - more sides besides the head than [`MAX_SIDES`], faced;
 /// - a member that is no member of `doc`'s chain — of another document, the
-///   bare document itself, an address within a member —
-///   [`Refusal::BaseUnknown`];
+///   bare document itself, an address within a member — and a fork in
+///   `doc`'s own tree — `doc` itself, a member of its chain or an address
+///   within either — [`Refusal::BaseUnknown`];
 /// - the metadata read's refusals — at the named position,
 ///   [`Reader::read`]'s faults of a position included — and an answer
 ///   naming no `as_of`, faced;
-/// - a draft of an account other than the trunk owner's,
-///   [`Refusal::BaseUnknown`];
+/// - the first side, in side order, that is a draft of an account other
+///   than the trunk owner's, [`Refusal::BaseUnknown`], or a fork of the
+///   trunk owner's own account, [`Refusal::ForkOfOwner`] — every side
+///   judged so before any side's own read;
 /// - for each side in order: at a fork or a draft its metadata read's
 ///   refusals at P — [`Reader::read`]'s faults of a position included,
 ///   [`Refusal::HistoryReclaimed`] among them — the side unreadable,
@@ -1858,9 +1889,17 @@ pub(super) fn read_shape(
     };
     for side in sides {
         match side {
-            // A fork's anchor and a draft's are read off the board below,
-            // after the trunk's own metadata.
-            Side::Fork(_) | Side::Draft { .. } => {}
+            // A draft's anchor is read off the board below, after the
+            // trunk's own metadata.
+            Side::Draft { .. } => {}
+            // A fork lies outside the trunk's own tree: `doc` itself, a
+            // member of its chain or an address within either is none. Its
+            // anchor is read off the board below, as a draft's is.
+            Side::Fork(fork) => {
+                if trunk_of(fork).as_ref() == Some(doc) {
+                    return Err(Refusal::BaseUnknown(side.clone()));
+                }
+            }
             Side::Member(m) => {
                 if m == doc || !in_chain(doc, m) {
                     return Err(Refusal::BaseUnknown(side.clone()));
@@ -1884,11 +1923,18 @@ pub(super) fn read_shape(
             .into())
         }
     };
+    // The owner, in side order: a draft side is the trunk owner's account's,
+    // and a fork side another account's — the owner's own draft is the
+    // draft side, its words re-minted, never a fork's windows onto it.
     for side in sides {
-        if let Side::Draft { at, .. } = side {
-            if account_of(at).as_deref() != Some(meta.owner.as_str()) {
+        match side {
+            Side::Draft { at, .. } if account_of(at).as_deref() != Some(meta.owner.as_str()) => {
                 return Err(Refusal::BaseUnknown(side.clone()));
             }
+            Side::Fork(fork) if account_of(fork).as_deref() == Some(meta.owner.as_str()) => {
+                return Err(Refusal::ForkOfOwner { fork: fork.clone() });
+            }
+            Side::Draft { .. } | Side::Fork(_) | Side::Member(_) => {}
         }
     }
     // Each side's line, in side order: its anchor — a fork's the source the
@@ -2407,13 +2453,14 @@ fn compare_parts(
 /// A base named beside a fork side, [`Refusal::ForkBaseNamed`], before any
 /// read — a fork's base is the board's to serve (the fork-source design
 /// record, decision 8); then `read_shape`'s — more than 255 sides besides
-/// the head among them, faced before any read; a hop the board records no
-/// parent for, [`Refusal::HopUnrecorded`]; a named base the sides' recorded
-/// bases do not derive, [`Refusal::DraftBaseDisagrees`] or
-/// [`Refusal::NamedBaseDisagrees`]; a side begun before the document's
-/// first version on a board serving no `own_count`,
-/// [`Refusal::BareSource`] — then the prior records' reads' refusals, which
-/// `record::current` answers.
+/// the head among them, faced before any read; a fork of the trunk owner's
+/// own account, [`Refusal::ForkOfOwner`], after the trunk's metadata alone;
+/// a hop the board records no parent for, [`Refusal::HopUnrecorded`]; a
+/// named base the sides' recorded bases do not derive,
+/// [`Refusal::DraftBaseDisagrees`] or [`Refusal::NamedBaseDisagrees`]; a
+/// side begun before the document's first version on a board serving no
+/// `own_count`, [`Refusal::BareSource`] — then the prior records' reads'
+/// refusals, which `record::current` answers.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {

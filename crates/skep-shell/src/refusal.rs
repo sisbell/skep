@@ -401,7 +401,9 @@ impl Name {
     /// document, a draft of another account's, a draft the board records no
     /// base for or whose base lies in another chain, a fork the board serves
     /// no source for or whose source lies in another chain
-    /// (`skep_client::merge::Refusal::BaseUnknown`); `bare_source` with the
+    /// (`skep_client::merge::Refusal::BaseUnknown`); `fork_of_owner` — a
+    /// fork of the document owner's own account, whose draft is the draft
+    /// side (`Refusal::ForkOfOwner`); `bare_source` with the
     /// `source`, the bare document, and the `hop` on the side's line
     /// published from it where the side's own base or source is not — a
     /// side begun from the document before its first version, while no

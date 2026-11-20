@@ -131,7 +131,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `merge.compose`: the published document's head merged with ONE side —
   a daughter of its chain, a draft of the owner's account whose recorded
   base is a version of `doc`, or another account's fork whose source is
-  one — and the merge landed, at its defaults, as the whole arrangement
+  one, a draft of the owner's account given as `fork` refused
+  `base_unknown` with reason `fork_of_owner` — and the merge landed, at
+  its defaults, as the whole arrangement
   of `into` or of a fresh draft staged from the head, by one write; its
   answer is the gap report, and composing again re-opens the draft,
   reading each gap's state off it, or names the version a merged

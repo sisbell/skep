@@ -932,19 +932,22 @@ pub enum Verdict {
 /// names, which answer [`Verdict::Unreadable`]; a record whose base is not
 /// the one the sides' recorded bases derive, [`Refusal::NamedBaseDisagrees`]
 /// — beside a draft side [`Refusal::DraftBaseDisagrees`] — never verified
-/// against the base it names; a position the record names
-/// past the board's head or inside one commit, [`Refusal::BeyondHead`] or
-/// [`Refusal::NotAPosition`] naming the draft as the record's — the record
-/// was not written against this board's history as it stands; a record
-/// with no head side or with `landed` none is faced — there is nothing to
-/// verify against — and so is one naming more sides besides the head than
-/// a merge numbers, before any read; a client join the oracle disagrees
-/// with is this library's own fault, faced; a landed member with no
-/// `placed` term is faced; the landed document's reads' refusals but
-/// `withheld`, `doc_not_registered` and a reclaimed landing position, which
-/// answer [`Verdict::Unreadable`]; an `image` run that is no content
-/// I-address. The death signal under the token at any read is
-/// [`Refusal::SessionEnded`], the verification made again on a new session.
+/// against the base it names; a record whose fork side is of the trunk
+/// owner's own account, [`Refusal::ForkOfOwner`] — the owner's draft is the
+/// draft side, and no composition names it as a fork — never verified as a
+/// fork's merge; a position the record names past the board's head or
+/// inside one commit, [`Refusal::BeyondHead`] or [`Refusal::NotAPosition`]
+/// naming the draft as the record's — the record was not written against
+/// this board's history as it stands; a record with no head side or with
+/// `landed` none is faced — there is nothing to verify against — and so is
+/// one naming more sides besides the head than a merge numbers, before any
+/// read; a client join the oracle disagrees with is this library's own
+/// fault, faced; a landed member with no `placed` term is faced; the landed
+/// document's reads' refusals but `withheld`, `doc_not_registered` and a
+/// reclaimed landing position, which answer [`Verdict::Unreadable`]; an
+/// `image` run that is no content I-address. The death signal under the
+/// token at any read is [`Refusal::SessionEnded`], the verification made
+/// again on a new session.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
     let head = record.head().ok_or_else(|| {

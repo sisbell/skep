@@ -52,11 +52,14 @@
 //! gap; a fork with no source, or one in another chain, refused
 //! `base_unknown`, and one of the bare document `bare_source` whatever its
 //! account while no version stands, composed over the document once one
-//! does; the refusals of a side's line crossing as typed data naming their
-//! members with no daemon behind the shell; the agent's re-base of its
-//! own fork into a fresh draft of its own, the fork itself as `into`
-//! refused `fork_base_moved` and its landing on the person's trunk refused
-//! `not_owner`; the merged arm
+//! does; the person's own draft named as the fork side refused
+//! `base_unknown` with `reason` `fork_of_owner`, as the fork alone and as
+//! `into` too, nothing written, and landing as the draft side (skep
+//! #1107); the refusals of a side and its line crossing as typed data
+//! naming their members with no daemon behind the shell; the agent's
+//! re-base of its own fork into a fresh draft of its own, the fork itself
+//! as `into` refused `fork_base_moved` and its landing on the person's
+//! trunk refused `not_owner`; the merged arm
 //! naming the member and writing a missing record once; another account's
 //! record of the kind, read as the composition's `prior`, never deciding
 //! where the merge lands — its own draft carrying the merge never
@@ -334,16 +337,17 @@ fn a_published_journal_crosses_as_typed_data_naming_it() {
     shell.shutdown();
 }
 
-/// Checks that the refusals of a side's line of recorded bases cross as
-/// typed data naming their members (skep #1113).
+/// Checks that the refusals of a side and of its line of recorded bases
+/// cross as typed data naming their members (skep #1113, #1107).
 ///
-/// The library's `BareSource` with a `hop` is `base_unknown` with `reason`
-/// `bare_source`, its `side`, its `source` and its `hop`, and with none
-/// carries no `hop`; `HopUnrecorded` is `reason` `hop_unrecorded` with the
-/// `side` and the `hop`; `NamedBaseDisagrees` is `reason` `base_disagrees`
-/// with `named` and `served` and no `side`. The session stands after each
-/// (the mutants that drop the `hop`, or cross either new refusal as a
-/// halt).
+/// The library's `ForkOfOwner` is `base_unknown` with `reason`
+/// `fork_of_owner` and the fork as its `side`; `BareSource` with a `hop` is
+/// `reason` `bare_source`, its `side`, its `source` and its `hop`, and with
+/// none carries no `hop`; `HopUnrecorded` is `reason` `hop_unrecorded` with
+/// the `side` and the `hop`; `NamedBaseDisagrees` is `reason`
+/// `base_disagrees` with `named` and `served` and no `side`. The session
+/// stands after each (the mutants that drop the `side` or the `hop`, or
+/// cross a refusal as a halt).
 #[test]
 fn the_refusals_of_a_sides_line_cross_as_typed_data_naming_their_members() {
     let dir = TempDir::new().unwrap();
@@ -357,6 +361,10 @@ fn the_refusals_of_a_sides_line_cross_as_typed_data_naming_their_members() {
         assert_eq!(crossed.name(), "base_unknown", "{}", crossed.to_value());
         crossed.to_value()
     };
+    assert_eq!(
+        crossed(Library::ForkOfOwner { fork: parse(draft) }),
+        json!({"kind": "shell", "name": "base_unknown", "side": draft, "reason": "fork_of_owner"})
+    );
     let member = Side::Member(parse(daughter));
     assert_eq!(
         crossed(Library::BareSource { side: member.clone(), source: parse(doc), hop: Some(parse(daughter)) }),
@@ -2667,6 +2675,54 @@ fn a_fork_is_composed_or_refused_by_the_source_the_board_serves_for_it() {
         (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
         (Some("landed"), Some("fork"), Some(z.as_str()), Some(z1.as_str())),
         "once Z.1 stands, the fork of Z composes over Z itself: {report}"
+    );
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the person's own draft named as the fork side is refused,
+/// and lands as the draft side, against the daemon (skep #1107).
+///
+/// A draft of the person's staged from E.1 — its `source` E.1, a version
+/// of E — named as `fork` is refused exactly `base_unknown` with `reason`
+/// `fork_of_owner`, the draft its `side`, and so is the same draft named
+/// as the fork and as `into`, which would rewrite the draft in place; the
+/// board's position is unmoved by either and the draft's words stand.
+/// Named as `draft`, it composes over E.1 with the head E.2 and lands, its
+/// `form` `draft` (the mutant that drops the library's owner test at the
+/// fork composes it as a fork, its words windows onto the person's own
+/// private draft).
+#[test]
+fn the_persons_own_draft_named_as_a_fork_is_refused_and_lands_as_the_draft_side() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let own = g.staged(&f.e1, "and ");
+    let meta = g.op(frames::doc_metadata(&own));
+    assert_eq!(
+        (meta["owner"].as_str(), meta["source"].as_str(), meta["published"].as_bool()),
+        (Some("1.0.1"), Some(f.e1.as_str()), Some(false)),
+        "the premise — the person's own private draft, its source E.1: {meta}"
+    );
+    let words = g.text(&own, 11);
+    assert_eq!(words, "and the fox", "the premise: the draft's words");
+    let fork_of_owner = json!({"kind": "shell", "name": "base_unknown", "side": own, "reason": "fork_of_owner"});
+    for args in [
+        json!({"session": g.session, "doc": f.edition, "fork": own}),
+        json!({"session": g.session, "doc": f.edition, "fork": own, "into": own}),
+    ] {
+        let before = g.position();
+        let refused = g.call("merge.compose", args.clone()).unwrap_err().to_value();
+        assert_eq!(refused, fork_of_owner, "{args}");
+        assert_eq!(g.position(), before, "nothing written: {args}");
+    }
+    assert_eq!(g.text(&own, 11), words, "the draft's words stand");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": own})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(
+        (report["outcome"].as_str(), report["form"].as_str(), report["base"].as_str(), report["head"].as_str()),
+        (Some("landed"), Some("draft"), Some(f.e1.as_str()), Some(f.e2.as_str())),
+        "named as the draft side, it lands: {report}"
     );
     g.shell.shutdown();
     sd.shutdown();

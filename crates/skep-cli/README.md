@@ -17,13 +17,15 @@ composition refused with nothing published), `--into` lands it in a draft, the r
 in a private document
 — a published `--journal` said by the composition's talk and refused
 before any write, exit 1 — a daughter is reported and never retried,
-a fork of the document (`--fork`) is merged from the source the board
+another account's fork of the document (`--fork`) is merged from the source the board
 serves for it, every side's base derived up the bases the board recorded
 and never from an address — a side begun from the bare document before its
 first version merged over the document's arrangement from before that
 version, the report's `base` the document itself — and a side whose base
 the board does not serve — a draft of another account, a line through a
-member the board records no base for — is refused with the reason — and `share`, over the
+member the board records no base for — is refused with the reason, as is a
+`--fork` of the document owner's own account (`fork_of_owner`: the owner's
+draft goes as `--draft`) — and `share`, over the
 library's `share` module: a draft (`--doc`) or the caller's whole account
 (`--whole-account`, every draft under it, those written later included)
 shared with ONE account (`--to`); a draft PRIVASHED (`--privash`, Nelson's

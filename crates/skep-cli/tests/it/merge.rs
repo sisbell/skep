@@ -27,7 +27,9 @@
 //! board serves for it and published — and a fork of the bare document,
 //! taken before its first version, composed once a version stands over the
 //! document as it stood before it, its `base` the document itself, nothing
-//! written; and `--draft` WITHOUT `--base` — a draft `stage`
+//! written — and `--fork` naming the owner's own draft refused
+//! `fork_of_owner`, exit 1, nothing written, that draft composing as
+//! `--draft`; and `--draft` WITHOUT `--base` — a draft `stage`
 //! minted off the base version merged over the base the board records for
 //! it, a `--base` that agrees taken, and one the board's record does not
 //! derive refused by name, exit 1, nothing on stdout; and `--draft` WITH
@@ -832,6 +834,49 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
     assert!(r.err.contains(&format!("composed over the base {d2}: ")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// `--fork` NAMING THE OWNER's OWN DRAFT IS REFUSED (skep #1107): a fork is
+/// another account's document, so a draft of the document owner's account —
+/// `stage` minted off the base version `D.1`, its `source` `D.1` — given as
+/// `--fork` is refused by name, `fork_of_owner`, exit 1, nothing on stdout,
+/// nothing written, the refusal saying to name the owner's draft as the
+/// draft side; given as `--draft`, the same draft composes over `D.1`.
+#[test]
+fn the_owners_own_draft_given_as_a_fork_is_refused_and_composes_as_a_draft() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, _daughter) = rig.race(&session);
+    let staged = rig.stage(&base);
+    let meta = rig.read(&token, &frames::doc_metadata(&staged.to_string()));
+    assert_eq!(
+        (meta["source"].as_str(), meta["owner"].as_str()),
+        (Some(base.to_string().as_str()), Some(ACCOUNT)),
+        "the premise — the owner's own draft, its source D.1: {meta}"
+    );
+    let (d_s, staged_s) = (d.to_string(), staged.to_string());
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--fork", &staged_s, "--kind", &kind]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(
+        r.err.contains(&format!("the board refused: fork_of_owner:{staged} is of the document owner's own account, not another account's fork: name the owner's draft as the draft side; nothing was merged")),
+        "{}",
+        r.err
+    );
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    let r = rig.merge(&["--doc", &d_s, "--draft", &staged_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!(
+        (v["base"].as_str(), v["head"].as_str(), v["sides"][1]["role"].as_str()),
+        (Some(base.to_string().as_str()), Some(head.to_string().as_str()), Some("draft")),
+        "{v}"
+    );
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "composing writes nothing");
     session.close().expect("close");
 }
 

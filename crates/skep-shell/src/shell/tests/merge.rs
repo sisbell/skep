@@ -21,7 +21,15 @@
 //! that no longer carries its merge — another device's landing in it, under
 //! the page's panel or the row's own, the same side marked on a newer head,
 //! or a withdrawal — refused `no_merge` naming the draft, nothing sent and
-//! the composition dropped (skep #992); the
+//! the composition dropped (skep #992); an undo over a draft whose latest
+//! landing is another merge — another device's landing, the same side
+//! marked on a newer head, or the device's landing found by the latest
+//! landing row of a draft with no recorded base — refused `no_merge` naming
+//! the draft, nothing sent and the composition dropped, and over a
+//! withdrawn draft answered by the library, the composition standing for
+//! the undo once the merge is put back; the undo of its own landing in a
+//! draft with no recorded base and in a fork its owner landed in itself,
+//! whose marker names no side (skep #1050); the
 //! landing, the undo, the withdrawal and a compose into the draft refused
 //! `held_lines` over the draft's held lines, a burst held behind them, and
 //! the undo going out once the run is dropped; the rows refused `stopped`
@@ -1013,6 +1021,185 @@ fn a_landing_over_a_draft_no_longer_carrying_its_merge_is_refused_naming_the_dra
     cell(SinceTheCompose::LandedUnderThePagesPanel);
     cell(SinceTheCompose::MarkedOnANewerHead);
     cell(SinceTheCompose::Withdrawn);
+}
+
+/// Checks that an undo over a draft whose latest landing is another merge
+/// is refused `no_merge` naming the draft (skep #1050).
+///
+/// Four cells against the daemon. E.1.2 is published and E.1.1's merge is
+/// composed into a draft here; then another hand acts on it. In L, staged from
+/// E.2, a second device lands E.1.2's merge, or E.3 is published and E.1.1's
+/// merge on E.3 marked in L by hand: `merge.undo` is refused exactly `no_merge`
+/// naming L, the board's position unmoved and L's marker as the other hand left
+/// it, and the composition is gone, the next undo answering `no_merge` naming
+/// the session. Or the device withdraws L's merge: the undo goes to the
+/// library, `nothing_to_undo` with `why` `taken_back`, nothing sent, and the
+/// composition stands, so once the device puts the merge back the undo lands, L
+/// as staged. In X, a draft never staged, which the board records no base for
+/// and so carries no marker, the device lands E.1.2's merge: the undo is
+/// refused `no_merge` naming X by X's latest landing row, nothing sent and X's
+/// words standing (the mutants that send the undo to the library unread, which
+/// takes the other hand's landing back; that test the side alone and take back
+/// the merge on E.3; that refuse a draft with a base and no marker, or drop the
+/// composition there; that keep the composition at the refusal; and that test
+/// the marker alone, or X's first landing row, and take back the device's
+/// landing in X).
+#[test]
+fn an_undo_over_a_draft_whose_latest_landing_is_another_merge_is_refused_naming_the_draft() {
+    let cell = |since: SinceTheCompose| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let e12 = another_daughter(&g, &f, " later");
+        let l = g.addr(frames::stage(&f.e2, None));
+        merged_into(&g, &f, &f.e11, &l);
+        // The device that withdrew L's merge, kept to put it back, and the
+        // withdrawal's position.
+        let withdrawn = match since {
+            // An undo reads no panel, so the panel's cell is the landing's alone.
+            SinceTheCompose::Landed | SinceTheCompose::LandedUnderThePagesPanel => {
+                let second = second_device(&dir, &sd);
+                let landed = second.call("merge.compose", json!({"session": second.session, "doc": f.edition, "alternative": e12, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+                assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(l.as_str())), "the premise: the device's landing in L: {landed}");
+                second.shell.shutdown();
+                assert_eq!(g.op(frames::doc_metadata(&l))["merge"]["sides"], json!([e12]), "the premise: L carries E.1.2's merge");
+                None
+            }
+            SinceTheCompose::MarkedOnANewerHead => {
+                let e3 = the_next_version(&g, &f);
+                let entry = g.shell.sessions.get(&g.session).unwrap();
+                let a = |s: &str| parse_address(s).unwrap();
+                let inputs = Inputs { doc: a(&f.edition), head: a(&e3), base: None, sides: vec![Side::Member(a(&f.e11))], options: skep_client::merge::Options::default(), kind: a(KIND) };
+                let merged = skep_client::merge::compose(&entry.board, Some(&entry.token), &inputs).unwrap_or_else(|r| panic!("{r:?}"));
+                mark(&g, &bare(&g, 1), &l, &merged, &f.e11);
+                let marker = g.op(frames::doc_metadata(&l))["merge"].clone();
+                assert_eq!((marker["sides"].clone(), marker["head"].as_str()), (json!([f.e11]), Some(e3.as_str())), "the premise: L carries E.1.1's merge on E.3: {marker}");
+                None
+            }
+            SinceTheCompose::Withdrawn => {
+                let second = second_device(&dir, &sd);
+                let withdrawn = second.call("merge.withdraw", json!({"session": second.session, "draft": l})).unwrap_or_else(|r| panic!("{r}"));
+                assert!(g.op(frames::doc_metadata(&l))["merge"].is_null(), "the premise: L carries no merge");
+                Some((second, withdrawn["position"].clone()))
+            }
+        };
+        let marker = g.op(frames::doc_metadata(&l))["merge"].clone();
+        let before = g.position();
+        match withdrawn {
+            None => {
+                let refused = g.call("merge.undo", json!({"session": g.session})).unwrap_err().to_value();
+                assert_eq!(refused, json!({"kind": "shell", "name": "no_merge", "draft": l}), "{since:?}: {refused}");
+                assert_eq!(g.position(), before, "{since:?}: nothing sent");
+                assert_eq!(g.op(frames::doc_metadata(&l))["merge"], marker, "{since:?}: L's marker as the other hand left it");
+                assert_no_merge(&g, &g.session);
+            }
+            Some((second, withdrawal)) => {
+                let refused = g.call("merge.undo", json!({"session": g.session})).unwrap_err();
+                assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("nothing_to_undo", Some("taken_back")), "the library's answer: {refused}");
+                assert_eq!(g.position(), before, "nothing sent");
+                second.call("merge.undo", json!({"session": second.session, "draft": l, "withdrawal": withdrawal})).unwrap_or_else(|r| panic!("{r}"));
+                second.shell.shutdown();
+                let (undone, marker) = undo_once(&g, &g.session);
+                assert_eq!(
+                    (undone["draft"].as_str(), undone["restored"].clone(), marker),
+                    (Some(l.as_str()), json!({"base": f.e2, "extent": 13}), None),
+                    "the composition stood, and its landing is taken back: {undone}"
+                );
+                assert_eq!(g.text(&l, 20), "the fox jumps", "L as staged");
+            }
+        }
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell(SinceTheCompose::Landed);
+    cell(SinceTheCompose::MarkedOnANewerHead);
+    cell(SinceTheCompose::Withdrawn);
+    // X, never staged: its latest landing row is the device's.
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let e12 = another_daughter(&g, &f, " later");
+    let x = g.draft("the hen");
+    merged_into(&g, &f, &f.e11, &x);
+    let second = second_device(&dir, &sd);
+    let landed = second.call("merge.compose", json!({"session": second.session, "doc": f.edition, "alternative": e12, "into": x})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(x.as_str())), "the premise: the device's landing in X: {landed}");
+    second.shell.shutdown();
+    let meta = g.op(frames::doc_metadata(&x));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "the premise: X records no base and carries no marker: {meta}");
+    let words = g.text(&x, 20);
+    let before = g.position();
+    let refused = g.call("merge.undo", json!({"session": g.session})).unwrap_err().to_value();
+    assert_eq!(refused, json!({"kind": "shell", "name": "no_merge", "draft": x}), "by X's latest landing row: {refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    assert_eq!(g.text(&x, 20), words, "X's words stand");
+    assert_no_merge(&g, &g.session);
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that an undo takes back its own landing in a draft the board
+/// records no base for, and in a fork its owner landed in itself, against
+/// the daemon (skep #1050).
+///
+/// X, a draft never staged, takes E.1.1's merge, which leaves no marker on a
+/// draft with no recorded base: `merge.undo` finds the landing by X's latest
+/// landing row and lands, `restored` and `marker` null, X holding "the hen"
+/// again by one arrangement row naming no base and no merge. The agent stages S
+/// from E.1, writes " quietly" and lands the merge with E.2 in S itself, whose
+/// marker names no side, a landing marking every side but its draft:
+/// `merge.land` goes on to the shot, no window asked of S's own words, which
+/// the board refuses `not_owner`, nothing published, and `merge.undo` lands,
+/// S's words, base and marker as they stood before the landing (the mutants
+/// that refuse every undo on a draft with no base, and that read a marker
+/// naming no side as no landing of the fork's, which refuse S's landing
+/// `no_merge` and drop its composition).
+#[test]
+fn an_undo_takes_back_its_own_landing_in_a_draft_with_no_base_and_in_a_fork_landed_in_itself() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    // A draft never staged: no base recorded, so no marker.
+    let x = g.draft("the hen");
+    merged_into(&g, &f, &f.e11, &x);
+    let meta = g.op(frames::doc_metadata(&x));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "the premise: X records no base and carries no marker: {meta}");
+    let since = g.position();
+    let (undone, marker) = undo_once(&g, &g.session);
+    assert_eq!((undone["draft"].as_str(), undone["restored"].clone(), marker), (Some(x.as_str()), Value::Null, None), "{undone}");
+    assert_eq!(g.text(&x, 20), "the hen", "X as it stood before the landing");
+    assert_eq!(arrangement_rows(&g, &x, since), [(false, false)], "one arrangement row, no base and no merge");
+    // The agent's staged fork, landed in itself.
+    let agent = agent_seat(&dir, &sd, &g);
+    let stage = agent.op(frames::stage(&f.e1, None));
+    let s = stage["addr"].as_str().expect("an ack_addr").to_string();
+    agent.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": stage["at"]}));
+    let landed = agent.call("merge.compose", json!({"session": agent.session, "doc": f.edition, "fork": s, "into": s})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(s.as_str())), "{landed}");
+    let meta = agent.op(frames::doc_metadata(&s));
+    assert_eq!(
+        (meta["base"].as_str(), meta["merge"]["sides"].clone(), meta["merge"]["head"].as_str()),
+        (Some(f.e2.as_str()), json!([]), Some(f.e2.as_str())),
+        "the premise: S marked, naming no side: {meta}"
+    );
+    // The landing on the person's trunk: S's words are the draft's own, no
+    // window asked, and the shot reaches the board.
+    let before = g.position();
+    let refused = agent.call("merge.land", json!({"session": agent.session})).unwrap_or_else(|r| panic!("the fork's landing reaches the shot: {r}"));
+    crate::shapes::assert_declared("PublicationRefused", &refused);
+    assert_eq!((refused["outcome"].as_str(), refused["arm"].as_str()), (Some("refused"), Some("not_owner")), "{refused}");
+    assert_eq!(g.position(), before, "nothing published");
+    let (undone, marker) = undo_once(&agent, &agent.session);
+    assert_eq!((undone["draft"].as_str(), undone["restored"].clone(), marker), (Some(s.as_str()), json!({"base": f.e1, "extent": 7}), None), "{undone}");
+    assert_eq!(agent.text(&s, 16), "the fox quietly", "S as it stood before the landing");
+    let meta = agent.op(frames::doc_metadata(&s));
+    assert_eq!((meta["base"].as_str(), &meta["merge"]), (Some(f.e1.as_str()), &Value::Null), "S's base and marker as they stood: {meta}");
+    agent.shell.shutdown();
+    g.shell.shutdown();
+    sd.shutdown();
 }
 
 /// Checks that the landing, the undo, the withdrawal and a compose into the

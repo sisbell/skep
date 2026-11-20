@@ -125,8 +125,9 @@
 //! landing goes on only over a draft that still carries the composition's
 //! merge (skep #992): the draft's marker — read past that refusal where the
 //! page's panel stands, by the open where the row opens its own — must name
-//! the composition's side and its head (`Composition::marks`) before any
-//! panel is keyed on it. A draft carrying another merge — another hand's
+//! the composition's side, or no side where a fork landed in itself, and
+//! its head (`Composition::marks`) before any panel is keyed on it. A draft
+//! carrying another merge — another hand's
 //! landing since the compose, on another device or by `skep merge`, or the
 //! same side composed on another head — or carrying none, a withdrawal
 //! since, is refused `no_merge` naming the draft: the page's panel, standing
@@ -174,8 +175,17 @@
 //! stands, the marker the draft carried before the landing put back as it
 //! stood and answered as `marker` (skep #964), and the composition a later
 //! landing set aside for that marker standing again, so the next
-//! `merge.undo` takes that landing back (skep #981). At the editor it is
-//! typed against THE EDITOR's OWN LAST ACK on the draft, as every burst is
+//! `merge.undo` takes that landing back (skep #981). It takes back that
+//! landing alone (skep #1050): the library's undo takes back the draft's
+//! latest landing — the one its marker names where the board records a
+//! base for the draft, else its latest `set_arrangement` row carrying a
+//! `merge` — so that landing is read first, after the door, and must
+//! mark the composition's merge (`Composition::marks`). Another hand's
+//! landing since, on another device or by `skep merge`, or the same side
+//! marked on another head, is refused `no_merge` naming the draft, the
+//! composition dropped and nothing sent; a draft carrying no landing
+//! goes to the library, which answers it. At the editor it is typed
+//! against THE EDITOR's OWN LAST ACK on the draft, as every burst is
 //! typed: the position of the principal's latest arrangement write on it
 //! that this shell acknowledged, a burst's or a `set_arrangement`'s, never
 //! a link's (`Holds::last_arranged`), or the landing's position — or the
@@ -213,12 +223,15 @@
 //! dying with it, dropped by the bus's watcher at `session-died` as the
 //! panels are, saying nothing: a composition's state crosses in its calls'
 //! answers alone, and the contract names no event for the family. `land`
-//! and `undo` with nothing standing answer `no_merge` naming the session, and
+//! and `undo` with nothing standing answer `no_merge` naming the session;
 //! `land` over a draft that no longer carries the standing composition's
-//! merge drops it, answering `no_merge` naming the draft (**`merge.land`**).
+//! merge, and `undo` over one whose latest landing is another merge, drop
+//! it, answering `no_merge` naming the draft (**`merge.land`**,
+//! **`merge.undo`**; skep #992, #1050).
 //! A landing into the draft the standing composition stands in, over that
 //! composition's marker as the compose read it there — its side among the
-//! marker's sides and its head the marker's — sets the composition aside by
+//! marker's sides, or no side where a fork landed in itself, and its head
+//! the marker's — sets the composition aside by
 //! the marker's `at`, and the undo that puts that marker back stands it
 //! again: while the session lasts, undo after undo takes the draft's merges
 //! back a landing at a time (skep #981). Over any other marker — another
@@ -407,12 +420,17 @@ impl Composition {
     /// Returns whether `marker`, read on `draft`, marks this merge.
     ///
     /// It does where `draft` is the one the composition stands in and the
-    /// marker names its side and its head: the test by which `merge.land`
-    /// lands only over a draft that still carries this merge
-    /// (`Shell::carried`; skep #992), and by which a later landing in the
-    /// draft sets this composition aside (`Merges::stand_over`).
+    /// marker names its side and its head — no side where the side is the
+    /// draft itself, a fork landed in itself, since a landing marks every
+    /// side but the draft it lands in. It is the test by which
+    /// `merge.land` lands only over a draft that still carries this merge
+    /// (`Shell::carried`; skep #992), by which `merge.undo` takes back only
+    /// a landing of this merge (skep #1050), and by which a later landing in
+    /// the draft sets this composition aside (`Merges::stand_over`).
     fn marks(&self, draft: &Address, marker: &MergeMarker) -> bool {
-        self.into == *draft && marker.sides.contains(&self.form.side().to_string()) && marker.head == self.merged.inputs.head.to_string()
+        let side = self.form.side();
+        let named = if side == draft { marker.sides.is_empty() } else { marker.sides.contains(&side.to_string()) };
+        self.into == *draft && named && marker.head == self.merged.inputs.head.to_string()
     }
 }
 
@@ -801,6 +819,61 @@ impl Shell {
         }
     }
 
+    /// Returns the latest landing on `draft` by its feed rows, as a marker.
+    ///
+    /// It is the landing `skep_client::merge::undo` takes back on a draft
+    /// the board records no base for, which carries no marker (wire.md
+    /// §Arrangement, THE FORK GATE): the last `set_arrangement` row whose
+    /// `merge` is an object, walked from the start of the drafts supplement
+    /// under the draft as the library walks it — page after page to the
+    /// head, a page past the budget re-asked at the limit that fits, a
+    /// reclaimed floor walked on from just below it — answered as its sides,
+    /// its head and its position (wire.md §The change feed). A row naming no
+    /// sides or no head answers neither, which marks no merge. `None` where
+    /// no such row stands.
+    ///
+    /// # Errors
+    ///
+    /// The feed's halts; `session_died` where the walk met the death signal;
+    /// a halt's face for an answer this shell does not read.
+    fn latest_landing(&self, session: &SessionEntry, draft: &Address) -> Result<Option<MergeMarker>, Refusal> {
+        let text = draft.to_string();
+        let (mut since, mut limit, mut latest) = (0, None, None);
+        loop {
+            match session.board.changes(Some(&session.token), &ChangesQuery { since, under: Some(&text), drafts: true, limit })? {
+                ChangesAnswer::Page(page) => {
+                    for row in page.changes.iter().filter(|r| r["op"] == "set_arrangement" && r["merge"].is_object()) {
+                        let Some(at) = row["at"].as_u64() else { continue };
+                        let (sides, head) = match (row["merge"]["sides"].as_array(), row["merge"]["head"].as_str()) {
+                            (Some(sides), Some(head)) => (sides.iter().filter_map(Value::as_str).map(str::to_string).collect(), head.to_string()),
+                            _ => (Vec::new(), String::new()),
+                        };
+                        latest = Some(MergeMarker { sides, head, head_copied: None, at: Some(at) });
+                    }
+                    if !page.more {
+                        return Ok(latest);
+                    }
+                    since = page.last;
+                }
+                // The page is `(since, head]`, so the oldest answerable
+                // position is reached from the one below it.
+                ChangesAnswer::HistoryReclaimed { floor } => {
+                    let next = floor.map_or(since + 1, |f| f.saturating_sub(1));
+                    if next <= since {
+                        return Ok(latest);
+                    }
+                    since = next;
+                }
+                ChangesAnswer::TooLarge { fits } => limit = Some(fits),
+                ChangesAnswer::Closed => return Err(self.died(session)),
+                other => {
+                    let state = format!("the board answered `/changes` with {other:?}, which is no answer the shell reads");
+                    return Err(Refusal::from(Halt::face(state, "`skep-client` read a `/changes` answer this shell does not carry", "report it: the shell's merge row is behind the library")));
+                }
+            }
+        }
+    }
+
     /// Maps the merge library's refusal to the shell's (the module doc, **The
     /// refusals**), the session ended where the library answers its end.
     pub(super) fn merge_refusal(&self, session: &SessionEntry, r: lib::Refusal) -> Refusal {
@@ -877,16 +950,19 @@ impl Shell {
 
     /// Returns `marker` where it marks the standing composition's merge.
     ///
-    /// `marker` is the merge marker the draft the composition stands in
-    /// carries, as `merge.land` read it before any panel is keyed on it (the
-    /// module doc, **`merge.land`**; skep #992). It marks the merge where it
-    /// names the composition's side and its head (`Composition::marks`).
+    /// `marker` is read on the draft the composition stands in: its merge
+    /// marker as `merge.land` read it before any panel is keyed on it (the
+    /// module doc, **`merge.land`**; skep #992), or the landing `merge.undo`
+    /// would take back — that marker, or, on a draft the board records no
+    /// base for, its latest landing row (skep #1050; `Shell::latest_landing`).
+    /// It marks the merge where it names the composition's side and its head
+    /// (`Composition::marks`).
     ///
     /// # Errors
     ///
     /// Returns `no_merge` naming the draft where `marker` marks another merge
-    /// or the draft carries none, the composition `key` names taken out: the
-    /// draft no longer carries it.
+    /// or is none, the composition `key` names taken out: the draft no longer
+    /// carries it.
     fn carried<'m>(&self, key: &(String, u64), composition: &Composition, marker: Option<&'m MergeMarker>) -> Result<&'m MergeMarker, Refusal> {
         match marker.filter(|m| composition.marks(&composition.into, m)) {
             Some(marker) => Ok(marker),
@@ -1364,6 +1440,12 @@ impl Shell {
     /// (skep #981). With `{draft, withdrawal}` it is the withdrawal's undo
     /// instead ([`Shell::merge_unwithdraw`]).
     ///
+    /// The undo takes back the composition's own landing alone (skep #1050):
+    /// the landing the library's undo takes back — the draft's marker where
+    /// the board records a base for it, else its latest landing row
+    /// (`Shell::latest_landing`) — is read first and must mark the
+    /// composition's merge (`Composition::marks`).
+    ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `session`, then
@@ -1374,7 +1456,14 @@ impl Shell {
     /// `another_window`, `stopped`, `poisoned` or `halted` naming
     /// `set_arrangement`, `held_lines` naming the draft the composition
     /// landed in and the lines of the principal's standing on it — nothing
-    /// read at any; `store_unreadable`, `no_account`; the library's
+    /// read at any; `store_unreadable`, `no_account`; the draft's
+    /// `doc_metadata` read's — `unreadable` or `no_such_document` naming it,
+    /// the board's verdicts verbatim, `unreachable`, `session_died`, `shape`
+    /// naming `doc_metadata` — and, where the board records no base for it,
+    /// the feed walk's: the feed's halts, `session_died`, a halt's face;
+    /// then `no_merge` naming the draft where the landing the undo would
+    /// take back marks another merge than the composition's, the
+    /// composition dropped and nothing sent (skep #1050); the library's
     /// (`skep_client::merge::undo`): `unreadable`,
     /// `no_such_document`, `not_owner`, `nothing_to_undo` with its reason,
     /// `no_merge` naming the draft, `merge_refused` with `history_reclaimed`,
@@ -1394,6 +1483,20 @@ impl Shell {
         let signed = self.signed(&session, Write::call("merge.undo", "set_arrangement").over([composition.into.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
+        // The composition's own landing alone is taken back (skep #1050):
+        // the one the library's undo takes back — the draft's marker where
+        // the board records a base for it, else its latest landing row —
+        // must mark the composition's merge, else `no_merge` naming the
+        // draft, the composition dropped and nothing sent. A draft carrying
+        // no landing goes to the library, which answers it.
+        let facts = self.draft_facts(&session, &composition.into)?;
+        let latest = match facts.base {
+            Some(_) => facts.marker,
+            None => self.latest_landing(&session, &composition.into)?,
+        };
+        if let Some(latest) = &latest {
+            self.carried(&key, &composition, Some(latest))?;
+        }
         // The editor's own last ack on the draft, an agent's none (P3).
         let own_ack = self.own_ack(&session, &composition.into);
         let out = self.holds.write_out(&session);

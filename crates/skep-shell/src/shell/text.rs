@@ -39,11 +39,12 @@
 //! it settles. The fifth, `text.diff` — what changed in a draft since a
 //! document that holds its content by identity, told by identity, its moved
 //! lines shown as moved and its re-typed ones said, the two images mapped
-//! through the person's correspondence records so words a publication
-//! re-minted pair with what they were (skep #1095) — is the child module
-//! `diffing`'s, over `skep-client`'s plan and mapping and the child `rows`:
-//! it writes nothing, and asks no write door. The four rows that write keep
-//! one order to the first read ([`Shell::text_call`]).
+//! through the correspondence records the publications left, each draft's
+//! read in its owner's account, so words a publication re-minted pair with
+//! what they were (skep #1095) — is the child module `diffing`'s, over
+//! `skep-client`'s plan and mapping and the child `rows`: it writes nothing,
+//! and asks no write door. The four rows that write keep one order to the
+//! first read ([`Shell::text_call`]).
 //!
 //! **The order** ([`Shell::text_replace`], [`Shell::text_call`]). The
 //! members first, each refused in another form before the session is looked
@@ -1340,10 +1341,11 @@ impl Shell {
     /// #1091). The members are read (`diffing::Asked::read`), and the diff
     /// is made as a text call that writes nothing is ([`Shell::text_read`]),
     /// by the child module `diffing`: the two documents imaged, the draft's
-    /// text read, the two images mapped through the person's correspondence
-    /// records ([`Shell::through_records`], under the session the call
-    /// stands under when the mapping runs; skep #1095), the spans the draft
-    /// no longer holds read by identity, and the lines planned and drawn.
+    /// text read, the two images mapped through the correspondence records
+    /// the publications left, each origin's read in its owner's account
+    /// ([`Shell::through_records`], under the session the call stands under
+    /// when the mapping runs; skep #1095), the spans the draft no longer
+    /// holds read by identity, and the lines planned and drawn.
     ///
     /// # Errors
     ///
@@ -1357,11 +1359,11 @@ impl Shell {
     ///    or the shell's refusal of it — a death the call could not follow
     ///    to a re-open among them;
     /// 4. the records' reads' ([`Shell::through_records`]): `unreadable`
-    ///    naming an origin of the person's the board withholds,
-    ///    `no_such_document`, the board's other verdicts verbatim, and
-    ///    `session_died` where a records' read itself met the death signal,
-    ///    answered as it stands; a halt where the board's records map words
-    ///    past the largest ordinal;
+    ///    naming an origin the board answers `withheld`, `no_such_document`
+    ///    one it answers `doc_not_registered`, the board's other verdicts
+    ///    verbatim, and `session_died` where a records' read itself met the
+    ///    death signal, answered as it stands; a halt where the board's
+    ///    records map words past the largest ordinal;
     /// 5. the board's verdict on a read by identity, or the shell's refusal
     ///    of it, as at step 3.
     pub(super) fn text_diff(&self, args: &Value) -> Result<Value, Refusal> {
@@ -1375,17 +1377,19 @@ impl Shell {
         })
     }
 
-    /// Returns `before` and `now` mapped through the correspondence records
-    /// of the account the session `session` acts as: the mapping
-    /// [`Shell::text_diff`] hands its diff.
+    /// Returns `before` and `now` mapped through the publications' records.
     ///
-    /// The session is looked up by the reference the diff stands under when
-    /// the mapping runs ([`Under`]), so a diff whose earlier read was made
-    /// again under the restart arm's re-open reads the records under the
-    /// re-open too. The records are read once over both images, at the head
-    /// (`skep_client::history::records`), and each image is mapped through
-    /// them (`skep_client::history::mapped_image`). A session the board
-    /// named no account maps neither: no origin is the person's.
+    /// It is the mapping [`Shell::text_diff`] hands its diff: the
+    /// correspondence records the publications left, read under the session
+    /// `session`. The session is looked up by the reference the diff stands
+    /// under when the mapping runs ([`Under`]), so a diff whose earlier read
+    /// was made again under the restart arm's re-open reads the records under
+    /// the re-open too. The records are read once over both images, at the
+    /// head, at every origin among their runs, each held to the origin's own
+    /// account — so the words of another account's draft pair across that
+    /// account's publication as the person's own do across theirs
+    /// (`skep_client::history::records`) — and each image is mapped through
+    /// them (`skep_client::history::mapped_image`).
     ///
     /// # Errors
     ///
@@ -1396,8 +1400,7 @@ impl Shell {
     /// the largest ordinal.
     pub(super) fn through_records(&self, session: &str, before: &Image, now: &Image) -> Result<(Image, Image), Refusal> {
         let session = self.session(&Value::from(session))?;
-        let Some(account) = session.facts.account.as_deref() else { return Ok((before.clone(), now.clone())) };
-        let records = history::records(&session.board, &session.token, account, &[before, now]).map_err(|r| self.merge_refusal(&session, r))?;
+        let records = history::records(&session.board, &session.token, &[before, now]).map_err(|r| self.merge_refusal(&session, r))?;
         Ok((history::mapped_image(before, &records)?, history::mapped_image(now, &records)?))
     }
 

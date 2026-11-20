@@ -6,7 +6,10 @@
 //! member's own words written under the member's chain, the cap counted on
 //! the runs the write sends, a record mapping past the range faced, and the
 //! session's end at each of them typed. Beside them, the one records' read
-//! over several images, the diff's.
+//! over several images, the diff's: each origin's records held to its own
+//! account, another account's mapped through its owner's record, a record
+//! homed in a third account never read, and the restore's own records the
+//! person's alone.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -175,28 +178,154 @@ fn a_record_mapping_past_the_largest_ordinal_is_faced_and_maps_nothing() {
     assert!(mapped_image(&image(&[(&s, 1, 4)]), &last).is_ok(), "within the range, mapped");
 }
 
-/// THE RECORDS OF SEVERAL IMAGES, one read: the owned origin's spans of both
-/// images in one four-set query, a span two images hold asked once, the
-/// other account's hit never read, a record kept once; the death signal at
-/// the query and at a link's read is the typed session end (the mutants that
-/// read per image, or keep a span twice, ask another query).
+/// The records of several images are read at once, each span asked once.
+///
+/// Each origin's spans of both images go in one four-set query, in run
+/// order, a span two images hold asked once; a hit homed in another account
+/// than the origin's is never read, one of another type is read and
+/// dropped, and a record is kept once; images holding no run read nothing;
+/// the death signal at the query and at a link's read is the typed session
+/// end (the mutants that read per image, or keep a span twice, ask another
+/// query).
 #[test]
 fn the_records_of_several_images_are_read_at_once_each_span_asked_once() {
     let (s, z) = (format!("{S}.0.1"), format!("{Z}.0.1"));
     let (mark, draft) = (image(&[(&s, 1, 11), (&z, 1, 4)]), image(&[(&s, 1, 11), (&s, 20, 3)]));
     let fake = scripted();
-    let found = records(&fake::board(&fake), &token(), ACCOUNT, &[&mark, &draft]).expect("the records");
+    let found = records(&fake::board(&fake), &token(), &[&mark, &draft]).expect("the records");
     assert_eq!(found, vec![record(S, 1, span(S, 1, 11), span(E, 20, 11))]);
-    assert_eq!(fake.log(), ["POST /op find_links_ftt", "POST /op read_link", "POST /op read_link"], "one query, each owned hit read once");
+    let log = ["POST /op find_links_ftt", "POST /op read_link", "POST /op read_link", "POST /op find_links_ftt", "POST /op read_link"];
+    assert_eq!(fake.log(), log, "one query per origin, each hit of the origin's account read once");
     let reads = served(&fake);
     assert_eq!(reads[0].2["q"]["home"], frames::unit_span(S));
     assert_eq!(reads[0].2["q"]["from"], json!([frames::i_span(&format!("{s}.1"), 11), frames::i_span(&format!("{s}.20"), 3)]), "each span once");
-    assert_eq!(records(&fake::board(&Fake::unread()), &token(), ACCOUNT, &[&image(&[(&z, 1, 4)]), &Image::default()]), Ok(Vec::new()), "no origin of the person's: nothing read");
+    assert_eq!((&reads[3].2["q"]["home"], &reads[3].2["q"]["from"]), (&frames::unit_span(Z), &json!([frames::i_span(&format!("{z}.1"), 4)])), "Z's own query");
+    assert_eq!(reads[4].2["a"], format!("{Z}.0.2.9"), "Z's hit read in Z's account, the person's hits not again");
+    assert_eq!(records(&fake::board(&Fake::unread()), &token(), &[&Image::default(), &Image::default()]), Ok(Vec::new()), "no run: nothing read");
     for n in 1..=2 {
         let dying = dying_at(n);
-        let answer = records(&fake::board(&dying), &token(), ACCOUNT, &[&mark, &draft]);
+        let answer = records(&fake::board(&dying), &token(), &[&mark, &draft]);
         assert!(matches!(&answer, Err(Refusal::SessionEnded(Halt::Halt(face))) if face.act == OnEnd::Rerun.act()), "the death at read {n}: {answer:?}");
     }
+}
+
+/// The edition `Z`'s owner published `Z`'s words into, of `Z`'s account.
+const F: &str = "1.0.2.0.64";
+
+/// Returns the answer to a records' read over `S`, `Z`, `E` and `F`.
+///
+/// Each query is answered by its `home` — `S`'s by `S.0.2.1`, `Z`'s by
+/// `z_hits`, and `E`'s and `F`'s by none, as a board answers a home that
+/// holds no record, or one the reader may not read — and each link is read
+/// as a record: `S`'s of `S`'s first eleven positions as `E`'s twentieth on,
+/// any other of `Z`'s first four as `F`'s thirtieth on. `None` for another
+/// frame.
+fn by_home(req: &Request, z_hits: &[String]) -> Option<Response> {
+    let f = fake::frame(req);
+    match f["op"].as_str()? {
+        "find_links_ftt" => {
+            let home = &f["q"]["home"];
+            let hits = if *home == frames::unit_span(S) {
+                vec![format!("{S}.0.2.1")]
+            } else if *home == frames::unit_span(Z) {
+                z_hits.to_vec()
+            } else {
+                Vec::new()
+            };
+            Some(fake::json(200, json!({"resp": "addrs", "as_of": 20, "addrs": hits})))
+        }
+        "read_link" => {
+            let (from, to, width) = match f["a"].as_str() {
+                Some(a) if a.starts_with(S) => (format!("{S}.0.1.1"), format!("{E}.0.1.20"), 11),
+                _ => (format!("{Z}.0.1.1"), format!("{F}.0.1.30"), 4),
+            };
+            let slots = json!([[frames::i_span(&from, width)], [frames::i_span(&to, width)], frames::unit_span(T_CORRESPONDENCE)]);
+            Some(fake::json(200, json!({"resp": "link_value", "as_of": 20, "at": 15, "link": {"slots": slots}})))
+        }
+        _ => None,
+    }
+}
+
+/// Returns the fake board of [`by_home`], answering no other frame.
+fn homed(z_hits: Vec<String>) -> Arc<Fake> {
+    Fake::new(move |req: &Request| by_home(req, &z_hits).unwrap_or_else(|| panic!("the records' read sent another frame: {}", fake::frame(req))))
+}
+
+/// Returns the homes the records' read queried and the links it read.
+///
+/// Each list is in the order the reads were made.
+fn asked(fake: &Fake) -> (Vec<Value>, Vec<Value>) {
+    let reads = served(fake);
+    let homes = reads.iter().filter(|(_, _, f)| f["op"] == "find_links_ftt").map(|(_, _, f)| f["q"]["home"].clone()).collect();
+    let links = reads.iter().filter(|(_, _, f)| f["op"] == "read_link").map(|(_, _, f)| f["a"].clone()).collect();
+    (homes, links)
+}
+
+/// Another account's words map through its owner's record (skep #1120).
+///
+/// A mark holds the words of the person's draft `S` and of `Z`, a draft of
+/// the account `1.0.2`; each draft was published since, `S`'s words into `E`
+/// and `Z`'s into `F`, so the draft as it stands holds the published words.
+/// Every origin of the two images is queried once, in run order, and `Z`'s
+/// record — homed in `Z`, so held to `Z`'s account, never the person's — is
+/// read and kept beside `S`'s, so the two images map onto one (the mutants
+/// that read the person's origins alone, or hold `Z`'s hits to another
+/// account than `Z`'s, keep `S`'s record alone and leave `Z`'s words
+/// apart).
+#[test]
+fn a_foreign_origins_words_map_through_its_owners_record() {
+    let (s, z, e, f) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"), format!("{F}.0.1"));
+    let (mark, draft) = (image(&[(&s, 1, 11), (&z, 1, 4)]), image(&[(&e, 20, 11), (&f, 30, 4)]));
+    let fake = homed(vec![format!("{Z}.0.2.1")]);
+    let found = records(&fake::board(&fake), &token(), &[&mark, &draft]).expect("the records");
+    assert_eq!(found, vec![record(S, 1, span(S, 1, 11), span(E, 20, 11)), record(Z, 1, span(Z, 1, 4), span(F, 30, 4))], "Z's record kept, held to Z's account");
+    let (homes, links) = asked(&fake);
+    assert_eq!(homes, [S, Z, E, F].map(frames::unit_span), "one query per origin, in run order");
+    assert_eq!(links, [json!(format!("{S}.0.2.1")), json!(format!("{Z}.0.2.1"))], "each kept hit read once");
+    assert_eq!(mapped_image(&mark, &found), Ok(draft.clone()), "the mark maps onto the draft as it stands");
+    assert_eq!(mapped_image(&draft, &found), Ok(draft), "the published words map to themselves");
+}
+
+/// A record not homed in its origin's account is never read.
+///
+/// `Z`'s query answers a link homed in a document of a third account,
+/// `1.0.3`: judged off its address against `Z`'s account, it is never read,
+/// no record of `Z`'s is kept, and `Z`'s run maps to itself (the mutant that
+/// holds each hit to its own home's account reads the link and keeps it).
+#[test]
+fn a_record_not_homed_in_its_origins_account_is_not_kept() {
+    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
+    let mark = image(&[(&s, 1, 11), (&z, 1, 4)]);
+    let fake = homed(vec!["1.0.3.0.5.0.2.1".to_string()]);
+    let found = records(&fake::board(&fake), &token(), &[&mark]).expect("the records");
+    assert_eq!(found, vec![record(S, 1, span(S, 1, 11), span(E, 20, 11))], "S's record alone");
+    assert_eq!(asked(&fake), (vec![frames::unit_span(S), frames::unit_span(Z)], vec![json!(format!("{S}.0.2.1"))]), "the third account's link never read");
+    assert_eq!(mapped_image(&mark, &found), Ok(image(&[(&e, 20, 11), (&z, 1, 4)])), "Z's run as read");
+}
+
+/// The restore maps through the person's own records alone.
+///
+/// A state holding `Z`'s words while `Z`'s record stands reads the records
+/// with one query, homed in the person's `S`, and writes `Z`'s run as the
+/// state held it, never as the words `Z`'s owner published (the mutant that
+/// reads the restore's records at every origin queries `Z` too and writes
+/// `F`'s words).
+#[test]
+fn the_restore_maps_through_the_persons_own_records_alone() {
+    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
+    let state = runs_at(&[(&s, 1, 11), (&z, 1, 4)]);
+    let hits = vec![format!("{Z}.0.2.1")];
+    let fake = Fake::new(move |req: &Request| {
+        by_home(req, &hits).unwrap_or_else(|| match (req.path.as_str(), fake::frame(req)["op"].as_str().unwrap_or("?")) {
+            ("/op", "doc_metadata") => fake::json(200, metadata(false)),
+            ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": "0.15"}]})),
+            ("/op-at", "image") => fake::json(200, state.clone()),
+            other => panic!("the past read sent a frame the fake does not answer: {other:?}"),
+        })
+    });
+    let p = past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    assert_eq!(p.written, image(&[(&e, 20, 11), (&z, 1, 4)]), "Z's words written as the state held them");
+    assert_eq!(asked(&fake), (vec![frames::unit_span(S)], vec![json!(format!("{S}.0.2.1"))]), "one query, homed in the person's S");
 }
 
 // ── the reads and the one write ──────────────────────────────────────────

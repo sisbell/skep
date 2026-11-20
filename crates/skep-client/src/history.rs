@@ -56,20 +56,27 @@
 //!   from the draft, no longer shares the draft's identity; the diff maps
 //!   both images through one read of the records, made after both are read.
 //!   [`records`] is THE RECORDS' read above over every image handed it at
-//!   once: the distinct runs of all of them, as the merge's reads take them
-//!   — exact for every run a record can name, records being homed only in
-//!   private drafts, whose chains carry no member's component — each record
-//!   read once however many images name its span. [`mapped_image`] maps one
-//!   image at its own spelling, each run keyed by its I-address prefix, so a
-//!   run minted under a member's chain is compared as itself: the piece a
-//!   record covers — the first record covering its I-address — becomes the
+//!   once, at *every* distinct origin among their runs — the person's, and
+//!   another account's draft a mark or a copy holds words of — each hit held
+//!   to the account that owns the origin: only that account's own
+//!   publication re-mints the draft's words, and it homes their records in
+//!   the draft (the merge's `owners_records`). The runs are the distinct
+//!   runs of all the images, as the merge's reads take them — exact for
+//!   every run a record can name, records being homed only in private
+//!   drafts, whose chains carry no member's component — and each record is
+//!   read once however many images name its span. An origin the reader may
+//!   not read yields no record, the board answering no link homed where it
+//!   may not read, and its words are compared as read. [`mapped_image`] maps
+//!   one image at its own spelling, each run keyed by its I-address prefix,
+//!   so a run minted under a member's chain is compared as itself: the piece
+//!   a record covers — the first record covering its I-address — becomes the
 //!   span the record's `to` names at the same offset, every sum checked
 //!   (SP-19); the piece no record covers is kept as read; consecutive pieces
 //!   I-adjacent on one chain are one run; and the ordinals are tiled again
 //!   from 1, the extent unchanged. Their cost (SP-23): one four-set read per
-//!   distinct owned origin for each `MAX_WIRE_LIST` of its spans, one
-//!   `read_link` per hit homed in the person's documents, then a walk of
-//!   each run against the records.
+//!   distinct origin for each `MAX_WIRE_LIST` of its spans, one `read_link`
+//!   per hit homed in a document of that origin's own account, then a walk
+//!   of each run against the records.
 //!
 //! **Why the mapping.** The board's twin fence refuses a draft-native run a
 //! record already names `already_published` (wire.md §The publish shot and
@@ -99,7 +106,7 @@ use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
 use crate::merge::reads::{
-    records_of, runs_of, session_ended, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
+    owners_records, records_of, runs_of, session_ended, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
 };
 use crate::merge::undo::{judge, Act};
 use crate::merge::Run;
@@ -306,29 +313,24 @@ pub fn written_runs(image: &Image) -> Result<Vec<Value>, Halt> {
         .collect()
 }
 
-/// Reads the correspondence records of `account`'s own origins among the
-/// runs of `images`, at the head, as `account`'s reader under `token`.
+/// Reads the correspondence records of every origin among `images`' runs.
 ///
-/// It is the module doc's THE RECORDS over every image handed it at once:
-/// the distinct runs of all of them, in order, each record read once
-/// however many images name its span. A caller comparing two images reads
-/// both first and hands both here, so a publication landing between its
-/// reads leaves neither image unmapped.
+/// Each origin's records are held to its owner's own account, read at the
+/// head under `token`. It is the module doc's THE RECORDS AND THE MAPPING
+/// OF IMAGES: the distinct runs of every image handed it at once, in order,
+/// each record read once however many images name its span. A caller
+/// comparing two images reads both first and hands both here, so a
+/// publication landing between its reads leaves neither image unmapped.
 ///
 /// # Errors
 ///
 /// A run whose I-address is no content I-address, the board's fault, faced;
 /// the records' reads' refusals — [`Refusal::Unreadable`] for an origin the
-/// board withholds, [`Refusal::NoSuchDocument`] for one it does not
-/// register, an answer of another shape faced; the death signal under the
-/// token at any read, [`Refusal::SessionEnded`], its face saying to run this
-/// again; the dialer's halts.
-pub fn records(
-    board: &Board,
-    token: &Token,
-    account: &str,
-    images: &[&Image],
-) -> Result<Vec<Record>, Refusal> {
+/// board answers `withheld`, [`Refusal::NoSuchDocument`] for one it answers
+/// `doc_not_registered`, an answer of another shape faced; the death signal
+/// under the token at any read, [`Refusal::SessionEnded`], its face saying
+/// to run this again; the dialer's halts.
+pub fn records(board: &Board, token: &Token, images: &[&Image]) -> Result<Vec<Record>, Refusal> {
     let (mut seen, mut runs) = (HashSet::new(), Vec::new());
     for image in images {
         for run in runs_of(image.runs())? {
@@ -337,7 +339,7 @@ pub fn records(
             }
         }
     }
-    records_of(&Reader::new(board, Some(token), OnEnd::Rerun), account, &runs)
+    owners_records(&Reader::new(board, Some(token), OnEnd::Rerun), &runs)
 }
 
 /// Returns `image` mapped through `records`, as a comparison by identity

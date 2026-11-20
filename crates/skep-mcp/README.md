@@ -103,8 +103,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   since a document that holds its content by identity — a mark, the version
   it was staged from, a document it copied from — told by identity, so a
   block moved shows as moved and text typed again is said re-typed; both
-  texts are mapped through the person's correspondence records first, so
-  words a publication re-minted pair with `since` and only real edits show.
+  texts are mapped first through the correspondence records the
+  publications left, each draft's read in its owner's account — the
+  person's, or another account's whose draft they hold words of — so words
+  a publication re-minted pair with `since` and only real edits show.
   Its result is the shell's answer on one line — the positions shared, the
   bytes new, gone and moved, the lines added, removed and moved, the notes
   — then the hunks, one row a line: each under `@@ -a,b +c,d @@`, ` N`

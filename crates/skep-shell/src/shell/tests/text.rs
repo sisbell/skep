@@ -41,16 +41,18 @@
 //! shell's rows watched, and meddled with at a frame, `Watched`); a diff
 //! across the person's own publication — since a mark made before it, and
 //! of the mark since the draft — every re-minted word paired and an edit
-//! after it told alone, and a publication landing between the diff's
-//! reads; and a diff whose session the board ended, made under the re-open,
-//! its records read there too.
+//! after it told alone; a diff of another account's draft since the
+//! person's mark of it, across that account's own publication; a
+//! publication landing between the diff's reads; and a diff whose session
+//! the board ended, made under the re-open, its records read there too.
 
 use std::cell::Cell;
 
+use skep_client::address::{account_of, first_child};
 use skep_client::board::Image;
 
 use super::super::text::{diff_through, edit_through, mark_through, move_through, Row, Rows};
-use super::publication::{ground, register};
+use super::publication::{agent_seat, ground, register};
 use super::*;
 use crate::sessions::Facts;
 
@@ -990,12 +992,12 @@ fn publish(g: &super::publication::Ground, draft: &str, edition: &str) {
 /// the draft's own. The diff since the mark is `unchanged`, and so is the
 /// mark's since the draft — a draft published since the document compared
 /// with it copied from it — the counts alone too: both images are mapped
-/// through the person's correspondence records, so every re-minted word
-/// pairs with what it was. One word replaced after it is told alone, its
-/// line gone and new, no `retyped` note, `shared` the draft's extent less
-/// the new word's width, the gone word read by identity at the member's
-/// addresses (the mutants that pass the images as read, or map `since`
-/// alone, answer `shared` `"0"`).
+/// through the correspondence records the publication left, so every
+/// re-minted word pairs with what it was. One word replaced after it is
+/// told alone, its line gone and new, no `retyped` note, `shared` the
+/// draft's extent less the new word's width, the gone word read by identity
+/// at the member's addresses (the mutants that pass the images as read, or
+/// map `since` alone, answer `shared` `"0"`).
 #[test]
 fn a_diff_across_the_persons_own_publication_pairs_the_words_the_shot_re_minted() {
     let dir = TempDir::new().unwrap();
@@ -1034,6 +1036,42 @@ fn a_diff_across_the_persons_own_publication_pairs_the_words_the_shot_re_minted(
     );
     let stat = diff(json!({"session": g.session, "doc": draft, "since": mark, "stat": true}));
     assert_eq!((&stat["bytes"], &stat["shared"], stat.get("rows")), (&answer["bytes"], &answer["shared"], None), "{stat}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks a diff across another account's own publication (skep #1120).
+///
+/// The agent — the claim's agent space, an account other than the person's
+/// under the owned-home test — mints a published edition of its own and
+/// stages a draft from it holding [`LINES`]; the person marks the agent's
+/// draft, which the account subtree lets them read, and the agent publishes
+/// it into its edition: the shot re-windows the draft onto the member's
+/// words and homes their records in the draft, the agent's. The person's
+/// diff of the draft since the mark is `unchanged`, the counts alone too:
+/// each origin's records are read in its owner's account (the mutant that
+/// reads the person's own origins alone answers `shared` `"0"`).
+#[test]
+fn a_mark_of_another_accounts_draft_reads_unchanged_after_its_owner_publishes() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let agent = agent_seat(&dir, &sd, &g);
+    let space = first_child("1.0.1");
+    let edition = agent.addr(json!({"op": "create_new_document", "account": space, "published": true}));
+    let draft = agent.staged(&edition, LINES);
+    assert_eq!((account_of(&draft), account_of(&edition)), (Some(space.clone()), Some(space)), "the premise: the agent's own draft and edition");
+    let mark = g.call("text.mark", json!({"session": g.session, "doc": draft})).unwrap_or_else(|r| panic!("{r}"))["mark"].as_str().expect("the mark").to_string();
+    publish(&agent, &draft, &edition);
+    let (now, marked) = (addresses(&g.shell, &g.session, &draft), addresses(&g.shell, &g.session, &mark));
+    assert!(now.iter().all(|a| a.starts_with(&format!("{edition}.0.1."))), "the premise: the draft re-windowed onto the member's words: {now:?}");
+    assert!(marked.iter().all(|a| a.starts_with(&format!("{draft}.0.1."))), "the premise: the mark keeps the draft's own: {marked:?}");
+    let diff = |args: Value| g.call("text.diff", args).unwrap_or_else(|r| panic!("{r}"));
+    let unchanged = diff(json!({"session": g.session, "doc": draft, "since": mark}));
+    crate::shapes::assert_declared("TextDiffUnchanged", &unchanged);
+    assert_eq!((unchanged["outcome"].as_str(), unchanged["since"].as_str()), (Some("unchanged"), Some(mark.as_str())), "{unchanged}");
+    assert_eq!(diff(json!({"session": g.session, "doc": draft, "since": mark, "stat": true}))["outcome"], "unchanged", "the counts mapped too");
+    agent.shell.shutdown();
     g.shell.shutdown();
     sd.shutdown();
 }

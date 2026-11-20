@@ -8,8 +8,10 @@
 //! correspondence records of the person's own origins among a past state's
 //! runs, and [`mapped`], the state mapped through them — what the restore
 //! and the undo send, so words a publication made public since come back as
-//! the published words they became; and [`Refusal`], every refusal a read
-//! or a landing can meet.
+//! the published words they became; the read of every origin's records in
+//! its owner's own account, which a comparison by identity maps both its
+//! texts through (`history::records`); and [`Refusal`], every refusal a
+//! read or a landing can meet.
 //!
 //! The reads, in the record's order (§1.3): the document's metadata; each
 //! side's line of recorded bases, walked to the trunk; the head's extent;
@@ -1592,38 +1594,89 @@ pub(crate) fn shape(op: &str, v: &Value) -> Halt {
 
 // ── the correspondence records ────────────────────────────────────────────
 
-/// Reads the correspondence records of `account`'s own origins among
-/// `state`'s runs, at the head.
+/// Reads the correspondence records of `account`'s own origins, at the head.
 ///
-/// It is the read a write of a past state makes before it is sent — the
-/// restore's (the `history` module) and the undo's (the `undo` module):
-/// one four-set read per chunk of each distinct owned origin's spans, in
-/// run order — `{home: [the origin], from: [the spans], ty: [the
-/// correspondence class]}`, the twin fence's own read — each hit judged
-/// off its address, read once and kept by `Record::of`. The reads are made
-/// at the head and never at the state's position, since a record minted
-/// after the state must be seen.
+/// The origins are those among `state`'s runs. It is the read a write of a
+/// past state makes before it is sent — the restore's (the `history`
+/// module) and the undo's (the `undo` module) — and the shot's read of its
+/// twins (the `windows` module): [`records_held_to`] over each distinct
+/// origin `account` owns exactly, every record held to `account`. An origin
+/// of another account's is not read, and its words stay as read.
+///
+/// # Errors
+///
+/// [`records_held_to`]'s.
+pub(crate) fn records_of(
+    reader: &Reader<'_>,
+    account: &str,
+    state: &[Run],
+) -> Result<Vec<publication::Record>, Refusal> {
+    records_held_to(reader, state, |origin| {
+        owned_by(&origin.to_string(), account).then(|| account.to_string())
+    })
+}
+
+/// Reads every origin's correspondence records, each in its owner's account.
+///
+/// The origins are those among `state`'s runs, and the reads are made at
+/// the head. It is the read a comparison by identity maps its texts
+/// through — the diff's (`history::records`). A text can hold another
+/// account's draft's words by identity, a mark of the draft or a copy from
+/// it, and only that draft's owner's own shot re-mints them and homes a
+/// record for them in the draft (wire.md §The publish shot and head-float:
+/// every named draft the caller's own; the correspondence records), so each
+/// origin's records are read in its owner's account, as a publication reads
+/// a window's (the link-sets design §5.5; `publication::parts`'s
+/// `window_records`): [`records_held_to`] over every distinct origin, each
+/// held to the account it lies in. The board answers a reader only the
+/// links homed where it may read (wire.md §The read predicate), so an
+/// origin the reader may not read yields no record, and its words stay as
+/// read.
+///
+/// # Errors
+///
+/// [`records_held_to`]'s.
+pub(crate) fn owners_records(
+    reader: &Reader<'_>,
+    state: &[Run],
+) -> Result<Vec<publication::Record>, Refusal> {
+    records_held_to(reader, state, account_of)
+}
+
+/// Reads each origin's correspondence records, held to `held_to`'s account.
+///
+/// It is the one loop of [`records_of`] and [`owners_records`], over the
+/// origins among `state`'s runs, at the head. Each distinct origin is taken
+/// in run order, and `held_to` names the account its records are held to,
+/// or none, which leaves it unread. One four-set read per chunk of each
+/// taken origin's spans — `{home: [the origin], from: [the spans], ty: [the
+/// correspondence class]}`, the twin fence's own read — each hit judged off
+/// its address (the owned-home test: a hit homed in no document of that
+/// account's exactly is never read), read once, and kept by `Record::of` as
+/// a record of that account's. The reads are made at the head and never at
+/// the state's position, since a record minted after the state must be
+/// seen.
 ///
 /// # Errors
 ///
 /// The reads' refusals: `withheld` on an origin as [`Refusal::Unreadable`],
 /// `doc_not_registered` as [`Refusal::NoSuchDocument`], an answer of
 /// another shape faced, the reader's other errors.
-pub(crate) fn records_of(
+fn records_held_to(
     reader: &Reader<'_>,
-    account: &str,
     state: &[Run],
+    held_to: impl Fn(&Address) -> Option<String>,
 ) -> Result<Vec<publication::Record>, Refusal> {
     let subtype =
         frames::unit_span(frames::T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
-    let mut origins: Vec<&Address> = Vec::new();
+    let mut distinct: Vec<&Address> = Vec::new();
     for run in state {
-        if !origins.contains(&&run.origin) && owned_by(&run.origin.to_string(), account) {
-            origins.push(&run.origin);
+        if !distinct.contains(&&run.origin) {
+            distinct.push(&run.origin);
         }
     }
     let mut records: Vec<publication::Record> = Vec::new();
-    for origin in origins {
+    for (origin, account) in distinct.into_iter().filter_map(|o| Some((o, held_to(o)?))) {
         let text = origin.to_string();
         let home = frames::unit_span(&text).as_array().cloned().unwrap_or_default();
         let spans: Vec<Value> = state
@@ -1647,7 +1700,7 @@ pub(crate) fn records_of(
                 if records.iter().any(|r| r.link.to_string() == hit) {
                     continue;
                 }
-                if !home_of_link(&hit).is_some_and(|h| owned_by(h, account)) {
+                if !home_of_link(&hit).is_some_and(|h| owned_by(h, &account)) {
                     continue;
                 }
                 let lv = reader.answered(origin, &frames::read_link(&hit), None)?;
@@ -1656,7 +1709,7 @@ pub(crate) fn records_of(
                 else {
                     continue;
                 };
-                if let Some(record) = publication::Record::of(&hit, &value, account) {
+                if let Some(record) = publication::Record::of(&hit, &value, &account) {
                     records.push(record);
                 }
             }

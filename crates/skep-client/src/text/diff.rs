@@ -16,11 +16,13 @@
 //!
 //! A publication between the two re-mints a draft's words: its shot leaves
 //! the draft arranging the member's I-addresses where it arranged its own,
-//! and homes a correspondence record naming each pair. A caller comparing
-//! across one hands both images mapped through the person's correspondence
-//! records, the restore's mapping, read after both images; mapped on one
-//! side alone, or not at all, re-minted words pair with nothing and read as
-//! gone and new.
+//! and homes a correspondence record naming each pair in the draft. A
+//! caller comparing across one hands both images mapped through the
+//! records every publication left — each draft's records read in its
+//! owner's account, the person's drafts and another account's alike — by
+//! the restore's mapping, read after both images; mapped on one side alone,
+//! or not at all, re-minted words pair with nothing and read as gone and
+//! new.
 //!
 //! **Identity** ([`Identity::of`]). Each image is cut, chain by chain, at
 //! every I-address where a run of either begins or ends, so two pieces hold

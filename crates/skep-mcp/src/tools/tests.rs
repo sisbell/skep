@@ -1344,9 +1344,10 @@ fn the_merge_references_state_the_shells_shapes() {
 /// as a whole number from 1; `diff_text`'s reference names the cap on the
 /// two texts, the plan's bound on their pairs, each figure of its rows and
 /// the re-typed threshold by their constants, each row and each note in its
-/// form, and that both texts are mapped through the person's correspondence
-/// records so words a publication re-minted pair with `since`, and its
-/// schema takes `stat` as a boolean and `hunk` as a whole number from 1;
+/// form, and that both texts are mapped through the correspondence records
+/// the publications left so words a publication re-minted pair with
+/// `since`, and its schema takes `stat` as a boolean and `hunk` as a whole
+/// number from 1;
 /// `mark_text`'s reference names the `marks` type as the client spells it;
 /// the instructions send an agent to the three
 /// tools, and so do the EDITING TEXT topic, which names the review step

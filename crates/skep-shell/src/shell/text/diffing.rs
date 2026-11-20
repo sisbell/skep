@@ -26,16 +26,20 @@
 //! **The mapping.** A publication between the two documents re-mints the
 //! draft's words — its shot leaves a draft arranging the member's
 //! I-addresses where it arranged its own, and homes a correspondence record
-//! for each pair — so once the draft's last image is read, BOTH images are
-//! mapped through the person's correspondence records, read once over the
-//! two (`skep_client::history::records` and `mapped_image`, the restore's
-//! mapping), and the pairs are those of the mapped images, on every path,
-//! `stat` too: words a publication re-minted pair with what they were,
-//! whether `since` is a mark made before it or the draft published since
-//! `doc` copied from it, and a publication landing between the reads finds
-//! both images mapped by the records it made. The caller hands the mapping
-//! in ([`diff`]); `Shell::text_diff`'s reads the records under the session
-//! the call stands under when it runs.
+//! for each pair in the draft — so once the draft's last image is read,
+//! *both* images are mapped through the records the publications left,
+//! read once over the two at every origin among their runs, each in its
+//! owner's own account (`skep_client::history::records`, and
+//! `mapped_image`, the restore's mapping), and the pairs are those of the
+//! mapped images, on every path, `stat` too: words a publication re-minted
+//! pair with what they were, whether `since` is a mark made before it or
+//! the draft published since `doc` copied from it, whether the draft is the
+//! person's or another account's its owner published, and a publication
+//! landing between the reads finds both images mapped by the records it
+//! made. An origin the session may not read yields no record, and its words
+//! pair as read. The caller hands the mapping in ([`diff`]);
+//! `Shell::text_diff`'s reads the records under the session the call stands
+//! under when it runs.
 //!
 //! **The text before.** `since` is never read whole. A position the draft
 //! still holds is told from the draft's text where it stands
@@ -72,9 +76,9 @@
 //!
 //! **The cost** (SP-23). Three images and one read of the draft's text, as
 //! every text call makes, each made again where the draft moved; the
-//! records' read, one four-set read per distinct origin of the person's
-//! among the two images' runs for each `MAX_WIRE_LIST` spans of it and one
-//! `read_link` per hit homed in the person's documents, and the mapping, a
+//! records' read, one four-set read per distinct origin among the two
+//! images' runs for each `MAX_WIRE_LIST` spans of it and one `read_link` per
+//! hit homed in a document of that origin's own account, and the mapping, a
 //! walk of each run against the records; one read by identity for each part
 //! of the gone spans; and the plan's own cost over the two texts' lines. The
 //! call holds the draft's text and the text before, each within
@@ -108,9 +112,9 @@ const ANSWER_ENVELOPE: usize = 64;
 /// The mapping a diff applies to its two images before it plans them.
 ///
 /// It is handed `since`'s image and the draft's last, and answers the two
-/// mapped — through the person's correspondence records, as
-/// `Shell::text_diff`'s does — or the refusal that ends the call (the
-/// module doc's *The mapping*).
+/// mapped — through the records the publications left, each origin's in its
+/// owner's account, as `Shell::text_diff`'s does — or the refusal that ends
+/// the call (the module doc's *The mapping*).
 pub(super) type Mapping<'m> = dyn Fn(&Image, &Image) -> Result<(Image, Image), Refusal> + 'm;
 
 /// What the call is asked: the two documents, and how much of the answer.

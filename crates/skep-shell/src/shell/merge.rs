@@ -77,8 +77,16 @@
 //! and each unsettled gap's state read off the draft as it stands, settled
 //! by the merger where the draft no longer arranges the gap's default as M
 //! placed it: its runs removed whole, or reordered; an edit inside a run's
-//! words settles nothing. The merger is the one composing, `person` at the
-//! editor and `agent` with no person present ([`Surface`]), since the
+//! words settles nothing. The landing the marker names is recorded first
+//! where no record of the person's names it and `into` still holds M, by
+//! the library's `resume` naming `into` — a record-only completion, no
+//! write of the landing's sent again — so a landing cut off before its
+//! record is recorded once when its draft is named; a fork landed in
+//! itself, composed as it stands on the base its landing moved to the head,
+//! is no longer the composition that landed, and nothing of it is recorded
+//! there. The merger is the one
+//! composing, `person` at the editor and `agent` with no person present
+//! ([`Surface`]), since the
 //! re-open reads the draft and not the hand that edited it. A fork arranged
 //! since the landing is no re-open (the owner's rulings of 2026-11-20; skep
 //! #770): the fork's state as composed — its `arranged_at` — is tested
@@ -112,7 +120,15 @@
 //! marker names the side, or at a fork moved since the landing over it,
 //! with what it replaced — else the landing goes into it, a record of its
 //! own written. The library is handed `into` none only where neither read
-//! found a record (the survey §5 item 2). A landing of the
+//! found a record (the survey §5 item 2). Where no record of the person's
+//! stands for a landing of the key, a landing of the merge begun in a
+//! draft of theirs and never recorded — cut off between its one write and
+//! its record — is the library's refusal at the first read, `merge_refused`
+//! with `landing_begun` naming the `draft` and the `position`, nothing
+//! staged or written, so the merge never lands twice (PUB-8.32): the way on
+//! is that draft named as `into`, whose re-open records the landing, then
+//! `merge.undo` to take it back, or `merge.withdraw` to take it out keeping
+//! its words. A landing of the
 //! person's own made between that read and the landing — on another
 //! device, or by `skep merge --new` naming the same kind — is the library's
 //! answer, found standing with nothing staged: `fresh` is the library's
@@ -959,6 +975,7 @@ impl Shell {
             R::Published { doc } => Refusal::shell(Name::NOT_OWNER, json!({"addr": s(&doc), "published": true})),
             R::PublishedJournal { journal } => other("published_journal", json!({"journal": s(&journal)})),
             R::AlreadyPublished { draft, member } => other("already_published", json!({"draft": s(&draft), "member": s(&member)})),
+            R::LandingBegun { draft, position } => other("landing_begun", json!({"draft": s(&draft), "position": position})),
             R::NothingToUndo { draft, why } => {
                 let mut detail = json!({"draft": s(&draft)});
                 match why {
@@ -1083,16 +1100,27 @@ impl Shell {
     ///    with its arm, the board's verdicts verbatim; at a re-open at the
     ///    fork side, the read of the person's own record of the merge, its
     ///    states ignored (`skep_client::merge::landed_draft`): a halt's
-    ///    face, `session_died`; where the fork moved since, the composition
+    ///    face, `session_died`; at a re-open but of a fork landed in itself,
+    ///    the landing's record read and, where none of the person's names it
+    ///    and `into` holds M, written (`skep_client::merge::resume` naming
+    ///    `into`): `unreadable`,
+    ///    `no_such_document`, `merge_refused` with its arm, a halt's face —
+    ///    the board too busy to find the person's journal, the landing
+    ///    standing with its record unwritten — and `session_died`, nothing
+    ///    landed; where the fork moved since, the composition
     ///    again, as above, then the read of what the landing replaces
     ///    (`skep_client::merge::replaced`): `unreadable`,
     ///    `no_such_document`, `merge_refused` with its arm, a halt's face,
     ///    `session_died`; then `over_cap` where M passes the cap, nothing
     ///    landed;
     /// 6. where no `into` is named, the read of the person's own standing
-    ///    record of the key (`skep_client::merge::resume`), then, where none
-    ///    stands, of the merge with the states ignored (`landed_draft`): a
-    ///    halt's face, `session_died`; where either names a draft landing,
+    ///    record of the key (`skep_client::merge::resume`) — with none
+    ///    standing, `merge_refused` with `landing_begun` naming the `draft`
+    ///    and the `position` where the merge landed in a draft of the
+    ///    person's that no record of theirs names, nothing staged or written
+    ///    — then, where no record stands, of the merge with the states
+    ///    ignored (`landed_draft`): a halt's face, `session_died`; where
+    ///    either names a draft landing,
     ///    that draft's read, as `into`'s in step 4, `not_owner` among them,
     ///    and, where the record found with the states ignored names it and
     ///    its marker names the side, the composition on the marker's head
@@ -1101,7 +1129,8 @@ impl Shell {
     ///    for it, `held_lines` among them, nothing landed; then the landing's
     ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
-    ///    with `fork_base_moved`, `base_not_in_chain`, `window_withheld` or
+    ///    with `landing_begun` for a landing begun since that first read,
+    ///    `fork_base_moved`, `base_not_in_chain`, `window_withheld` or
     ///    `needs_signed_session`; `not_owner`; a halt's face — the board too
     ///    busy to find the person's journal, the landing standing with its
     ///    record unwritten; and
@@ -1191,11 +1220,23 @@ impl Shell {
             None => self.trunk_head(&session, &signed, &doc, &start, &form.library_side())?,
         };
         let mut merged = self.composed(&session, &doc, &form, head, reopen.as_ref(), &kind)?;
+        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         // What a landing over an earlier landing of the merge replaces, where
         // a fork moved since it (the owner's ruling of 2026-11-20).
         let mut replaced = None;
         if let (Some(marker), Some(into)) = (&reopen, &into) {
             if !self.fork_moved(&session, &signed.account, &kind, &form, &merged, into, marker)? {
+                // The landing the marker names gets its record where none of
+                // the person's names it and `into` still holds the merge: a
+                // record-only completion, the landing's write never sent
+                // again, so a landing cut off before its record and named as
+                // `into` is recorded once (PUB-8.32). A fork landed in itself
+                // is composed as it stands, its base moved to the head by
+                // that landing, so its composition is no longer the one that
+                // landed, and none is recorded of it.
+                if !matches!(&form, Form::Fork(f) if f == into) {
+                    lib::resume(&session.board, &merged, lib::Landing::Draft { merger, into: Some(into.clone()), journal: None }).map_err(|r| self.merge_refusal(&session, r))?;
+                }
                 return self.reopened(&session, key, form, merged, into, marker.at);
             }
             // The moved fork: composed again on the trunk's head as it
@@ -1225,10 +1266,11 @@ impl Shell {
         // is landed over with what it replaces; else it is landed into. The
         // library is handed `into` none only where neither read found a
         // record — one landed since is the library's answer, nothing staged,
-        // which its `staged` says. `over` is the marker read here on the
+        // which its `staged` says, and a landing of the merge begun in a
+        // draft of the person's and never recorded is the library's refusal
+        // naming it, nothing staged. `over` is the marker read here on the
         // draft the landing goes into, which the composition standing in it
         // is set aside by (skep #981).
-        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let mut landing_into = into.clone();
         let mut over = target.and_then(|t| t.marker);
         if landing_into.is_none() {

@@ -1303,7 +1303,9 @@ fn the_merge_references_state_the_shells_shapes() {
         "The composition lives with this adapter's session",
         "a published merge is not undone",
         "your own edits included",
-        "changes_since(class: \"drafts\")",
+        "a call — the adapter's own once included — that finds the merge landed in such a draft is refused merge_refused landing_begun {draft, position}, nothing staged or written, never a second landing",
+        "compose again naming draft as into, before you write to it, which re-opens it and writes its record; then merge_undo() takes the merge back, or merge_withdraw(draft) takes it out and keeps its words",
+        "A draft only staged, the merge never landed in it, is found by its stage row on changes_since(class: \"drafts\")",
         "merge_land publishes into doc, which only its owner can",
     ] {
         assert!(merging.contains(said), "MERGING says {said:?}: {merging}");
@@ -1324,14 +1326,18 @@ fn the_merge_references_state_the_shells_shapes() {
         "REJECTIONS ARE DATA names the merge tools among the calls an end may not have stopped: {rejections}"
     );
     // What a compose made again after a lost answer or a session's end
-    // leaves, and how a draft it left is found; the base read off the
-    // records, `doc` itself for a side begun before the first version; and
-    // `base_unknown` by each reason, with the way on from a draft begun
-    // while no version stands.
+    // leaves — a landing no record names refused `landing_begun` with no
+    // `into`, and recorded by the re-open naming it — and how a draft only
+    // staged is found; the base read off the records, `doc` itself for a
+    // side begun before the first version; and `base_unknown` by each
+    // reason, with the way on from a draft begun while no version stands.
     let compose = reference(&catalog, "merge_compose");
     for said in [
         "which the adapter makes again itself, once, under the next session — may have left a draft it staged, or landed in, that no merge record names",
-        "With into named, the call made again re-opens into, or lands there, and stages nothing more; with none named, it stages another, the first left standing beside it",
+        "With into named, the call made again re-opens into, or lands there, and stages nothing more, a re-open writing the record of a landing no merge record names where into still holds the merge",
+        "With none named, where the merge landed in such a draft, the call — the adapter's own once included — is refused merge_refused landing_begun {draft, position}, nothing staged or written",
+        "name draft as into, before you write to it, to re-open it with its record; then merge_undo() takes the merge back, or merge_withdraw(draft) takes it out and keeps its words",
+        "merge_refused {arm, …}, landing_begun {draft, position} among its arms",
         "changes_since(class: \"drafts\") from before the call names such a draft",
         "base the version both sides descend from, read off the bases the board recorded and never off an address — doc itself where a side was begun from doc before its first version",
         "up from the version the side lies under, or from doc's first version for a side begun from doc itself",

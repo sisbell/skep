@@ -46,8 +46,11 @@
 //! landing and stages nothing, its `fresh` false, and where a fork or a
 //! draft side moved since the merger's own landing of the merge, so the
 //! key is another, lands in the draft that landing's record names, found
-//! with the states ignored (`landed_draft`), its `fresh` false; and the
-//! report then
+//! with the states ignored (`landed_draft`), its `fresh` false, and where
+//! the merge landed in a draft of the merger's that no record of theirs
+//! names — a landing cut off before its record — lands nothing and stages
+//! nothing, refused `landing_begun` naming the draft, exit 1, for `--into`
+//! that draft to land it with its record or `--undo` it; and the report then
 //! carries the landing, naming a newer version published since where the
 //! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
 //! left open; `--journal` names the merge journal (decision 7), `--kind`

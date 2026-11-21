@@ -785,6 +785,26 @@ pub enum Refusal {
         /// The member the board names them published into (`site.addr`).
         member: Address,
     },
+    /// A landing of this merge begun in a draft and never recorded.
+    ///
+    /// It is the answer of a draft landing with no draft named, at
+    /// [`land`](fn@super::land) and [`resume`](super::resume) alike, where no
+    /// record of the merger's own stands for a landing of the key and a
+    /// draft of the merger's account carries this merge's landing as the
+    /// board marks it, no record of the merger's own of the merge naming
+    /// that draft: a landing cut off between its one write and its record.
+    /// Nothing is staged and nothing is written, so the merge never lands
+    /// twice, and the landing is never finished unasked (PUB-8.32). The
+    /// ways on are the merger's: the merge composed again and landed naming
+    /// `draft`, every check run again and its record written; `resume`
+    /// naming `draft`, the record alone, written where `draft` still holds
+    /// the merge; or the landing taken back by `undo` naming `draft`.
+    LandingBegun {
+        /// The draft the merge landed in.
+        draft: Address,
+        /// The position the board marks the landing at.
+        position: u64,
+    },
     /// A window part of the shot with no answer, or an answer that fits
     /// nothing: nothing is sent (the merge record's §1.5, THE SHOT's WINDOW
     /// PARTS; §7).
@@ -961,6 +981,7 @@ impl fmt::Display for Refusal {
                 SupersedeCause::Duplicate => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, duplicate): the side is named twice — nothing was published"),
             },
             Refusal::AlreadyPublished { draft, member } => write!(f, "the words of {draft} were published as {member} while this merge was being sent (already_published) — nothing was published; run the merge again, which sends words already published by reference"),
+            Refusal::LandingBegun { draft, position } => write!(f, "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written, so the merge does not land twice; to go on, compose the merge again and land it naming {draft} (the command's --into {draft}), which runs every check again and writes its record, or resume naming {draft}, which writes the record alone where {draft} still holds the merge; to give it up, undo it naming {draft} (the command's --undo {draft}), or discard {draft}"),
             Refusal::WindowPartsOwed { parts, misfits, .. } => {
                 write!(f, "nothing was published: {} window part{} of this merge need{} an answer", parts.len(), if parts.len() == 1 { "" } else { "s" }, if parts.len() == 1 { "s" } else { "" })?;
                 if !misfits.is_empty() {
@@ -1538,8 +1559,12 @@ pub(crate) enum OnEnd {
     /// the restore, a take-back up to and at its one write, the record of a
     /// publication — each reads what stands before it writes.
     Rerun,
-    /// A landing, landed in part or not at all: `resume` finds what of it
-    /// landed and completes the rest, writing nothing twice.
+    /// A landing, landed in part or not at all, which `resume` takes up.
+    ///
+    /// `resume` reads what of it landed and writes nothing twice: a shot's
+    /// member, or a landing in a draft named, is completed with its record,
+    /// and a fresh draft the merge landed in before its record is named
+    /// ([`Refusal::LandingBegun`]) for a `resume` naming that draft.
     Resume,
     /// A take-back's record, its one write standing: nothing more is
     /// written, a re-run finding no merge to take out and writing none.
@@ -1578,7 +1603,7 @@ impl OnEnd {
     pub(crate) fn act(self) -> &'static str {
         match self {
             OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes",
-            OnEnd::Resume => "open a session again and resume: every step of the landing resumes by reading",
+            OnEnd::Resume => "open a session again and resume: it reads what of the landing stands and writes nothing twice, and a fresh draft the merge landed in before its record is named, for resume naming that draft to write the record",
             OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
             OnEnd::EarlierBack => "nothing more is written: the draft stands as the act left it, carrying the merge landed in it before; a re-run takes that merge back too, as a step of its own, so run it only to take that merge out; the landing's record stands alone in the journal",
             OnEnd::PutBack => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding the merge put back; the withdrawal's record stands alone in the journal",

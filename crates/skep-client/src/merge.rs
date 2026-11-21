@@ -38,7 +38,9 @@
 //! the draft landing — one `set_arrangement` typed against the position the
 //! merge was composed at, into the draft named or into a fresh draft staged
 //! from the head, the draft's base re-recorded on that head and the merge
-//! marked, a newer head told — and the residue walk over a lost
+//! marked, a newer head told, a landing of the merge begun in a draft and
+//! never recorded named before any stage and never landed twice
+//! ([`Refusal::LandingBegun`]) — and the residue walk over a lost
 //! acknowledgment; [`record_published`], the record of a merge a
 //! publication of the merger's own landed — the editor's shot from the
 //! draft the merge was landed in — written once and never a second shot;

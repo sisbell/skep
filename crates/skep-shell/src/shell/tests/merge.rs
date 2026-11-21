@@ -68,7 +68,9 @@
 //! re-base of its own fork into a fresh draft of its own, the fork itself
 //! as `into` refused `fork_base_moved` and its landing on the person's
 //! trunk refused `not_owner`; the merged arm
-//! naming the member and writing a missing record once; another account's
+//! naming the member and writing a missing record once; a landing cut off
+//! before its record refused `landing_begun` with no `into`, recorded once
+//! by its re-open and taken back by the undo (skep #1103); another account's
 //! record of the kind, read as the composition's `prior`, never deciding
 //! where the merge lands — its own draft carrying the merge never
 //! re-opened, a draft of the person's it names never landed into — and the
@@ -2643,6 +2645,66 @@ fn merged_names_the_member_and_writes_a_missing_record_once() {
     let again = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((again["outcome"].as_str(), again["record_link"].as_str()), (Some("merged"), Some(record.as_str())), "{again}");
     assert_eq!((again["record"]["landed"]["member"].as_str(), g.position()), (Some(e3.as_str()), after), "the standing record, nothing written again: {again}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a landing cut off before its record is named, then recorded.
+///
+/// Against the daemon (skep #1103): the person's draft L, staged from E.2,
+/// takes the merge of E.2 with E.1.1 by hand — the landing's one write and
+/// no record, as a landing cut off before its record leaves it.
+/// `merge.compose` with no `into` is refused `merge_refused` with
+/// `landing_begun` naming L and the landing's position, nothing staged or
+/// written (the mutant that drops the library's search stages a second
+/// draft). Named as `into`, L re-opens and the person's own record of the
+/// landing now stands, written once: the board's position moved by its
+/// writes, a second call writing nothing (the mutant that drops the
+/// re-open's `lib::resume` leaves none). `merge.undo` then takes the
+/// landing back, L holding E.2's words again and the undo's record
+/// replacing the re-open's.
+#[test]
+fn a_landing_cut_off_before_its_record_is_named_and_its_re_open_records_it() {
+    use skep_client::merge::{current, landed_draft};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let merged = composed(&g, &f);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &f.e11);
+    let compose = |into: Option<&str>| {
+        let mut args = json!({"session": g.session, "doc": f.edition, "alternative": f.e11});
+        if let Some(into) = into {
+            args["into"] = json!(into);
+        }
+        g.call("merge.compose", args)
+    };
+    let before = g.position();
+    let refused = compose(None).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["arm"].as_str(), v["draft"].as_str(), v["position"].as_u64()), ("merge_refused", Some("landing_begun"), Some(l.as_str()), Some(at)), "{v}");
+    assert_eq!(g.position(), before, "nothing staged or written");
+    // Named as `into`: the re-open, its landing recorded once.
+    let reopened = compose(Some(&l)).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&reopened);
+    assert_eq!((reopened["outcome"].as_str(), reopened["into"].as_str(), reopened["position"].as_u64()), (Some("reopened"), Some(l.as_str()), Some(at)), "{reopened}");
+    let recorded = g.position();
+    assert!(recorded > before, "the record's writes");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let kind = parse_address(KIND).unwrap();
+    let record = landed_draft(&entry.board, Some(&entry.token), &kind, &merged.key, "1.0.1").expect("the lookup").expect("the landing's record");
+    assert_eq!(record.landed, Some(RecordLanding::Draft { draft: parse_address(&l).unwrap(), position: at }), "{record:?}");
+    let again = compose(Some(&l)).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(again["outcome"].as_str(), Some("reopened"), "{again}");
+    assert_eq!(g.position(), recorded, "nothing written again");
+    // Taken back: L holds E.2's words, the undo's record replacing the
+    // re-open's.
+    let (undone, marker) = undo_once(&g, &g.session);
+    assert_eq!((undone["draft"].as_str(), marker), (Some(l.as_str()), None), "{undone}");
+    assert_eq!(g.text(&l, 13), "the fox jumps", "E.2's words");
+    let taken = current(&entry.board, Some(&entry.token), &kind, &merged.key).expect("the lookup").expect("the undo's record");
+    assert_eq!((taken.landed, taken.replaces, taken.link.map(|l| l.to_string())), (None, record.link, undone["record"].as_str().map(str::to_string)), "the undo's record replaces the re-open's");
     g.shell.shutdown();
     sd.shutdown();
 }

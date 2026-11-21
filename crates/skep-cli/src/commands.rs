@@ -589,9 +589,12 @@ fn journal_published(journal: &Address) -> String {
 /// published `--journal` under `published_target` too, in the command's
 /// own words — the journal and why it takes no record, that nothing was
 /// merged, taken back or taken out ([`Step::undone`]) and nothing was
-/// written, and the two ways on; and the shot's own `supersede_refused`,
+/// written, and the two ways on; the shot's own `supersede_refused`,
 /// whose detail at `head_moved` says the head moved under the merge, that
-/// nothing was published, and to run the merge again on the head it names.
+/// nothing was published, and to run the merge again on the head it names;
+/// and `landing_begun`, a `--new` landing that found this merge landed in a
+/// draft of the merger's with no record, nothing staged or written, its
+/// detail naming the draft, the position and the ways on (PUB-8.32).
 /// The two `withheld` refusals — a
 /// document the reader may not read, an origin a write's run windows —
 /// name the document alone, so their detail says beside it what `step`
@@ -628,6 +631,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::NotPast { .. } => "not_past",
         Refusal::SupersedeRefused { .. } => "supersede_refused",
         Refusal::AlreadyPublished { .. } => "already_published",
+        Refusal::LandingBegun { .. } => "landing_begun",
         Refusal::WindowPartsOwed { .. } => "window_parts_owed",
     };
     match r {
@@ -786,6 +790,25 @@ mod tests {
             assert_eq!((r.code.as_str(), r.detail.as_deref()), (code, Some(words.as_str())));
             assert_eq!(finish(Err(refused(refusal, Step::Compose))), 1);
         }
+    }
+
+    /// Checks that a landing begun is the board's refusal naming its draft.
+    ///
+    /// A `--new` landing that found the merge landed in a draft of the
+    /// merger's with no record is `landing_begun`, exit 1, its detail the
+    /// library's own words: the draft, the position, and the command's
+    /// `--into` and `--undo` naming the draft (skep #1103).
+    #[test]
+    fn a_landing_begun_is_the_boards_refusal_naming_the_draft_and_the_ways_on() {
+        let draft = skep_client::address::parse_address("1.0.1.0.72").expect("an address");
+        let refusal = Refusal::LandingBegun { draft, position: 21 };
+        let words = refusal.to_string();
+        let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Draft) else { panic!("the board's refusal") };
+        assert_eq!((r.code.as_str(), r.detail.as_deref()), ("landing_begun", Some(words.as_str())));
+        for said in ["1.0.1.0.72 at position 21", "--into 1.0.1.0.72", "--undo 1.0.1.0.72"] {
+            assert!(words.contains(said), "the detail says {said:?}: {words}");
+        }
+        assert_eq!(finish(Err(refused(refusal, Step::Draft))), 1);
     }
 
     /// Checks that a person door's refusal is a halt naming its own moments.

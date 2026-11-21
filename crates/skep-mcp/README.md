@@ -141,7 +141,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   its defaults, as the whole arrangement
   of `into` or of a fresh draft staged from the head, by one write; its
   answer is the gap report, and composing again re-opens the draft,
-  reading each gap's state off it — save at a fork changed since the
+  recording a landing no merge record names, and reading each gap's
+  state off it — save at a fork changed since the
   landing, which is composed again on the head and lands over the draft,
   the answer's `replaced` naming each stretch of the earlier landing's
   words and the edits made in it since that it replaced, and `merge_undo`
@@ -150,8 +151,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   draft of theirs staged from the head, re-basing it for the document's
   owner to merge; the fork itself as `into` takes the merge at any head
   where its owner staged it, and where a `version` minted it is refused
-  `fork_base_moved` unless its source is the head. A gap is settled by
-  editing the draft.
+  `fork_base_moved` unless its source is the head. With no `into`, a
+  merge that landed in a draft of the agent's no merge record names — a
+  call cut off before its record — is refused `merge_refused`
+  `landing_begun` naming the draft, nothing staged: naming that draft as
+  `into` re-opens it with its record. A gap is settled by editing the
+  draft.
   `merge_land {resolutions?, answers?}` is the shell's `merge.land`: the
   draft published through the publication family's one signed write with
   the supersession claim on the daughter — none at the draft or fork

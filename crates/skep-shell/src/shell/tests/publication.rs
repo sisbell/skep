@@ -44,7 +44,11 @@
 //! re-stated, its read at a second window; and the shell's own lists, of the
 //! person's account exactly — a sub-account's draft on the base never in
 //! the family left behind, and a sub-account's home, the claim's agent
-//! space's among them, no `read_with` key and no destination. Every draft a
+//! space's among them, no `read_with` key and no destination; and the re-open
+//! in the form a panel holds (skep #979) — an open in another form refused
+//! `other_panel`, nothing read and every panel as it stood, each member a
+//! re-open passes compared and one left out the panel's own, and the same
+//! open after a `restated` confirm re-opening the panel. Every draft a
 //! cell publishes into a document is staged through `stage`, the one frame
 //! that copies its source and records its base.
 
@@ -429,6 +433,15 @@ fn copied_store(dir: &TempDir, name: &str) -> PathBuf {
 /// #865), so a window that holds its dials to account leaves those out.
 fn but_health(shell: &Shell) -> Vec<Value> {
     shell.log().entries().into_iter().filter(|e| e["path"] != "/health").collect()
+}
+
+/// Returns how many board ops `shell` has dialed, at `/op` and `/op-at`.
+///
+/// The feed thread's own reads, `/health` and `/changes`, are no op, so a
+/// call that reads nothing of the board leaves the count where it stood
+/// whatever that thread does meanwhile.
+fn op_dials(shell: &Shell) -> usize {
+    shell.log().entries().iter().filter(|e| e["kind"] == "dial" && (e["path"] == "/op" || e["path"] == "/op-at")).count()
 }
 
 /// A fresh signed shell over the board `ground` claimed, over the data
@@ -2048,6 +2061,136 @@ fn a_held_panels_re_open_keeps_a_second_place_the_re_statement_showed() {
     let e1 = format!("{edition}.1");
     let member = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&e1, 1, 14)})).unwrap();
     assert_eq!(member["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect::<String>(), "abcdquoteabcd", "the run at both places, the window by its counterpart: {member}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that an open in another form than a held panel's is refused.
+///
+/// Every panel stands as it stood, and a differing selection still ends the
+/// hold (skep #979; item 1 (a)). A, staged from the memberless edition E, holds
+/// a mint-form panel behind B's. An open of A at the document form is refused
+/// exactly `other_panel` naming A and the account the panel mints under,
+/// nothing read and no event said; B's panel still stands, `publication.cancel`
+/// saying `cancelled` of B, and A's panel re-opens in its own form, its hold's
+/// `since` beside it and no standing. An open of A at the document form with a
+/// selection of its own then ends that panel: the draft opened afresh,
+/// `standing: first` and no hold (the mutants that compare no form, that stand
+/// or drop the panel at the refusal, and that compare ahead of the selection).
+#[test]
+fn an_open_in_another_form_than_a_held_panels_is_refused_and_every_panel_stands_as_it_stood() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let a = g.staged(&edition, "abcd");
+    let b = g.draft("elsewhere");
+    let mint = |draft: &str| json!({"session": g.session, "draft": draft, "mint": "1.0.1", "readable_drafts": [draft], "published": [edition]});
+    g.call("publication.open", mint(&a)).unwrap_or_else(|r| panic!("{r}"));
+    g.call("publication.open", mint(&b)).unwrap_or_else(|r| panic!("{r}"));
+    let (dials, said) = (op_dials(&g.shell), g.states().len());
+    let refused = g.call("publication.open", json!({"session": g.session, "draft": a, "doc": edition})).unwrap_err().to_value();
+    crate::shapes::assert_declared("OtherPanelRefusal", &refused);
+    assert_eq!(refused, json!({"kind": "shell", "name": "other_panel", "draft": a, "mint": "1.0.1"}), "{refused}");
+    assert_eq!((op_dials(&g.shell), g.states().len()), (dials, said), "nothing read and no event said");
+    g.call("publication.cancel", json!({"session": g.session})).unwrap();
+    let cancelled = wait_for(&g.seen, |e| e.name == EventName::Publication && e.data["state"] == "cancelled");
+    assert_eq!(cancelled.data["draft"].as_str(), Some(b.as_str()), "B's panel stood and was cancelled: {:?}", cancelled.data);
+    let held = g.call("publication.open", json!({"session": g.session, "draft": a, "mint": "1.0.1"})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &held);
+    assert!(held["hold"]["since"].is_u64() && held.get("standing").is_none(), "A's panel held as it stood, in its own form: {held}");
+    let selection = json!([{"origin": a, "i_start": 1, "width": 3}]);
+    let fresh = g
+        .call("publication.open", json!({"session": g.session, "draft": a, "doc": edition, "selection": selection, "readable_drafts": [a], "published": [edition]}))
+        .unwrap_or_else(|r| panic!("a differing selection ends the hold: {r}"));
+    assert_eq!((fresh["standing"].as_str(), fresh.get("hold")), (Some("first"), None), "opened afresh at the document form: {fresh}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that each member a re-open passes is compared with the panel's.
+///
+/// A member left out is the panel's own (skep #979). A, staged from the
+/// memberless edition E, holds a document-form panel carrying the claim behind
+/// B's. An open of A passing one member in another form — another document, the
+/// mint form, `claim` off, an `also`, a `notes`, a `readable_drafts` or a
+/// `published` naming another document — is refused exactly `other_panel`
+/// naming A and E, nothing read. One passing every member as the panel holds
+/// it, `readable_drafts` empty, the draft joining it as at a fresh open,
+/// re-opens the panel with its hold's `since`; and, the panel held behind B
+/// again, one passing the draft and E alone re-opens it with the claim it holds
+/// (the mutants that drop any one member's comparison, that compare after the
+/// reads, that read a member left out as its default, and that compare
+/// `readable_drafts` without the draft).
+#[test]
+fn every_member_a_re_open_passes_is_the_panels_and_one_left_out_is_its_own() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let other = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let a = g.staged(&edition, "abcd");
+    let b = g.draft("elsewhere");
+    let x = g.draft("another");
+    let open_a = |members: Value| {
+        let mut args = json!({"session": g.session, "draft": a});
+        args.as_object_mut().unwrap().extend(members.as_object().unwrap().clone());
+        g.call("publication.open", args)
+    };
+    let open_b = json!({"session": g.session, "draft": b, "mint": "1.0.1", "readable_drafts": [b], "published": [edition]});
+    open_a(json!({"doc": edition, "claim": true, "readable_drafts": [a], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    g.call("publication.open", open_b.clone()).unwrap_or_else(|r| panic!("{r}"));
+    for members in [
+        json!({"doc": other}),
+        json!({"mint": "1.0.1"}),
+        json!({"doc": edition, "claim": false}),
+        json!({"doc": edition, "also": [x]}),
+        json!({"doc": edition, "notes": [x]}),
+        json!({"doc": edition, "readable_drafts": [a, x]}),
+        json!({"doc": edition, "published": [edition, other]}),
+    ] {
+        let dials = op_dials(&g.shell);
+        let refused = open_a(members.clone()).map_err(|r| r.to_value());
+        assert_eq!(refused, Err(json!({"kind": "shell", "name": "other_panel", "draft": a, "doc": edition})), "{members}");
+        assert_eq!(op_dials(&g.shell), dials, "{members}: refused before any read");
+    }
+    let same = open_a(json!({"doc": edition, "claim": true, "also": [], "notes": [], "readable_drafts": [], "published": [edition]})).unwrap_or_else(|r| panic!("every member the panel's: {r}"));
+    assert!(same["hold"]["since"].is_u64(), "re-opened from behind B's panel: {same}");
+    g.call("publication.open", open_b).unwrap_or_else(|r| panic!("{r}"));
+    let left_out = open_a(json!({"doc": edition})).unwrap_or_else(|r| panic!("the members left out the panel's own: {r}"));
+    assert_eq!((left_out["hold"]["since"].is_u64(), left_out["count"]["claim"].as_bool()), (true, Some(true)), "re-opened with the claim it holds: {left_out}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the same open after a `restated` confirm re-opens the panel.
+///
+/// It is the way on the re-statement names, and the next confirm lands
+/// (skep #979; PUB-3.108). A panel over `abcd` passes `readable_drafts`
+/// empty, the draft joining it as at every fresh open, and the run is copied
+/// after itself while it stands: the confirm answers `restated`.
+/// `publication.open` with the very same members re-opens the panel, never
+/// refused, and the next confirm is acknowledged, the member reading
+/// `abcdabcd` (the mutant that compares `readable_drafts` without the draft
+/// joining it refuses the re-open).
+#[test]
+fn the_same_open_after_a_restated_confirm_re_opens_the_panel_and_lands() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "abcd");
+    let inputs = json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [], "published": [edition]});
+    g.call("publication.open", inputs.clone()).unwrap_or_else(|r| panic!("{r}"));
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "5"}, "specs": [{"source": draft, "span": {"start": "1.1", "width": "0.4"}}], "as_of": g.position()}));
+    let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(restated["outcome"], "restated", "the premise: the run at a second place since the panel: {restated}");
+    g.call("publication.open", inputs).unwrap_or_else(|r| panic!("the way on the re-statement names: {r}"));
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e1.as_str())), "{acked}");
+    let member = g.call("op", json!({"guest": true, "board": g.board, "frame": skep_client::board::frames::retrieve_v(&e1, 1, 9)})).unwrap();
+    assert_eq!(member["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect::<String>(), "abcdabcd", "{member}");
     g.shell.shutdown();
     sd.shutdown();
 }

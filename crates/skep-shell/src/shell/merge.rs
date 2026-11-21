@@ -135,10 +135,13 @@
 //! (`shell/publication.rs`, **The landing**): the row is refused
 //! `other_panel`, nothing composed or sent, that panel, the family's
 //! standing one and the composition, with any `resolutions` the call named,
-//! as they stood. The way on is `publication.cancel` of that panel, a held
-//! one re-opened first, then `merge.land` again; confirming it instead
-//! publishes the draft as a document of its own, whose base no longer lies
-//! in the trunk's chain, and the row is then refused `base_unrecorded`. The
+//! as they stood. The way on is `publication.cancel` of that panel — a held
+//! one re-opened first in its own form, `publication.open` naming the draft
+//! and the `doc` or `mint` the refusal names and no other member, since an
+//! open passing another is refused the same (`shell/publication.rs`, **The
+//! panels**) — then `merge.land` again; confirming it instead publishes the
+//! draft as a document of its own, whose base no longer lies in the trunk's
+//! chain, and the row is then refused `base_unrecorded`. The
 //! landing goes on only over a draft that still carries the composition's
 //! merge (skep #992): the draft's marker — read past that refusal where the
 //! page's panel stands, by the open where the row opens its own — must name
@@ -1452,10 +1455,12 @@ impl Shell {
     /// draft, standing or held, publishes into another document than the
     /// composition's or mints an edition — nothing read, every panel and the
     /// composition as they stood, the panel to be cancelled before the row
-    /// lands (`publication.cancel`, a held panel re-opened first); where a
-    /// panel stands or is held, the draft's marker read's — `unreadable` or
-    /// `no_such_document` naming the draft, the board's verdicts verbatim,
-    /// `unreachable`, `session_died`, `shape` naming `doc_metadata` — then
+    /// lands (`publication.cancel`, a held panel re-opened first by
+    /// `publication.open` naming the draft and that `doc` or `mint` alone);
+    /// where a panel stands or is held, the draft's marker read's —
+    /// `unreadable` or `no_such_document` naming the draft, the board's
+    /// verdicts verbatim, `unreachable`, `session_died`, `shape` naming
+    /// `doc_metadata` — then
     /// `no_merge` naming the draft where the marker marks no merge of the
     /// composition's or the draft carries none, the composition dropped and
     /// nothing keyed (skep #992), then its keying's on the draft as it stands
@@ -1510,7 +1515,22 @@ impl Shell {
             }
             None => {
                 let also = side.iter().cloned().collect();
-                let (state, _) = self.open_panel(&session, &signed, OpenArgs { draft: into.clone(), also, doc: Some(doc.clone()), mint: None, claim: false, selection: None, notes: None, readable_drafts: None, published: None, merge_landing: true })?;
+                let (state, _) = self.open_panel(
+                    &session,
+                    &signed,
+                    OpenArgs {
+                        draft: into.clone(),
+                        also: Some(also),
+                        doc: Some(doc.clone()),
+                        mint: None,
+                        claim: Some(false),
+                        selection: None,
+                        notes: None,
+                        readable_drafts: None,
+                        published: None,
+                        merge_landing: true,
+                    },
+                )?;
                 self.carried(&key, &composition, state.marker())?;
                 self.publications.stand(key.clone(), state.clone());
                 state

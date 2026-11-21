@@ -383,19 +383,28 @@ impl Name {
     /// names the `session` where no composition stands, else the `draft`,
     /// with the `withdrawal` named beside it at a withdrawal's undo.
     pub const NO_MERGE: Name = Name("no_merge");
-    /// A `merge.land` over a panel of the draft in another form or document.
+    /// A call over a panel of the draft in another form or document.
     ///
-    /// The family's panel of the draft the composition landed in, standing
-    /// or held, publishes into another document than the composition's or
-    /// mints an edition, and a shot through it would publish the merge
-    /// outside the document merged. So nothing is composed or sent, and
-    /// that panel, the family's standing panel and the composition stand as
-    /// they were. The detail names the `draft` and exactly one of the
-    /// panel's `doc` and `mint`, as `publication.open` took them. The way on
-    /// is `publication.cancel` of that panel, a held one re-opened first,
-    /// then `merge.land` again: confirming the panel instead publishes the
-    /// draft as a document of its own, and the next `merge.land` is refused
-    /// `base_unrecorded`.
+    /// At `merge.land` the family's panel of the draft the composition
+    /// landed in, standing or held, publishes into another document than the
+    /// composition's or mints an edition, and a shot through it would
+    /// publish the merge outside the document merged. So nothing is
+    /// composed or sent, and that panel, the family's standing panel and the
+    /// composition stand as they were. The way on is `publication.cancel` of
+    /// that panel — a held one re-opened first in its own form, by
+    /// `publication.open` naming the draft and the `doc` or `mint` the
+    /// refusal names and no other member — then `merge.land` again:
+    /// confirming the panel instead publishes the draft as a document of its
+    /// own, and the next `merge.land` is refused `base_unrecorded`.
+    ///
+    /// At `publication.open` the family's panel of the draft, standing or
+    /// held, holds a member the open passes in another form — another `doc`
+    /// or `mint`, `claim`, `also`, `notes`, `readable_drafts` or `published`
+    /// — so nothing is read and every panel stands as it stood (skep #979).
+    /// The way on is the same re-open in its own form, then
+    /// `publication.cancel` of it where a fresh panel is wanted. At either
+    /// call the detail names the `draft` and exactly one of the panel's
+    /// `doc` and `mint`, as `publication.open` took them.
     pub const OTHER_PANEL: Name = Name("other_panel");
     /// A side whose base the merge library cannot read (`client.md` §4b.1's
     /// merge row, `BaseUnknown{side}`).

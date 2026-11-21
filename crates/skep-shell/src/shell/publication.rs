@@ -54,21 +54,33 @@
 //! **The panels** ([`Publications`]). One family per (board, principal): the
 //! STANDING panel — the ceremony that stands, the one `count`, `confirm` and
 //! `cancel` act on — and the HELD ones behind it, one per draft, which those
-//! three never touch. An `open` on another draft puts the standing panel
-//! behind it, held with the moment it was put there; an `open` on a held
-//! draft with no selection, or the held one, re-opens it as it stands — the
-//! switches and answers the page last sent it, the base its first open
-//! read and the family it left behind, `hold: {since}`, the base's standing
-//! typed again and the windows re-read, never from the read's cache — where
-//! a part's naming changed since, its origin published meanwhile, the
-//! open's reads run again and the answers carried onto the parts as they
-//! stand, one a part no longer admits asked again — while a differing
-//! selection ends the hold, the held answers lost, a fresh panel answered
-//! (item 1 (a)). Every panel records the session it was
+//! three never touch. An `open` on another draft puts the standing panel behind
+//! it, held with the moment it was put there; an `open` on a held draft with no
+//! selection, or the held one, and every other member it passes the panel's
+//! (below), re-opens it as it stands — the switches and answers the page last
+//! sent it, the base its first open read and the family it left behind,
+//! `hold: {since}`, the base's standing typed again and the windows re-read,
+//! never from the read's cache — where a part's naming changed since, its
+//! origin published meanwhile, the open's reads run again and the answers
+//! carried onto the parts as they stand, one a part no longer admits asked
+//! again — while a differing selection ends the hold, the held answers lost, a
+//! fresh panel answered (item 1 (a)). Every panel records the session it was
 //! opened or last touched under and dies with it: the bus's watcher
-//! ([`Publications::ended`]) drops a dead session's panels and says `ended`
-//! for each, whichever thread met the death (§4b.1's one session rule;
-//! §4b.2).
+//! ([`Publications::ended`]) drops a dead session's panels and says `ended` for
+//! each, whichever thread met the death (§4b.1's one session rule; §4b.2).
+//!
+//! A re-open brings a panel back in the form it holds, never another
+//! (skep #979). Every member the open passes — `doc` or `mint`, `claim`,
+//! `also` in its order, `notes`, `readable_drafts` with the draft joining it
+//! as a fresh open joins it, and `published` — must be the panel's, and a
+//! member left out is read as the panel's own. One that differs is refused
+//! `other_panel` naming the draft and the panel's `doc` or `mint`, before
+//! anything is read, every panel of the family as it stood, so the caller
+//! re-opens it in that form or cancels it, and a confirm never publishes in
+//! a form the open did not ask for. The panel's `also` is the one it was last
+//! keyed with: a landing's keying names the draft side in it (**The
+//! landing**), so after a `merge.land` re-statement a re-open passing the
+//! page's first `also` is refused, and one passing none re-opens.
 //!
 //! **Before any frame.** `open` and `confirm` meet the shell's one write
 //! door through `Shell::signed` (`Shell::write_door`): a bare session is
@@ -360,11 +372,14 @@ impl PanelState {
         self.marker.as_ref()
     }
 
-    /// Returns the refusal of a landing through this panel, `other_panel`.
+    /// Returns `other_panel`, the refusal of a call this panel's form refuses.
     ///
-    /// The panel publishes into another document than the composition's or
-    /// mints an edition. The detail names the draft and whichever of `doc`
-    /// and `mint` the open took, never both: `publication.open` admits one.
+    /// A landing meets it where the panel publishes into another document
+    /// than the composition's or mints an edition
+    /// ([`Publications::stood_for`]), and an open where a member it passes
+    /// differs from the panel's ([`Shell::open_panel`]). The detail names the
+    /// draft and whichever of `doc` and `mint` the open took, never both:
+    /// `publication.open` admits one, and the panel re-opens by that one.
     fn other_panel(&self) -> Refusal {
         let mut detail = json!({"draft": self.draft().to_string()});
         if let Some(doc) = &self.inputs.doc {
@@ -901,10 +916,10 @@ impl Shell {
     /// parts, inherited, merge_records, edition_links, p3_stands, standing?,
     /// head?, left_behind, hold?}` (the module doc): a held or standing panel
     /// of the draft re-opened as it stands where the selection is none or the
-    /// same,
-    /// its base's standing typed again and its windows re-read (`also`, the
-    /// base and the family left behind as it held them); else the draft's
-    /// base read off the board and its standing
+    /// same and every other member passed is the panel's, one left out read
+    /// as the panel's (**The panels**), its base's standing typed again and
+    /// its windows re-read (the base and the family left behind as it held
+    /// them); else the draft's base read off the board and its standing
     /// typed (**The base**), the family it leaves behind read (**The family
     /// left behind**) and the composition's first steps run afresh over the
     /// session's board, the shell's own lists where the page passes none,
@@ -925,9 +940,11 @@ impl Shell {
     /// 2. `malformed_args` naming `session`, then `session_ended`;
     ///    `write_in_bare_session`, then `another_window`, naming the call;
     ///    `store_unreadable`, `no_account`;
-    /// 3. a held or standing panel re-opened: at the document form its base
-    ///    read and its standing typed again, refused as at step 4; then its
-    ///    windows read's faults, as the reads' below;
+    /// 3. a held or standing panel re-opened: `other_panel` naming the draft
+    ///    and the panel's `doc` or `mint` where a member passed differs from
+    ///    the panel's, nothing read and every panel as it stood; then at the
+    ///    document form its base read and its standing typed again, refused
+    ///    as at step 4; then its windows read's faults, as the reads' below;
     /// 4. at the document form, the base read's: `no_such_document` or
     ///    `unreadable` naming `doc` or the draft, `busy`, `session_died`,
     ///    `shape`, the board's own verdicts verbatim, `unreachable` — then
@@ -952,14 +969,14 @@ impl Shell {
         // the session is looked up — the order every row keeps.
         let doc = optional(args, "doc", address_arg)?;
         let mint = optional(args, "mint", address_arg)?;
-        let claim = optional(args, "claim", Value::as_bool)?.unwrap_or(false);
+        let claim = optional(args, "claim", Value::as_bool)?;
         let selection = optional(args, "selection", runs_arg)?;
         let notes = optional(args, "notes", addresses_arg)?;
         let readable_drafts = optional(args, "readable_drafts", addresses_arg)?;
         let published = optional(args, "published", addresses_arg)?;
-        let also = optional(args, "also", addresses_arg)?.unwrap_or_default();
+        let also = optional(args, "also", addresses_arg)?;
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
-        admit_also(&draft, &also)?;
+        admit_also(&draft, also.as_deref().unwrap_or_default())?;
         match (&doc, &mint) {
             (None, None) => return Err(Refusal::malformed("doc or mint")),
             (Some(_), Some(_)) => return Err(Refusal::malformed("mint")),
@@ -979,30 +996,34 @@ impl Shell {
     /// where the family holds one and the selection is none or the one it
     /// holds, with its standing typed again, its marker read again and its
     /// windows re-read — the hold's `{since}` beside it where it was held —
-    /// else the composition's first steps run afresh (the module doc). The
-    /// panel is answered, not stood: the caller stands it. `merge.land`
-    /// opens the panel of the draft its composition landed in through it
-    /// where the page opened none.
+    /// else the composition's first steps run afresh (the module doc). A
+    /// re-open passing a member that differs from the panel's is refused
+    /// before any read ([`OpenArgs::differs_from`]). The panel is answered,
+    /// not stood: the caller stands it. `merge.land` opens the panel of the
+    /// draft its composition landed in through it where the page opened none.
     ///
     /// # Errors
     ///
     /// Steps 3 to 6 of [`Shell::publication_open`]'s.
     pub(super) fn open_panel(&self, session: &Arc<SessionEntry>, signed: &Signed, args: OpenArgs) -> Result<(PanelState, Option<Value>), Refusal> {
-        let OpenArgs { draft, also, doc, mint, claim, selection, notes, readable_drafts, published, merge_landing } = args;
         let key = Self::family_key(session);
         let p = signed.publisher(session);
         let fault = |f: Fault| self.fault(session, "publication.open", f);
         // A panel of this draft standing or held: re-opened as it stands
-        // where the selection is none or the one it holds (item 1 (a)), its
-        // base's standing typed again and its claim composed again off the
-        // marker as it stands now.
-        if let Some(mut state) = self.publications.of_draft(&key, &draft) {
-            if selection.as_ref().is_none_or(|s| *s == state.inputs.selection) {
+        // where the selection is none or the one it holds (item 1 (a)) and
+        // every other member passed is its own, refused before any read
+        // where one is not (skep #979); its base's standing typed again and
+        // its claim composed again off the marker as it stands now.
+        if let Some(mut state) = self.publications.of_draft(&key, &args.draft) {
+            if args.selection.as_ref().is_none_or(|s| *s == state.inputs.selection) {
+                if args.differs_from(&state.inputs) {
+                    return Err(state.other_panel());
+                }
                 if let Some(trunk) = &state.inputs.doc {
-                    state.standing = Some(self.typed_base(session, &p, "publication.open", trunk, &draft)?.1);
-                    let marker = self.draft_marker(session, &draft)?;
+                    state.standing = Some(self.typed_base(session, &p, "publication.open", trunk, &args.draft)?.1);
+                    let marker = self.draft_marker(session, &args.draft)?;
                     state.inputs.supersede = self.marker_claim(session, trunk, marker.as_ref())?;
-                    state.inputs.merge_landing = state.inputs.merge_landing || merge_landing || marker.is_some();
+                    state.inputs.merge_landing = state.inputs.merge_landing || args.merge_landing || marker.is_some();
                 }
                 // The windows re-read: where a part's naming changed — its
                 // origin published meanwhile, or a merge landed since whose
@@ -1016,8 +1037,9 @@ impl Shell {
                 return Ok((state, hold));
             }
             // A differing selection ends the hold: the held answers lost.
-            self.publications.drop_draft(&key, &draft);
+            self.publications.drop_draft(&key, &args.draft);
         }
+        let OpenArgs { draft, also, doc, mint, claim, selection, notes, readable_drafts, published, merge_landing } = args;
         // The base: the draft's own, read off the board and typed against
         // the chain's head — never the head where nothing names it; the
         // birth shape at the mint form, which has no chain to stand in. THE
@@ -1041,11 +1063,21 @@ impl Shell {
             Some(s) => s,
             None => self.whole_draft(session, &draft)?,
         };
-        let mut readable = readable_drafts.unwrap_or_else(|| own_drafts.clone());
-        if !readable.contains(&draft) {
-            readable.push(draft.clone());
-        }
-        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts: readable, published: published.unwrap_or(own_published), supersede, merge_landing };
+        let readable = with_draft(readable_drafts.unwrap_or_else(|| own_drafts.clone()), &draft);
+        let inputs = lib::Inputs {
+            doc,
+            mint,
+            claim: claim.unwrap_or(false),
+            base,
+            draft: draft.clone(),
+            also: also.unwrap_or_default(),
+            selection,
+            notes: notes.unwrap_or_default(),
+            readable_drafts: readable,
+            published: published.unwrap_or(own_published),
+            supersede,
+            merge_landing,
+        };
         let left_behind = match (&inputs.doc, &inputs.base, &standing) {
             (Some(trunk), Some((base, _)), Some(standing)) => lib::left_behind(&p, trunk, base, &inputs.draft, &inputs.also, standing, &own_drafts).map_err(fault)?,
             _ => Vec::new(),
@@ -1711,22 +1743,25 @@ impl Shell {
     }
 }
 
-/// The members of `publication.open` past the session, as the row reads
-/// them: what [`Shell::open_panel`] opens a panel from.
+/// The members of `publication.open` past the session, as the row reads them.
+///
+/// [`Shell::open_panel`] opens a panel from them. A member the call leaves
+/// out is `None`: at a fresh open read as its field says, at a re-open the
+/// panel's own, never compared ([`OpenArgs::differs_from`]).
 pub(super) struct OpenArgs {
     /// The rendering draft.
     pub(super) draft: Address,
-    /// The other drafts of the family whose words the shot re-mints.
-    pub(super) also: Vec<Address>,
+    /// The other drafts whose words the shot re-mints; none where `None`.
+    pub(super) also: Option<Vec<Address>>,
     /// The published document, at the document form.
     pub(super) doc: Option<Address>,
     /// The parent account, at the mint form.
     pub(super) mint: Option<Address>,
-    /// Whether the one write carries the edition claim.
-    pub(super) claim: bool,
+    /// Whether the one write carries the edition claim; not where `None`.
+    pub(super) claim: Option<bool>,
     /// The selection; the whole draft where none.
     pub(super) selection: Option<Vec<lib::Run>>,
-    /// The person's notes documents.
+    /// The person's notes documents; none where `None`.
     pub(super) notes: Option<Vec<Address>>,
     /// The person's drafts the page lists, which no step of the composition
     /// reads; the shell's own list where none.
@@ -1735,6 +1770,41 @@ pub(super) struct OpenArgs {
     pub(super) published: Option<Vec<Address>>,
     /// Whether the panel carries a merge the draft's marker may not name.
     pub(super) merge_landing: bool,
+}
+
+impl OpenArgs {
+    /// Returns whether a member the call passed differs from the panel's.
+    ///
+    /// `held` is the panel's inputs. A member left out is the panel's own and
+    /// is never compared. `doc` and `mint` are compared each where passed, so a
+    /// call of the other form differs; `claim` where passed; `also`, `notes`
+    /// and `published` as the lists passed, in their order; and
+    /// `readable_drafts` as a fresh open holds it, the draft joining it
+    /// (`with_draft`). The selection is the caller's to compare: one that
+    /// differs ends the hold (item 1 (a)).
+    fn differs_from(&self, held: &lib::Inputs) -> bool {
+        let differs = |passed: Option<&[Address]>, own: &[Address]| passed.is_some_and(|passed| passed != own);
+        let readable = self.readable_drafts.clone().map(|drafts| with_draft(drafts, &self.draft));
+        (self.doc.is_some() && self.doc != held.doc)
+            || (self.mint.is_some() && self.mint != held.mint)
+            || self.claim.is_some_and(|claim| claim != held.claim)
+            || differs(self.also.as_deref(), &held.also)
+            || differs(self.notes.as_deref(), &held.notes)
+            || differs(readable.as_deref(), &held.readable_drafts)
+            || differs(self.published.as_deref(), &held.published)
+    }
+}
+
+/// Returns `drafts` with `draft` joining them last where they leave it out.
+///
+/// It is the list a panel reads as the person's drafts: a fresh open builds
+/// the panel's list so, and a re-open compares a passed one so
+/// ([`OpenArgs::differs_from`]).
+fn with_draft(mut drafts: Vec<Address>, draft: &Address) -> Vec<Address> {
+    if !drafts.contains(draft) {
+        drafts.push(draft.clone());
+    }
+    drafts
 }
 
 /// What [`Shell::confirm_standing`] answers.

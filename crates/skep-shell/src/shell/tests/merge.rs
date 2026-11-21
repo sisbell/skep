@@ -2544,8 +2544,12 @@ fn a_landing_over_a_page_panel_that_lists_no_origin_still_names_the_part() {
 /// refuses `window_parts_owed` naming the part's three answers, nothing
 /// sent; given `keep_private` it lands, the member holding the window and
 /// the acknowledgment naming the answer, its private rows left private and
-/// the merge's defaults taken. The same answers through the page's panel
-/// compose the same member (skep #932: the one request, the shared core).
+/// the merge's defaults taken. Through the page instead, its open of L over
+/// the panel the row opened — which holds the shell's own lists — passing
+/// lists of its own is refused `other_panel` naming L and E, the panel's
+/// form (skep #979); that panel cancelled, the page's own opens afresh, and
+/// the same answers through it compose the same member (skep #932: the one
+/// request, the shared core).
 #[test]
 fn a_part_no_record_names_is_asked_and_its_answer_composes_as_the_panels() {
     let compose = |dir: &TempDir, sd: &Skepd, panel_route: bool| -> Vec<(String, String)> {
@@ -2570,6 +2574,9 @@ fn a_part_no_record_names_is_asked_and_its_answer_composes_as_the_panels() {
         let answers = json!({ key: "keep_private" });
         let member = if panel_route {
             let open = json!({"session": g.session, "draft": l, "doc": f.edition, "also": [b], "readable_drafts": [l, b], "published": [f.edition]});
+            let other = g.call("publication.open", open.clone()).unwrap_err().to_value();
+            assert_eq!(other, json!({"kind": "shell", "name": "other_panel", "draft": l, "doc": f.edition}), "the row's panel holds the shell's own lists: {other}");
+            g.call("publication.cancel", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
             g.call("publication.open", open).unwrap_or_else(|r| panic!("{r}"));
             let acked = g.call("publication.confirm", json!({"session": g.session, "answers": answers})).unwrap_or_else(|r| panic!("{r}"));
             acked["member"].as_str().expect("the member").to_string()

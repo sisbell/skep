@@ -1040,6 +1040,20 @@ fn spelled(name: &str) -> String {
     format!("{{{}}}", fields.join(", "))
 }
 
+/// Returns a refusal of the shell's own as a reference spells it.
+///
+/// It is the refusal's name, then the shape's other members, as
+/// `held_lines {doc, held}`: the `kind` and the `name` every one carries
+/// stand in its name.
+fn spelled_refusal(name: &str) -> String {
+    let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+    let named =
+        shape.fields.iter().find(|field| field.name == "name").and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\'')).unwrap_or_else(|| panic!("{name} carries its name as one literal"));
+    let members: Vec<String> =
+        shape.fields.iter().filter(|field| field.name != "kind" && field.name != "name").map(|field| if field.required { field.name.to_string() } else { format!("{}?", field.name) }).collect();
+    format!("{named} {{{}}}", members.join(", "))
+}
+
 /// Returns an inline object type's member names, `b?` for an optional `b`.
 fn members(object: &str) -> Vec<&str> {
     object.trim_matches(|c| c == '{' || c == '}').split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()).collect()
@@ -1061,8 +1075,11 @@ fn alias(declarations: &str, name: &str) -> Vec<String> {
 /// `, …`, the empty answer as `{}` — and the open and count references the
 /// shapes of the panel's members — a window's parts among them; the open's
 /// names each standing the shell's
-/// `BaseStanding` spells and its one refusal of a base by the shell's name —
-/// `base_unrecorded` with its members and reasons — and neither the open's
+/// `BaseStanding` spells, its one refusal of a base by the shell's name —
+/// `base_unrecorded` with its members and reasons — and its refusal of a
+/// re-open passing a member the panel does not hold, `other_panel` as the
+/// shell's `OtherPanelRefusal` spells it, with a member left out read as the
+/// panel's and the way on (skep #979); neither the open's
 /// card nor its reference names `base_superseded`
 /// (the shell refuses no standing; a draft begun before version 1 is told
 /// `superseded_first`), while the confirm's reference names the library's
@@ -1126,6 +1143,13 @@ fn the_publication_references_state_the_shells_shapes() {
         assert!(!said.contains(superseded), "the open refuses no standing — a draft begun before version 1 is told superseded_first: {said}");
     }
     assert!(open.contains("superseded_first (") && open.contains("beside version 1 as its daughter"), "the open reference tells the fourth standing and where its member lands: {open}");
+    let other_panel = spelled_refusal("OtherPanelRefusal");
+    assert!(
+        open.contains(&format!("is refused {other_panel} (isError), naming the panel's own doc or mint, nothing read and every panel as it stood"))
+            && open.contains("one you leave out read as the panel's")
+            && open.contains("open it with that doc or mint alone, then publication_cancel it for a fresh panel"),
+        "the open reference names the refusal of a re-open in another form by the shell's shape, a member left out the panel's, and the way on: {open}"
+    );
     let confirm = reference(&catalog, "publication_confirm");
     assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm reference names the library's base_superseded arm: {confirm}");
     assert!(confirm.contains("superseded_first where version 1 was"), "the confirm reference re-states a first draft's standing moved: {confirm}");
@@ -1182,7 +1206,9 @@ fn the_publication_references_state_the_shells_shapes() {
 /// the shell's own an agent acts on by its name with its members, as
 /// REJECTIONS ARE DATA names `held_lines {doc, held}`: every tool's
 /// `held_lines`, and `merge_land`'s `window_parts_owed`, each part in it
-/// spelled as the shell's `WindowPart`, and `other_panel`; the compose
+/// spelled as the shell's `WindowPart`, and `other_panel`, whose way on it
+/// and MERGING say re-opens a held panel in its own form before the cancel,
+/// an open in another being refused the same (skep #979); the compose
 /// reference names `base_unknown` with every member the shell answers it
 /// with, by each reason, at the draft side and at the fork side,
 /// `bare_source` naming its `source` for a draft of yours or a fork begun
@@ -1211,23 +1237,6 @@ fn the_publication_references_state_the_shells_shapes() {
 /// alone would tell every agent of an answer the shell no longer gives.
 #[test]
 fn the_merge_references_state_the_shells_shapes() {
-    /// Returns a refusal of the shell's own as a reference spells it.
-    ///
-    /// It is the refusal's name, then the shape's other members, as
-    /// `held_lines {doc, held}`: the `kind` and the `name` every one carries
-    /// stand in its name.
-    fn refusal(name: &str) -> String {
-        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
-        let named = shape
-            .fields
-            .iter()
-            .find(|field| field.name == "name")
-            .and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\''))
-            .unwrap_or_else(|| panic!("{name} carries its name as one literal"));
-        let members: Vec<String> =
-            shape.fields.iter().filter(|field| field.name != "kind" && field.name != "name").map(|field| if field.required { field.name.to_string() } else { format!("{}?", field.name) }).collect();
-        format!("{named} {{{}}}", members.join(", "))
-    }
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, row, nested, refusals) in [
@@ -1245,11 +1254,17 @@ fn the_merge_references_state_the_shells_shapes() {
             assert!(said_all.contains(&said), "the {name} reference spells {shape} as {said}: {said_all}");
         }
         for shape in refusals {
-            let said = refusal(shape);
+            let said = spelled_refusal(shape);
             assert!(said_all.contains(&said), "the {name} reference names the refusal {shape} as {said}: {said_all}");
         }
     }
     let merging = topic(&catalog, "MERGING");
+    // The way on from `other_panel`: a held panel is re-opened in its own
+    // form first, since an open in another is refused the same.
+    let own_form = "a held one first opened again in its own form, publication_open with the draft and the doc or mint the refusal names and nothing else";
+    for (whose, said) in [("MERGING", merging), ("the merge_land reference", reference(&catalog, "merge_land"))] {
+        assert!(said.contains(own_form), "{whose} re-opens a held panel in its own form before the cancel: {said}");
+    }
     for kind in alias(&declarations, "GapKind") {
         let kind = kind.trim_matches('\'');
         for (whose, said) in [("merge_compose's reference", reference(&catalog, "merge_compose")), ("MERGING", merging)] {

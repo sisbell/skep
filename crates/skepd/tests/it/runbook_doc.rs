@@ -733,6 +733,30 @@ fn runbook_says_a_health_probe_that_hangs_waits_on_the_volume() {
     }
 }
 
+/// Checks that §4 step 3 says the binary's own end runs the orderly stop.
+///
+/// The binary asks for no stop, but `Skepd::wait` drops the server once the
+/// last worker has ended, and the drop runs the library's stop: the pruner's
+/// pass, a checkpoint in flight and the change feed's walk are let finish
+/// before the last line, and one that hangs holds the process with no exit
+/// for a unit to restart on. The step says so, and what to do then.
+#[test]
+fn runbook_says_the_binarys_end_runs_the_orderly_stop() {
+    let step =
+        collapsed(&passage("\n## 4. Stop", "3. **Know how it ends on its own.**", &["\n## 5."]));
+    assert!(!step.contains("never runs it"), "§4 step 3 has the binary run the stop: {step}");
+    for fact in [
+        "the `skepd` binary asks for none, and runs it only at its own end",
+        "the daemon lets what still runs finish",
+        "the change feed's walk, where one runs (Restart, step 3), to the step it is on",
+        "holds the process there, with no exit for a unit to restart on",
+        "`every worker thread has ended` never comes",
+        "Send it a signal (step 1) and start it again",
+    ] {
+        assert!(step.contains(fact), "§4 step 3 says {fact:?}: {step}");
+    }
+}
+
 /// Checks that §1 says a write refused for a cause but room has its line.
 ///
 /// Step 1 says such a write is refused `durability` and said by its own

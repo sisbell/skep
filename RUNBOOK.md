@@ -2033,20 +2033,24 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      bare entries: their key and their time are lost, and their
      operation too, save where the journal names it.
 
-3. **Know how it ends on its own.** The library's orderly stop is
-   for programs that embed the daemon; the `skepd` binary never
-   runs it. The binary ends by itself only once every worker thread
-   has ended. A panic is said on one line the first time it comes at
-   its site — on whichever thread, and once for each route a worker
-   was serving there (`while serving {route}`) — and the panics after
-   it there, on any thread, are counted and said within the hour: on
-   the hourly `standing:` line (`{n} more panics at {location} since
-   its last line`; The full volume, step 8), or on the site's next
-   line where no standing line has come for an hour (`; {n} more at
-   this site since its last line`). A worker thread's death is said
-   on a line of its own, with the panic's site and the workers left.
-   When the last worker is gone, the daemon says the counts not yet
-   said, then the last line below, and exits 1:
+3. **Know how it ends on its own.** The library's orderly stop is for
+   programs that embed the daemon; the `skepd` binary asks for none,
+   and runs it only at its own end. The binary ends by itself only
+   once every worker thread has ended. A panic is said on one line the
+   first time it comes at its site — on whichever thread, and once for
+   each route a worker was serving there (`while serving {route}`) —
+   and the panics after it there, on any thread, are counted and said
+   within the hour: on the hourly `standing:` line (`{n} more panics
+   at {location} since its last line`; The full volume, step 8), or on
+   the site's next line where no standing line has come for an hour
+   (`; {n} more at this site since its last line`). A worker thread's
+   death is said on a line of its own, with the panic's site and the
+   workers left. When the last worker is gone, the daemon lets what
+   still runs finish — the pruner's pass and a checkpoint in flight
+   run to their end, the change feed's walk, where one runs (Restart,
+   step 3), to the step it is on, and an event stream whose reader
+   stopped draining is waited on to its write timeout — then says the
+   counts not yet said, then the last line below, and exits 1:
 
    ```
    failure: {thread}: a thread panicked at {location}
@@ -2054,6 +2058,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    failure: {n} more panics at {location} since its last line
    failure: every worker thread has ended; the board serves nothing
    ```
+
+   A disk I/O that hangs under one of those, or a deadlock, holds the
+   process there, with no exit for a unit to restart on: the workers'
+   deaths are said, and `every worker thread has ended` never comes.
+   Send it a signal (step 1) and start it again. Where a device does
+   not answer, the process can stay past the signal until it does, and
+   a restart does not help while it does not: check the volume and its
+   device first.
 
    A panic on the binary's own thread, `main` — in the open, before
    any worker starts — ends it at once, exit 101, after its line and

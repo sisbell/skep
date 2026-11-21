@@ -28,8 +28,9 @@ pub(super) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// The socket write deadline, per write call, replies and events alike.
 ///
 /// A subscriber that stops draining errors out instead of blocking a thread
-/// forever — which is what keeps shutdown bounded even against a stalled
-/// peer.
+/// forever — which is what keeps
+/// [`Skepd::shutdown`](super::Skepd::shutdown)'s wait on a stalled peer to
+/// this timeout.
 pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The deadline for one transfer: the request in, or the answer out.
@@ -50,9 +51,10 @@ pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`MAX_REQUEST_BODY`](skep_core::limits::MAX_REQUEST_BODY) at one byte per
 /// interval is years, and `workers` such peers occupy the whole pool,
 /// leaving the daemon answering nothing with every structure inside it
-/// healthy. It is also what makes
-/// [`Skepd::shutdown`](super::Skepd::shutdown)'s bound true, since that stop
-/// joins a worker that may be mid-request.
+/// healthy. It is also what bounds the transfer in
+/// [`Skepd::shutdown`](super::Skepd::shutdown)'s wait on a worker that may be
+/// mid-request; the handler's own time is no transfer's, and nothing here
+/// bounds it.
 ///
 /// The two halves are bounded *separately* and not as one window, so that a
 /// request refused for exhausting its own deadline still has a deadline in
@@ -356,9 +358,9 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 /// here costs one of `workers` threads — which is why the reply path takes
 /// the deadline and `serve_events` does not: a subscriber runs on its own
 /// thread against a slot `Subscribers` already budgets. That exemption is
-/// what makes [`Skepd::shutdown`](super::Skepd::shutdown)'s bound include
-/// one write timeout — the stop joins a subscriber that may be blocked
-/// writing to a peer that stopped draining.
+/// why [`Skepd::shutdown`](super::Skepd::shutdown) waits up to one write
+/// timeout on a subscriber — the stop joins one that may be blocked writing
+/// to a peer that stopped draining.
 ///
 /// # Errors
 ///

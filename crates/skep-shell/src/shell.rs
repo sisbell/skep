@@ -383,7 +383,10 @@ pub trait NodeControl: Send + Sync {
     /// Stops the node: its orderly stop.
     ///
     /// A node already stopped is left stopped. The call that asks waits on
-    /// it under the node's lock, however long the orderly stop takes.
+    /// it under the node's lock, however long the orderly stop takes. The
+    /// orderly stop has no bound of its own: a daemon whose handler or
+    /// checkpoint never returns (a disk I/O that hangs, a deadlock) never
+    /// finishes it, and the call waits with it, the node's lock held.
     fn stop(&self);
 }
 

@@ -700,8 +700,10 @@ impl Skepd {
     /// each death said by its worker's catch as it comes, with the workers left
     /// — which the binary says as the failure it is and exits 1 on. An embedder
     /// that wants to stop a running server keeps the [`Skepd`] and calls
-    /// [`Skepd::shutdown`] instead. Returning ends every event stream too,
-    /// since the server is dropped here.
+    /// [`Skepd::shutdown`] instead. Returning ends every event stream too:
+    /// the server is dropped here, and its drop runs the rest of
+    /// [`Skepd::shutdown`]'s stop — the pruner's pass and a checkpoint in
+    /// flight let finish — so a return waits on what that stop waits on.
     pub fn wait(mut self) {
         for h in self.workers.drain(..) {
             let _ = h.join();
@@ -716,26 +718,33 @@ impl Skepd {
     /// threads too. Returning releases the kernel's journal-directory lock,
     /// so the same data dir can be reopened.
     ///
-    /// Bounded, and by more than one number: a worker mid-request runs to at
-    /// most one `TRANSFER_DEADLINE` plus one socket timeout in each
-    /// direction — a blob fetch's answer to one `BLOB_TRANSFER_BOUND` plus
-    /// one `BLOB_IDLE_BOUND` — plus its handler's own time; then every
-    /// subscriber is woken by the commit stream's broadcast, and one blocked
-    /// writing to a peer that stopped draining is joined only when its
-    /// socket's `WRITE_TIMEOUT` fires — `serve_events` writes without a
-    /// deadline by design (see `write_bounded`). So this stop does wait on a
-    /// client, for at most that timeout. Interrupting it would mean holding a
-    /// second descriptor per live stream, against the budget
-    /// `MAX_SUBSCRIBERS` exists to keep.
+    /// Bounded only where what it waits on is bounded. A worker mid-request
+    /// runs to at most one `TRANSFER_DEADLINE` plus one socket timeout in
+    /// each direction — a blob upload's body in and a blob fetch's answer out
+    /// to one `BLOB_TRANSFER_BOUND` plus one `BLOB_IDLE_BOUND` — plus its
+    /// handler's own time, which has no bound here. Then every subscriber is
+    /// woken by the commit stream's broadcast, and one blocked writing to a
+    /// peer that stopped draining is joined only when its socket's
+    /// `WRITE_TIMEOUT` fires — `serve_events` writes without a deadline by
+    /// design (see `write_bounded`). So this stop does wait on a client, for
+    /// at most that timeout. Interrupting it would mean holding a second
+    /// descriptor per live stream, against the budget `MAX_SUBSCRIBERS`
+    /// exists to keep. A pruner pass and a checkpoint in flight are let
+    /// finish, and the daemon, dropped as this returns, lets the change
+    /// feed's walk finish the step it is on (`skep-core`'s `Commits`): none
+    /// with a bound here. So a handler, a pass, a checkpoint or a walk's step
+    /// that never returns — a disk I/O that hangs, or a deadlock — makes this
+    /// stop never return, and its caller waits with it, the journal
+    /// directory's lock held.
     ///
     /// Calling it is how a caller learns the stop *finished*; a server that
     /// is merely dropped stops the same way, so a panic between [`serve`]
     /// and here cannot leak the threads or strand the lock.
     ///
-    /// The checkpoint thread is stopped and joined last: a checkpoint in
-    /// flight is let finish — the data directory is the beneficiary, a
-    /// landed base in place of a `.tmp` the next open would remove — and no
-    /// further one begins once the stop is asked.
+    /// The checkpoint thread is stopped and joined last of the server's
+    /// threads: a checkpoint in flight is let finish — the data directory is
+    /// the beneficiary, a landed base in place of a `.tmp` the next open
+    /// would remove — and no further one begins once the stop is asked.
     pub fn shutdown(mut self) {
         self.stop_and_join();
     }

@@ -1109,6 +1109,43 @@ fn the_module_doc_says_the_served_page_is_the_guest_reader() {
     }
 }
 
+/// Checks that `Skepd::shutdown`'s doc claims no bound its joins do not keep.
+///
+/// The stop joins each worker, the pruner and the checkpoint thread, and the
+/// daemon's drop as it returns joins the change feed's walk, none of them
+/// under a time bound: the doc says which of its waits are bounded and that
+/// one that never returns makes the stop never return. And `http.rs`, whose
+/// timeouts bound the waits that are, gives the stop no bound of its own.
+/// Read off the source, as the served page's paragraph is.
+#[test]
+fn the_stops_doc_promises_no_bound_its_joins_do_not_keep() {
+    let doc = |source: &str| -> String {
+        let lines = source.lines().map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("///").unwrap_or(line)
+        });
+        lines.collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let listen = include_str!("listen.rs");
+    let start = listen.find("    /// Stops the server in order").expect("the stop's doc");
+    let end = start + listen[start..].find("    pub fn shutdown(").expect("the stop's signature");
+    let stop = doc(&listen[start..end]);
+    for fact in [
+        "Bounded only where what it waits on is bounded",
+        "plus its handler's own time, which has no bound here",
+        "A pruner pass and a checkpoint in flight are let finish",
+        "lets the change feed's walk finish the step it is on",
+        "makes this stop never return, and its caller waits with it",
+    ] {
+        assert!(stop.contains(fact), "the stop's doc says {fact:?}: {stop}");
+    }
+    assert!(!stop.contains("Bounded,"), "the stop's doc claims no bound for the whole: {stop}");
+    let http = doc(include_str!("http.rs"));
+    for claim in ["shutdown bounded", "Skepd::shutdown)'s bound"] {
+        assert!(!http.contains(claim), "http.rs gives the stop no bound: {claim:?}");
+    }
+}
+
 /// THE GRAMMAR's MOMENTS, as a warning's class word spells each — the four
 /// the warning class is keyed by, `at reissue` the fourth (RULED at this
 /// lane's cut) — one label per moment and no two alike; and ROW 20's HEADER,

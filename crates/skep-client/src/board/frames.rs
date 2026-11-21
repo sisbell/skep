@@ -178,14 +178,18 @@ pub fn stage(from: &str, id: Option<&str>) -> Value {
 /// Builds `{"op":"create_well_known_document","account":…,"slot":2}`
 /// (wire.md §Namespace; the mailbox design §3).
 ///
-/// It mints `account`'s mailbox, the private document at
+/// It asks for `account`'s mailbox, the private document at
 /// [`mailbox_of`](crate::address::mailbox_of): its owner's alone, and made
-/// once, a second call answered the same address with nothing committed.
-/// It is [`create_well_known_document`] at the mailbox's slot,
+/// once, a later call answered the same address with nothing committed.
+/// The board creates every account's mailbox with its home page, in the
+/// commit that mints the account's doc 1 (the mailbox design §3), so on
+/// every account whose home the board minted the frame finds the mailbox
+/// standing and is answered `committed: false`. It is
+/// [`create_well_known_document`] at the mailbox's slot,
 /// [`MAILBOX_SLOT`](crate::address::MAILBOX_SLOT), with no `attest`: the
 /// mailbox is private, so its creation is no publish-class act and signs
-/// nothing, from a bare session and a signed one alike. No code of this
-/// crate sends the frame: it stands for an embedder, as [`T_MAIL`] does.
+/// nothing, from a bare session and a signed one alike. The frame stands
+/// for an embedder, as [`T_MAIL`] does; no ceremony of this crate needs it.
 pub fn create_mailbox(account: &str, id: Option<&str>) -> Value {
     create_well_known_document(account, crate::address::MAILBOX_SLOT, None, id)
 }

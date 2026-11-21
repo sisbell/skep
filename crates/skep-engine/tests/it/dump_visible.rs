@@ -18,7 +18,7 @@ use skep_arrangement::{Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, Seq, World};
 use skep_links::SlotArg;
-use skep_namespace::{staging_draft, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{mailbox_address, staging_draft, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
@@ -38,19 +38,24 @@ const SECRET: [u8; 3] = [201, 202, 203];
 struct Board {
     acct_a: Address,
     home_a: Address,
+    /// A's mailbox, which its home's commit made beside the home (M3's
+    /// mailbox rule): a private document holding nothing.
+    mailbox_a: Address,
     draft_a: Address,
     /// The one link in the draft — its dotted address is what the hints name.
     link_a: Address,
     acct_b: Address,
 }
 
-/// Two accounts under the genesis node: A (principal 1) with a published home
-/// and a private DRAFT holding one secret content value and one link; B
-/// (principal 2), a stranger to A's subtree until granted.
+/// Two accounts under the genesis node: A (principal 1) with a published home,
+/// the private mailbox its home's commit made, and a private DRAFT holding
+/// one secret content value and one link; B (principal 2), a stranger to A's
+/// subtree until granted.
 fn board(engine: &Engine) -> Board {
     let ns = engine.namespace();
     let acct_a = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, A);
     let (home_a, _) = ns.create_new_document(A, &acct_a, None).expect("A's published home");
+    let mailbox_a = mailbox_address(&acct_a).expect("an account's slot");
     let (draft_a, _) = ns.create_new_document(A, &acct_a, None).expect("A's private draft");
     let acct_b = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, B);
     let owner = Caller::Principal(A);
@@ -75,7 +80,7 @@ fn board(engine: &Engine) -> Board {
             SlotArg::Resolve(vec![vspec(&draft_a, 1, 2)]),
         )
         .expect("the owner links within its draft");
-    Board { acct_a, home_a, draft_a, link_a, acct_b }
+    Board { acct_a, home_a, mailbox_a, draft_a, link_a, acct_b }
 }
 
 /// A grant of `content_prefix` to `grantee`, issued by A from its doc 1.
@@ -105,7 +110,8 @@ fn secret_line() -> String {
 }
 
 /// The v5 format: the banner, the PUBLICATION section listing the board's
-/// draft and, after it in address order, genesis's staging draft, and
+/// two drafts — A's mailbox and A's draft — and, after them in address
+/// order, genesis's staging draft, and
 /// the GRANTS section holding the fold's operative record with its five
 /// fields — a first share's `replaces` the EMPTY state, `none` (PUB-5.15
 /// (iv)) — and the faithfulness check, which now compares the grant fold's
@@ -118,7 +124,10 @@ fn the_v5_format_renders_the_publication_and_grants_sections() {
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
-    let publication = format!("\"publication\": {}", seq_of(&[&board.draft_a, &staging_draft()]));
+    let publication = format!(
+        "\"publication\": {}",
+        seq_of(&[&board.mailbox_a, &board.draft_a, &staging_draft()])
+    );
     assert!(text.contains(&publication), "expected {publication} in:\n{text}");
     let grants = format!(
         "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}, \"replaces\": none}}}}",
@@ -244,10 +253,11 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     assert_eq!(stranger.as_str(), guest, "a stranger's class is the guest's");
 }
 
-/// The OWNER lists its drafts and reads their content and links; the
-/// GRANTEE follows the grant — before it, B's dump is the guest's; after it,
-/// B's holds the draft's publication-section entry, content and link — and the
-/// owner's and the grantee's dumps agree once both read the same set.
+/// The OWNER lists its drafts — its mailbox and its draft — and reads their
+/// content and links; the GRANTEE follows the grant — before it, B's dump is
+/// the guest's; after it, B's holds the draft's publication-section entry,
+/// content and link — and the owner's and the grantee's dumps agree once both
+/// read the same set, the mailbox granted too.
 #[test]
 fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
     let engine = mem_engine();
@@ -257,21 +267,23 @@ fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
     assert_eq!(before, engine.world_dump_visible_to(None), "ungranted, B reads as the guest");
 
     let owner = engine.world_dump_visible_to(Some(A)).into_string();
-    let section = format!("\"publication\": [{}]", quoted(&board.draft_a));
-    assert!(owner.contains(&section), "the owner's publication section lists its draft:\n{owner}");
+    let owners = format!("\"publication\": {}", seq_of(&[&board.mailbox_a, &board.draft_a]));
+    assert!(owner.contains(&owners), "the owner's publication section lists its drafts:\n{owner}");
     assert!(owner.contains(&secret_line()), "…with its content line:\n{owner}");
     assert!(owner.contains(&quoted(&board.link_a)), "…and its link in the hints:\n{owner}");
 
     grant(&engine, &board, &board.draft_a, &board.acct_b);
     let grantee = engine.world_dump_visible_to(Some(B)).into_string();
+    let section = format!("\"publication\": [{}]", quoted(&board.draft_a));
     assert!(
         grantee.contains(&section),
         "the grantee's publication section holds the granted draft:\n{grantee}"
     );
     assert!(grantee.contains(&secret_line()), "…and its content line:\n{grantee}");
     assert!(grantee.contains(&quoted(&board.link_a)), "…and its link:\n{grantee}");
+    grant(&engine, &board, &board.mailbox_a, &board.acct_b);
     assert_eq!(
-        grantee,
+        engine.world_dump_visible_to(Some(B)).into_string(),
         engine.world_dump_visible_to(Some(A)).into_string(),
         "owner and grantee read one set, so they dump one text"
     );
@@ -337,14 +349,15 @@ fn a_historical_world_dumps_at_the_head_s_class() {
         "…and B, which cannot read the later draft at the head either, sees none of it"
     );
     // …so the as-of-N claim is witnessed at a class that WOULD see the later
-    // draft if the N-world held it: A reads both of its drafts at the head.
+    // draft if the N-world held it: A reads every draft of its own at the head.
     let at_n_for_a = engine
         .dump_of_visible(&world_n, &|doc: &Address| head.world().readable(Some(A), doc))
         .into_string();
+    let a_at_n = format!("\"publication\": {}", seq_of(&[&board.mailbox_a, &board.draft_a]));
     assert!(
-        at_n_for_a.contains(&first_draft_alone),
-        "at A's head class the N-world's section still lists only the draft that existed at \
-         N:\n{at_n_for_a}"
+        at_n_for_a.contains(&a_at_n),
+        "at A's head class the N-world's section still lists only the drafts that existed at \
+         N, its mailbox and its first draft:\n{at_n_for_a}"
     );
 
     // The same N-world at the N-world's OWN class would withhold it — which
@@ -355,17 +368,19 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     assert!(!own.contains(&secret_line()), "the N-world's own class has no grant yet");
 
     // The head, at B's class: B holds a grant on the first draft alone, so
-    // B's publication section lists that draft; A reads both, in address order.
+    // B's publication section lists that draft; A reads its mailbox and both
+    // drafts, in address order.
     let head_b = engine.world_dump_visible_to(Some(B)).into_string();
     assert!(
         head_b.contains(&first_draft_alone),
         "B's head publication section: the granted draft alone:\n{head_b}"
     );
-    let both_drafts = format!("\"publication\": {}", seq_of(&[&board.draft_a, &draft_two]));
+    let every_draft =
+        format!("\"publication\": {}", seq_of(&[&board.mailbox_a, &board.draft_a, &draft_two]));
     let head_a = engine.world_dump_visible_to(Some(A)).into_string();
     assert!(
-        head_a.contains(&both_drafts),
-        "A's head publication section: both drafts, address order:\n{head_a}"
+        head_a.contains(&every_draft),
+        "A's head publication section: its mailbox and both drafts, address order:\n{head_a}"
     );
 }
 

@@ -138,8 +138,9 @@ pub const SEED_PUBLISH_AT: u64 = {
 
 /// A fresh board's head: the publish, then a link per type.
 ///
-/// The ceremony's five commits land above it, at `SEED_HEAD + 2`, `+ 3`,
-/// `+ 6`, `+ 9` and `+ 12` ([`claim_board`]).
+/// The ceremony's five commits land above it, at `SEED_HEAD + 2`, `+ 4`,
+/// `+ 7`, `+ 10` and `+ 13` ([`claim_board`]): the home mint is two records,
+/// the home and the mailbox the account's first mint creates beside it.
 pub const SEED_HEAD: u64 = SEED_PUBLISH_AT + SEED_LINK_RECORDS * SEED_TYPES;
 
 /// The seed's commits ahead of its links.

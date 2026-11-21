@@ -1,11 +1,12 @@
 //! THE WELL-KNOWN CREATION against the real daemon (wire.md §Namespace; the
 //! mailbox design §2, §3; REG-4.131): `ceremony::create_well_known_document`
 //! over an ENFORCING board its owner claimed, from the owner's signed
-//! session. The call creates each of the four slots at its own address and
-//! in its own state — the mailbox private and unsigned, the bio, the link
-//! page and the policy document published, each under the attest this crate
-//! composes over the slot document's own address, which the board verifies
-//! — once per slot, and says whose act the answer is; the board's refusals
+//! session. The call answers each of the four slots at its own address and
+//! in its own state — the mailbox private and unsigned, standing from the
+//! claim, whose home commit made it; the bio, the link page and the policy
+//! document created published, each under the attest this crate composes
+//! over the slot document's own address, which the board verifies — once
+//! per slot, and says whose act the answer is; the board's refusals
 //! reach the caller verbatim; and a number no slot has is this client's own
 //! halt, nothing written.
 
@@ -48,17 +49,20 @@ fn document(answer: Result<Answer, Halt>) -> Value {
 
 /// Checks the call at every slot, on a claimed board that enforces.
 ///
-/// From the owner's signed session each slot's document is created at
-/// `<account>.0.<slot>` and the answer says this call created it. The slot
-/// fixes the state: the mailbox is private — its owner reads it, a guest is
-/// withheld it — and the bio, the link page and the policy document are
-/// published and empty, a guest reading each. At the three published slots
+/// From the owner's signed session each slot's document stands at
+/// `<account>.0.<slot>` after the call: the mailbox from the claim, the
+/// board having made it in the home's own commit, so the answer says this
+/// call created nothing; each other slot's by this call, and the answer
+/// says so. The slot fixes the state: the mailbox is private — its owner
+/// reads it, a guest is withheld it — and the bio, the link page and the
+/// policy document are published and empty, a guest reading each. At the
+/// three published slots
 /// the board is ENFORCING, so the creation lands only because the attest
 /// this crate composed verified: a frame signed over the parent account, or
 /// under another op's token, is refused `attestation_invalid` and the call
 /// halts. A second call under another `id` is answered the same address and
 /// says it created nothing; a re-send under the first `id` is the first
-/// acknowledgment whole, so it still says created.
+/// acknowledgment whole, so it says what the first said.
 #[test]
 fn the_call_creates_each_slot_once_in_its_own_state_and_signs_the_published_three() {
     let rig = rig();
@@ -67,7 +71,9 @@ fn the_call_creates_each_slot_once_in_its_own_state_and_signs_the_published_thre
     for slot in WELL_KNOWN_SLOTS {
         let addr = well_known_of(&rig.account, slot);
         let call = |id: &str| create_well_known_document(&board, &session, &rig.account, slot, &rig.device, id).unwrap_or_else(|halt| panic!("slot {slot} under `{id}`: {halt}"));
-        assert_eq!(call(&format!("wk-{slot}")), WellKnownDocument { addr: addr.clone(), created: true }, "slot {slot}: created at its own address");
+        // The board made the mailbox with the account's home, at the claim.
+        let created = slot != MAILBOX_SLOT;
+        assert_eq!(call(&format!("wk-{slot}")), WellKnownDocument { addr: addr.clone(), created }, "slot {slot}: at its own address");
 
         let (owners, guests) = (document(session.op(&frames::doc_metadata(&addr))), document(board.op(None, &frames::doc_metadata(&addr))));
         if slot == MAILBOX_SLOT {
@@ -77,7 +83,7 @@ fn the_call_creates_each_slot_once_in_its_own_state_and_signs_the_published_thre
         }
 
         assert_eq!(call(&format!("wk-{slot}-again")), WellKnownDocument { addr: addr.clone(), created: false }, "slot {slot}: a second call creates nothing");
-        assert_eq!(call(&format!("wk-{slot}")), WellKnownDocument { addr, created: true }, "slot {slot}: a re-send under the first id is the first acknowledgment");
+        assert_eq!(call(&format!("wk-{slot}")), WellKnownDocument { addr, created }, "slot {slot}: a re-send under the first id is the first acknowledgment");
     }
     session.close().expect("close");
 }

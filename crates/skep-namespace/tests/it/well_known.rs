@@ -1,7 +1,8 @@
 //! §B create_well_known_document over every slot: the four well-known
 //! documents an account's owner creates (the mailbox design §2, §3;
-//! REG-4.131) — the mailbox at 2, the bio at 3, the link page at 4 and the
-//! account's policy document at 5. What holds of each slot and of the four
+//! REG-4.131) — the mailbox at 2, which the account's home's own commit
+//! creates too, the bio at 3, the link page at 4 and the account's policy
+//! document at 5. What holds of each slot and of the four
 //! together: the address a creation lands at and the state it is created in,
 //! the slot's own and no caller's; that a document created published holds
 //! nothing and is an ordinary document from then on; that a slot is created
@@ -97,32 +98,48 @@ fn the_four_slots_are_documents_2_to_5_each_with_a_state_of_its_own() {
     }
 }
 
-/// A creation lands at `<account>.0.<slot>` in the slot's own state, whatever
-/// the account's count: the mailbox private, the bio, the link page and the
-/// policy document published. No argument of the op chooses the state. The
-/// document is registered in the commit that answers it, entered in the
-/// position map at that commit, owned at the account's own seat, and holds
-/// nothing: no version, no content, no link — a home like any document, whose
-/// chains open at their first slots, so its first version is `.1`.
+/// A slot's document stands at `<account>.0.<slot>` in the slot's own state,
+/// whatever the account's count: the mailbox private, the bio, the link page
+/// and the policy document published. No argument of the op chooses the
+/// state. On an account holding its home the mailbox stands from the home's
+/// own commit, so its slot answers it standing, dated at the home; each of
+/// the other three is created by the call, registered in the commit that
+/// answers it and entered in the position map at that commit. Each is owned
+/// at the account's own seat, and holds nothing: no version, no content, no
+/// link — a home like any document, whose chains open at their first slots,
+/// so its first version is `.1`.
 #[test]
 fn each_slot_is_created_at_its_own_address_in_its_own_state_holding_nothing() {
     for later in [0u32, 2] {
-        let (k, acct, _doc) = kernel_with_account_and_doc();
+        let (k, acct, doc) = kernel_with_account_and_doc();
         let ns = Namespace::new(&k);
+        let home_at = k.snapshot().world().m3().minted_at(&doc).expect("the home's position");
         for _ in 0..later {
             ns.create_new_document(ID1, &acct, None).expect("a later document");
         }
         for slot_named in WellKnownSlot::ALL {
             let expected = slot(&acct, slot_named.number());
             let before = k.current_seq();
-            assert!(!k.snapshot().world().m3().is_registered_document(&expected));
+            let mailbox = slot_named == WellKnownSlot::Mailbox;
+            assert_eq!(
+                k.snapshot().world().m3().is_registered_document(&expected),
+                mailbox,
+                "{slot_named:?}: only the mailbox stands ahead of the call, from the home's commit"
+            );
 
             let (created, at) = ns
                 .create_well_known_document(ID1, &acct, slot_named)
                 .expect("the account's owner creates the slot's document");
-            assert_eq!(created, WellKnown::Minted(expected.clone()), "{slot_named:?}, {later} later");
-            // Commit-before-acknowledge: the position is the creation's own.
-            assert_eq!(at, Seq(before.0 + 1), "{slot_named:?}");
+            let minted_at = if mailbox {
+                assert_eq!(created, WellKnown::Standing(expected.clone()), "{later} later");
+                assert_eq!(at, before, "the mailbox's call commits nothing");
+                home_at
+            } else {
+                assert_eq!(created, WellKnown::Minted(expected.clone()), "{slot_named:?}, {later} later");
+                // Commit-before-acknowledge: the position is the creation's own.
+                assert_eq!(at, Seq(before.0 + 1), "{slot_named:?}");
+                at
+            };
             assert_eq!(k.current_seq(), at);
 
             let m3 = k.snapshot().world().m3().clone();
@@ -142,7 +159,7 @@ fn each_slot_is_created_at_its_own_address_in_its_own_state_holding_nothing() {
                 Some((&expected, slot_named.born_published())),
                 "the publication walk holds the document with its bit"
             );
-            assert_eq!(m3.minted_at(&expected), Some(at));
+            assert_eq!(m3.minted_at(&expected), Some(minted_at), "{slot_named:?}");
             assert_eq!(m3.effective_owner(&expected), Some(ID1));
             assert_eq!(m3.account_seat(&expected), Some((&acct, ID1)));
             // It holds nothing, and is a home and a version's source.
@@ -179,7 +196,8 @@ fn each_slot_is_created_at_its_own_address_in_its_own_state_holding_nothing() {
 /// committed position the call read. A document standing at one slot answers
 /// nothing for another: with the bio standing, the policy document is still
 /// created, at its own address, and the link page and the mailbox after it,
-/// whatever the order the slots are asked in.
+/// whatever the order the slots are asked in. The account holds its doc 1 and
+/// no mailbox, so all four are the op's to create.
 #[test]
 fn a_slot_is_created_once_and_a_document_at_one_slot_never_answers_for_another() {
     for order in [
@@ -187,7 +205,7 @@ fn a_slot_is_created_once_and_a_document_at_one_slot_never_answers_for_another()
         [WellKnownSlot::Policy, WellKnownSlot::Mailbox, WellKnownSlot::Bio, WellKnownSlot::LinkPage],
         [WellKnownSlot::Mailbox, WellKnownSlot::LinkPage, WellKnownSlot::Policy, WellKnownSlot::Bio],
     ] {
-        let (k, acct, _doc) = kernel_with_account_and_doc();
+        let (k, acct, _doc) = kernel_with_account_doc_1_and_no_mailbox();
         let ns = Namespace::new(&k);
         let mut standing: Vec<(WellKnownSlot, Address)> = Vec::new();
         for slot_named in order {
@@ -223,13 +241,15 @@ fn a_slot_is_created_once_and_a_document_at_one_slot_never_answers_for_another()
 
 /// No creation moves a count: with all four slots created, the account's
 /// next document is the one its counter would have handed out, at a count of
-/// 1 and past the block alike; and on an account that holds no document the
-/// four are created and the account still holds none its counter handed out,
-/// so its first create is still its doc 1, born published.
+/// 1 and past the block alike, on an account holding its doc 1 and no
+/// mailbox; and on an account that holds no document the four are created
+/// and the account still holds none its counter handed out, so its first
+/// create is still its doc 1, born published — and finds the mailbox
+/// standing, so its commit is the home's one record.
 #[test]
 fn creating_every_slot_moves_no_count() {
     for later in [0u32, 1, 3] {
-        let (k, acct, _doc) = kernel_with_account_and_doc();
+        let (k, acct, _doc) = kernel_with_account_doc_1_and_no_mailbox();
         let ns = Namespace::new(&k);
         for _ in 0..later {
             ns.create_new_document(ID1, &acct, None).expect("a later document");
@@ -237,7 +257,8 @@ fn creating_every_slot_moves_no_count() {
         let frontier = k.snapshot().world().m3().mint_document(&acct, false).expect("next").0;
         assert_eq!(frontier, nth_document(&acct, later + 2));
         for slot_named in WellKnownSlot::ALL {
-            ns.create_well_known_document(ID1, &acct, slot_named).expect("created");
+            let (created, _) = ns.create_well_known_document(ID1, &acct, slot_named).expect("created");
+            assert!(matches!(created, WellKnown::Minted(_)), "{slot_named:?}: the call created it");
             assert_eq!(
                 k.snapshot().world().m3().mint_document(&acct, false).expect("next").0,
                 frontier,
@@ -257,9 +278,11 @@ fn creating_every_slot_moves_no_count() {
         ns.create_well_known_document(ID1, &acct, slot_named).expect("created with no doc 1");
         assert!(!k.snapshot().world().m3().has_documents(&acct), "{slot_named:?} counted");
     }
-    let (first, _) = ns.create_new_document(ID1, &acct, None).expect("the first create");
+    let before = k.current_seq();
+    let (first, at) = ns.create_new_document(ID1, &acct, None).expect("the first create");
     assert_eq!(first, nth_document(&acct, 1), "the first create is still doc 1");
     assert!(k.snapshot().world().m3().published(&first), "born published by the empty-account rule");
+    assert_eq!(at, Seq(before.0 + 1), "the mailbox stands, so the home's commit is one record");
 }
 
 /// The refusals keep their order at every slot: a caller that is not ω is
@@ -393,13 +416,15 @@ fn a_published_slots_creation_commits_under_the_attestation_and_the_mailbox_neve
     assert_eq!(PUBLISHED_SLOTS.map(WellKnownSlot::born_published), [true; 3]);
 }
 
-/// The four creations are four ordinary records, and they recover: a board
-/// that created them reopens holding each where it was created, in the
-/// state it was created in — the bio restored from a checkpoint, the rest by
-/// replay — with the counter where it stood. A call after the reopen is
-/// answered with the standing document and stages nothing; and a record at
-/// document 6, the first number past the named slots, is still refused by
-/// the fold, by the reserved block's own words.
+/// The four slots' documents are four ordinary records, and they recover: a
+/// board that holds them — the mailbox placed by its home's commit, the
+/// other three by their creations — reopens holding each where it was
+/// placed, in the state it was placed in — the mailbox and the bio restored
+/// from a checkpoint, the rest by replay — with the counter where it stood.
+/// A call after the reopen is answered with the standing document and
+/// stages nothing; and a record at document 6, the first number past the
+/// named slots, is still refused by the fold, by the reserved block's own
+/// words.
 #[test]
 fn a_board_that_created_every_slot_recovers_them_and_a_record_at_6_is_still_refused() {
     let dir = tempdir().expect("tempdir");
@@ -407,10 +432,10 @@ fn a_board_that_created_every_slot_recovers_them_and_a_record_at_6_is_still_refu
         let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
         let ns = Namespace::new(&k);
         let (acct, _) = ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1).expect("delegate");
-        ns.create_new_document(ID1, &acct, None).expect("doc 1");
+        ns.create_new_document(ID1, &acct, None).expect("doc 1, and the mailbox beside it");
         ns.create_well_known_document(ID1, &acct, WellKnownSlot::Bio).expect("the bio");
         k.checkpoint().expect("checkpoint");
-        for slot_named in [WellKnownSlot::LinkPage, WellKnownSlot::Policy, WellKnownSlot::Mailbox] {
+        for slot_named in [WellKnownSlot::LinkPage, WellKnownSlot::Policy] {
             ns.create_well_known_document(ID1, &acct, slot_named).expect("created");
         }
         (acct, k.snapshot().world().m3().clone(), k.current_seq())

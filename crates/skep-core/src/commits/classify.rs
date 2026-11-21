@@ -16,11 +16,14 @@
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
-use skep_address::{document_of, ordinal, validate, Address, Nat, Tumbler};
+use skep_address::{document_of, ordinal, parent, validate, Address, Nat, Tumbler};
 use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::World;
 use skep_links::{is_replaces_class, HasLinks, ShippedType, View};
-use skep_namespace::{system_account, system_node, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{
+    first_document_address, mailbox_address, system_account, system_node, HasM3, PrincipalId,
+    BOOTSTRAP_PRINCIPAL,
+};
 
 use super::sidecar::{JournalTerms, OpTerms};
 
@@ -123,11 +126,17 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 ///    put the draft in its class still leads with the member;
 /// 1. the drafts the commit minted — every draft of `after` absent from
 ///    `before` (`create_new_document`/`fork`/`version` resolving private,
-///    `stage`, whose draft is always private, and a
-///    `create_well_known_document` at the mailbox's slot, the one slot whose
-///    document is created private — at the bio's, the link page's or the
-///    policy document's it creates a published document, which moves no
-///    mask);
+///    `stage`, whose draft is always private, and the mailbox, the one
+///    well-known slot whose document is created private: an account's first
+///    `create_new_document` or `fork` creates it in its own commit (M3's
+///    mailbox rule), and a `create_well_known_document` at the mailbox's
+///    slot on an account the store holds no document for — at the bio's,
+///    the link page's or the policy document's that op creates a published
+///    document, which moves no mask) — and beside a mailbox minted with its
+///    account's first document, that document, named first as the recorded
+///    row `[home, mailbox]` names it: published, it moves no mask, and it is
+///    named so a reader who cannot read the mailbox is served the entry
+///    reduced to the home, as the recorded twin is, and not masked whole;
 /// 2. the links the commit deposited — every link of `after` absent from
 ///    `before`, each one's home, and for a retraction (the shipped `[R]`
 ///    class) its targets' homes too, which is `nullify`'s own `docs` rule
@@ -137,7 +146,8 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 ///    copy, rearrange or seat into a draft that already existed.
 ///
 /// What it cannot name is a *published* document an arrangement write or a
-/// mint touched (no public read enumerates them) — and it need not: a
+/// mint touched (no public read enumerates them), save the home witness 1
+/// reads off its mailbox — and it need not: a
 /// single-document commit into a published document classifies empty here,
 /// and an empty class is served to every class, which is exactly the answer
 /// a recorded `[P]` earns (P is readable by all); the two-document ops
@@ -202,7 +212,8 @@ fn new_links(before: &World, after: &World) -> Vec<Address> {
 
 /// Returns [`derived_docs`]'s answer over `links` and `member` already
 /// enumerated: the shot's member first where the commit minted one with its
-/// placing record, then the rest in address order.
+/// placing record, or the home where an account's first mint created one
+/// beside its mailbox, then the rest in address order.
 fn derived_docs_over(
     before: &World,
     after: &World,
@@ -214,9 +225,14 @@ fn derived_docs_over(
     //    whose mask it moves as little.
     let shot_member = member.filter(|m| after.m5().shot_terms(m).is_some());
     let mut docs: BTreeSet<Address> = BTreeSet::new();
-    // 1. Drafts minted by this commit.
+    // 1. Drafts minted by this commit — and the home an account's first mint
+    //    created beside its mailbox (M3's mailbox rule): the account's doc 1,
+    //    registered by this commit with the mailbox it names, led with as the
+    //    recorded row leads with it.
+    let mut home = None;
     for draft in after.drafts() {
         if before.owner_account(draft.document).is_none() {
+            home = home.or_else(|| home_minted_beside(before, after, draft.document));
             docs.insert(draft.document.clone());
         }
     }
@@ -255,13 +271,33 @@ fn derived_docs_over(
             }
         }
     }
-    let mut out: Vec<Address> = Vec::with_capacity(docs.len() + 1);
-    if let Some(member) = shot_member {
-        docs.remove(&member);
-        out.push(member);
+    let mut out: Vec<Address> = Vec::with_capacity(docs.len() + 2);
+    for first in shot_member.into_iter().chain(home) {
+        docs.remove(&first);
+        out.push(first);
     }
     out.extend(docs);
     out
+}
+
+/// Returns the home a commit minted beside `minted`, where `minted` is its
+/// account's mailbox.
+///
+/// That is the account's doc 1 where `after` registers it and `before` does
+/// not: an account's first mint creates its mailbox in the same commit
+/// (M3's mailbox rule), and the recorded row names the two
+/// `[home, mailbox]`. The home is published wherever the daemon's door
+/// admitted its mint, so no draft witness names it; this is what does.
+/// `None` for every other draft a commit mints, and for a mailbox created
+/// on its own, beside no home.
+fn home_minted_beside(before: &World, after: &World, minted: &Address) -> Option<Address> {
+    let account = parent(minted)?;
+    if mailbox_address(&account).as_ref() != Some(minted) {
+        return None;
+    }
+    let home = first_document_address(&account)?;
+    (after.m3().is_registered_document(&home) && !before.m3().is_registered_document(&home))
+        .then_some(home)
 }
 
 /// Returns the journal's terms for one bare commit (SO-I5 (e)).
@@ -309,8 +345,10 @@ fn derived_docs_over(
 /// write, into a draft or a published document, of a `register_node`, of a
 /// `create_new_document`, a `fork`, a cross-owner `version`, a `stage`
 /// recording no base or a `create_well_known_document` (one new document,
-/// five ops; the last creates at a reserved slot, which no witness here
-/// reads, so its row stays unnamed with the rest), of a plain `make_link`
+/// five ops — two new documents, an account's first and its mailbox, where
+/// a create or a fork minted that first; the last op creates at a reserved
+/// slot, which no witness here reads, so its row stays unnamed with the
+/// rest), of a plain `make_link`
 /// against an `emit` or `assert_sup`, of an `edit_link`; a `delegate` under
 /// a node that `register_node` admitted and that no enumeration from the
 /// bootstrap and system nodes reaches (that enumeration follows account

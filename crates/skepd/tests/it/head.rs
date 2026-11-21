@@ -2055,7 +2055,7 @@ fn board_under(dir: &Path, seed: Option<u64>, origin: u64) -> Board {
 }
 
 /// The claim link's position on a fresh board — the ceremony's fifth commit,
-/// twelve records above the seeded board's head (`common::SEED_HEAD`;
+/// thirteen records above the seeded board's head (`common::SEED_HEAD`;
 /// wire.md §A first board) — and `H.1`'s records above it: the head record's
 /// insert (3) and the publish shot into `H` (7: the shot's four — the atom
 /// re-inserted as fresh identity, its mint and write, the member's mint and
@@ -2063,7 +2063,7 @@ fn board_under(dir: &Path, seed: Option<u64>, origin: u64) -> Board {
 /// in the staging draft, its link mint, deposit and seat; the link-sets
 /// design §5.7); the staging draft stands from genesis, so the claim's head
 /// mints none. `H.1` is the claim's own (signed ops).
-const CLAIM_POSITION: u64 = SEED_HEAD + 12;
+const CLAIM_POSITION: u64 = SEED_HEAD + 13;
 const H1_RECORDS: u64 = 10;
 
 /// The time record's records (wire.md §The other endpoints, the time document):
@@ -2075,7 +2075,7 @@ const H1_RECORDS: u64 = 10;
 const TIME_RECORD_RECORDS: u64 = 10;
 
 /// THE POSITIONS, pinned off the one constant: the head names the triggering
-/// commit — the seed's commits, the ceremony's (12 records), the claim's own
+/// commit — the seed's commits, the ceremony's (13 records), the claim's own
 /// `H.1` (10), three creates and the fourth — and the live head is that plus
 /// the head's own insert and publish (10 more) and the first time record's
 /// insert and publish (10 more), due at the same forced hour. The salt adds

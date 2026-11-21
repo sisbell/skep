@@ -918,6 +918,96 @@ fn a_claimed_board_reads_the_slots_own_state_and_keeps_the_two_tokens_at_every_s
     }
 }
 
+/// Checks that a minting `publish` into an empty account is refused
+/// `mint_home_first` (PUB-1.18, PUB-8.22; the mailbox design §3).
+///
+/// A `publish` at its mint form mints its edition under the account it
+/// names, through the bare mint, so on an account holding no document that
+/// edition would be the account's doc 1, minted with no mailbox beside it:
+/// the mint class refuses it, in `well_known_mint_refusal`'s form, keyed on
+/// the request's account. On [`a_board_with_a_homeless_account`]'s
+/// unclaimed board: the empty account's owner is refused `mint_home_first`
+/// by the producer and by the whole admission, the mint slot standing ahead
+/// of the pre-claim gate's `claim_first`; a caller who does not own the
+/// account — the maker, the bootstrap principal above it — falls through
+/// and is answered what a stranger naming a full account is; the address of
+/// no registered account, asked by the principal owning its space, falls
+/// through to the store's own answer; and the document form names no
+/// account and is the producer's never. Once the owner has minted its home
+/// through `create_new_document` the same request answers `None` here.
+#[test]
+fn a_minting_publish_into_an_empty_account_is_refused_mint_home_first() {
+    use skep_arrangement::Shot;
+    use skep_links::{PublishDeposits, PublishTarget};
+
+    use crate::auth::CredentialLock;
+
+    let (board, homeless, homeless_id) = a_board_with_a_homeless_account();
+    let lock = CredentialLock::new();
+    let publish = |target: PublishTarget| Op::Publish {
+        target,
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+        places: vec![],
+        also_places: vec![],
+        deposits: PublishDeposits::default(),
+    };
+    let mint = |account: &Address| publish(PublishTarget::Mint { account: account.clone() });
+    let own = addr_of(&[1, 0, 1]);
+
+    let snap = board.engine.kernel().snapshot();
+    let world = snap.world();
+    assert!(world.identity().claimant().is_none(), "the premise: unclaimed");
+    assert!(
+        world.m3().is_registered_account(&homeless) && !world.m3().has_documents(&homeless),
+        "the premise: registered, and holding no document"
+    );
+    let door = |account: &Address, caller: PrincipalId| {
+        mint_home_refusal(&lock.read(), world, &mint(account), caller)
+    };
+    let admission = |op: &Op, caller: PrincipalId| {
+        plain_admission(&lock.read(), world, op, caller, None, None)
+    };
+    assert_eq!(door(&homeless, homeless_id), Some(CredentialRefusal::MintHomeFirst), "the owner");
+    assert_eq!(
+        admission(&mint(&homeless), homeless_id),
+        Err(CredentialRefusal::MintHomeFirst),
+        "the mint slot answers ahead of the pre-claim gate"
+    );
+    for stranger in [board.maker.0, BOOTSTRAP_PRINCIPAL] {
+        assert_eq!(door(&homeless, stranger), None, "{stranger:?}: not the account's owner");
+        assert_eq!(
+            admission(&mint(&homeless), stranger),
+            admission(&mint(&own), board.other.0),
+            "{stranger:?}: the answer tells nothing of the account"
+        );
+    }
+    let unregistered = addr_of(&[1, 0, 9]);
+    assert!(world.m3().is_effective_owner(BOOTSTRAP_PRINCIPAL, &unregistered), "the premise");
+    assert_eq!(door(&unregistered, BOOTSTRAP_PRINCIPAL), None, "no registered account");
+    assert_eq!(door(&own, board.maker.0), None, "an account holding its home");
+    let at_the_document = publish(PublishTarget::Document(addr_of(&[1, 0, 1, 0, 1])));
+    assert_eq!(
+        mint_home_refusal(&lock.read(), world, &at_the_document, homeless_id),
+        None,
+        "the document form names no account"
+    );
+
+    // The owner mints its home: the same request is the producer's no more.
+    let sid = board.febe.open_session(homeless_id);
+    exec(
+        &board.febe,
+        sid,
+        serde_json::json!({"op": "create_new_document", "account": homeless.to_string()}),
+    );
+    let snap = board.engine.kernel().snapshot();
+    assert!(snap.world().m3().has_documents(&homeless), "the premise: the home stands");
+    assert_eq!(
+        mint_home_refusal(&lock.read(), snap.world(), &mint(&homeless), homeless_id),
+        None,
+        "an account holding its home"
+    );
+}
+
 /// Checks the registrar's gate on `register_node` (REG-2.1).
 ///
 /// Through the whole admission, on [`TwoAccounts`]' board. Unclaimed, the

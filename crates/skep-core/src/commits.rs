@@ -176,7 +176,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
-use skep_address::{document_of, Address};
+use skep_address::{document_of, parent, Address};
 use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{MintTime, Op, OpKind, RejectCode, Rejection, Response, Stores, TimeSource};
@@ -184,6 +184,7 @@ use skep_kernel::{Attestation, Seq, Snapshot};
 use skep_links::{read_with_in, supersession_claim_in, HasLinks, NamedAddress};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
+use skep_namespace::{mailbox_address, HasM3};
 use skep_util::caught::{self, Caught};
 use skep_util::notice::{self, Class};
 
@@ -1499,6 +1500,30 @@ impl Commits {
                 );
                 minted.cloned().map(|a| vec![a]).unwrap_or_default()
             }
+            // A create path's row: the minted document, then its account's
+            // mailbox where this commit created it — an account's first mint
+            // creates it in its own commit (M3's mailbox rule) — read off the
+            // commit's two worlds: the mailbox the post-commit world
+            // registers and the pre-commit one does not, which no commit but
+            // this one can have made, the serial guard admitting none between
+            // them. Any later mint names its document alone.
+            AffectedDocs::MintedWithMailbox => {
+                // The `Minted` arm's obligation, made loud for the same reason.
+                debug_assert!(
+                    minted.is_some(),
+                    "a create or a fork answers AckAddr, the ack carrying the document it minted"
+                );
+                let mut docs: Vec<Address> = minted.cloned().into_iter().collect();
+                let mailbox = minted.and_then(parent).as_ref().and_then(mailbox_address);
+                if let Some(mailbox) = mailbox {
+                    if !pre.m3().is_registered_document(&mailbox)
+                        && post.world().m3().is_registered_document(&mailbox)
+                    {
+                        docs.push(mailbox);
+                    }
+                }
+                docs
+            }
             // The publication's row: the member first, then the edition
             // where the commit minted one, then the drafts — the rendering
             // draft always, then each other named draft the shot wrote, in
@@ -2132,7 +2157,8 @@ pub struct WriteMeta {
 /// They are the write's target doc; a link write names its home
 /// (`edit_link` both its homes, the successor's `d_s` first; `nullify` its
 /// home and the target link's home, as a set — PUB-6.46); the minted
-/// document for create/fork/version/stage/create_well_known_document and
+/// document for create/fork/version/stage/create_well_known_document, with
+/// the account's mailbox after it where a create or a fork created it, and
 /// the minted member for `publish`
 /// (each known only from the ack); delegate/register_node touch no
 /// document.
@@ -2152,6 +2178,19 @@ enum AffectedDocs {
     /// address is the minted document — see [`Commits::record`]'s `Minted`
     /// arm, which is the other half of this decision.
     Minted,
+    /// The document a create path mints, then its account's mailbox where
+    /// the same commit created it.
+    ///
+    /// `create_new_document`'s and `fork`'s: an account's first mint creates
+    /// the account's mailbox in its own commit (M3's mailbox rule; the
+    /// mailbox design §3), and the row names the two in that order,
+    /// `[home, mailbox]` — the document first, as every minting row leads
+    /// with the document it minted. Whether the commit created the mailbox
+    /// is read at record time off the commit's two worlds
+    /// ([`Commits::record`]), so a later mint, whose commit creates none,
+    /// names its document alone. The same `AckAddr` obligation as
+    /// `Minted`'s.
+    MintedWithMailbox,
     /// A publication's documents: the member the shot mints, known only
     /// from its ack, FIRST; then the edition it was minted under, where the
     /// commit minted one; then the rendering draft, whether or not the
@@ -2371,8 +2410,11 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
     let absent = RowTerms::Absent;
     let no_cell = Minting::None;
     let answer = match op {
+        // The document the create minted, and the account's mailbox where
+        // the commit created it beside an account's first document (M3's
+        // mailbox rule).
         Op::CreateNewDocument { .. } => {
-            meta(OpKind::CreateNewDocument, AffectedDocs::Minted, absent, no_cell)
+            meta(OpKind::CreateNewDocument, AffectedDocs::MintedWithMailbox, absent, no_cell)
         }
         // The seated principal rides from the request; the minted prefix is
         // the ack's (`RowTerms::complete`).
@@ -2385,15 +2427,26 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::RegisterNode { .. } => {
             meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent, no_cell)
         }
-        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent, no_cell),
+        // A `fork` opens the create's own transaction, so its row is the
+        // create's: an account's first document — which only a fork below
+        // the daemon's door mints, the door refusing it `mint_home_first` —
+        // and the mailbox beside it, so the store and the feed agree.
+        Op::Fork { .. } => {
+            meta(OpKind::Fork, AffectedDocs::MintedWithMailbox, absent, no_cell)
+        }
         // The well-known creation's row names the document it created,
-        // known only from the ack, and carries no term and no cell: a
-        // mailbox, which is private, so its row is masked from everyone but
-        // its owner; or a bio, a link page or a policy document, which is
-        // published, so its row is served to every class. A call that finds
-        // the slot's document standing commits nothing: its ack names the
-        // position it read, one the feed already carries, so the record
-        // declines it and the document has one row, its creation's.
+        // known only from the ack, and carries no term and no cell: a bio, a
+        // link page or a policy document, which is published, so its row is
+        // served to every class. A call that finds the slot's document
+        // standing commits nothing: its ack names the position it read, one
+        // the feed already carries, so the record declines it and the
+        // document has one row, its creation's. That is every call at the
+        // mailbox's slot on an account holding its home: the mailbox stands
+        // from the home's own commit, whose row names it (M3's mailbox
+        // rule). A mailbox this op creates is one the store places on an
+        // account holding no document, which the daemon's door refuses
+        // `mint_home_first`; its row, private, is masked from everyone but
+        // its owner.
         Op::CreateWellKnownDocument { .. } => {
             meta(OpKind::CreateWellKnownDocument, AffectedDocs::Minted, absent, no_cell)
         }

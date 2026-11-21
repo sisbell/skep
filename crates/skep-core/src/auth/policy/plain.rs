@@ -583,15 +583,26 @@ fn old_is_the_makers_own(world: &World, claim: &Link, at: &Address) -> bool {
 
 /// Answers the mint class's refusal, `mint_home_first`.
 ///
-/// `Some(MintHomeFirst)` iff `op` is a `fork`, a `version` or a `stage` — a
-/// document-minting op other than `create_new_document`, the staging act
-/// minting its draft in the caller's own account as `fork` does — and the
-/// subject account's chain is empty — AUTH-3.68's `has_documents(account)`,
-/// which is M3's own read of its document chain. The subject is
-/// `principal_prefix(p)` *then* an account-hood test — never `key_subject`
-/// (AUTH-3.11); a subject that is not an account answers `None` and no arm
-/// fires. Reads the op's kind and the principal and nothing else — never a
-/// fork/version/stage source (AUTH-3.13).
+/// `Some(MintHomeFirst)` where `op` would mint an account's first document
+/// by a path other than `create_new_document` — whose commit is the one
+/// that creates the account's mailbox beside its home (the mailbox design
+/// §3) — and the subject account's chain is empty: AUTH-3.68's
+/// `has_documents(account)`, which is M3's own read of its document chain
+/// (PUB-1.18, PUB-8.22). Two forms:
+///
+/// * a `fork`, a `version` or a `stage`, the staging act minting its draft
+///   in the caller's own account as `fork` does. The subject is
+///   `principal_prefix(p)` *then* an account-hood test — never `key_subject`
+///   (AUTH-3.11); a subject that is not an account answers `None` and no arm
+///   fires. Reads the op's kind and the principal and nothing else — never a
+///   fork/version/stage source (AUTH-3.13).
+/// * a `publish` at its mint form (the link-sets design §5.7), whose edition
+///   is minted under the account the request names: the subject is that
+///   `account`, in [`well_known_mint_refusal`]'s form — the caller is its
+///   effective owner, and it is registered. Ownership stands ahead (PUB-6.36
+///   slot 1), so a caller who does not own the account falls through to the
+///   gate's and the store's own answers and learns nothing of whether it is
+///   empty.
 ///
 /// **Precondition.** `world` must be the snapshot taken under the read guard
 /// for this request; the guard argument is that contract's cheap half.
@@ -601,14 +612,18 @@ fn mint_home_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    if !matches!(op, Op::Fork { .. } | Op::Version { .. } | Op::Stage { .. }) {
-        return None;
-    }
-    let subject = world.m3().principal_prefix(principal)?;
-    if !world.m3().is_registered_account(subject) {
-        return None;
-    }
-    if world.m3().has_documents(subject) {
+    let m3 = world.m3();
+    let subject = match op {
+        Op::Fork { .. } | Op::Version { .. } | Op::Stage { .. } => {
+            m3.principal_prefix(principal)?
+        }
+        Op::Publish {
+            target: PublishTarget::Mint { account, .. },
+            ..
+        } if m3.is_effective_owner(principal, account) => account,
+        _ => return None,
+    };
+    if !m3.is_registered_account(subject) || m3.has_documents(subject) {
         None
     } else {
         Some(CredentialRefusal::MintHomeFirst)
@@ -677,13 +692,15 @@ fn first_mint_private_refusal(
 ///    the op and no world, so what it discloses is a constant.
 /// 2. `mint_home_first`, where the caller is the effective owner of
 ///    `account`, the account is registered, and it holds no document: the
-///    home page stays every account's first document, ahead of its mailbox,
-///    its bio, its link page and its policy document alike. On such an
-///    account the store would create the slot, holding no guard for it.
+///    home page stays every account's first document, its mailbox created
+///    in the home's own commit (the mailbox design §3) and its bio, its link
+///    page and its policy document after it. On such an account the store
+///    would create the slot, holding no guard for it.
 ///
-/// The second arm takes [`first_mint_private_refusal`]'s form and not
-/// [`mint_home_refusal`]'s, because this op names its account where a
-/// `fork`, a `version` and a `stage` mint in the caller's own. Ownership
+/// The second arm takes [`first_mint_private_refusal`]'s form, as
+/// [`mint_home_refusal`]'s `publish` arm does, and not that producer's
+/// `fork`/`version`/`stage` form, because this op names its account where
+/// those three mint in the caller's own. Ownership
 /// stands ahead (PUB-6.36 slot 1), so only the account's own owner reaches
 /// it: a non-owner falls through to the store's `not_owner`, which never
 /// leaks whether the account is empty, and the principal that owns the
@@ -758,7 +775,9 @@ fn well_known_mint_refusal(
 /// path's order" is owed at the build; the correspondence takes the same
 /// slot, one producer, so `plain_admission`'s order is unchanged): in the
 /// plain path's admission, after
-/// the mint class — which reads no link write, so the two are disjoint — and
+/// the mint class — which reads one link write, a `publish` minting into an
+/// account that holds no document, and answers it `mint_home_first` (PUB-6.36
+/// slot 2) ahead of a fenced entry it carries — and
 /// *ahead* of the board-state pair: the pre-claim gate, the publish-class
 /// gate and the write-path check behind it. So the home's owner is told the
 /// act is never admitted before being asked to claim, to sign, or to attach
@@ -1083,8 +1102,9 @@ fn registrar_refusal(
 /// needs it.) The three minting arms take something else, each stated on the
 /// arm: `create` tests ω of the account, `fork` that the caller *has* one,
 /// and `version` registration of the source alone. An empty-account
-/// `fork`/`version` is refused `mint_home_first` before this gate is
-/// reached.
+/// `fork`, `version` or `stage`, and a `publish` minting into an empty
+/// account its caller owns, are refused `mint_home_first` before this gate
+/// is reached.
 ///
 /// The projection reaches every arm that reads an address: `published(home)`
 /// on a version member answers its document's bit, so a member minted
@@ -1160,7 +1180,9 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
         // link-sets design §5.7) mints a published edition under the parent
         // account it names, so it takes the gate where the caller owns that
         // registered account — the `create` arm's pair, with no first-mint
-        // exemption: an edition born by a shot is never the mechanical home.
+        // exemption: an edition born by a shot is never the mechanical home,
+        // nor any account's first document, a mint into an account holding
+        // none being refused `mint_home_first` ahead of this gate.
         Op::Publish { target, .. } => match target {
             PublishTarget::Document(doc) => owned(doc),
             PublishTarget::Mint { account, .. } => {
@@ -1323,15 +1345,17 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// `first_mint_private_refusal` (PUB-8.20's door) shares the mint slot with
 /// `mint_home_refusal` and `well_known_mint_refusal`, and the three are
 /// pairwise disjoint — the door reads a `create` with an explicit `false`,
-/// mint-first a `fork`, a `version` or a `stage`, the well-known mint's
-/// producer a `create_well_known_document` — so their relative order is
-/// inert; all stand ahead of the board-state pair (PUB-6.36 slot 2 before
-/// slot 4), which is why a `fork` or `version` by a principal whose account
-/// holds no document answers `mint_home_first` and never the pre-claim
-/// `claim_first`, and why a well-known mint naming the system account
-/// answers `system_account_no_well_known` on an unclaimed board as on a
-/// claimed one. An explicit-`false` home mint answers `mint_home_public` in
-/// either order: the pre-claim gate admits a `create` into an empty account.
+/// mint-first a `fork`, a `version`, a `stage` or a `publish` at its mint
+/// form, the well-known mint's producer a `create_well_known_document` — so
+/// their relative order is inert; all stand ahead of the board-state pair
+/// (PUB-6.36 slot 2 before slot 4), which is why a `fork` or `version` by a
+/// principal whose account holds no document, and an owner's mint-form
+/// `publish` into an account holding none, answer `mint_home_first` and
+/// never the pre-claim `claim_first`, and why a well-known mint naming the
+/// system account answers `system_account_no_well_known` on an unclaimed
+/// board as on a claimed one. An explicit-`false` home mint answers
+/// `mint_home_public` in either order: the pre-claim gate admits a `create`
+/// into an empty account.
 ///
 /// The order is PUB-6.36's write-side order as RES-195 places the
 /// `nullify` cells: mint-first is slot 2; the board-state pair stands in
@@ -1352,14 +1376,17 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// Re-ordering moves no input: all three are pure functions of the same
 /// `(world, op, principal, signer)` — the board-state pair's of the
 /// presented attestation too — under the same guard, and
-/// `mint_home_refusal` fires only on `fork`/`version`, so its position
-/// relative to the `nullify` cell is inert either way.
+/// `mint_home_refusal` fires only on `fork`, `version`, `stage` and a
+/// mint-form `publish`, never on a `nullify`, so its position relative to
+/// the `nullify` cell is inert either way.
 ///
 /// **The sole-writer fences' place** is this build's (PUB-5.15 leaves the
 /// `replaces` fence's owed; the correspondence fence takes the same
-/// producer, so the order gained no slot): it reads link writes alone, so it
-/// is disjoint from the mint class
-/// and its position against that class is inert; it stands ahead of the
+/// producer, so the order gained no slot): it reads link writes alone, and
+/// the mint class reads one link write, a `publish` minting into an account
+/// that holds no document, which the mint class answers first —
+/// `mint_home_first`, slot 2's — where its entries name a fenced class too;
+/// it stands ahead of the
 /// board-state pair, so a write that can never be admitted is refused as
 /// such before the pair asks its owner to claim, to sign or to attach an
 /// attestation; and it answers the owner of every home the write names

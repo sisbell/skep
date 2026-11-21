@@ -162,7 +162,9 @@ impl M3State {
 // genesis's fixed seed is minted here. Five are public and fold into M5/M7
 // composites (M2 contract 3); two are `pub(crate)` because their callers
 // live in this crate — `mint_account`, called by `delegate` and the account
-// peek, and `mint_well_known`, called by `create_well_known_document`.
+// peek, and `mint_well_known`, called by `create_well_known_document` and,
+// for an account's mailbox beside its first document, by
+// `create_new_document`.
 //
 // Each is a query: called on a transaction's working state, it checks one
 // structural precondition and hands back the next address on its chain
@@ -351,7 +353,12 @@ impl M3State {
     /// mints private. Whether that first mint is refused is the daemon's
     /// door, not M3's (PUB-kickoff D2c): its mint-first door refuses a
     /// `version` into an empty account whatever the bit, where PUB-8.20's
-    /// door refuses an explicit-`false` first create.
+    /// door refuses an explicit-`false` first create. The mailbox rule — an
+    /// account's first mint creates its mailbox in the same commit (the
+    /// mailbox design §3) — belongs to the create path with PUB-8.21, so a
+    /// doc 1 a composite mints through this function stands with no
+    /// mailbox; that mint-first door is what keeps every such mint off an
+    /// empty account (`mint_home_first`).
     ///
     /// # Errors
     ///
@@ -417,9 +424,10 @@ impl M3State {
     /// document mint stamps the one its caller resolved, and no caller hands
     /// it one. Folded, the record registers the document, writes its bit and
     /// its position, and moves no count ([`M3State::apply_m3`]), so the
-    /// account's counter hands out what it would have handed out.
-    /// [`crate::Namespace::create_well_known_document`] is the op that
-    /// stages it.
+    /// account's counter hands out what it would have handed out. Two ops
+    /// stage it: [`crate::Namespace::create_well_known_document`] at the
+    /// slot it is asked for, and [`crate::Namespace::create_new_document`]
+    /// at the mailbox's, beside an account's first document.
     ///
     /// It answers the same pair whether or not the slot holds a document,
     /// which makes the caller's half its own. Hold
@@ -429,8 +437,8 @@ impl M3State {
     /// ([`M3State::is_registered_document`]). Staged at a slot that holds
     /// one, the record is outside the fold's totality domain and the fold
     /// fail-stops on it, on every build: a slot is filled once. `pub(crate)`
-    /// for the reason [`M3State::mint_account`] is: its one caller lives in
-    /// this crate, and keeps both halves.
+    /// for the reason [`M3State::mint_account`] is: its two callers live in
+    /// this crate, and each keeps both halves.
     ///
     /// # Errors
     ///

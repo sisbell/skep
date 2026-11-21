@@ -175,7 +175,9 @@ impl M3State {
     ///
     /// That is whether it holds its doc 1, the first the counter hands out:
     /// AUTH-3.68's `has_documents(account)`, and the premise of the create
-    /// path's empty-account rule (PUB-8.21). The frontier of the account's
+    /// path's two first-mint rules — the empty-account rule (PUB-8.21), and
+    /// the mailbox rule, an account's first mint creating its mailbox in the
+    /// same commit (the mailbox design §3). The frontier of the account's
     /// `(account, 2)` chain is the last number its counter handed out, so the
     /// account holds its doc 1 iff that frontier exists and is nonzero — one
     /// lookup on the key [`M3State::mint_document`] reads; a zero count,
@@ -194,9 +196,9 @@ impl M3State {
     /// registered stays the caller's question
     /// ([`M3State::is_registered_account`]). Asked by
     /// [`crate::Namespace::create_new_document`] under the held document-chain
-    /// key and by the daemon's gates off a snapshot — its two mint doors, the
-    /// publish-class gate and the pre-claim gate; answered here so that neither
-    /// reassembles it.
+    /// key, once for both of its rules, and by the daemon's gates off a
+    /// snapshot — its three mint doors, the publish-class gate and the
+    /// pre-claim gate; answered here so that neither reassembles it.
     pub fn has_documents(&self, account: &Address) -> bool {
         account.level() == Level::Account
             && self

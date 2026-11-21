@@ -40,20 +40,21 @@ mod mirror;
 
 /// The claim link's committed position on a fresh board — the ceremony's
 /// fifth commit (`common::claim_board`) above the seeded board's head
-/// (`common::SEED_HEAD`): delegate (2 records), the home mint (1), the
-/// one-atom insert (3), the genesis link (3), the claim link (3) — twelve
+/// (`common::SEED_HEAD`): delegate (2 records), the home mint (2: the home
+/// and the mailbox the account's first mint creates beside it), the
+/// one-atom insert (3), the genesis link (3), the claim link (3) — thirteen
 /// records. The claim's own step then writes the board's first head `H.1`
 /// above it ([`H1_ATS`]; signed ops), so the board the claim leaves behind
 /// stands at [`CLAIMED_HEAD`], the base every seeded position below sits
 /// on, wire.md's change-feed examples among them, every figure derived from
 /// the one constant.
-const CLAIM_POSITION: u64 = SEED_HEAD + 12;
+const CLAIM_POSITION: u64 = SEED_HEAD + 13;
 
 /// The ceremony's own commit positions (the record counts above,
 /// cumulative): delegate, the home mint, the record insert, the genesis
 /// link, the claim link.
 const CEREMONY_ATS: [u64; 5] =
-    [SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12];
+    [SEED_HEAD + 2, SEED_HEAD + 4, SEED_HEAD + 7, SEED_HEAD + 10, SEED_HEAD + 13];
 
 /// `H.1`'s two commits, in the claim's own step: the head record's insert
 /// into the staging draft (3 records) — which stands from genesis, so the
@@ -75,10 +76,10 @@ const CLAIMED_HEAD: u64 = H1_PUBLISH_AT;
 /// the home mint, the private second mint, the insert, the make_link.
 const SEEDED_ATS: [u64; 5] = [
     CLAIMED_HEAD + 2,
-    CLAIMED_HEAD + 3,
     CLAIMED_HEAD + 4,
-    CLAIMED_HEAD + 7,
-    CLAIMED_HEAD + 10,
+    CLAIMED_HEAD + 5,
+    CLAIMED_HEAD + 8,
+    CLAIMED_HEAD + 11,
 ];
 
 /// Every committed position a claimed, seeded board's OWNER (principal 1)
@@ -96,12 +97,13 @@ fn all_ats() -> Vec<u64> {
 
 /// The scripted flow behind the wire.md examples. Positions are pinned by
 /// the stores' record counts above the claimed board's head ([`SEEDED_ATS`]):
-/// `delegate` commits 2 records (`CLAIMED_HEAD + 2`), the home mint 1
-/// (`+ 3`) — MINT-FIRST (RES-26): the account's doc 1 is born published,
+/// `delegate` commits 2 records (`CLAIMED_HEAD + 2`), the home mint 2 — the
+/// home, and the mailbox the account's first mint creates beside it —
+/// (`+ 4`) — MINT-FIRST (RES-26): the account's doc 1 is born published,
 /// where bare writes are gated by design, so the flow writes a SECOND,
-/// private document — that mint 1 (`+ 4`), a two-byte `insert` 3 — one
-/// range mint, one stretch, one placement — (`+ 7`), `make_link` 3 — mint,
-/// link, seat — (`+ 10`). If an ack below drifts, a store changed its
+/// private document — that mint 1 (`+ 5`), a two-byte `insert` 3 — one
+/// range mint, one stretch, one placement — (`+ 8`), `make_link` 3 — mint,
+/// link, seat — (`+ 11`). If an ack below drifts, a store changed its
 /// transaction shape and wire.md §The change feed must be re-pinned.
 fn seed_flow(port: u16) -> String {
     let boot = open_session(port, 0);
@@ -128,7 +130,11 @@ fn seed_flow(port: u16) -> String {
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
     assert_eq!(acked_addr(&v), "1.0.2.0.1", "the home mint is doc 1; re-pin the examples");
-    assert_eq!(acked_at(&v), CLAIMED_HEAD + 3, "create_new_document is a 1-record commit");
+    assert_eq!(
+        acked_at(&v),
+        CLAIMED_HEAD + 4,
+        "an account's first create_new_document is a 2-record commit: the home and its mailbox"
+    );
     let v = op(
         port,
         Some(&s1),
@@ -136,7 +142,7 @@ fn seed_flow(port: u16) -> String {
     );
     let doc = acked_addr(&v);
     assert_eq!(doc, nth_document("1.0.2", 2), "second document address drifted; re-pin the examples");
-    assert_eq!(acked_at(&v), CLAIMED_HEAD + 4, "create_new_document is a 1-record commit");
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 5, "a later create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -146,7 +152,7 @@ fn seed_flow(port: u16) -> String {
     );
     // A 2-value per-byte insert is a 3-record commit: one range mint, one
     // stretch, one placement.
-    assert_eq!(acked_at(&v), CLAIMED_HEAD + 7, "a 2-value insert is a 3-record commit");
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 8, "a 2-value insert is a 3-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -161,7 +167,7 @@ fn seed_flow(port: u16) -> String {
     );
     assert_eq!(
         acked_at(&v),
-        CLAIMED_HEAD + 10,
+        CLAIMED_HEAD + 11,
         "make_link is a 3-record commit (mint + link + seat)"
     );
     doc
@@ -290,7 +296,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(
         head(port),
         CLAIMED_HEAD,
-        "the seed, the claim and its head: twenty-two records above the seed"
+        "the seed, the claim and its head: twenty-three records above the seed"
     );
     let doc = seed_flow(port);
     let s1 = open_session(port, 1);
@@ -330,6 +336,11 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let entries = v["changes"].as_array().expect("changes");
     assert_eq!(entries[0]["op"].as_str(), Some("delegate"));
     assert_eq!(entries[0]["docs"], serde_json::json!([]), "delegate names no doc");
+    assert_eq!(
+        entries[1]["docs"],
+        serde_json::json!(["1.0.2.0.1", "1.0.2.0.2"]),
+        "the account's first mint names its home, then the mailbox its commit created"
+    );
     assert_eq!(entries[4]["op"].as_str(), Some("make_link"));
     assert_eq!(
         entries[4]["docs"],
@@ -344,7 +355,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let times: Vec<u64> =
         entries.iter().map(|e| e["time"].as_u64().expect("live entries carry times")).collect();
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "times monotone in position: {times:?}");
-    assert_eq!(v["last"].as_u64(), Some(b + 10));
+    assert_eq!(v["last"].as_u64(), Some(b + 11));
     assert_eq!(v["more"], Value::Bool(false));
     // …and the whole page against wire.md's own 'feed' example, which is the
     // first thing a client author reads.
@@ -355,18 +366,23 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(body, again, "same (since, limit) on the same journal must be byte-equal");
 
     // ── the GUEST's page over the same range (wire v7.8, PUB-6.44/6.45):
-    //    the delegate (no doc) and the born-published home mint are shown;
-    //    the private second document's mint, insert and make_link are
-    //    MASKED — omitted, never present with nulled fields — and `last`
+    //    the delegate (no doc) and the born-published home mint are shown,
+    //    the home's row reduced to the home, the private mailbox beside it
+    //    withheld; the private second document's mint, insert and make_link
+    //    are MASKED — omitted, never present with nulled fields — and `last`
     //    is the last VISIBLE position. ──
     let (st, guest_body) = changes_raw(port, None, &format!("since={b}"));
     assert_eq!(st, 200);
     let g = json(&guest_body);
-    assert_eq!(entry_ats(&g), vec![b + 2, b + 3], "the guest sees the two published-world writes");
+    assert_eq!(entry_ats(&g), vec![b + 2, b + 4], "the guest sees the two published-world writes");
     let guest_entries = g["changes"].as_array().expect("changes");
     assert_eq!(guest_entries[0]["docs"], serde_json::json!([]), "delegate names no doc");
-    assert_eq!(guest_entries[1]["docs"], serde_json::json!(["1.0.2.0.1"]), "the home, published");
-    assert_eq!((g["last"].as_u64(), g["more"].as_bool()), (Some(b + 3), Some(false)));
+    assert_eq!(
+        guest_entries[1]["docs"],
+        serde_json::json!(["1.0.2.0.1"]),
+        "the home, published, its private mailbox withheld"
+    );
+    assert_eq!((g["last"].as_u64(), g["more"].as_bool()), (Some(b + 4), Some(false)));
     let (_, guest_again) = changes_raw(port, None, &format!("since={b}"));
     assert_eq!(guest_body, guest_again, "the guest's page is byte-equal across repeats");
     matches_doc(&g, "feed_guest");
@@ -377,36 +393,36 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(entry_ats(&v), vec![b + 2]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 2), Some(true)));
     let v = changes_ok(port, None, &format!("since={}&limit=1", b + 2));
-    assert_eq!(entry_ats(&v), vec![b + 3]);
+    assert_eq!(entry_ats(&v), vec![b + 4]);
     assert_eq!(
         (v["last"].as_u64(), v["more"].as_bool()),
-        (Some(b + 3), Some(false)),
+        (Some(b + 4), Some(false)),
         "the masked run past the home mint is not `more`"
     );
-    let v = changes_ok(port, None, &format!("since={}", b + 3));
+    let v = changes_ok(port, None, &format!("since={}", b + 4));
     assert_eq!(entry_ats(&v), Vec::<u64>::new(), "the whole tail is masked for the guest");
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 4), Some(false)));
 
     // ── paging (the owner's) ──
     let v = changes_ok(port, owner, &format!("since={b}&limit=2"));
-    assert_eq!(entry_ats(&v), vec![b + 2, b + 3]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
+    assert_eq!(entry_ats(&v), vec![b + 2, b + 4]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 4), Some(true)));
     matches_doc(&v, "feed_page");
-    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 3));
-    assert_eq!(entry_ats(&v), vec![b + 4, b + 7]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 7), Some(true)));
-    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 7));
-    assert_eq!(entry_ats(&v), vec![b + 10]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 10), Some(false)));
+    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 4));
+    assert_eq!(entry_ats(&v), vec![b + 5, b + 8]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 8), Some(true)));
+    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 8));
+    assert_eq!(entry_ats(&v), vec![b + 11]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
 
     // `since` is a fence, not a position: an interior number pages cleanly.
-    let v = changes_ok(port, owner, &format!("since={}", b + 5));
-    assert_eq!(entry_ats(&v), vec![b + 7, b + 10]);
+    let v = changes_ok(port, owner, &format!("since={}", b + 6));
+    assert_eq!(entry_ats(&v), vec![b + 8, b + 11]);
 
     // since ≥ head: empty, `last` echoes `since`.
-    let v = changes_ok(port, owner, &format!("since={}", b + 10));
+    let v = changes_ok(port, owner, &format!("since={}", b + 11));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 10), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
     let v = changes_ok(port, owner, "since=999");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!(v["last"].as_u64(), Some(999));
@@ -767,8 +783,9 @@ fn the_testimony_names_the_key_that_signed_the_session() {
 
 /// wire.md §The change feed fixes `docs` as a table: the target doc for
 /// arrangement writes; a link write's HOME (`edit_link` both its homes,
-/// successor's first); the MINTED document for create/fork/version and the
-/// mailbox's mint, `create_well_known_document`; `[]`
+/// successor's first); the MINTED document for create/fork/version and a
+/// well-known creation, `create_well_known_document` — an account's first
+/// create naming the mailbox its commit created after the home; `[]`
 /// for `delegate` and `register_node`. Four of the fourteen rows were
 /// watched, and `edit_link` — the one row with an order to get wrong — was
 /// not: `docs` is the field a client dispatches on to decide what to
@@ -826,8 +843,21 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     };
     // MINT-FIRST (RES-26): the first mint is the account's doc 1, born
     // published, where bare writes are gated by design — the rows below
-    // write the later, private mints.
-    create();
+    // write the later, private mints. Its row names the home, then the
+    // mailbox its commit created.
+    let (ack, entry) = feed_entry(
+        port,
+        &s1,
+        "create_new_document (the account's first)",
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    let mailbox = format!("{account}.0.{}", skep_namespace::MAILBOX_SLOT);
+    assert_eq!(
+        entry["docs"],
+        serde_json::json!([acked_addr(&ack), mailbox]),
+        "the account's first mint names its home, then the mailbox: {entry}"
+    );
+    assert_terms_by_op(&entry, "create_new_document");
     let doc_a = create();
     let doc_b = create();
     let v = op(
@@ -963,11 +993,19 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     // published home, minted into principal 1's own account — since a
     // version of one's own draft is versionless (PUB-2.9, the store's
     // `private_source_versionless`; `tests/it/version_chain.rs`). The
-    // well-known mint is the account's mailbox, its first call here.
+    // well-known creation is the claimant's bio, from its signed session:
+    // every call at slot 2 on an account holding its home finds the mailbox
+    // standing and records no row.
     let minting = [
         ("version", format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}","published":false}}"#)),
         ("fork", r#"{"op":"fork"}"#.to_string()),
-        ("create_well_known_document", format!(r#"{{"op":"create_well_known_document","account":"{account}","slot":2}}"#)),
+        (
+            "create_well_known_document",
+            format!(
+                r#"{{"op":"create_well_known_document","account":"{CLAIMANT_ACCOUNT}","slot":{}}}"#,
+                skep_namespace::BIO_SLOT
+            ),
+        ),
     ];
 
     fn op_of(what: &str) -> &str {
@@ -1011,7 +1049,11 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         assert_absent(&entry, &["attest"], what);
     }
     for (what, frame) in minting {
-        let (ack, entry) = feed_entry(port, &s1, what, &frame);
+        let writer = match what {
+            "create_well_known_document" => registrar.as_str(),
+            _ => s1.as_str(),
+        };
+        let (ack, entry) = feed_entry(port, writer, what, &frame);
         let minted = ack["addr"].as_str().expect("a minting write acks its address");
         assert_eq!(entry["op"].as_str(), Some(what), "{what}: the entry's op kind");
         assert_eq!(
@@ -1022,6 +1064,79 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         assert_terms_by_op(&entry, what);
     }
 
+    sd.shutdown();
+}
+
+/// Checks that a home's row names the mailbox to its holder and keeps its
+/// `attest` for a guest (THE EXEMPTION; wire.md §The change feed).
+///
+/// A keyed account's first mint, from its own signed session, carries the
+/// entry signature over its parent account and an empty body, and its commit
+/// creates the account's mailbox beside the home. The holder's page serves
+/// the row whole — `docs` the home, then the mailbox — with its `attest`,
+/// the marker's blob, and no testimony; a guest's and a stranger's pages
+/// serve the same row reduced to the home, carrying the same `attest`, which
+/// verifies under the holder's key over the frame a reader composes from the
+/// home alone — the parent account by `effective_owner`, the empty body
+/// under the op's token, `H.1`'s pair; and the holder's `drafts=true` page
+/// carries the row, the mailbox being a draft it reads.
+#[test]
+fn the_home_row_names_the_mailbox_to_its_holder_and_keeps_its_attest_for_a_guest() {
+    use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm, ALG_MLDSA65_ED25519};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let stranger = seat_stranger(port, 931);
+    let key = distinct_key(77);
+    let (account, _) = bootstrap_delegate(port, 77);
+    let holder = hire(port, &registrar, CLAIMANT_DOC1, &account, 77, &key);
+    let before = head(port);
+    // A flagless first mint from a signed session: publish-class, so the
+    // suite's `op` attaches the holder's `attest`.
+    let ack = op(port, Some(&holder), &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#));
+    let home = acked_addr(&ack);
+    let at = acked_at(&ack);
+    let mailbox = format!("{account}.0.{}", skep_namespace::MAILBOX_SLOT);
+    let row_of = |token: Option<&str>, narrowing: &str| -> Value {
+        let page = changes_ok(port, token, &format!("since={before}{narrowing}"));
+        page["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .find(|row| row["at"].as_u64() == Some(at))
+            .cloned()
+            .unwrap_or_else(|| panic!("the page carries the home's row: {page}"))
+    };
+    let whole = row_of(Some(&holder), "");
+    assert_eq!(whole["op"].as_str(), Some("create_new_document"), "{whole}");
+    assert_eq!(whole["docs"], serde_json::json!([home, mailbox]), "the holder: the home, then the mailbox: {whole}");
+    assert!(whole.get("key").is_none(), "a signed row carries no testimony: {whole}");
+    let slot = sd.daemon().attestation_at(Seq(at)).expect("the journal").expect("the home's commit is attested");
+    assert_eq!(whole["attest"]["sig"].as_str(), Some(hex(slot.sig()).as_str()), "the row's attest is the marker's blob: {whole}");
+    // The frame a reader composes from the home alone.
+    let (parent, _) = effective_owner(port, None, &home).expect("the home's owner");
+    let parent = skep_resolve::parse_address(&parent).expect("an account's address");
+    let board = board_term(port).expect("H.1");
+    let frame = entry_frame(
+        ALG_MLDSA65_ED25519,
+        board,
+        &parent,
+        DocTerm::One(&parent),
+        &entry_body_empty(ContentFreeOp::CreateNewDocument),
+    );
+    assert!(
+        skep_signature::verify(FIXTURE_TAG, &public_key_of(&key), &frame, slot.sig()).is_ok(),
+        "the attest verifies over the frame composed from the home"
+    );
+    for (who, token) in [("a guest", None), ("a stranger", Some(stranger.session.as_str()))] {
+        let reduced = row_of(token, "");
+        assert_eq!(reduced["docs"], serde_json::json!([home]), "{who}: reduced to the home: {reduced}");
+        assert_eq!(reduced["attest"], whole["attest"], "{who}: the row keeps its attest: {reduced}");
+    }
+    let drafts = row_of(Some(&holder), "&drafts=true");
+    assert_eq!(drafts["docs"], whole["docs"], "the holder's drafts=true page carries the row: {drafts}");
     sd.shutdown();
 }
 
@@ -1562,7 +1677,9 @@ fn pre_feature_positions_answer_bare_entries() {
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         ) {
             Response::AckAddr { addr, at, .. } => {
-                assert_eq!(at.0, 3, "create commits at position 3; re-pin wire.md");
+                // Two records: the home, and the mailbox the account's
+                // first mint creates beside it.
+                assert_eq!(at.0, 4, "create commits at position 4; re-pin wire.md");
                 addr.tumbler().to_string()
             }
             other => panic!("create: {}", unexpected(&other)),
@@ -1575,13 +1692,13 @@ fn pre_feature_positions_answer_bare_entries() {
         match exec(
             s1,
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":"{T_ENROLL}","as_of":3}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":"{T_ENROLL}","as_of":4}}"#
             ),
         ) {
             Response::AckAddr { at, .. } => {
                 // Three records — one range mint, one stretch, one placement
-                // — above the mint's three, and no marker between.
-                assert_eq!(at.0, 6, "the insert commits at position 6; re-pin wire.md")
+                // — above the mint's four, and no marker between.
+                assert_eq!(at.0, 7, "the insert commits at position 7; re-pin wire.md")
             }
             other => panic!("insert: {}", unexpected(&other)),
         }
@@ -1601,9 +1718,10 @@ fn pre_feature_positions_answer_bare_entries() {
     // page of three, `more` true.
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
-    // Read as the GUEST: every bare position here classifies PUBLISHED from
-    // the journal (a delegate, the born-published home's mint, a deposit
-    // into it), so the guest's page is the whole pre-feature history.
+    // Read as the GUEST: every bare position here classifies so the guest
+    // reads it from the journal (a delegate, the born-published home's mint
+    // — the mailbox beside it withheld, the home named first — and a deposit
+    // into the home), so the guest's page is the whole pre-feature history.
     let (st, body) = changes_raw(port, None, "since=0&limit=3");
     assert_eq!(st, 200);
     // BYTE-EXACT, which wire.md claims of this example alone: a bare
@@ -1620,12 +1738,12 @@ fn pre_feature_positions_answer_bare_entries() {
     assert_eq!(st, 200);
     let health = json(&body);
     assert!(health["head_time"].is_u64(), "the seed's commits are recorded: {health}");
-    assert_eq!(health["log_position"].as_u64(), Some(6 + SEED_HEAD));
+    assert_eq!(health["log_position"].as_u64(), Some(7 + SEED_HEAD));
     // Paging over bare entries behaves like any other page.
-    let v = changes_ok(port, None, "since=3&limit=1");
-    assert_eq!(entry_ats(&v), vec![6]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(6), Some(true)));
-    let v = changes_ok(port, None, &format!("since={}", 6 + SEED_HEAD));
+    let v = changes_ok(port, None, "since=4&limit=1");
+    assert_eq!(entry_ats(&v), vec![7]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(7), Some(true)));
+    let v = changes_ok(port, None, &format!("since={}", 7 + SEED_HEAD));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     sd.shutdown();
 }

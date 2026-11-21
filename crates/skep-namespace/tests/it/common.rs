@@ -175,7 +175,8 @@ pub const UNKNOWN_ID: PrincipalId = PrincipalId(99);
 
 /// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then a
 /// flagless `create_new_document` under it (⇒ doc `[1,0,1,0,1]`, the
-/// account's doc 1, born PUBLISHED by the create-path default). The handle
+/// account's doc 1, born PUBLISHED by the create-path default, with the
+/// account's mailbox `[1,0,1,0,2]` created in the same commit). The handle
 /// borrows the kernel, so it stays inside; a test that needs one builds it
 /// off the returned kernel.
 pub fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
@@ -187,5 +188,30 @@ pub fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
     let (doc, _) = ns
         .create_new_document(ID1, &acct, None)
         .expect("the delegate creates a document");
+    (k, acct, doc)
+}
+
+/// The standard fixture's account holding its doc 1 and NO mailbox: genesis,
+/// `delegate [1,0,1] → ID1`, then doc `[1,0,1,0,1]` minted published through
+/// the pure mint in a composite of its own.
+///
+/// The create path's first mint creates the account's mailbox in its commit,
+/// so this is the one way to an account whose count stands at 1 with slot 2
+/// empty: a state the store admits and the daemon's door refuses
+/// (`mint_home_first` keeps every mint but the create off an empty
+/// account). The slot op's own cells read it, to place a slot's first
+/// document under a count of 1 and past the block.
+pub fn kernel_with_account_doc_1_and_no_mailbox() -> (Kernel<World>, Address, Address) {
+    let k = mem_kernel(genesis_world());
+    let (acct, _) = Namespace::new(&k)
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("bootstrap delegates the first account");
+    let doc = commit_mint(&k, M3State::document_lock_key(&acct), |m3| m3.mint_document(&acct, true));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.has_documents(&acct), "the premise: the account holds its doc 1");
+    assert!(
+        !m3.is_registered_document(&slot(&acct, 2)),
+        "the premise: no mailbox stands — only a first create makes one"
+    );
     (k, acct, doc)
 }

@@ -510,7 +510,7 @@ fn the_well_known_creations_schema_requires_its_slot_and_refuses_an_unknown_memb
     let slots: Vec<u64> = slot["enum"].as_array().expect("the slots the schema admits").iter().filter_map(Value::as_u64).collect();
     assert_eq!(slots, skep_client::address::WELL_KNOWN_SLOTS, "the four well-known slots, and no other number");
     let said_all = reference(&catalog, "create_well_known_document");
-    for said in ["slot is REQUIRED", "2 your mailbox", "3 your bio", "4 your public link page", "5 your account's policy document", "always PRIVATE", "PUBLISHED and EMPTY", "mint_home_first", "committed: false"] {
+    for said in ["slot is REQUIRED", "2 your mailbox", "3 your bio", "4 your public link page", "5 your account's policy document", "always PRIVATE", "already exists", "created it with your home page", "PUBLISHED and EMPTY", "mint_home_first", "committed: false"] {
         assert!(said_all.contains(said), "the reference says `{said}`: {said_all}");
     }
     let args = serde_json::json!({"account": "1.0.1", "slot": 5});
@@ -874,7 +874,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
         ("resolve", &["\"drop\"", "\"send\"", "\"kept\": true", "may_have_landed", "landing_unread"]),
         ("changes_since", &["next", "log_position", "history_reclaimed"]),
         ("make_link", &["from_", "addrs", "spans", "empty_type_resolution"]),
-        ("create_well_known_document", &["slot", "mint_home_first", "committed: false"]),
+        ("create_well_known_document", &["slot", "already", "mint_home_first", "committed: false"]),
         ("set_arrangement", &["WHOLE", "head_moved", "fork_base_moved"]),
         ("line_numbers", &["masked", "range_not_present"]),
         ("doc_metadata", &["base", "withheld", "arranged_at"]),

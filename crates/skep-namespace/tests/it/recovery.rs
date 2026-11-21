@@ -12,7 +12,8 @@ use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
     first_document_address, ghost_position, head_document, staging_draft, system_account,
     time_document, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
-    FIRST_ORDINARY_DOCUMENT, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
+    FIRST_ORDINARY_DOCUMENT, MAILBOX_SLOT, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -64,18 +65,22 @@ fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
 /// The document chain's own contiguity, past the reserved block: once an
 /// account holds its doc 1 its chain's next is the first ordinary document,
 /// so the fold admits that record after doc 1 and then the one after it — a
-/// hand-folded account of three documents, the shape every fixture above
-/// this crate folds. It reads as the same three minted through the ops do:
-/// each registered with its bit and its position, the account holding
-/// documents, each version chain its own, the walk in address order, the
-/// next mint the account's fourth, and no number of the block registered.
+/// hand-folded account of three documents and the mailbox its doc 1's commit
+/// places beside it, the shape the ops leave. It reads as the same three
+/// minted through the ops do: each registered with its bit and its
+/// position, the mailbox private at doc 1's, the account holding documents,
+/// each version chain its own, the walk in address order, the next mint the
+/// account's fourth, and no number of the block but the mailbox's
+/// registered.
 #[test]
 fn the_fold_admits_the_first_ordinary_document_after_doc_1_and_then_the_next() {
     let acct = a(&[1, 0, 1]);
     let docs = [1, 2, 3].map(|k| nth_document(&acct, k));
+    let mailbox = slot(&acct, MAILBOX_SLOT);
     let folded = M3State::genesis()
         .apply_m3(Seq(1), &alloc(&[1, 0, 1]))
         .apply_m3(Seq(2), &M3Rec::allocate(docs[0].clone(), true))
+        .apply_m3(Seq(2), &M3Rec::allocate(mailbox.clone(), false))
         .apply_m3(Seq(3), &M3Rec::allocate(docs[1].clone(), false))
         .apply_m3(Seq(4), &M3Rec::allocate(docs[2].clone(), true));
     for (doc, (bit, at)) in docs.iter().zip([(true, 2), (false, 3), (true, 4)]) {
@@ -84,24 +89,28 @@ fn the_fold_admits_the_first_ordinary_document_after_doc_1_and_then_the_next() {
         assert_eq!(folded.minted_at(doc), Some(Seq(at)), "{doc}");
         assert_eq!(folded.latest_version(doc), None, "{doc} has no version yet");
     }
+    assert!(folded.is_registered_document(&mailbox) && !folded.published(&mailbox));
+    assert_eq!(folded.minted_at(&mailbox), Some(Seq(2)), "the mailbox is dated with doc 1");
     assert!(folded.has_documents(&acct));
+    let walk = [docs[0].clone(), mailbox.clone(), docs[1].clone(), docs[2].clone()];
     assert_eq!(
-        folded.documents().take(3).map(|(doc, bit)| (doc.clone(), bit)).collect::<Vec<_>>(),
-        docs.iter().cloned().zip([true, false, true]).collect::<Vec<_>>(),
-        "the account's three documents lead the walk, in address order"
+        folded.documents().take(4).map(|(doc, bit)| (doc.clone(), bit)).collect::<Vec<_>>(),
+        walk.iter().cloned().zip([true, false, false, true]).collect::<Vec<_>>(),
+        "the account's four documents lead the walk, in address order"
     );
     assert_eq!(
         folded.mint_document(&acct, false).expect("the account mints").0,
         nth_document(&acct, 4)
     );
-    for number in 2..FIRST_ORDINARY_DOCUMENT {
+    for number in (2..FIRST_ORDINARY_DOCUMENT).filter(|&number| number != MAILBOX_SLOT) {
         assert!(
             !folded.is_registered_document(&slot(&acct, number)),
             "document {number} of the reserved block reads registered under a count past it"
         );
     }
-    // The same three through the ops are the same slice, but for the seat
-    // `delegate` stages beside the account and the positions the commits took.
+    // The same three through the ops are the same slice, the mailbox beside
+    // doc 1 among it, but for the seat `delegate` stages beside the account
+    // and the positions the commits took.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1).expect("delegate");
@@ -869,13 +878,14 @@ fn the_slice_prints_its_four_fields_and_their_contents() {
 
 /// The reserved block adds no field and no form to the slice: a filled slot
 /// is an entry of the publication map and of the position map, and a count
-/// past the block is a count. So a slice holding its account's doc 1, two
-/// filled slots and a second document round-trips M2's checkpoint encoding
-/// whole, and a durable kernel recovers the same slice — one slot restored
-/// FROM the checkpoint, the second document and the other slot by replay —
-/// and each answers as the live one did: the slots registered with the bits
-/// they carried, every other number of the block unregistered, and the
-/// counter standing past the block.
+/// past the block is a count. So a slice holding its account's doc 1 with
+/// the mailbox its commit placed, two more filled slots and a second
+/// document round-trips M2's checkpoint encoding whole, and a durable kernel
+/// recovers the same slice — the mailbox and one slot restored FROM the
+/// checkpoint, the second document and the other slot by replay — and each
+/// answers as the live one did: the slots registered with the bits they
+/// carried, every other number of the block unregistered, and the counter
+/// standing past the block.
 #[test]
 fn a_slice_holding_filled_slots_and_a_count_past_the_block_recovers_whole() {
     let dir = tempdir().expect("tempdir");
@@ -892,16 +902,16 @@ fn a_slice_holding_filled_slots_and_a_count_past_the_block_recovers_whole() {
         let (acct, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
             .expect("delegate");
-        ns.create_new_document(ID1, &acct, None).expect("doc 1");
-        fill(&k, &acct, &slot(&acct, 2), false);
-        // Checkpoint here: doc 1 and slot 2 are restored FROM the checkpoint;
-        // the rest ride post-checkpoint replay.
+        ns.create_new_document(ID1, &acct, None).expect("doc 1, and the mailbox beside it");
+        fill(&k, &acct, &slot(&acct, 3), false);
+        // Checkpoint here: doc 1, the mailbox and slot 3 are restored FROM
+        // the checkpoint; the rest ride post-checkpoint replay.
         k.checkpoint().expect("checkpoint");
         let (second, _) = ns
             .create_new_document(ID1, &acct, Some(true))
             .expect("the second document");
         assert_eq!(second, nth_document(&acct, 2));
-        fill(&k, &acct, &slot(&acct, 3), true);
+        fill(&k, &acct, &slot(&acct, 4), true);
         (acct, k.snapshot().world().m3().clone())
     };
     let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
@@ -911,12 +921,12 @@ fn a_slice_holding_filled_slots_and_a_count_past_the_block_recovers_whole() {
     let recovered = k2.snapshot().world().m3().clone();
     assert_eq!(recovered, live);
     for (which, m3) in [("round-tripped", &restored), ("recovered", &recovered)] {
-        for (number, bit) in [(2, false), (3, true)] {
+        for (number, bit) in [(MAILBOX_SLOT, false), (3, false), (4, true)] {
             let placed = slot(&acct, number);
             assert!(m3.is_registered_document(&placed), "{which}: {placed}");
             assert_eq!(m3.published(&placed), bit, "{which}: {placed}");
         }
-        for number in 4..FIRST_ORDINARY_DOCUMENT {
+        for number in 5..FIRST_ORDINARY_DOCUMENT {
             assert!(
                 !m3.is_registered_document(&slot(&acct, number)),
                 "{which}: document {number} of the block reads registered"

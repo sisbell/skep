@@ -281,9 +281,11 @@ pub enum M3Rec {
     /// frontier returns such a record — the counter steps over the block
     /// ([`crate::FIRST_ORDINARY_DOCUMENT`]). It has two producers: genesis's
     /// seed, which holds the system account's three, and a well-known slot's
-    /// mint, whose record [`crate::Namespace::create_well_known_document`]
-    /// stages at the slot it is asked for ([`crate::WellKnownSlot`]), stamped
-    /// with that slot's own state. The fold admits one where the slot holds
+    /// mint, stamped with that slot's own state, whose record
+    /// [`crate::Namespace::create_well_known_document`] stages at the slot
+    /// it is asked for ([`crate::WellKnownSlot`]) and
+    /// [`crate::Namespace::create_new_document`] at the mailbox's, beside an
+    /// account's first document. The fold admits one where the slot holds
     /// no document and refuses a second ([`M3State::apply_m3`]).
     ///
     /// **Where it may be staged.** This is the caller's half of every mint, and

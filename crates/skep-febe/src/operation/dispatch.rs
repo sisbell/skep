@@ -116,9 +116,11 @@ where
             // The three-valued publication flag rides the op verbatim
             // (PUB-8.16); M3's create path resolves the absent arm — the
             // account's first document born published, every later flagless
-            // one private (PUB-8.21). The explicit-false first-mint refusal
-            // is the daemon's door (PUB-8.20, PUB-kickoff D2c), not this
-            // dispatch's.
+            // one private (PUB-8.21) — and creates the account's mailbox in
+            // the commit that mints its first document (the mailbox design
+            // §3), so this ack names the home and its `at` dates both. The
+            // explicit-false first-mint refusal is the daemon's door
+            // (PUB-8.20, PUB-kickoff D2c), not this dispatch's.
             Op::CreateNewDocument { account, published } => {
                 let (addr, at) = self
                     .stores
@@ -172,7 +174,9 @@ where
             // that finds the slot's document standing is acknowledged as M3
             // answers it: the standing address beside the position it read,
             // no commit made, and `committed: false` — as `emit`'s dedup hit
-            // is below.
+            // is below. Every call at the mailbox's slot on an account that
+            // holds its home is such a call: the mailbox stands from the
+            // home's own commit.
             Op::CreateWellKnownDocument { account, slot } => {
                 let (document, at) = self
                     .stores

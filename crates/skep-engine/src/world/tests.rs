@@ -672,7 +672,11 @@ fn a_base_written_before_the_position_map_fails_to_decode() {
     ];
     for (store, shapes) in stores {
         let (world, draft) = links_in_a_draft_named(shapes);
-        let mut minted = vec![draft.clone()];
+        // The draft, the mailbox its commit made beside it — the account's
+        // first mint (M3's mailbox rule) — and each link.
+        let account = skep_address::parent(&draft).expect("a document lies in an account");
+        let mailbox = skep_namespace::mailbox_address(&account).expect("an account's slot");
+        let mut minted = vec![draft.clone(), mailbox];
         minted.extend((1..=shapes.len() as u32).map(|k| element(&draft, 2, k)));
         bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
             .expect("this build's own bytes decode");

@@ -455,9 +455,12 @@ const LAST_NAMED_SLOT: u32 = 5;
 /// (the mailbox design §2, §3). The system account has no mailbox, and there
 /// the number is the head document, which genesis seeds ([`head_document`]). No
 /// counter hands the number out ([`FIRST_ORDINARY_DOCUMENT`]), so a document
-/// stands at it only where a record placed one, and a mailbox's record is
-/// the one [`crate::Namespace::create_well_known_document`] stages at
-/// [`WellKnownSlot::Mailbox`].
+/// stands at it only where a record placed one. A mailbox's record is staged
+/// by the account's first [`crate::Namespace::create_new_document`], in the
+/// commit that mints its doc 1 (the mailbox design §3), so every account
+/// whose doc 1 that op minted holds its mailbox; and
+/// [`crate::Namespace::create_well_known_document`] stages one at
+/// [`WellKnownSlot::Mailbox`] where none stands.
 ///
 /// It is the one spelling of the number. `skep-client`, which does not link
 /// this crate, holds a copy its suite holds equal to this (its `address`
@@ -620,7 +623,9 @@ impl WellKnownSlot {
 /// minted (the mailbox design §3), and the signature over a slot's creation
 /// names this address before the commit. Whether a document stands there is
 /// [`M3State::is_registered_document`] of this address, and what places one
-/// is [`crate::Namespace::create_well_known_document`]. For the system
+/// is [`crate::Namespace::create_well_known_document`] — at the mailbox's
+/// slot, an account's first [`crate::Namespace::create_new_document`] too,
+/// beside the account's doc 1. For the system
 /// account the slots are no account's well-known documents: this answers
 /// its head document, its staging draft, its time document, and at
 /// [`WellKnownSlot::Policy`] an address nothing is created at.

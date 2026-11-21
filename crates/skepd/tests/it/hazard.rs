@@ -1011,9 +1011,9 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
 const CLAIM_CRASH_DIR: &str = "SKEP_HAZARD_CLAIM_CRASH_DIR";
 
 /// The claim link's committed position on a fresh board — the ceremony's
-/// fifth commit, twelve records above the seeded board's head
+/// fifth commit, thirteen records above the seeded board's head
 /// (`common::SEED_HEAD`; wire.md §A first board).
-const CLAIM_POSITION: u64 = SEED_HEAD + 12;
+const CLAIM_POSITION: u64 = SEED_HEAD + 13;
 
 /// `H.1`'s records above the claim: the head record's insert (3) and the
 /// publish shot into `H` (7: the shot's four and the correspondence record

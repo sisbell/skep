@@ -9,9 +9,9 @@ use serde::Serialize;
 use skep_address::{Address, Tumbler};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
-    first_document_address, ghost_home_document, head_document, prefix_contains, staging_draft,
-    time_document, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
-    SYSTEM_PRINCIPAL,
+    first_document_address, ghost_home_document, head_document, mailbox_address, prefix_contains,
+    staging_draft, time_document, HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId,
+    BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -36,7 +36,9 @@ fn create_and_read(
 /// PUB-8.21, the create-path default, resolved by `create_new_document` and
 /// never by the mint: a FLAGLESS first mint into an empty account is honored
 /// born PUBLISHED as doc 1 (PUB-1.17) — the Allocate the mint stamps carries
-/// `true`, the fold's map holds `true`, and `published` answers `true`.
+/// `true`, the fold's map holds `true`, and `published` answers `true`. The
+/// commit is that record and the mailbox's beside it, private, and nothing
+/// else.
 #[test]
 fn a_flagless_first_create_is_born_published() {
     let k = mem_kernel(genesis_world());
@@ -64,12 +66,18 @@ fn a_flagless_first_create_is_born_published() {
         .expect("the empty account mints");
     assert_eq!(addr, slot);
     assert_eq!(rec, M3Rec::allocate(slot.clone(), true));
-    // …and folding that one record at the position it committed at is the
-    // whole of what the op committed: the publication map and the position
-    // map are written by the fold, in the same step as the registration.
+    // …and folding that record, then the mailbox's the account's first mint
+    // stages beside it, at the position the commit took is the whole of what
+    // the op committed: the publication map and the position map are written
+    // by the fold, in the same step as each registration.
     let committed = k.current_seq();
-    assert_eq!(before_create.apply_m3(committed, &rec), *k.snapshot().world().m3());
-    assert!(before_create.apply_m3(committed, &rec).published(&slot));
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
+    let folded = before_create
+        .apply_m3(committed, &rec)
+        .apply_m3(committed, &M3Rec::allocate(mailbox.clone(), false));
+    assert_eq!(folded, *k.snapshot().world().m3());
+    assert!(folded.published(&slot));
+    assert!(!folded.published(&mailbox), "the mailbox is born private");
     assert_eq!(
         k.snapshot().world().m3().minted_at(&slot),
         Some(committed),
@@ -652,7 +660,7 @@ fn registration_precedes_publication() {
     for never_minted in [
         nth_document(&acct, 2), // the slot the chain's next mint fills
         a(&[1, 0, 1, 0, 71]),   // deeper on the chain
-        slot(&acct, 2),         // a named slot of the reserved block, unfilled
+        slot(&acct, 3),         // a named slot of the reserved block, unfilled
         slot(&acct, 9),         // a number of the block no slot names
         a(&[1, 0, 1, 0, 1, 1]), // doc 1's version chain, never opened
         a(&[1, 0, 2, 0, 1]),    // under an account that does not exist

@@ -34,8 +34,10 @@ use skep_address::GateViolation;
 /// `next_account_prefix`, which answers the `None` as its own, so a fifth
 /// variant would be a permanently dead arm in M5's, M7's and M10's
 /// vocabularies. A well-known slot's, which `create_well_known_document`
-/// calls, keeps `mint_document`'s gate and answers its leaf, `NotAnAccount`,
-/// so it adds none either; it never answers `Gate`.
+/// calls — and `create_new_document`, for an account's mailbox, past the
+/// same gate its home's mint has passed — keeps `mint_document`'s gate and
+/// answers its leaf, `NotAnAccount`, so it adds none either; it never
+/// answers `Gate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
     /// The home is not a registered Document (P6/C2/L1a).

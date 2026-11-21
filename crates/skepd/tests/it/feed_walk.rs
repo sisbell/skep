@@ -92,9 +92,10 @@ const PATIENCE: Duration = Duration::from_secs(60);
 
 /// The claimed board's head as the claim leaves it: the registry seed's
 /// commits (`common::SEED_HEAD`), the ceremony's five and `H.1`'s two, the
-/// publish twenty-two records above the seed — its correspondence record's
-/// three among them (`changes.rs` pins them).
-const CLAIMED_HEAD: u64 = SEED_HEAD + 22;
+/// publish twenty-three records above the seed — the home mint's mailbox
+/// and the correspondence record's three among them (`changes.rs` pins
+/// them).
+const CLAIMED_HEAD: u64 = SEED_HEAD + 23;
 
 /// The hold, taken for a test's span and RELEASED at its end, pass or
 /// fail, so a red leaves no later walk parked.
@@ -686,7 +687,7 @@ fn the_three_lines_come_at_the_cadence() {
 fn public_ats_through_the_claimed_head() -> Vec<u64> {
     seed_ats()
         .into_iter()
-        .chain([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12])
+        .chain([SEED_HEAD + 2, SEED_HEAD + 4, SEED_HEAD + 7, SEED_HEAD + 10, SEED_HEAD + 13])
         .chain([CLAIMED_HEAD])
         .collect()
 }

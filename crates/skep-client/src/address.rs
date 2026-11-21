@@ -134,7 +134,9 @@ pub fn well_known_of(account: &str, slot: u64) -> String {
 /// The address is the account's own, then `.0.` and [`MAILBOX_SLOT`] (the
 /// mailbox design §2). It names a place whether or not a document stands
 /// there: mail points at it from the moment the account exists, and nothing
-/// in mail needs the mailbox document minted (§3). The answer is in the
+/// in mail needs the mailbox document minted (§3). The board mints one with
+/// every account's home page, in the same commit, so a document stands there
+/// wherever the account's doc 1 does. The answer is in the
 /// spelling the account came in — a board's own form of an account gives
 /// that board's own form of its mailbox, the global form the global one —
 /// and the text is not checked to be an account's. The system account has

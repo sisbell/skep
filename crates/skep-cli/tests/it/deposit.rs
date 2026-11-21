@@ -298,6 +298,23 @@ fn deposit_mints_the_missing_home_published_and_a_verifying_mirror_reads_the_end
     assert_eq!(registry.mirrored(&node).1.map(|e| e.link.to_string()), Some(link), "and the endpoint stands as it was");
 }
 
+/// Checks that a node account holds its mailbox after its first deposit.
+///
+/// The first `skep deposit` at a node account mints its missing home, and
+/// the board creates the account's mailbox in that home's own commit (the
+/// mailbox design §3), with no step of the binary's: before the deposit a
+/// guest is answered `doc_not_registered` at the account's `.0.2`, as at
+/// its `.0.1`; after it, `withheld`.
+#[test]
+fn deposit_node_account_holds_its_mailbox() {
+    let registry = Registry::open();
+    let node = registry.node_account("node", 932);
+    let mailbox = skep_client::address::mailbox_of(&node.account);
+    assert_eq!(registry.metadata(&mailbox)["code"].as_str(), Some("doc_not_registered"), "no home yet, and no mailbox");
+    deposited(&registry.deposit(&node, &["https://acme.example"], &[]));
+    assert_eq!(registry.metadata(&mailbox)["code"].as_str(), Some("withheld"), "the mailbox stands beside the home the deposit minted");
+}
+
 /// Checks that a later deposit names the one it replaces and erases nothing.
 ///
 /// A second `skep deposit` names the first in `replaces` and becomes

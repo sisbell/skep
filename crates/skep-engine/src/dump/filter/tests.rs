@@ -6,7 +6,7 @@ use skep_kernel::TxnError;
 use skep_links::{
     enc, EditLinkError, EmitError, Link, MakeLinkError, ReservedAddrs, SlotArg,
 };
-use skep_namespace::PrincipalId;
+use skep_namespace::{mailbox_address, PrincipalId};
 
 use crate::dump::tests::{populated_world, render_of, vspec};
 use crate::dump::{dump, dump_tree, dump_visible, BANNER};
@@ -36,10 +36,12 @@ enum Shape {
 /// owed nothing of any of them.
 ///
 /// The exception set is HASH-KEYED and its enumeration has no order of
-/// its own, and it holds a second entry beside the fixture's: genesis's
-/// staging draft, under the system account. So the fixture's draft is
-/// picked by its OWNER — the account `USER` is seated at — and never by
-/// its place in the walk. A fixture that grew a second document of its
+/// its own, and it holds two entries beside the fixture's: genesis's
+/// staging draft, under the system account, and the account's mailbox,
+/// which the account's first create made beside its doc 1 (M3's mailbox
+/// rule) and which holds nothing. So the fixture's draft is picked by its
+/// OWNER — the account `USER` is seated at — less that mailbox, and never
+/// by its place in the walk. A fixture that grew a second document of its
 /// own would leave the three tests below choosing a draft per process —
 /// passing or failing on the hasher's seed, which is worse than either.
 /// The count under that owner is asserted here so that growth is an
@@ -47,8 +49,11 @@ enum Shape {
 fn the_one_draft(world: &World) -> Address {
     let owner =
         world.namespace.principal_prefix(USER).expect("the fixture seats USER at its account");
+    let mailbox = mailbox_address(owner).expect("an account has a mailbox slot");
     let drafts: Vec<&Address> =
         world.drafts().filter(|d| d.owner_account == owner).map(|d| d.document).collect();
+    assert!(drafts.contains(&&mailbox), "the account's mailbox stands beside its draft: {drafts:?}");
+    let drafts: Vec<&Address> = drafts.into_iter().filter(|d| **d != mailbox).collect();
     assert_eq!(drafts.len(), 1, "the fixture must hold exactly one draft of its own: {drafts:?}");
     drafts[0].clone()
 }

@@ -182,9 +182,14 @@ fn write(
     addr
 }
 
-/// A bare mint into `account` by `token`; `None` docs ⇒ the minted address.
-fn mint(log: &mut Vec<Entry>, port: u16, token: &str, account: &str) -> String {
-    write(
+/// A bare mint into `account` by `token`, its row naming the minted address.
+///
+/// An account's first mint is its home, and its commit creates the
+/// account's mailbox beside it (the mailbox design §3): that row names the
+/// two, the home first, and the mailbox — private — joins `drafts`. Every
+/// later mint's row names its document alone.
+fn mint(log: &mut Vec<Entry>, drafts: &mut BTreeSet<String>, port: u16, token: &str, account: &str) -> String {
+    let minted = write(
         log,
         port,
         token,
@@ -192,7 +197,13 @@ fn mint(log: &mut Vec<Entry>, port: u16, token: &str, account: &str) -> String {
         &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         None,
         Hand::Bare,
-    )
+    );
+    if minted == format!("{account}.0.1") {
+        let mailbox = format!("{account}.0.{}", skep_namespace::MAILBOX_SLOT);
+        log.last_mut().expect("the mint's own entry").docs.push(mailbox.clone());
+        drafts.insert(mailbox);
+    }
+    minted
 }
 
 /// A one-byte insert at content ordinal 1 of `doc` (a prepend, so every
@@ -322,12 +333,12 @@ fn build(port: u16) -> Board {
         Hand::Bare,
     );
     let a = open_session(port, 1);
-    let a_doc1 = mint(&mut log, port, &a, &a_acct);
+    let a_doc1 = mint(&mut log, &mut drafts, port, &a, &a_acct);
     assert_eq!(a_doc1, "1.0.2.0.1");
     let a_signed = hire_logged(&mut log, port, &claimant_signed, &a_acct, 1, &distinct_key(1));
-    let d1 = mint(&mut log, port, &a, &a_acct);
-    let d2 = mint(&mut log, port, &a, &a_acct);
-    let d3 = mint(&mut log, port, &a, &a_acct);
+    let d1 = mint(&mut log, &mut drafts, port, &a, &a_acct);
+    let d2 = mint(&mut log, &mut drafts, port, &a, &a_acct);
+    let d3 = mint(&mut log, &mut drafts, port, &a, &a_acct);
     drafts.extend([d1.clone(), d2.clone(), d3.clone()]);
 
     // A.1 — principal 2, delegated by A beneath A's account.
@@ -343,8 +354,8 @@ fn build(port: u16) -> Board {
         Hand::Bare,
     );
     let a1 = open_session(port, 2);
-    let _a1_doc1 = mint(&mut log, port, &a1, &a1_acct);
-    let e1 = mint(&mut log, port, &a1, &a1_acct);
+    let _a1_doc1 = mint(&mut log, &mut drafts, port, &a1, &a1_acct);
+    let e1 = mint(&mut log, &mut drafts, port, &a1, &a1_acct);
     drafts.insert(e1.clone());
 
     // A.1.1 — principal 3, delegated by A.1.
@@ -360,8 +371,8 @@ fn build(port: u16) -> Board {
         Hand::Bare,
     );
     let a11 = open_session(port, 3);
-    let _a11_doc1 = mint(&mut log, port, &a11, &a11_acct);
-    let f1 = mint(&mut log, port, &a11, &a11_acct);
+    let _a11_doc1 = mint(&mut log, &mut drafts, port, &a11, &a11_acct);
+    let f1 = mint(&mut log, &mut drafts, port, &a11, &a11_acct);
     drafts.insert(f1.clone());
 
     // B — principal 4, a stranger, the grant-holder to be.
@@ -377,8 +388,8 @@ fn build(port: u16) -> Board {
         Hand::Bare,
     );
     let b = open_session(port, 4);
-    let _b_doc1 = mint(&mut log, port, &b, &b_acct);
-    let g1 = mint(&mut log, port, &b, &b_acct);
+    let _b_doc1 = mint(&mut log, &mut drafts, port, &b, &b_acct);
+    let g1 = mint(&mut log, &mut drafts, port, &b, &b_acct);
     drafts.insert(g1.clone());
 
     // C — principal 5, a stranger with no grant.
@@ -394,7 +405,7 @@ fn build(port: u16) -> Board {
         Hand::Bare,
     );
     let c = open_session(port, 5);
-    let _c_doc1 = mint(&mut log, port, &c, &c_acct);
+    let _c_doc1 = mint(&mut log, &mut drafts, port, &c, &c_acct);
 
     // Three public links in A's doc 1 (the straddles' targets).
     let l1 = ghost_link(&mut log, port, &a_signed, &a_doc1, 1);
@@ -561,8 +572,10 @@ fn under_prefix(prefix: &str, doc: &str) -> bool {
 /// whose `docs` the class REDUCES carries no `attest`, whatever hand the
 /// fixture stated — the third absence, beside LOST and NEVER — save a
 /// `publish` row whose reduction dropped the staging draft alone, its member
-/// still first: THE EXEMPTION (the link-sets design §5.7), the preimage
-/// naming no member the reduction withholds, so the row keeps its `attest`.
+/// still first, and a `create_new_document` or `fork` row whose reduction
+/// dropped the mailbox alone, its home still first: THE EXEMPTION (the
+/// link-sets design §5.7), the preimage naming no member the reduction
+/// withholds, so the row keeps its `attest`.
 fn expected(
     log: &[Entry],
     drafts: &BTreeSet<String>,
@@ -586,9 +599,11 @@ fn expected(
             continue;
         }
         let whole = reduced.len() == e.docs.len();
-        // The exemption: a `publish` row still naming its member first keeps
-        // its `attest` though the draft beside it was reduced away.
-        let composable = e.op == "publish" && reduced.first() == e.docs.first();
+        // The exemption: a `publish` row still naming its member first, and
+        // a home's row still naming its home first, keep their `attest`
+        // though the draft or the mailbox beside it was reduced away.
+        let composable = matches!(e.op, "publish" | "create_new_document" | "fork")
+            && reduced.first() == e.docs.first();
         let mut entry = Map::new();
         entry.insert("at".into(), Value::Number(e.at.into()));
         entry.insert("docs".into(), Value::Array(reduced.into_iter().map(Value::String).collect()));

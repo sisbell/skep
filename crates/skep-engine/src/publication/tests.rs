@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use skep_address::{validate, Nat, Tumbler};
-use skep_namespace::{staging_draft, system_account, HasM3, PrincipalId};
+use skep_namespace::{mailbox_address, staging_draft, system_account, HasM3, PrincipalId};
 
 use crate::canon::{to_tree, SerdeTree, TreeDe};
 use crate::testkit::{addr, delegated_account, mem_engine, USER};
@@ -9,7 +9,9 @@ use super::*;
 
 /// M3's slice holding one account under the genesis node and one DRAFT
 /// document in it, driven through the real drivers, with the two
-/// addresses.
+/// addresses. The draft is the account's first mint, so its commit made the
+/// account's mailbox beside it, a second draft holding nothing (M3's
+/// mailbox rule).
 fn account_with_a_draft() -> (M3State, Address, Address) {
     let engine = mem_engine();
     let acct = delegated_account(&engine, USER);
@@ -262,14 +264,16 @@ fn the_seed_skips_an_entry_for_an_address_the_registry_never_held() {
          false"
     );
     assert_eq!(drafts.get(&doc), Some(&acct), "…while the registered draft is memoized");
+    let mailbox = mailbox_address(&acct).expect("an account has a mailbox slot");
+    assert_eq!(drafts.get(&mailbox), Some(&acct), "…and the account's mailbox beside it");
     assert_eq!(
         drafts.get(&staging_draft()),
         Some(&system_account()),
-        "…and genesis's staging draft beside it, under the system account"
+        "…and genesis's staging draft beside them, under the system account"
     );
     assert_eq!(
         drafts.len(),
-        2,
-        "the two registered drafts, and none for the address the registry never held"
+        3,
+        "the three registered drafts, and none for the address the registry never held"
     );
 }

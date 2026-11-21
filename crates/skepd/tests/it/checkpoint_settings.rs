@@ -53,7 +53,7 @@ use crate::common::{
 };
 
 /// The claimed board's head as the claim leaves it (`feed_walk.rs` pins it).
-const CLAIMED_HEAD: u64 = SEED_HEAD + 22;
+const CLAIMED_HEAD: u64 = SEED_HEAD + 23;
 
 /// The start under the three settings, every other option the default's.
 fn settings(every: u64, retain: usize, reclaim: JournalReclamation) -> StartOptions {

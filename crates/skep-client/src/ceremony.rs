@@ -223,8 +223,10 @@ pub fn well_known_frame(term: BoardTerm, own: &str, account: &str, slot: u64, si
 /// ordinary `stage` from it and a `publish` naming it as `doc`. A slot is
 /// created once, so the call is safe to repeat: where the document already
 /// stands the board answers its address and commits nothing, and the answer
-/// says so ([`WellKnownDocument::created`]). `id` is the idempotency id the
-/// frame carries.
+/// says so ([`WellKnownDocument::created`]). At the mailbox's slot that is
+/// every account whose home the board minted: the board creates the mailbox
+/// in the home's own commit (the mailbox design §3), so the call answers it
+/// standing. `id` is the idempotency id the frame carries.
 ///
 /// # Errors
 ///

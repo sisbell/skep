@@ -6,10 +6,11 @@
 //! page at 4 and the account's policy document at 5, each published. Over a
 //! real board the suite holds what a board shows of the three published
 //! slots and of the four together: a signed creation lands published and
-//! empty, a guest reads it and its feed row while the mailbox's stays
-//! masked; a slot is created once and one slot never answers for another;
-//! the mailbox is still minted from a bare session, and a signature a
-//! signed session attaches to it is dropped; a request with no slot, or
+//! empty, a guest reads it and its feed row while the mailbox stays
+//! withheld; a slot is created once and one slot never answers for
+//! another; the mailbox, standing from the account's home commit, answers a
+//! bare session's call at slot 2, and a signature a signed session attaches
+//! to that call is dropped; a request with no slot, or
 //! with a number no slot has, is refused before any write; a published
 //! slot's creation is publish-class on a claimed board, refused bare,
 //! unsigned and badly signed in the published mint's own order; its
@@ -27,7 +28,7 @@ use crate::common;
 
 use common::*;
 use serde_json::{json, Value};
-use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm, Fingerprint, SigAlgRow};
+use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm, SigAlgRow};
 use skep_kernel::Seq;
 use skep_namespace::WellKnownSlot;
 
@@ -104,11 +105,12 @@ fn an_ordinary_keyed_account(port: u16, registrar: &str, id: u64) -> (String, St
 /// commit marker carries the attestation, and the feed row its `attest` and
 /// no testimony. Each document is published and holds nothing — a guest and
 /// a stranger read its metadata, published and the account's own, no birth
-/// version, and its empty content — where the mailbox, minted beside them,
-/// is withheld from both. A guest's feed page carries the three creations'
-/// rows and omits the mailbox's; the owner's carries all four. And the four
-/// creations move no count: the account's next document takes the number
-/// it would have taken.
+/// version, and its empty content — where the mailbox beside them, standing
+/// from the claim's home commit and answered so to a call at slot 2, is
+/// withheld from both. A guest's feed page and the owner's each carry the
+/// three creations' rows and no other: the call at slot 2 committed
+/// nothing. And none of the four calls moves a count: the account's next
+/// document takes the number it would have taken.
 #[test]
 fn a_signed_creation_at_each_published_slot_lands_published_and_empty_and_a_guest_reads_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -122,8 +124,8 @@ fn a_signed_creation_at_each_published_slot_lands_published_and_empty_and_a_gues
     let before = head_position(port);
 
     let mailbox = slot_of(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT);
-    let minted = op(port, Some(&owner), &creation_frame(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT));
-    assert_eq!(acked_addr(&minted), mailbox, "{minted}");
+    let standing = op(port, Some(&owner), &creation_frame(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT));
+    assert_eq!((acked_addr(&standing), &standing["committed"]), (mailbox.clone(), &json!(false)), "the mailbox stands from the claim: {standing}");
     let mut created = Vec::new();
     for slot in PUBLISHED_SLOTS {
         let document = slot_of(CLAIMANT_ACCOUNT, slot);
@@ -172,14 +174,18 @@ fn a_signed_creation_at_each_published_slot_lands_published_and_empty_and_a_gues
         }
     }
     let owners = changes_since(port, Some(&owner), before);
-    assert_eq!(owners.len(), 4, "the owner's page: the mailbox's row and the three creations': {owners:?}");
-    assert_eq!(owners[0]["docs"], json!([mailbox]), "{owners:?}");
-    assert_eq!(owners[0]["key"].as_str(), Some("bare"), "the mailbox's row testifies a bare session: {owners:?}");
+    let named: Vec<(&str, &Value)> = owners.iter().map(|row| (row["op"].as_str().expect("op"), &row["docs"])).collect();
+    let expected: Vec<(&str, Value)> =
+        created.iter().map(|(_, document, _)| ("create_well_known_document", json!([document]))).collect();
+    assert_eq!(named.len(), expected.len(), "the owner's page: the three creations' rows and no other: {owners:?}");
+    for ((op, docs), (want_op, want_docs)) in named.iter().zip(&expected) {
+        assert_eq!((op, *docs), (want_op, want_docs), "{owners:?}");
+    }
 
     // No count moved: the next document is the one after the draft counted.
     let next = owner_draft(port, &owner);
     let number = |doc: &str| doc.rsplit('.').next().and_then(|n| n.parse::<u64>().ok()).expect("a document number");
-    assert_eq!(number(&next), number(&counted) + 1, "the four creations moved no count: {counted} then {next}");
+    assert_eq!(number(&next), number(&counted) + 1, "the four calls moved no count: {counted} then {next}");
     sd.shutdown();
 }
 
@@ -240,15 +246,18 @@ fn a_slot_is_created_once_and_a_resend_under_the_first_id_answers_from_the_memo(
     sd.shutdown();
 }
 
-/// Checks that the mailbox is minted as before: bare, private, unsigned, once.
+/// Checks that the mailbox answers a bare session's call standing:
+/// private, its commit unsigned, made once.
 ///
-/// On a claimed board a bare session's `create_well_known_document` at slot
-/// 2 is admitted with no `attest`: the mailbox lands at its address,
-/// private — a guest is withheld it — its feed row testifying `bare` and
-/// carrying no `attest`, its marker's signature slot empty. A second call
-/// answers the same address and commits nothing.
+/// On a claimed board the claimant's mailbox stands from the claim's home
+/// commit. A bare session's `create_well_known_document` at slot 2 is
+/// admitted with no `attest` and answered the mailbox standing, `"committed":
+/// false`, at the head: private — a guest is withheld it — dated at the home,
+/// whose commit made it, that marker's signature slot empty, the ceremony's
+/// home mint being a bare session's. The call commits nothing and adds no
+/// row, and a second answers the same.
 #[test]
-fn the_mailbox_is_still_minted_from_a_bare_session_private_unsigned_and_once() {
+fn the_mailbox_answers_a_bare_sessions_call_standing_private_unsigned_and_once() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -256,34 +265,33 @@ fn the_mailbox_is_still_minted_from_a_bare_session_private_unsigned_and_once() {
     let mailbox = slot_of(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT);
     let before = head_position(port);
     let frame = creation_frame(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT);
-    let ack = op_as_written(port, Some(&owner), &frame);
-    assert_eq!(acked_addr(&ack), mailbox, "{ack}");
-    let at = acked_at(&ack);
+    for call in ["the first call", "a second call"] {
+        let ack = op_as_written(port, Some(&owner), &frame);
+        assert_eq!((acked_addr(&ack), acked_at(&ack), &ack["committed"]), (mailbox.clone(), before, &json!(false)), "{call}: the mailbox standing: {ack}");
+    }
+    assert_eq!(head_position(port), before, "no call committed anything");
+    assert_eq!(changes_since(port, Some(&owner), before), Vec::<Value>::new(), "no call added a row");
+    let home = doc_metadata(port, Some(&owner), CLAIMANT_DOC1);
+    let home_at = expect_resp(&home, "doc_metadata")["at"].as_u64().expect("the home's position");
     let meta = doc_metadata(port, Some(&owner), &mailbox);
-    assert_eq!(expect_resp(&meta, "doc_metadata")["published"].as_bool(), Some(false), "private: {meta}");
+    let m = expect_resp(&meta, "doc_metadata");
+    assert_eq!((m["published"].as_bool(), m["at"].as_u64()), (Some(false), Some(home_at)), "private, dated at the home: {meta}");
     assert_withheld(&doc_metadata(port, None, &mailbox), &mailbox);
-    assert!(sd.daemon().attestation_at(Seq(at)).expect("the journal").is_none(), "the marker's signature slot is empty");
-    let rows = changes_since(port, Some(&owner), before);
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["key"].as_str(), Some("bare"), "a bare session's write: {rows:?}");
-    assert!(rows[0].get("attest").is_none(), "the mint is not signed: {rows:?}");
-    assert_eq!(changes_since(port, None, before), Vec::<Value>::new(), "a guest is served no entry for it");
-    let again = op_as_written(port, Some(&owner), &frame);
-    assert_eq!((acked_addr(&again), &again["committed"]), (mailbox, &json!(false)), "once: {again}");
-    assert_eq!(head_position(port), at, "the second call committed nothing");
+    assert!(sd.daemon().attestation_at(Seq(home_at)).expect("the journal").is_none(), "the home's commit, the mailbox's, is unsigned");
     sd.shutdown();
 }
 
-/// Checks that an `attest` on a mailbox's request is admitted and dropped.
+/// Checks that an `attest` on a call at the mailbox's slot is admitted and
+/// dropped.
 ///
-/// A signed session sends the mailbox's creation with the `attest` a shell
+/// A signed session sends the call at slot 2 with the `attest` a shell
 /// attaches to every write of the checked set — composed over the slot's own
 /// address under the op's token, valid — and the board admits the request
-/// and drops the signature unverified: the mailbox is private, its marker's
-/// signature slot empty, its feed row carrying the session's testimony, the
-/// key's fingerprint, and no `attest`. An `attest` that verifies over no
-/// frame is dropped the same way, never judged: a second account's mailbox
-/// lands under one.
+/// and drops the signature unverified, answering the mailbox standing,
+/// private, `"committed": false`, with nothing written. An `attest` that
+/// verifies over no frame is dropped the same way, never judged: a second
+/// account's call, its mailbox standing from its own home's commit, is
+/// answered the same.
 #[test]
 fn a_signed_sessions_mailbox_request_carrying_an_attest_is_admitted_and_the_signature_dropped() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -295,30 +303,20 @@ fn a_signed_sessions_mailbox_request_carrying_an_attest_is_admitted_and_the_sign
     let attested = attach_attest(port, &signed, &frame);
     assert!(json(attested.as_bytes())["attest"].is_object(), "the premise: the frame carries an attest: {attested}");
     let unverifiable = with_unverifiable_attest(&creation_frame(&account, skep_namespace::MAILBOX_SLOT));
-    let fingerprint = Fingerprint::of(&public_key_of(&device_key())).to_hex();
     let cells = [
-        ("a valid attest", signed.as_str(), attested.as_str(), CLAIMANT_ACCOUNT, Some(fingerprint.as_str())),
-        ("an attest that verifies over no frame", theirs.as_str(), unverifiable.as_str(), account.as_str(), None),
+        ("a valid attest", signed.as_str(), attested.as_str(), CLAIMANT_ACCOUNT),
+        ("an attest that verifies over no frame", theirs.as_str(), unverifiable.as_str(), account.as_str()),
     ];
-    for (what, token, sent, named, testimony) in cells {
+    for (what, token, sent, named) in cells {
         let mailbox = slot_of(named, skep_namespace::MAILBOX_SLOT);
         let before = head_position(port);
         let ack = op_as_written(port, Some(token), sent);
-        assert_eq!(acked_addr(&ack), mailbox, "{what}: admitted: {ack}");
-        let at = acked_at(&ack);
-        assert_eq!(at, before + 1, "{what}: the mint committed");
-        assert!(sd.daemon().attestation_at(Seq(at)).expect("the journal").is_none(), "{what}: the marker's signature slot is empty");
+        assert_eq!((acked_addr(&ack), acked_at(&ack), &ack["committed"]), (mailbox.clone(), before, &json!(false)), "{what}: admitted, the mailbox standing: {ack}");
+        assert_eq!(head_position(port), before, "{what}: nothing written");
         let meta = doc_metadata(port, Some(token), &mailbox);
         assert_eq!(expect_resp(&meta, "doc_metadata")["published"].as_bool(), Some(false), "{what}: private: {meta}");
         assert_withheld(&doc_metadata(port, None, &mailbox), &mailbox);
-        let rows = changes_since(port, Some(token), before);
-        assert_eq!(rows.len(), 1, "{what}: {rows:?}");
-        assert!(rows[0].get("attest").is_none(), "{what}: the row carries no attest: {rows:?}");
-        let key = rows[0]["key"].as_str().expect("the row's testimony");
-        assert_ne!(key, "bare", "{what}: a signed session's write: {rows:?}");
-        if let Some(fingerprint) = testimony {
-            assert_eq!(key, fingerprint, "{what}: the session's key, by fingerprint: {rows:?}");
-        }
+        assert_eq!(changes_since(port, Some(token), before), Vec::<Value>::new(), "{what}: no row");
     }
     sd.shutdown();
 }
@@ -331,8 +329,9 @@ fn a_signed_sessions_mailbox_request_carrying_an_attest_is_admitted_and_the_sign
 /// the named four, an ordinary document's, a string or a fraction, is
 /// refused at the parse — `malformed`, the frame unparsed, its detail naming
 /// the member — from a bare session, a signed one and a guest alike, and
-/// with an `attest` riding it. The head does not move and no slot holds a
-/// document.
+/// with an `attest` riding it. The head does not move, no slot past the
+/// mailbox holds a document, and the mailbox stands as the claim's home
+/// commit left it.
 #[test]
 fn a_request_with_no_slot_or_a_number_no_slot_has_is_refused_before_any_write() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -356,9 +355,12 @@ fn a_request_with_no_slot_or_a_number_no_slot_has_is_refused_before_any_write() 
         }
     }
     assert_eq!(head_position(port), before, "no refused request moved the head");
-    for number in 2..=6u32 {
+    for number in 3..=6u32 {
         assert_unregistered(port, Some(&owner), &format!("{CLAIMANT_ACCOUNT}.0.{number}"), "the owner, of a slot no refused request filled");
     }
+    let home_at = expect_resp(&doc_metadata(port, Some(&owner), CLAIMANT_DOC1), "doc_metadata")["at"].as_u64();
+    let mailbox = doc_metadata(port, Some(&owner), &slot_of(CLAIMANT_ACCOUNT, skep_namespace::MAILBOX_SLOT));
+    assert_eq!(expect_resp(&mailbox, "doc_metadata")["at"].as_u64(), home_at, "the mailbox, as the claim's home commit left it: {mailbox}");
     sd.shutdown();
 }
 

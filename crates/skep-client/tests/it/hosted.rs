@@ -4,7 +4,8 @@
 //! by the reads alone — and the hosted arm's bare sessions closed where they
 //! outlive the flip.
 
-use skep_client::board::{KeySetAnswer, Scope};
+use skep_client::address::mailbox_of;
+use skep_client::board::{frames, KeySetAnswer, Scope};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use skep_client::ceremony::handshake::{handshake, Site};
@@ -145,7 +146,10 @@ fn the_whole_set_compare_detects_a_planted_key_and_passes_the_honest_genesis() {
 
 /// THE FIRST SIGNED SESSION's composition, `bind`'s two arms by the reads:
 /// on a hosted board the home stands and the setup act is OWED; after one
-/// run nothing is, and a second take opens no session.
+/// run nothing is, and a second take opens no session. Each home the walk
+/// leaves — the customer's, minted before the claim, and the agent space's
+/// — stands beside its mailbox, the board creating it in the home's own
+/// commit: a guest is answered `withheld` at each `.0.2`.
 #[test]
 fn first_session_owes_the_setup_act_once_and_nothing_after() {
     let dir = tempfile::tempdir().unwrap();
@@ -155,6 +159,8 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     let (entries, fp, device) = customer_material(&store);
     let HostedOutcome::Claimed(_) = hosted(&board, encode_enroll(&entries).as_bytes(), 1).unwrap() else { panic!() };
     let signer = device.signer();
+    let withheld = |account: &str| board.guest(&frames::doc_metadata(&mailbox_of(account))).unwrap()["code"] == "withheld";
+    assert!(withheld("1.0.1"), "the customer's mailbox stands beside the home H3 minted before the claim");
 
     let reads = FirstSessionReads::take(&board, "1.0.1", &fp, Some(&store)).unwrap();
     assert!(reads.home_present, "H3 minted the home");
@@ -175,6 +181,7 @@ fn first_session_owes_the_setup_act_once_and_nothing_after() {
     assert_eq!(principal_of(&board, "1.0.1.1").unwrap(), Some(agent_space_principal));
     assert_eq!(board.principal_prefix(agent_space_principal).unwrap().as_deref(), Some("1.0.1.1"));
     assert!(document_present(&board, "1.0.1.1.0.1").unwrap(), "the agent space's home");
+    assert!(withheld("1.0.1.1"), "the agent space's mailbox stands beside its home");
     assert!(agent_space_principal >= 2 && agent_space_principal <= (1u64 << 53) - 1, "a client-minted new_id in the domain (AUTH-5.20)");
     let persisted = store.all_bindings().unwrap().into_iter().find_map(|b| match b {
         Binding::Enrollment { account, principal, fingerprint, .. } if account == "1.0.1.1" => Some((principal, fingerprint)),

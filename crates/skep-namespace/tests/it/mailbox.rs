@@ -1,11 +1,15 @@
-//! §B create_well_known_document at the mailbox's slot: an account's
-//! mailbox, minted at its well-known slot 2 (the mailbox design §2, §3) —
-//! the address the slot has before anything stands there, where the mint
-//! lands and with which bit, that it moves no count, that it happens once,
-//! who may ask, where each answer is decided, which of its two answers —
-//! minted or standing — each call gives, and what the op answers for an
-//! account with no document and for the system account. The other three
-//! slots, and what holds of every slot alike, are `well_known.rs`'s.
+//! §B an account's mailbox, its well-known slot 2 (the mailbox design §2,
+//! §3): the address the slot has before anything stands there; the mailbox
+//! an account's first `create_new_document` creates in the commit that mints
+//! its doc 1 — which mints, which do not, at which position, under which
+//! marker, and what a mailbox already standing does to it; and
+//! `create_well_known_document` at the mailbox's slot, the store's own path
+//! to a mailbox on an account that holds none — where the mint lands and
+//! with which bit, that it moves no count, that it happens once, who may
+//! ask, where each answer is decided, which of its two answers — minted or
+//! standing — each call gives, and what the op answers for an account with
+//! no document and for the system account. The other three slots, and what
+//! holds of every slot alike, are `well_known.rs`'s.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Barrier;
@@ -14,7 +18,7 @@ use std::thread;
 use crate::common::*;
 
 use skep_address::{Address, Level};
-use skep_kernel::{Attestation, Kernel};
+use skep_kernel::{Attestation, HistoryError, Kernel};
 use skep_namespace::{
     first_document_address, head_document, mailbox_address, system_account, CreateDocumentError,
     HasM3, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -26,16 +30,23 @@ use tempfile::tempdir;
 /// `ID2`'s.
 const ID3: PrincipalId = PrincipalId(3);
 
-/// The standard fixture — `ID1`'s account `[1,0,1]` holding its doc 1 — with
-/// `later` more documents minted by its counter: none leaves the count at 1,
-/// and one or more carries it past the reserved block.
-fn account_with_documents(later: u32) -> (Kernel<World>, Address) {
-    let (k, acct, _doc) = kernel_with_account_and_doc();
+/// `ID1`'s account `[1,0,1]` holding its doc 1 and no mailbox
+/// ([`kernel_with_account_doc_1_and_no_mailbox`]), with `later` more
+/// documents minted by its counter: none leaves the count at 1, and one or
+/// more carries it past the reserved block — the slot empty under each,
+/// which is what the slot op's own cells read. A later create creates no
+/// mailbox, so the slot stays empty past them.
+fn account_holding_documents_and_no_mailbox(later: u32) -> (Kernel<World>, Address) {
+    let (k, acct, _doc) = kernel_with_account_doc_1_and_no_mailbox();
     for _ in 0..later {
         Namespace::new(&k)
             .create_new_document(ID1, &acct, None)
             .expect("the owner creates a later document");
     }
+    assert!(
+        !k.snapshot().world().m3().is_registered_document(&slot(&acct, MAILBOX_SLOT)),
+        "the premise: a later create made no mailbox"
+    );
     (k, acct)
 }
 
@@ -83,16 +94,210 @@ fn the_mailbox_address_is_slot_2_of_an_account_minted_or_not() {
     }
 }
 
-/// The mint lands at `<account>.0.2` whatever the account's count: at 1,
-/// where document 2 would be the counter's own next were the block not
-/// reserved, and past the block, where the counter stands at 64 and at 66.
-/// It is born private, registered in the commit that answers it, entered in
-/// the position map at that commit, and owned as every document of the
-/// account is, at the account's own seat.
+/// An account's first create creates its mailbox in the same commit. On a
+/// freshly delegated account the flagless create answers the account's doc
+/// 1, and leaves `<acct>.0.2` registered, private and owned at the account's
+/// seat; the two are dated at one position, the ack's own, which the commit
+/// reached by exactly its two records; the counter's next is the first
+/// ordinary document, the mailbox having moved no count; and a slot-2 call
+/// after it finds the mailbox standing and stages nothing. The rule is keyed
+/// on the account's first mint, never on the bit: a `Some(false)` first
+/// create — which the store mints and the daemon's door refuses
+/// `mint_home_public` — creates the mailbox too.
+///
+/// On a journaled kernel the commit is one transaction: walking every
+/// position the call drew, the committed worlds are the one before it,
+/// holding neither document, and the one it returned, holding both — no
+/// committed world holds the home without its mailbox — and after a reopen
+/// both stand at that one position.
+#[test]
+fn the_home_mint_creates_the_mailbox_in_its_own_commit() {
+    for published in [None, Some(false)] {
+        let k = mem_kernel(genesis_world());
+        let ns = Namespace::new(&k);
+        let (acct, _) = ns
+            .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+            .expect("a fresh account");
+        let before = k.current_seq();
+
+        let (home, at) = ns
+            .create_new_document(ID1, &acct, published)
+            .expect("the account's first create");
+        assert_eq!(home, a(&[1, 0, 1, 0, 1]), "{published:?}: the first create is doc 1");
+        assert_eq!(at, Seq(before.0 + 2), "{published:?}: the commit is the home's record and the mailbox's");
+        assert_eq!(k.current_seq(), at);
+
+        let m3 = k.snapshot().world().m3().clone();
+        let mailbox = mailbox_address(&acct).expect("an account's slot");
+        assert_eq!(mailbox, a(&[1, 0, 1, 0, 2]));
+        assert!(m3.is_registered_document(&mailbox), "{published:?}: the mailbox stands");
+        assert!(!m3.published(&mailbox), "{published:?}: a mailbox is born private");
+        assert_eq!(m3.published(&home), published.unwrap_or(true), "{published:?}: the home's own bit");
+        assert_eq!(m3.account_seat(&mailbox), Some((&acct, ID1)));
+        assert_eq!(m3.minted_at(&home), Some(at), "{published:?}: the home is dated at the ack");
+        assert_eq!(m3.minted_at(&mailbox), Some(at), "{published:?}: the mailbox is dated with it");
+        assert_eq!(
+            m3.mint_document(&acct, false).expect("the counter's next").0,
+            nth_document(&acct, 2),
+            "{published:?}: the mailbox moved the count"
+        );
+
+        assert_eq!(
+            ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
+                .expect("a slot-2 call is answered"),
+            (WellKnown::Standing(mailbox), at),
+            "{published:?}: the mailbox the home's commit made answers the slot"
+        );
+        assert_eq!(k.current_seq(), at, "{published:?}: the slot-2 call staged a record");
+    }
+
+    // Journaled: one transaction, and it recovers whole.
+    let dir = tempdir().expect("tempdir");
+    let (acct, at) = {
+        let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
+        let (acct, _) = Namespace::new(&k)
+            .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+            .expect("a fresh account");
+        let before = k.current_seq();
+        let (_, at) = Namespace::new(&k)
+            .create_new_document(ID1, &acct, None)
+            .expect("the account's first create");
+        let home = first_document_address(&acct).expect("an account's doc 1 slot");
+        let mailbox = mailbox_address(&acct).expect("an account's slot");
+        let mut answered = Vec::new();
+        for position in before.0..=at.0 {
+            let world = match k.world_at(Seq(position)) {
+                Ok(world) => world,
+                // A composite's interior position: no world was ever
+                // committed there, so there is nothing to hold.
+                Err(HistoryError::NotABoundary { .. }) => continue,
+                Err(e) => panic!("world_at(Seq({position})) refused for another reason: {e}"),
+            };
+            let m3 = world.m3();
+            assert_eq!(
+                m3.is_registered_document(&home),
+                m3.is_registered_document(&mailbox),
+                "Seq({position}) is a committed world holding one of the home and its mailbox"
+            );
+            answered.push((position, m3.is_registered_document(&home)));
+        }
+        assert_eq!(
+            answered,
+            vec![(before.0, false), (at.0, true)],
+            "the committed positions across the call"
+        );
+        (acct, at)
+    };
+    let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
+    let m3 = k.snapshot().world().m3().clone();
+    let (home, mailbox) = (
+        first_document_address(&acct).expect("an account's doc 1 slot"),
+        mailbox_address(&acct).expect("an account's slot"),
+    );
+    assert!(m3.is_registered_document(&home) && m3.is_registered_document(&mailbox));
+    assert_eq!(m3.minted_at(&home), Some(at), "the home recovers at its commit");
+    assert_eq!(m3.minted_at(&mailbox), Some(at), "the mailbox recovers at the same position");
+    assert!(m3.published(&home) && !m3.published(&mailbox));
+}
+
+/// `account`'s first document number past the reserved block, by the
+/// constant: where the counter goes after doc 1.
+fn slot_past_the_block(account: &Address) -> Address {
+    under(account, &[0, FIRST_ORDINARY_DOCUMENT])
+}
+
+/// `fork` opens the create's own transaction, so a fork by a principal whose
+/// account holds nothing creates the mailbox too: the fork answers the
+/// account's doc 1, born published by PUB-8.21, and both documents stand at
+/// the one position the fork's commit reached by its two records.
+#[test]
+fn a_fork_into_an_empty_account_creates_the_mailbox_too() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("a fresh account");
+    let before = k.current_seq();
+
+    let (forked, at) = ns.fork(ID1, None).expect("the fork into the caller's empty account");
+    assert_eq!(Some(&forked), first_document_address(&acct).as_ref(), "the fork is doc 1");
+    assert_eq!(at, Seq(before.0 + 2), "the fork's commit is two records");
+    let m3 = k.snapshot().world().m3().clone();
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
+    assert!(m3.is_registered_document(&mailbox) && !m3.published(&mailbox));
+    assert!(m3.published(&forked), "a flagless first fork is born published");
+    assert_eq!(m3.minted_at(&forked), Some(at));
+    assert_eq!(m3.minted_at(&mailbox), Some(at), "the mailbox is dated with the fork");
+}
+
+/// Only the first mint creates the mailbox. After the home, a flagless
+/// create and a `Some(true)` one each commit one record — `current_seq`
+/// moves by one — and the mailbox keeps the home's position. So does a fork
+/// into the account, which holds its doc 1.
+#[test]
+fn a_later_mint_creates_no_mailbox_record() {
+    let (k, acct, home) = kernel_with_account_and_doc();
+    let ns = Namespace::new(&k);
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
+    let home_at = k.snapshot().world().m3().minted_at(&home).expect("the home's position");
+    assert_eq!(
+        k.snapshot().world().m3().minted_at(&mailbox),
+        Some(home_at),
+        "the premise: the mailbox stands from the home's commit"
+    );
+
+    for published in [None, Some(true), Some(false)] {
+        let before = k.current_seq();
+        let (_, at) = ns
+            .create_new_document(ID1, &acct, published)
+            .expect("a later create");
+        assert_eq!(at, Seq(before.0 + 1), "{published:?}: a later create is one record");
+    }
+    let before = k.current_seq();
+    let (_, at) = ns.fork(ID1, Some(true)).expect("a later fork");
+    assert_eq!(at, Seq(before.0 + 1), "a later fork is one record");
+    let m3 = k.snapshot().world().m3().clone();
+    assert_eq!(m3.minted_at(&mailbox), Some(home_at), "the mailbox is as old as its home");
+    assert!(!m3.published(&mailbox));
+}
+
+/// The system account never meets the rule: genesis counts its doc 1, so its
+/// every mint is a later one, and its slot 2 is the head document, born
+/// published at genesis. A create by its own principal stages one record,
+/// and the head document stands as genesis left it.
+#[test]
+fn the_system_accounts_mint_creates_no_mailbox() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    assert!(
+        k.snapshot().world().m3().has_documents(&system_account()),
+        "the premise: genesis counts the system account's doc 1"
+    );
+    let before = k.current_seq();
+
+    let (created, at) = ns
+        .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+        .expect("the system principal creates in its own account");
+    assert_eq!(at, Seq(before.0 + 1), "the system account's create is one record");
+    assert_eq!(created, slot_past_the_block(&system_account()));
+    let m3 = k.snapshot().world().m3().clone();
+    let slot_2 = mailbox_address(&system_account()).expect("the system account's slot 2");
+    assert_eq!(slot_2, head_document());
+    assert!(m3.published(&slot_2), "the head document is no private mailbox");
+    assert_eq!(m3.minted_at(&slot_2), Some(Seq(0)), "the head document is genesis's");
+}
+
+/// On an account holding its doc 1 and no mailbox the mint lands at
+/// `<account>.0.2` whatever the account's count: at 1, where document 2
+/// would be the counter's own next were the block not reserved, and past the
+/// block, where the counter stands at 64 and at 66. It is born private,
+/// registered in the commit that answers it, entered in the position map at
+/// that commit, and owned as every document of the account is, at the
+/// account's own seat.
 #[test]
 fn the_mailbox_lands_at_slot_2_private_whether_the_count_stands_at_1_or_past_the_block() {
     for later in [0u32, 1, 3] {
-        let (k, acct) = account_with_documents(later);
+        let (k, acct) = account_holding_documents_and_no_mailbox(later);
         let ns = Namespace::new(&k);
         let before = k.current_seq();
         assert!(
@@ -137,7 +342,7 @@ fn the_mailbox_lands_at_slot_2_private_whether_the_count_stands_at_1_or_past_the
 #[test]
 fn the_counters_next_is_the_same_before_and_after_the_mint() {
     for later in [0u32, 1, 3] {
-        let (k, acct) = account_with_documents(later);
+        let (k, acct) = account_holding_documents_and_no_mailbox(later);
         let ns = Namespace::new(&k);
         let handed_out = 1 + later;
         let peek = |k: &Kernel<World>| {
@@ -190,7 +395,7 @@ fn the_counters_next_is_the_same_before_and_after_the_mint() {
 #[test]
 fn a_second_call_answers_the_same_address_and_stages_nothing() {
     for later in [0u32, 1] {
-        let (k, acct) = account_with_documents(later);
+        let (k, acct) = account_holding_documents_and_no_mailbox(later);
         let ns = Namespace::new(&k);
         let (first, minted) = ns
             .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
@@ -232,9 +437,10 @@ fn a_second_call_answers_the_same_address_and_stages_nothing() {
 
 /// Calls racing for one mailbox stage one record. The read of the slot and
 /// the mint are one critical section under the account's document-chain
-/// key, so of eight callers released together on each of three accounts one
-/// mints and seven find the mailbox standing — each answer saying which, the
-/// one minted at the mint's own position: every caller of an account is
+/// key, so of eight callers released together on each of three accounts —
+/// each holding a doc 1 a composite minted, and no mailbox — one mints and
+/// seven find the mailbox standing — each answer saying which, the one
+/// minted at the mint's own position: every caller of an account is
 /// answered the one address, no caller meets the fold's refusal of a second
 /// record, and the board's position moves by exactly one record an account.
 #[test]
@@ -247,9 +453,7 @@ fn racing_calls_for_one_mailbox_stage_one_record() {
             let (acct, _) = Namespace::new(&k)
                 .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, number]), id)
                 .expect("an account under the bootstrap node");
-            Namespace::new(&k)
-                .create_new_document(id, &acct, None)
-                .expect("its doc 1");
+            commit_mint(&k, M3State::document_lock_key(&acct), |m3| m3.mint_document(&acct, true));
             (acct, id)
         })
         .collect();
@@ -316,17 +520,24 @@ fn racing_calls_for_one_mailbox_stage_one_record() {
 /// A caller who is not the account's effective owner is refused `NotOwner`,
 /// and refused before anything is read: the refusal is the same whether the
 /// account is registered or not, whether it is an account at all, and
-/// whether its mailbox stands, where the effective owner of each of those
-/// targets earns the mint's own gate or the mailbox's address. Containment
-/// is no ownership — π₀'s prefix contains the account, and the owner of an
-/// account does not own its sub-account's mailbox. Nothing a refused caller
-/// sends commits.
+/// whether its mailbox stands — created by its home's commit, or by the op
+/// itself — where the effective owner of each of those targets earns the
+/// mint's own gate or the mailbox's address. Containment is no ownership —
+/// π₀'s prefix contains the account, and the owner of an account does not
+/// own its sub-account's mailbox. Nothing a refused caller sends commits.
 #[test]
 fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() {
-    let (k, acct, doc) = kernel_with_account_and_doc();
+    let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
-    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("an account holding no document, its slot empty");
+    let (other, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
         .expect("a second account");
+    let (doc, _) = ns
+        .create_new_document(ID2, &other, None)
+        .expect("the second account's home, its mailbox beside it");
     let (sub, _) = ns
         .delegate(ID1, t(&[1, 0, 1, 1]), ID3)
         .expect("a sub-account of the first");
@@ -355,9 +566,9 @@ fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() 
     for (target, owner) in [
         (&unregistered, BOOTSTRAP_PRINCIPAL),
         (&node, BOOTSTRAP_PRINCIPAL),
-        (&doc, ID1),
+        (&doc, ID2),
     ] {
-        for stranger in [UNKNOWN_ID, ID2] {
+        for stranger in [UNKNOWN_ID, ID3] {
             assert_eq!(
                 rejected(ns.create_well_known_document(stranger, target, WellKnownSlot::Mailbox)),
                 CreateDocumentError::NotOwner,
@@ -375,8 +586,24 @@ fn a_caller_who_is_not_the_effective_owner_is_refused_before_anything_is_read() 
     assert!(*k.snapshot().world().m3() == standing);
     assert!(!standing.is_registered_document(&slot(&acct, MAILBOX_SLOT)));
 
-    // Nor does a stranger learn whether the mailbox stands: with it minted,
-    // the owner is answered its address and a stranger the same refusal.
+    // Nor does a stranger learn whether the mailbox stands: with the second
+    // account's standing from its home's commit, its owner is answered the
+    // address and a stranger the same refusal…
+    let other_mailbox = mailbox_address(&other).expect("an account's slot");
+    let home_at = standing.minted_at(&doc).expect("the home's position");
+    assert_eq!(standing.minted_at(&other_mailbox), Some(home_at), "the premise: it stands");
+    for stranger in [UNKNOWN_ID, BOOTSTRAP_PRINCIPAL, ID1, ID3] {
+        assert_eq!(
+            rejected(ns.create_well_known_document(stranger, &other, WellKnownSlot::Mailbox)),
+            CreateDocumentError::NotOwner,
+            "{stranger:?} with the home's mailbox standing"
+        );
+    }
+    assert_eq!(
+        ns.create_well_known_document(ID2, &other, WellKnownSlot::Mailbox).expect("the owner"),
+        (WellKnown::Standing(other_mailbox), before)
+    );
+    // …and with the first account's minted by the op itself, the same.
     let (mailbox, minted) = ns
         .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
         .expect("the owner mints");
@@ -420,25 +647,22 @@ fn panic_of_a_nested_call<T>(k: &Kernel<World>, call: impl FnOnce() -> T) -> Opt
 /// Every answer the op gives is decided inside its own transaction, under
 /// its held keys, never off a snapshot taken before it: the owner test, the
 /// mint's gate, the mint, and the read of a slot that already holds the
-/// mailbox. Hoisted onto a snapshot, each would keep every sequential test
-/// green while a racing commit decided it on stale state — a delegation
-/// landing between the authorization and the mint, or two callers both
-/// finding the slot empty. So each case is first earned outside any
-/// transaction and then made from inside one, where an op that opens its own
-/// transaction before deciding meets M2's reentrancy panic and one that
-/// decided early hands its answer back.
+/// mailbox — here the one the account's home's commit made. Hoisted onto a
+/// snapshot, each would keep every sequential test green while a racing
+/// commit decided it on stale state — a delegation landing between the
+/// authorization and the mint, or two callers both finding the slot empty.
+/// So each case is first earned outside any transaction and then made from
+/// inside one, where an op that opens its own transaction before deciding
+/// meets M2's reentrancy panic and one that decided early hands its answer
+/// back.
 #[test]
 fn every_answer_is_decided_inside_the_ops_own_transaction() {
     let (k, acct, _doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
-    let (minted_acct, _) = ns
+    let (empty_acct, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
-        .expect("a second account");
-    let incumbent = ns
-        .create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)
-        .expect("the second account's mailbox stands")
-        .0
-        .into_address();
+        .expect("a second account, holding no document");
+    let incumbent = mailbox_address(&acct).expect("an account's slot");
     let decided_inside = |case: &str, raised: Option<String>| {
         assert!(
             raised
@@ -472,7 +696,7 @@ fn every_answer_is_decided_inside_the_ops_own_transaction() {
     );
 
     assert_eq!(
-        ns.create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)
+        ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("a standing mailbox is answered")
             .0,
         WellKnown::Standing(incumbent),
@@ -480,41 +704,48 @@ fn every_answer_is_decided_inside_the_ops_own_transaction() {
     );
     decided_inside(
         "a standing mailbox",
-        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID2, &minted_acct, WellKnownSlot::Mailbox)),
+        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)),
     );
 
     let before = k.current_seq();
     decided_inside(
         "an empty slot",
-        panic_of_a_nested_call(&k, || ns.create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)),
+        panic_of_a_nested_call(&k, || {
+            ns.create_well_known_document(ID2, &empty_acct, WellKnownSlot::Mailbox)
+        }),
     );
     assert_eq!(k.current_seq(), before, "the nested call minted");
-    assert!(!k.snapshot().world().m3().is_registered_document(&slot(&acct, MAILBOX_SLOT)));
+    assert!(!k.snapshot().world().m3().is_registered_document(&slot(&empty_acct, MAILBOX_SLOT)));
 }
 
-/// After the mint, slot 2 is a registered document and no other number of
-/// the reserved block is — slots 3, 4 and 5 by name, and every number up to
-/// the block's end — under a count of 1 and under one past the block, at all
-/// three membership reads. The mailbox is a home like any document: it takes
-/// the links its owner's marks are, content, and versions, on chains of its
-/// own that open at their first slots.
+/// After the home's mint, slot 2 is a registered document and no other
+/// number of the reserved block is — slots 3, 4 and 5 by name, and every
+/// number up to the block's end — under a count of 1 and under one past the
+/// block, at all three membership reads; before it, no number of the block
+/// is. The mailbox is a home like any document: it takes the links its
+/// owner's marks are, content, and versions, on chains of its own that open
+/// at their first slots.
 #[test]
-fn after_the_mint_slot_2_is_a_registered_document_and_slots_3_4_and_5_are_not() {
+fn after_the_home_slot_2_is_a_registered_document_and_slots_3_4_and_5_are_not() {
     for later in [0u32, 1] {
-        let (k, acct) = account_with_documents(later);
+        let k = mem_kernel(genesis_world());
+        let ns = Namespace::new(&k);
+        let (acct, _) = ns
+            .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+            .expect("a fresh account");
         let m3 = k.snapshot().world().m3().clone();
         for number in 2..FIRST_ORDINARY_DOCUMENT {
             assert!(
                 !m3.is_registered_document(&slot(&acct, number)),
-                "{later} later documents: slot {number} reads registered before any mint"
+                "slot {number} reads registered before the home"
             );
         }
 
-        let mailbox = Namespace::new(&k)
-            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
-            .expect("the mailbox mints")
-            .0
-            .into_address();
+        ns.create_new_document(ID1, &acct, None).expect("the home");
+        for _ in 0..later {
+            ns.create_new_document(ID1, &acct, None).expect("a later document");
+        }
+        let mailbox = mailbox_address(&acct).expect("an account's slot");
         let m3 = k.snapshot().world().m3().clone();
         assert!(m3.is_registered_document(&a(&[1, 0, 1, 0, 2])));
         for unminted in [a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 4]), a(&[1, 0, 1, 0, 5])] {
@@ -534,7 +765,7 @@ fn after_the_mint_slot_2_is_a_registered_document_and_slots_3_4_and_5_are_not() 
                 "{placed}"
             );
         }
-        // The account's own documents stand as they did.
+        // The account's own documents stand as the counter handed them out.
         for nth in 1..=1 + later {
             assert!(m3.is_registered_document(&nth_document(&acct, nth)));
         }
@@ -586,6 +817,9 @@ fn called_for_the_system_account_it_refuses_and_the_head_document_stands_untouch
 /// document its counter handed out — so its next create is still its doc 1,
 /// at the slot its chain opens at, born published by the empty-account rule
 /// (PUB-8.21), and the one after it the first ordinary document, private.
+/// That first create finds the mailbox standing, so its commit is the home's
+/// one record and the mailbox keeps its own earlier position — the fold
+/// refusing a second record at the filled slot, nothing fail-stops.
 /// Refusing a mailbox ahead of the home page is the daemon's door's.
 #[test]
 fn on_an_account_with_no_document_the_slot_mints_and_the_next_create_is_still_its_published_doc_1() {
@@ -608,11 +842,17 @@ fn on_an_account_with_no_document_the_slot_mints_and_the_next_create_is_still_it
     assert!(!m3.is_registered_document(&doc_1));
     assert_eq!(m3.mint_document(&acct, false).expect("the counter's next").0, doc_1);
 
-    let (first, _) = ns
+    let before_the_home = k.current_seq();
+    let (first, home_at) = ns
         .create_new_document(ID1, &acct, None)
         .expect("the account's first create");
     assert_eq!(first, doc_1);
     assert_eq!(first, a(&[1, 0, 1, 0, 1]));
+    assert_eq!(
+        home_at,
+        Seq(before_the_home.0 + 1),
+        "the home's commit is its own record alone: the mailbox stands"
+    );
     let (second, _) = ns
         .create_new_document(ID1, &acct, None)
         .expect("the account's second create");
@@ -632,70 +872,99 @@ fn on_an_account_with_no_document_the_slot_mints_and_the_next_create_is_still_it
     );
 }
 
-/// The mailbox's mint takes the plain arm whatever the handle carries: a
-/// private mint is outside the checked set, so an attested handle's mailbox
-/// commits with its marker's signature slot empty, where the same handle's
-/// create commits under the attestation. Over a journaled kernel, since an
+/// The mailbox rides its home's commit, under the home's one marker: an
+/// attested handle's first create commits the home and the mailbox at one
+/// position, whose marker holds the attestation the create's own act is
+/// signed under, and a slot-2 call on the same handle after it finds the
+/// mailbox standing and commits nothing, so no second marker is written.
+/// The mailbox's own mint, made at the store on an account holding no
+/// document, takes the plain arm whatever the handle carries — a private
+/// mint signs nothing of its own — and the home after it commits its one
+/// record under the attestation. Over a journaled kernel, since an
 /// in-memory one keeps no marker.
 #[test]
-fn an_attested_handles_mailbox_mint_leaves_its_signature_slot_empty() {
+fn an_attested_home_mint_carries_the_mailbox_under_its_one_marker() {
     let dir = tempdir().expect("tempdir");
     let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
     let attestation =
         Attestation::new(1, vec![0xA5; 64]).expect("a non-zero tag over a non-empty blob");
+    let attested = Namespace::attested(&k, Some(&attestation));
     let (acct, _) = Namespace::new(&k)
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("the delegation commits");
+    let (other, _) = Namespace::new(&k)
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
+        .expect("the delegation commits");
+    let marker = |at| k.attestation_at(at).expect("a journaled kernel reads its own markers");
 
-    let (_, created) = Namespace::attested(&k, Some(&attestation))
+    // The home's commit: both records, one marker, the attestation in it.
+    let before = k.current_seq();
+    let (_, created) = attested
         .create_new_document(ID1, &acct, None)
         .expect("the create commits");
-    let (mailbox, minted) = Namespace::attested(&k, Some(&attestation))
-        .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
-        .expect("the mailbox commits");
-    let mailbox = mailbox.into_address();
-    assert!(minted > created);
-
+    assert_eq!(created, Seq(before.0 + 2), "the home's commit is two records");
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
+    let m3 = k.snapshot().world().m3().clone();
+    assert_eq!(m3.minted_at(&mailbox), Some(created), "the mailbox rides the home's commit");
+    assert!(!m3.published(&mailbox));
     assert_eq!(
-        k.attestation_at(created)
-            .expect("a journaled kernel reads its own markers"),
+        marker(created),
         Some(attestation.clone()),
-        "the control: an attested create fills its signature slot"
+        "the home's commit is signed, the mailbox inside it"
     );
     assert_eq!(
-        k.attestation_at(minted)
-            .expect("a journaled kernel reads its own markers"),
-        None,
-        "the mailbox's marker carries a signature"
+        attested
+            .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
+            .expect("a slot-2 call is answered"),
+        (WellKnown::Standing(mailbox), created)
     );
-    assert!(!k.snapshot().world().m3().published(&mailbox));
+    assert_eq!(k.current_seq(), created, "the slot-2 call committed");
+
+    // The slot's own mint on an account holding no document: the plain arm.
+    let (minted, at) = attested
+        .create_well_known_document(ID2, &other, WellKnownSlot::Mailbox)
+        .expect("the mailbox commits");
+    assert!(matches!(minted, WellKnown::Minted(_)));
+    assert_eq!(marker(at), None, "the mailbox's own marker carries a signature");
+    // …and the home after it: one record, under the attestation.
+    let (_, home_at) = attested
+        .create_new_document(ID2, &other, None)
+        .expect("the home commits");
+    assert_eq!(home_at, Seq(at.0 + 1), "the home's commit is its own record alone");
+    assert_eq!(marker(home_at), Some(attestation.clone()), "the home's commit is signed");
 }
 
-/// The mint is one ordinary record in the journal, and it replays: reopened
-/// from its journal alone, the board holds the mailbox where the mint put
-/// it, private, at the mint's position, with the counter where it stood. A
-/// call after the reopen — another device's, say — is answered with that
-/// mailbox and stages nothing.
+/// The mailbox is one ordinary record of its home's commit, and it replays:
+/// reopened from its journal alone, the board holds the mailbox where the
+/// home's commit put it, private, at that commit's position, with the
+/// counter where it stood. A call before the reopen and a call after it —
+/// another device's, say — are each answered with that mailbox and stage
+/// nothing.
 #[test]
 fn the_mailbox_replays_from_the_journal_and_a_call_after_the_reopen_mints_nothing() {
     let dir = tempdir().expect("tempdir");
-    let (acct, mailbox, minted, left) = {
+    let (acct, mailbox, minted, head, left) = {
         let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
         let ns = Namespace::new(&k);
         let (acct, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
             .expect("delegate");
-        ns.create_new_document(ID1, &acct, None).expect("doc 1");
+        let (_, minted) = ns
+            .create_new_document(ID1, &acct, None)
+            .expect("doc 1, and the mailbox beside it");
         ns.create_new_document(ID1, &acct, None)
             .expect("a second document");
-        let (mailbox, minted) = ns
+        let head = k.current_seq();
+        let (mailbox, at) = ns
             .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
-            .expect("the mailbox mints");
-        (acct, mailbox.into_address(), minted, k.snapshot().world().m3().clone())
+            .expect("a slot-2 call is answered");
+        assert!(matches!(mailbox, WellKnown::Standing(_)), "the premise: it stands");
+        assert_eq!((at, k.current_seq()), (head, head), "the premise: nothing committed");
+        (acct, mailbox.into_address(), minted, head, k.snapshot().world().m3().clone())
     };
 
     let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
-    assert_eq!(k.current_seq(), minted);
+    assert_eq!(k.current_seq(), head);
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3 == left, "replay rebuilt another slice");
     assert!(m3.is_registered_document(&mailbox) && !m3.published(&mailbox));
@@ -709,7 +978,7 @@ fn the_mailbox_replays_from_the_journal_and_a_call_after_the_reopen_mints_nothin
         Namespace::new(&k)
             .create_well_known_document(ID1, &acct, WellKnownSlot::Mailbox)
             .expect("a call after the reopen is answered"),
-        (WellKnown::Standing(mailbox), minted)
+        (WellKnown::Standing(mailbox), head)
     );
-    assert_eq!(k.current_seq(), minted, "the call after the reopen drew a position");
+    assert_eq!(k.current_seq(), head, "the call after the reopen drew a position");
 }

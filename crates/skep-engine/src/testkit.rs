@@ -101,10 +101,11 @@ pub(crate) fn delegated_account(engine: &Engine, principal: PrincipalId) -> Addr
 ///
 /// The account is [`USER`]'s, and the engine is the in-memory one that
 /// minted both: `(engine, home, draft)`. The account's first flagless mint is
-/// its home (PUB-8.21) and a later one is a draft, and both states are
-/// asserted here, so a suite that deposits across that boundary — the dump
-/// filter's, the grant fold's, the hint check's — states only what it
-/// deposits.
+/// its home (PUB-8.21), its commit making the account's mailbox beside it, a
+/// private document holding nothing (M3's mailbox rule), and a later one is
+/// a draft; the home's and the draft's states are asserted here, so a suite
+/// that deposits across that boundary — the dump filter's, the grant
+/// fold's, the hint check's — states only what it deposits.
 ///
 /// # Panics
 ///

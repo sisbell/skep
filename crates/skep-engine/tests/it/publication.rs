@@ -21,7 +21,9 @@ use skep_arrangement::{Deposit, VersionError};
 use skep_content::Val;
 use skep_engine::{Draft, Engine, EngineError, OpenError, World};
 use skep_kernel::TxnError;
-use skep_namespace::{staging_draft, system_account, HasM3, FIRST_ORDINARY_DOCUMENT};
+use skep_namespace::{
+    mailbox_address, staging_draft, system_account, HasM3, FIRST_ORDINARY_DOCUMENT,
+};
 use tempfile::tempdir;
 
 /// The set as `(draft, owner account)` pairs in address order — the
@@ -32,23 +34,27 @@ fn drafts_of(world: &World) -> Vec<(Address, Address)> {
     rows.into_iter().map(|d| (d.document.clone(), d.owner_account.clone())).collect()
 }
 
-/// Three drafts and two published documents in one account: the home (the
-/// account's first mint, born published — PUB-1.17), two flagless mints and
-/// one explicit `false` (drafts), one explicit `true` (an edition).
+/// Three drafts, the mailbox and two published documents in one account:
+/// the home (the account's first mint, born published — PUB-1.17), the
+/// mailbox its commit made beside it (private, M3's mailbox rule), two
+/// flagless mints and one explicit `false` (drafts), one explicit `true` (an
+/// edition).
 struct Docs {
     acct: Address,
     home: Address,
+    mailbox: Address,
     drafts: [Address; 3],
     edition: Address,
 }
 
 impl Docs {
     /// The exception set over these documents, in address order: their three
-    /// drafts under the account, and genesis's staging draft under the
-    /// system account.
+    /// drafts and the mailbox under the account, and genesis's staging draft
+    /// under the system account.
     fn expected_set(&self) -> Vec<(Address, Address)> {
         let mut pairs: Vec<(Address, Address)> =
             self.drafts.iter().map(|d| (d.clone(), self.acct.clone())).collect();
+        pairs.push((self.mailbox.clone(), self.acct.clone()));
         pairs.push((staging_draft(), system_account()));
         pairs.sort();
         pairs
@@ -65,7 +71,8 @@ fn mint_docs(engine: &Engine) -> Docs {
     let d2 = mint(None);
     let edition = mint(Some(true));
     let d3 = mint(Some(false));
-    Docs { acct, home, drafts: [d1, d2, d3], edition }
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
+    Docs { acct, home, mailbox, drafts: [d1, d2, d3], edition }
 }
 
 /// The one checkpoint in `dir` — every test here takes exactly one.
@@ -153,9 +160,9 @@ fn pre_stamp_body() -> Vec<u8> {
     pre
 }
 
-/// Test 1 — the SEED: a checkpoint holding three drafts and two published
-/// documents, reopened, yields exactly the three beside the staging draft
-/// genesis seeds. The checkpoint sits at the head, so the reopened base IS
+/// Test 1 — the SEED: a checkpoint holding three drafts, the mailbox and two
+/// published documents, reopened, yields exactly the three and the mailbox
+/// beside the staging draft genesis seeds. The checkpoint sits at the head, so the reopened base IS
 /// the checkpoint and nothing replays onto it: the set below is the seed's
 /// alone.
 #[test]
@@ -175,10 +182,10 @@ fn the_seed_holds_exactly_the_drafts_of_a_checkpoint() {
     assert_eq!(
         drafts_of(world),
         docs.expected_set(),
-        "the seed holds exactly the three drafts and genesis's staging draft"
+        "the seed holds exactly the three drafts, the mailbox and genesis's staging draft"
     );
     assert_eq!(drafts_of(world), live, "…and equals the live fold it stands in for");
-    for draft in &docs.drafts {
+    for draft in docs.drafts.iter().chain([&docs.mailbox]) {
         assert!(!world.published(draft), "{draft} is a draft");
         assert_eq!(world.owner_account(draft), Some(&docs.acct), "the owner fixed at mint");
     }
@@ -214,7 +221,7 @@ fn a_draft_joins_the_set_in_the_commit_that_registers_it() {
         // never visible ahead of the fold.
         assert!(!before.world().m3().is_registered_document(&draft));
         assert!(before.world().owner_account(&draft).is_none());
-        assert_eq!(drafts_of(after.world()).len(), 5);
+        assert_eq!(drafts_of(after.world()).len(), 6);
 
         // A published mint after the checkpoint registers and joins nothing.
         let (edition, _) = engine
@@ -224,13 +231,13 @@ fn a_draft_joins_the_set_in_the_commit_that_registers_it() {
         let head = engine.kernel().snapshot();
         assert!(head.world().m3().is_registered_document(&edition));
         assert!(head.world().published(&edition));
-        assert_eq!(drafts_of(head.world()).len(), 5);
+        assert_eq!(drafts_of(head.world()).len(), 6);
         engine.check_hints().expect("the fold equals a from-authoritative rebuild");
         (draft, drafts_of(head.world()))
     };
 
-    // The reopen is checkpoint + replay: the seed covers the three and
-    // genesis's staging draft, the replayed tail folds the fourth.
+    // The reopen is checkpoint + replay: the seed covers the three, the
+    // mailbox and genesis's staging draft, the replayed tail folds the fourth.
     let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen");
     let snap = engine.kernel().snapshot();
     assert!(!snap.world().published(&draft), "the replayed draft is in the recovered set");
@@ -264,8 +271,9 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
         let live = drafts_of(engine.kernel().snapshot().world());
         assert_eq!(
             live.len(),
-            5,
-            "genesis's staging draft, three drafts and one more; the refused version joined nothing"
+            6,
+            "genesis's staging draft, the mailbox, three drafts and one more; the refused \
+             version joined nothing"
         );
         (engine.kernel().current_seq(), live)
     };
@@ -482,10 +490,13 @@ fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
         })
         .collect();
 
-    // The set holds them all and, under the system account, the staging draft
-    // genesis seeds: each row a draft and its owner, as the dump renders them.
+    // The set holds them all, the account's mailbox its home's commit made
+    // and, under the system account, the staging draft genesis seeds: each
+    // row a draft and its owner, as the dump renders them.
+    let mailbox = mailbox_address(&acct).expect("an account's slot");
     let mut rows: Vec<(Address, String, String)> = drafts
         .iter()
+        .chain([&mailbox])
         .map(|d| (d.clone(), quoted(d), quoted(&acct)))
         .chain([(staging_draft(), quoted(&staging_draft()), quoted(&system_account()))])
         .collect();

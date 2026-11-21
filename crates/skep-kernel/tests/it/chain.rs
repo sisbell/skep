@@ -46,7 +46,7 @@
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
 //! base is genesis and every one of the nineteen links is verified, which is
-//! where the mid-history cases live; with it STANDING (`checkpoint.34`) the
+//! where the mid-history cases live; with it STANDING (`checkpoint.35`) the
 //! open checks the base for a mismatch — the marker closing 37 is in the one
 //! segment — and the two transactions above it, and a `world_at` below it
 //! verifies from genesis — which is what cases 9, 12 and 14 turn on.
@@ -186,7 +186,7 @@ impl Golden {
     }
 
     /// A case directory: the fixture's files copied, the golden checkpoint
-    /// STANDING — the open's base is `checkpoint.34`.
+    /// STANDING — the open's base is `checkpoint.35`.
     fn case(&self, name: &str) -> PathBuf {
         let dir = self.tmp.path().join(name);
         copy_dir(&self.fixture.dir, &dir);
@@ -994,7 +994,7 @@ fn c07_a_closed_segment_rolled_back_to_an_older_copy_breaks_at_the_next_segments
 ///
 /// NOT CAUGHT BY DESIGN — the body FORGED: another world's canonical body
 /// under this coordinate (the golden's ops checkpointed one op earlier: the
-/// world at 36 posing as 37), the CRC, `body_len` and `body_hash` re-fixed
+/// world at 34 posing as 35), the CRC, `body_len` and `body_hash` re-fixed
 /// over it, `seq` and `chain_head` kept. It loads as the base, the two links
 /// above it verify against the head it kept, and the open succeeds at the
 /// true head serving a world that is not the golden's. Only the published
@@ -1309,7 +1309,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     //     has above its genesis value: the same forgery with the checkpoint
     //     left as the golden wrote it is a BASE MISMATCH — the forger
     //     re-chained op 17's marker, the header still carries the golden's
-    //     value, and the two disagree at 34 — case 9's door, which a forger
+    //     value, and the two disagree at 35 — case 9's door, which a forger
     //     who can write the checkpoint file closes with one more write, as
     //     (a) did.
     let case = golden.case("c11-checkpoint-kept");
@@ -1362,7 +1362,7 @@ fn c12_damage_below_a_standing_base_is_unseen_at_open_and_seen_by_a_replay_from_
         "a boundary above the base scans above it only"
     );
     // The chain at and above the base: the base's own (the header's, which
-    // is the golden's marker's at 34) and the two markers above, none of
+    // is the golden's marker's at 35) and the two markers above, none of
     // them consulting the rewritten segment below the base.
     chain_at_is(&engine, ckpt_seq, &golden.txn(CHECKPOINT_AFTER_OP).chain, "case 12: at the base");
     chain_at_is(&engine, above, &golden.txn(CHECKPOINT_AFTER_OP + 1).chain, "case 12: above the base");

@@ -110,15 +110,27 @@ fn an_attestation_lands_in_the_marker_of_the_eleven_publish_class_kinds_alone() 
         "the chain's six unsigned kinds each committed once (the seventh, reinstate, above): {seen:?}"
     );
 
-    // The eleventh kind, the well-known creation, at each of its slots: the
-    // attestation rides every request, and the store signs the creation of
-    // a published document and never the private mailbox's.
+    // The eleventh kind, the well-known creation, at each of its slots, on
+    // an account holding no document: the fixture's account holds its
+    // mailbox from its first mint's commit, and at this layer the store
+    // creates every slot of an empty account (refusing one ahead of the home
+    // is the daemon's door's). The attestation rides every request, and the
+    // store signs the creation of a published document and never the private
+    // mailbox's.
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
+    let (empty, _) = ack_addr(ex(
+        &fx.febe,
+        fx.boot,
+        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: OTHER },
+    ));
+    let other = fx.febe.open_session(OTHER);
     for slot in skep_namespace::WellKnownSlot::ALL {
         let before = fx.febe.log_position();
-        let create = Op::CreateWellKnownDocument { account: fx.account.clone(), slot };
+        let create = Op::CreateWellKnownDocument { account: empty.clone(), slot };
         let (_, at) = ack_addr(
             fx.febe
-                .execute(fx.user, Request { attest: Some(attestation.clone()), ..Request::from(create) }),
+                .execute(other, Request { attest: Some(attestation.clone()), ..Request::from(create) }),
         );
         assert!(at > before, "{slot:?}: the creation committed a transaction of its own");
         assert_eq!(

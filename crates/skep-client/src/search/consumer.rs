@@ -18,7 +18,9 @@
 //! is published and is read token-free at guest class — and each mounted
 //! supplement's ranges with the session's token over `drafts=true`, read at
 //! the principal's class; the distinct documents a page names are read once
-//! each — `retrieve_v` over the extent `span_set` answers, in parts past
+//! each — the drafts face passing over a `publish` row's member and an
+//! account's home named beside its mailbox, both published — `retrieve_v`
+//! over the extent `span_set` answers, in parts past
 //! [`MAX_DELIVERY_ITEMS`], an edition at its pinned member (the latest trunk
 //! member a minting row named, `moved_head`, or the trunk probed with
 //! `doc_metadata` until `doc_not_registered` where the feed names none,
@@ -101,7 +103,7 @@ use skep_search::{
     UnitKey, CEILING_BYTES,
 };
 
-use crate::address::{parent_account, parse_address, within_principal_depth};
+use crate::address::{doc_1_of, mailbox_of, parent_account, parse_address, within_principal_depth};
 use crate::board::answers::{self, Delivered};
 use crate::board::{frames, Answer, Board, ChainAtAnswer, ChangesAnswer, ChangesPage, ChangesQuery, KeySetAnswer, Rejection, Token, HEAD_DOCUMENT};
 use crate::derive::too_deep;
@@ -1146,9 +1148,19 @@ impl<'b> Consumer<'b> {
                     continue;
                 }
             };
-            for d in docs.iter().filter_map(Value::as_str) {
-                let Some(addr) = parse_address(d) else { continue };
+            let named: Vec<Address> =
+                docs.iter().filter_map(Value::as_str).filter_map(parse_address).collect();
+            for addr in named.iter().cloned() {
                 let Some(doc) = bare_document(&addr) else { continue };
+                // An account's first mint creates its mailbox in the same
+                // commit, and its row names the two, `[home, mailbox]`
+                // (wire.md §The change feed). The home is published — the
+                // board admits no other first mint — so it is the published
+                // face's, and the drafts face passes it over as it passes a
+                // `publish` row's member; the mailbox beside it is a draft.
+                if face != Face::Published && home_beside_its_mailbox(&doc, &named) {
+                    continue;
+                }
                 if addr != doc {
                     // A member names an edition's version, never a draft: on
                     // the published face it moves the edition's head; on the
@@ -2176,6 +2188,17 @@ fn refusal_reason(key: &str) -> String {
     } else {
         UNRECOGNIZED_REFUSAL.to_string()
     }
+}
+
+/// Returns whether `doc` is an account's home that `named` names beside the
+/// account's mailbox.
+///
+/// That is the row of an account's first mint: the board creates the
+/// mailbox in the commit that mints the account's doc 1, and the row names
+/// the two (wire.md §The change feed; the mailbox design §3).
+fn home_beside_its_mailbox(doc: &Address, named: &[Address]) -> bool {
+    let Some(account) = account_of(doc).map(|a| a.to_string()) else { return false };
+    doc.to_string() == doc_1_of(&account) && named.iter().any(|other| other.to_string() == mailbox_of(&account))
 }
 
 // ── the loop's input: `GET /events` ──────────────────────────────────────

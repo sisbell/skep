@@ -74,13 +74,17 @@
 //!   and such a record moves no count; the system account's three are in
 //!   genesis's seed, and an account's four — its mailbox, its bio, its link
 //!   page and its policy document ([`WellKnownSlot`]) — are each placed by
-//!   [`Namespace::create_well_known_document`]. Two of the chains
+//!   [`Namespace::create_well_known_document`], the mailbox by the
+//!   account's first [`Namespace::create_new_document`] too, in the commit
+//!   that mints its doc 1. Two of the chains
 //!   issue elements — a document's content chain and its link chain — and
 //!   no third does: the allocator refuses to issue any other element, so no
 //!   element in any other subspace is ever minted, and subspace 3, where
 //!   type names are spelled, stays unallocated ([`M3State::is_allocated`]).
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
-//!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
+//!   handle: [`Namespace::create_new_document`] \[ASN-0103\], which creates
+//!   an account's mailbox beside its first document, in the same commit
+//!   \[the mailbox design §3\],
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],
 //!   [`Namespace::register_node`] \[ASN-0047 NodeBaptism\],
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\], and
@@ -142,7 +146,8 @@
 //!   empty document, a retried [`Namespace::delegate`] or
 //!   [`Namespace::register_node`] is refused, and a retried
 //!   [`Namespace::create_well_known_document`] is answered with the document
-//!   the first attempt created at that slot and stages nothing; each op's
+//!   standing at that slot — the first attempt's, or at the mailbox's slot
+//!   the one the account's first create made — and stages nothing; each op's
 //!   doc says which —
 //!   `fork`'s through the op it reduces to — and, where a retry is refused,
 //!   how to tell it from a lost race or why that need not be told;

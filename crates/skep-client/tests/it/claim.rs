@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use skep_client::address::mailbox_of;
 use skep_client::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Opened, Scope, SessionBody, Token, T_CLAIM};
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::ceremony::claim::{self, ClaimOutcome};
@@ -129,6 +130,29 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
     let err = key_face(&board, &pre.walk, &stranger, &[], Site::Session).expect_err("in neither list");
     assert!(err.to_string().contains(&format!("{stranger} is in neither list")), "{err}");
     session.close().expect("close");
+}
+
+/// Checks that the claim leaves both of its accounts' mailboxes standing.
+///
+/// The claim mints two homes — the claimant's doc 1 and its agent space's —
+/// and the board creates each account's mailbox in its home's own commit
+/// (the mailbox design §3), with no step of the client's: a guest is
+/// answered `withheld` at `1.0.1.0.2` and at `1.0.1.1.0.2`, never
+/// `doc_not_registered`.
+#[test]
+fn claim_leaves_both_mailboxes_standing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let store = FileStore::open(dir.path().join("store"));
+    keygen(&store, "notebook");
+    let (done, _) = claim(&board, &store, &dir.path().join("anchors"));
+    let space = done.agent_space.expect("the claim's setup act seats the agent space");
+    for account in [done.account.as_str(), space.as_str()] {
+        let mailbox = mailbox_of(account);
+        let v = board.guest(&frames::doc_metadata(&mailbox)).expect("a guest's read");
+        assert_eq!(v["code"].as_str(), Some("withheld"), "{account}: its mailbox stands, private: {v}");
+    }
 }
 
 /// AUTH-5.56 boundary 1: a walk interrupted after S1 (the delegate landed,

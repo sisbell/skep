@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
-use skep_client::address::{doc_1_of, document_of, first_child};
+use skep_client::address::{doc_1_of, document_of, first_child, mailbox_of};
 use skep_client::board::{Board, KeySetAnswer, Scope};
 use skep_client::ceremony::claim::{hosted, HostedOutcome};
 use skep_client::ceremony::first_session::document_present;
@@ -240,6 +240,23 @@ fn an_anchored_hire_seats_the_agent_beneath_the_agent_space_under_three_entries(
     assert_eq!(records.label_of(&agent.fp).as_deref(), Some("scribe"), "the label carried");
     assert_eq!(records.records.len(), 1, "one record names the agent, and nothing is written for the roster");
     assert!(person.said("It is the row a roster reads — nothing more is written for it (AUTH-5.91)"), "{t}");
+}
+
+/// Checks that a hired agent's account holds its mailbox.
+///
+/// The hire mints the agent's doc 1 from the custody anchor's session, and
+/// the board creates the agent's mailbox in that home's own commit (the
+/// mailbox design §3), with no step of the walk's: a guest is answered
+/// `withheld` at the agent's `.0.2`.
+#[test]
+fn hire_agent_account_holds_its_mailbox() {
+    let rig = rig();
+    let board = rig.board();
+    let agent = rig.agent("scribe-host", "scribe");
+    let (done, _) = hired(&board, &rig, &agent, 1);
+    assert!(done.minted_home, "the premise: the hire minted the agent's home");
+    let v = board.guest(&skep_client::board::frames::doc_metadata(&mailbox_of(FIRST))).expect("a guest's read");
+    assert_eq!(v["code"].as_str(), Some("withheld"), "the agent's mailbox stands, private: {v}");
 }
 
 /// FENCE 5 (AUTH RES-211, the composition): the committed genesis is the

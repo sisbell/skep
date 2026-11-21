@@ -25,7 +25,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   never hands one out; a document stands at 2, 3, 4 or 5 only where a
   record placed it there, once, as genesis places the system account's
   three and `create_well_known_document` an account's four — its
-  mailbox, its bio, its link page and its policy document — and a
+  mailbox, its bio, its link page and its policy document, the mailbox
+  placed by the account's first `create_new_document` too — and a
   number of the block that holds none reads unregistered.
   The content chain also mints a RANGE — `count` consecutive addresses
   in one record, the addresses `count` single mints would have issued,
@@ -51,7 +52,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   document under an account its caller owns by ω and resolves the
   publication flag there — an account's first document, flagless, is
   born published, a later flagless one private, and an explicit flag
-  is honored as sent; `delegate`, asked by the new account's ω,
+  is honored as sent — and, at an account's first document, creates
+  the account's mailbox in the same commit, private and empty, so
+  every account whose first document it mints holds its mailbox from
+  that position on; `delegate`, asked by the new account's ω,
   baptizes the next account under a registered node or account and
   seats a new principal there in the same commit, so an account's seat
   is its allocation; `register_node` admits a node address
@@ -67,9 +71,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   version from an ordinary publication, and each signed where the
   handle carries an attestation — moving no count, and once per slot:
   a later call at that slot answers the same address, writes nothing,
-  and says so (`WellKnown::Standing`). The system account is refused
-  at every slot (`CreateDocumentError::SystemAccountNoWellKnown`): its
-  slots are its own, seeded at genesis.
+  and says so (`WellKnown::Standing`), as every call at the mailbox's
+  slot does on an account whose home `create_new_document` minted. The
+  system account is refused at every slot
+  (`CreateDocumentError::SystemAccountNoWellKnown`): its slots are its
+  own, seeded at genesis.
 - **Allocation and entity reads** — is-this-allocated over every
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check

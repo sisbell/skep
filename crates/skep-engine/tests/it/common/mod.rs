@@ -141,7 +141,9 @@ pub fn delegated_account(
 
 /// Bootstrap prologue, all through the real drivers: peek the next delegable
 /// prefix under the genesis node, delegate it to [`USER`], create one
-/// document in the new account — a DRAFT. Returns `(account, draft)`.
+/// document in the new account — a DRAFT, its commit making the account's
+/// mailbox beside it, a second draft holding nothing (M3's mailbox rule).
+/// Returns `(account, draft)`.
 ///
 /// The draft is an explicit `false` on the account's FIRST mint: flagless,
 /// that mint would be the account's born-published home (PUB-8.21), and a
@@ -155,8 +157,8 @@ pub fn setup_draft(engine: &Engine) -> (Address, Address) {
 }
 
 /// [`setup_draft`]'s published twin: the same prologue, minting the account's
-/// HOME — its flagless first document, born published (PUB-8.21, PUB-1.17).
-/// Returns `(account, home)`. Content enters it by declared deposits alone
+/// HOME — its flagless first document, born published (PUB-8.21, PUB-1.17),
+/// the account's private mailbox beside it. Returns `(account, home)`. Content enters it by declared deposits alone
 /// (PUB-2.59), and it is the one owned source `version` admits (PUB-2.9).
 pub fn setup_home(engine: &Engine) -> (Address, Address) {
     setup_with(engine, None)

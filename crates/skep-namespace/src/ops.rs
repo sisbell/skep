@@ -7,7 +7,10 @@
 //! `stg.working().m3()`, stages its [`M3Rec`] deltas lifted via the
 //! `W::Record: From<M3Rec>` bound, and returns `(Address, Seq)` — the new
 //! address plus `transact`'s committed `last_seq` (the linearization
-//! coordinate) — only after commit (commit-before-acknowledge). One op can
+//! coordinate) — only after commit (commit-before-acknowledge). An account's
+//! first `create_new_document` also creates the account's mailbox in its one
+//! transaction, where none stands (the mailbox design §3), and returns the
+//! doc 1. One op can
 //! find its work done, and says which it found: `create_well_known_document`
 //! returns `(WellKnown, Seq)`, and called where its slot already holds a
 //! document it stages nothing and returns that document's address as
@@ -76,7 +79,11 @@ pub struct Namespace<'k, W: WorldState> {
     /// `delegate` and `register_node` lie outside the checked set and take
     /// the plain arm whatever this field holds, and so does
     /// `create_well_known_document` at the mailbox's slot: that document is
-    /// private, and a private mint signs nothing.
+    /// private, and a private mint signs nothing of its own. The mailbox an
+    /// account's first `create_new_document` creates rides that create's
+    /// commit, under whatever its marker carries: the value signs the
+    /// create's own act — its parent account, an empty body, no minted
+    /// address — and names nothing of the mailbox.
     attest: Option<&'k Attestation>,
 }
 
@@ -159,11 +166,11 @@ where
 {
     /// Baptizes a fresh empty document under `account` [ASN-0103; §7].
     ///
-    /// Registers d only — no M5 arrangement write (lazy — Conflicts §3). No
-    /// idempotency key (identity is the address; a retried lost-ack yields a
-    /// harmless orphan empty document — exactly-once is M10's). Returns the
-    /// address and its commit `Seq` only after commit
-    /// (commit-before-acknowledge).
+    /// Registers d — and, at the account's first mint, its mailbox (below) —
+    /// with no M5 arrangement write (lazy — Conflicts §3). No idempotency key
+    /// (identity is the address; a retried lost-ack yields a harmless orphan
+    /// empty document — exactly-once is M10's). Returns the address and its
+    /// commit `Seq` only after commit (commit-before-acknowledge).
     ///
     /// `published` is the create path's three-valued flag (PUB-8.16:
     /// `absent | true | false`, `None` being absent), and this op resolves it
@@ -191,11 +198,36 @@ where
     /// [`M3State::has_documents`], M3's own read of the account's document
     /// chain.
     ///
+    /// **The mailbox rule.** The account's first mint creates the account's
+    /// mailbox in the same transaction (the mailbox design §3): its
+    /// well-known slot 2 ([`crate::mailbox_address`]), private and holding
+    /// nothing, the record the slot's own mint hands back staged after the
+    /// home's. "First" is the premise PUB-8.21 reads, read once, so the two
+    /// rules judge the same mint first: a flagless, a `Some(true)` and a
+    /// `Some(false)` first mint each create the mailbox, and no later mint
+    /// does. The two records commit under one marker and the position map
+    /// dates both at the commit's `last_seq`, so no committed state holds an
+    /// account's doc 1 without its mailbox; the returned address is the
+    /// home's, and the returned `Seq` dates both. A mailbox already standing
+    /// — one [`Namespace::create_well_known_document`] placed on an account
+    /// holding no document, which the daemon's door refuses
+    /// `mint_home_first` — is left as it stands, and the home's record is
+    /// staged alone: the fold refuses a second record at a filled slot. The
+    /// system account never meets the rule, and no guard of its own stands
+    /// here: genesis counts its doc 1, so its every mint is a later one, and
+    /// its slot 2 is the head document, which the same incumbent test leaves
+    /// standing. [`Namespace::fork`] opens this transaction, so it keeps the
+    /// rule; a composite minting through [`M3State::mint_document`] does not,
+    /// which is why the daemon's door refuses every other mint of an
+    /// account's first document `mint_home_first`.
+    ///
     /// **The attested arm (signed ops).** The transaction commits under the
     /// handle's attestation where it carries one — a mint born published is
     /// a publish-class act, signed over its parent account — and with its
     /// commit marker's signature slot empty otherwise; the kernel's arm is
-    /// `transact` itself under `None`.
+    /// `transact` itself under `None`. A mailbox the transaction creates
+    /// rides the same marker: the attestation signs the create's own act,
+    /// over its parent account and an empty body, and names no mailbox.
     ///
     /// # Errors
     ///
@@ -234,12 +266,28 @@ where
                 return Err(CreateDocumentError::NotOwner);
             }
             let m3 = stg.working().m3();
-            // PUB-8.21, off working state under the held chain key: the
-            // flagless first mint is born published; every other flagless
-            // mint is private (PUB-1.1); an explicit flag is honored as sent.
-            let published = published.unwrap_or_else(|| !m3.has_documents(account));
-            let (addr, rec) = m3.mint_document(account, published)?;
+            // Whether this mint is the account's first, read once, off
+            // working state under the held chain key: PUB-8.21's premise and
+            // the mailbox rule's, so the two judge the same mint first.
+            let first = !m3.has_documents(account);
+            // PUB-8.21: the flagless first mint is born published; every
+            // other flagless mint is private (PUB-1.1); an explicit flag is
+            // honored as sent.
+            let (addr, rec) = m3.mint_document(account, published.unwrap_or(first))?;
             stg.push(rec.into());
+            if first {
+                // The mailbox rule: the account's first mint creates its
+                // mailbox in this commit, at slot 2, private and holding
+                // nothing. A mailbox already standing is left as it stands —
+                // the fold refuses a second record at a filled slot.
+                let m3 = stg.working().m3();
+                let (mailbox, rec) = m3
+                    .mint_well_known(account, WellKnownSlot::Mailbox)
+                    .expect("the home's mint passed the same account gate on this state");
+                if !m3.is_registered_document(&mailbox) {
+                    stg.push(rec.into());
+                }
+            }
             Ok(addr)
         })
     }
@@ -274,7 +322,10 @@ where
     /// document-chain key, so two racing calls at one slot stage one record.
     /// The fold refuses a second record at a filled slot, on every build
     /// ([`M3State::apply_m3`]), and that read is what keeps a repeated call
-    /// from staging one.
+    /// from staging one. At the mailbox's slot, on an account whose doc 1
+    /// [`Namespace::create_new_document`] minted, even the first call finds
+    /// the slot filled: the mailbox stands from that doc 1's own commit (its
+    /// mailbox rule), and the call answers it standing.
     ///
     /// **No count moves.** The record is an ordinary [`M3Rec::Allocate`] at
     /// the slot: it registers the document, writes its bit and its position,
@@ -283,10 +334,11 @@ where
     /// have answered. Nor does the op ask for the account's doc 1: on an
     /// account that holds no document it mints the slot,
     /// [`M3State::has_documents`] still answers `false`, and the account's
-    /// next flagless create is still its doc 1, born published (PUB-8.21).
-    /// Refusing a well-known document ahead of the home page (the mailbox
-    /// design §3) is the daemon's door's, not this transaction's, as the
-    /// explicit-`false` first mint is (PUB-8.20).
+    /// next flagless create is still its doc 1, born published (PUB-8.21) —
+    /// which finds a mailbox this op placed standing and stages the home's
+    /// record alone. Refusing a well-known document ahead of the home page
+    /// (the mailbox design §3) is the daemon's door's, not this
+    /// transaction's, as the explicit-`false` first mint is (PUB-8.20).
     ///
     /// **The system account.** The op refuses it at every slot,
     /// [`CreateDocumentError::SystemAccountNoWellKnown`], whoever calls and
@@ -653,7 +705,10 @@ where
     /// off a snapshot, names the caller's account and so the
     /// [`M3State::document_lock_key`] the composite takes, and
     /// [`M3State::mint_document`] mints there inside the composite's own
-    /// transaction.
+    /// transaction. Such a composite creates no mailbox — the mailbox rule
+    /// is `create_new_document`'s — so it is built for an account that holds
+    /// its doc 1: the daemon's door refuses it into an empty one
+    /// `mint_home_first`.
     ///
     /// `published` is `fork`'s own three-valued flag (PUB-8.16, PUB-8.17's
     /// sibling on the create path), handed through the literal reduction to
@@ -666,7 +721,9 @@ where
     /// that door refuses a `fork` into an empty account whatever its flag,
     /// where PUB-8.20's door is `create_new_document`'s; here both mint what
     /// the rule says. The one transaction it opens is `create_new_document`'s,
-    /// so it commits under the handle's attestation exactly as that op does.
+    /// so it commits under the handle's attestation exactly as that op does,
+    /// and a fork into an empty account creates the account's mailbox beside
+    /// its doc 1 by that op's mailbox rule.
     ///
     /// # Errors
     ///

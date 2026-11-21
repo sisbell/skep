@@ -521,9 +521,12 @@ impl M3State {
     /// mint is document [`FIRST_ORDINARY_DOCUMENT`]. And no later record
     /// places a system document: its three slots are filled, and the fold
     /// refuses a second record at a filled one; its slot 5 holds nothing,
-    /// the system account's table naming no document there, and the one op
-    /// that stages a slot's record refuses that account at every slot
-    /// ([`crate::Namespace::create_well_known_document`]), the fold judging
+    /// the system account's table naming no document there, and neither op
+    /// that stages a slot's record places one in that account —
+    /// [`crate::Namespace::create_well_known_document`] refuses it at every
+    /// slot, and [`crate::Namespace::create_new_document`] places a mailbox
+    /// beside an account's first document alone, where this seed counts the
+    /// account's doc 1, so its every mint is a later one — the fold judging
     /// a slot's number and never whose account it lies in. A document added
     /// to the seed is one more record.
     ///

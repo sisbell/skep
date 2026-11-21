@@ -47,7 +47,9 @@
 //!   (`line_numbers`) and the read by identity (`retrieve_i`) among them,
 //!   the creation of a well-known document, slot named
 //!   (`create_well_known_document`; the mailbox's, `create_mailbox`, which
-//!   no code of the crate sends), and the copy by identity (`copy`) and
+//!   finds the mailbox standing on every account whose home the board
+//!   minted, the board creating it with the home), and the copy by
+//!   identity (`copy`) and
 //!   the link whose `from` is content (`make_link_spec`, with the marks
 //!   type `T_MARKS`) a mark of a draft is made of; its
 //!   child `answers`

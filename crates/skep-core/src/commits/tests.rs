@@ -1340,17 +1340,18 @@ fn the_head_and_time_writers_write_into_the_seeded_documents_and_mint_none() {
 ///
 /// Over this suite's own kernel config ([`fsync_engine`]), every write
 /// through the session door: an account delegated to a principal of its own,
-/// its home, then `create_well_known_document` for it, a draft, and
-/// `create_well_known_document` again, each ack built as M10's dispatch
-/// builds it, `committed` the store's answer. The first is acked the mailbox
-/// — the account's document 2 — at the position it committed, and recorded:
-/// one row, `op` the wire name, `docs` the mailbox alone, no term. The second
-/// is acked the same address at the position it read, the draft's, and
-/// commits nothing, saying so: the journal's position stands, the draft's
-/// row stays the draft's, and no row is added, so the mailbox has one row.
-/// That row is its
-/// owner's: the owner's page carries it, and a stranger's and a guest's omit
-/// it, the mailbox being private. The bio, the link page and the policy
+/// its home, then `create_well_known_document` at the mailbox's slot, a
+/// draft, and the same call again, each ack built as M10's dispatch builds
+/// it, `committed` the store's answer. The home's commit creates the mailbox
+/// (M3's mailbox rule), and its one row says so: `op` the wire name, `docs`
+/// the home then the mailbox, no term. Each slot-2 call after it is acked
+/// the mailbox — the account's document 2 — at the position it read, the
+/// home's and then the draft's, and commits nothing, saying so: the
+/// journal's position stands, the row there stays the write's that made it,
+/// and no row is added, so the mailbox has one row, its home's. The owner's
+/// page carries that row whole, and a stranger's and a guest's carry it
+/// reduced to the home, the mailbox being private; the draft's, a later
+/// mint's, names the draft alone. The bio, the link page and the policy
 /// document are created published, so the row of each creation is served to
 /// every class — the owner's page, a stranger's and a guest's alike — one
 /// row apiece, a second call at each adding none.
@@ -1410,23 +1411,22 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
         })
     };
     let create_the_mailbox = || create_at(WellKnownSlot::Mailbox);
-    create(None);
-    let (mailbox, minted_at, committed) = create_the_mailbox();
-    assert!(committed, "the mint committed, and says so");
-    assert_eq!(Some(&mailbox), mailbox_address(&account).as_ref(), "the account's document 2");
-    assert_eq!(
-        engine.kernel().current_seq().0,
-        minted_at,
-        "the mint committed at its ack's position"
-    );
+    let (home, home_at, _) = create(None);
+    assert_eq!(engine.kernel().current_seq().0, home_at, "the home committed at its ack's position");
+    let mailbox = mailbox_address(&account).expect("the account's document 2");
+    let (standing, judged_at, committed) = create_the_mailbox();
+    assert_eq!(standing, mailbox, "the call answers the account's document 2");
+    assert!(!committed, "the mailbox stands from the home's commit, and the call says so");
+    assert_eq!(judged_at, home_at, "at the position it read, the home's");
+    assert_eq!(engine.kernel().current_seq().0, home_at, "and commits nothing");
     let (draft, draft_at, _) = create(Some(false));
-    assert!(draft_at > minted_at, "the premise: a commit between the two calls");
+    assert!(draft_at > home_at, "the premise: a commit between the two calls");
     let rows_before = wp.feed.entries_above(0).len();
 
     let (again, judged_at, committed) = create_the_mailbox();
     assert_eq!(again, mailbox, "the second call answers the same address");
     assert!(!committed, "and says it committed nothing");
-    assert_eq!(judged_at, draft_at, "at the position it read, not the mint's");
+    assert_eq!(judged_at, draft_at, "at the position it read, the draft's");
     assert_eq!(engine.kernel().current_seq().0, draft_at, "and commits nothing");
     assert_eq!(wp.feed.entries_above(0).len(), rows_before, "no row is added");
 
@@ -1439,34 +1439,41 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
             other @ CommitMeta::Bare { .. } => panic!("a bare entry at {at}: {other:?}"),
         })
         .collect();
-    let of_the_mint: Vec<_> =
-        rows.iter().filter(|(_, op, _)| op == "create_well_known_document").collect();
+    let naming_the_mailbox: Vec<_> =
+        rows.iter().filter(|(.., docs)| docs.contains(&mailbox.to_string())).collect();
     assert_eq!(
-        of_the_mint,
-        [&(minted_at, "create_well_known_document".to_string(), vec![mailbox.to_string()])],
-        "one row, at the mint's position, naming the mailbox alone: {rows:?}"
+        naming_the_mailbox,
+        [&(home_at, "create_new_document".to_string(), vec![home.to_string(), mailbox.to_string()])],
+        "one row, the home's, naming the home and then the mailbox: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|(_, op, _)| op == "create_well_known_document"),
+        "no call at the mailbox's slot left a row: {rows:?}"
     );
     assert!(
         rows.contains(&(draft_at, "create_new_document".to_string(), vec![draft.to_string()])),
-        "the position the second call read keeps the draft's row: {rows:?}"
+        "the position the second call read keeps the draft's row, a later mint's: {rows:?}"
     );
 
     let snap = engine.kernel().snapshot();
     let page = |principal: Option<PrincipalId>| {
         served(page_from(&wp, &FeedClass::of(snap.world(), principal), 0))
     };
-    let row =
-        page(Some(owner)).remove(&minted_at).expect("the owner's page carries the mint's row");
-    assert_eq!(row["op"], "create_well_known_document", "{row}");
-    assert_eq!(row["docs"], serde_json::json!([mailbox.to_string()]), "{row}");
+    let row = page(Some(owner)).remove(&home_at).expect("the owner's page carries the home's row");
+    assert_eq!(row["op"], "create_new_document", "{row}");
+    assert_eq!(row["docs"], serde_json::json!([home.to_string(), mailbox.to_string()]), "{row}");
     assert_eq!(row["key"], "bare", "{row}");
     for member in ["attest", "link", "new_prefix", "new_id", "placed", "base", "merge"] {
         assert!(row.get(member).is_none(), "the row carries no `{member}`: {row}");
     }
     for stranger in [Some(SYSTEM_PRINCIPAL), None] {
-        assert!(
-            !page(stranger).contains_key(&minted_at),
-            "{stranger:?}: the row of a private mailbox is omitted"
+        let row = page(stranger)
+            .remove(&home_at)
+            .unwrap_or_else(|| panic!("{stranger:?}: the home's row is served"));
+        assert_eq!(
+            row["docs"],
+            serde_json::json!([home.to_string()]),
+            "{stranger:?}: the row reduced to the home, the private mailbox withheld"
         );
     }
 
@@ -1499,32 +1506,36 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
 /// `create_well_known_document` that finds the mailbox standing — names the
 /// position its call was judged at, another write's. `record` declines it as
 /// it declines a refusal: no row is entered there and nothing is announced,
-/// though no row holds that position yet. The account and its mailbox are
-/// committed off the door, so the feed's own refusal of a recorded position
-/// is not what declines it (the mutant that records the ack enters a row
-/// naming this call's op and testimony at another write's position, and
-/// announces it).
+/// though no row holds that position yet. The account and its home — whose
+/// commit creates its mailbox — are committed off the door, so the feed's
+/// own refusal of a recorded position is not what declines it (the mutant
+/// that records the ack enters a row naming this call's op and testimony at
+/// another write's position, and announces it).
 #[test]
 fn an_ack_that_committed_nothing_records_nothing_at_the_position_it_names() {
-    use skep_namespace::{WellKnown, BOOTSTRAP_PRINCIPAL};
+    use skep_namespace::{mailbox_address, WellKnown, BOOTSTRAP_PRINCIPAL};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = fsync_engine(dir.path());
     let wp = open_the_write_path(dir.path(), &engine);
     let stores = engine.stores();
     let owner = PrincipalId(41);
-    // Off the door: the account, its home and its mailbox, so the feed holds
-    // no row at the head the call below is judged at.
+    // Off the door: the account and its home, the mailbox minted in the
+    // home's own commit, so the feed holds no row at the head the call below
+    // is judged at.
     let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
     let (account, _) =
         stores.namespace().delegate(BOOTSTRAP_PRINCIPAL, prefix, owner).expect("the delegation commits");
-    stores.namespace().create_new_document(owner, &account, None).expect("the account's home");
-    let mailbox_slot = skep_namespace::WellKnownSlot::Mailbox;
-    let (minted, head) = stores
+    let (_, head) = stores
         .namespace()
-        .create_well_known_document(owner, &account, mailbox_slot)
-        .expect("the mailbox mints");
-    assert!(matches!(minted, WellKnown::Minted(_)), "the premise: the mailbox minted");
+        .create_new_document(owner, &account, None)
+        .expect("the account's home, its mailbox beside it");
+    let mailbox = mailbox_address(&account).expect("the account's document 2");
+    assert!(
+        engine.kernel().snapshot().world().m3().is_registered_document(&mailbox),
+        "the premise: the mailbox stands"
+    );
+    let mailbox_slot = skep_namespace::WellKnownSlot::Mailbox;
     let rows_before = wp.feed.entries_above(0).len();
     let announced = wp.announced();
 
@@ -1533,21 +1544,118 @@ fn an_ack_that_committed_nothing_records_nothing_at_the_position_it_names() {
     let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
     let serial = wp.serial_lock();
     let resp = wp.commit_under(&serial, meta, || {
-        let (mailbox, at) = stores
+        let (answer, at) = stores
             .namespace()
             .create_well_known_document(owner, &account, mailbox_slot)
             .expect("answered");
-        let committed = matches!(mailbox, WellKnown::Minted(_));
-        Response::AckAddr { addr: mailbox.into_address(), at, committed }
+        let committed = matches!(answer, WellKnown::Minted(_));
+        Response::AckAddr { addr: answer.into_address(), at, committed }
     });
     drop(serial);
-    let Response::AckAddr { at, committed: false, .. } = resp else {
+    let Response::AckAddr { addr, at, committed: false } = resp else {
         panic!("acked as committing nothing")
     };
+    assert_eq!(addr, mailbox, "the mailbox standing");
     assert_eq!(at, head, "at the position the call was judged at");
     assert_eq!(engine.kernel().current_seq(), head, "nothing committed");
     assert_eq!(wp.feed.entries_above(0).len(), rows_before, "no row is entered at another write's position");
     assert_eq!(wp.announced(), announced, "and nothing is announced");
+}
+
+/// Checks that a bare home entry names the home, then the mailbox.
+///
+/// An account's first mint creates its mailbox in its own commit (M3's
+/// mailbox rule), and the recorded row names the two `[home, mailbox]`
+/// (`AffectedDocs::MintedWithMailbox`). With that position's testimony lost
+/// the journal answers the same documents in the same order and names no
+/// op: `derived_journal` over the commit's two worlds answers the home —
+/// published, so no draft witness names it, and the witness that reads a
+/// home off its mailbox does — and then the mailbox, and no term. Over this
+/// suite's own kernel config ([`fsync_engine`]): a draft minted, then an
+/// account and its home through the session door, the owner's and a
+/// guest's pages read, `commits.log` torn back to the draft, and the walk's
+/// reconstruction read again. A bare row serves its `docs` as `null`, so
+/// what the classification decides shows in what each class is served: the
+/// owner and a guest are each served the bare row, as each was served the
+/// recorded one, and a guest's page `under=` the home carries it — reduced
+/// to the home, where a bare row naming the mailbox alone would be masked
+/// from the guest whole.
+#[test]
+fn a_bare_home_entry_names_the_home_then_the_mailbox() {
+    use skep_namespace::{mailbox_address, BOOTSTRAP_PRINCIPAL};
+
+    use super::classify::derived_journal;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let (_, low) = mint_a_draft(&wp, &stores);
+    let owner = PrincipalId(41);
+    let door = |op: Op, execute: &dyn Fn() -> (Address, Seq)| -> (Address, u64) {
+        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = execute();
+            Response::AckAddr { addr, at, committed: true }
+        });
+        let Response::AckAddr { addr, at, .. } = resp else { panic!("the write is acked") };
+        (addr, at.0)
+    };
+    let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
+    let (account, _) = door(Op::Delegate { new_prefix: prefix.clone(), new_id: owner }, &|| {
+        stores
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.clone(), owner)
+            .expect("the delegation commits")
+    });
+    let before = engine.kernel().snapshot();
+    let (home, home_at) =
+        door(Op::CreateNewDocument { account: account.clone(), published: None }, &|| {
+            stores.namespace().create_new_document(owner, &account, None).expect("the home commits")
+        });
+    let after = engine.kernel().snapshot();
+    let mailbox = mailbox_address(&account).expect("the account's document 2");
+
+    // The journal's answer over the commit's two worlds.
+    let (docs, journal) = derived_journal(before.world(), after.world());
+    assert_eq!(docs, [home.clone(), mailbox.clone()], "the home, then the mailbox");
+    assert_eq!(journal, super::sidecar::JournalTerms::default(), "no op named, and no term");
+
+    // The recorded row, as the owner and a guest are served it.
+    let row_at = |wp: &Commits, principal: Option<PrincipalId>| {
+        served(page_from(wp, &FeedClass::of(after.world(), principal), low))
+            .remove(&home_at)
+            .unwrap_or_else(|| panic!("{principal:?}'s page carries the home's row"))
+    };
+    let (recorded_owner, recorded_guest) = (row_at(&wp, Some(owner)), row_at(&wp, None));
+    assert_eq!(
+        recorded_owner["docs"],
+        serde_json::json!([home.to_string(), mailbox.to_string()]),
+        "the premise: the recorded row, whole"
+    );
+    assert_eq!(recorded_guest["docs"], serde_json::json!([home.to_string()]), "the premise: reduced");
+    drop(wp);
+
+    // The home's testimony lost: the walk reconstructs its position bare.
+    tear_to(dir.path(), low);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    for principal in [Some(owner), None] {
+        let bare = row_at(&wp, principal);
+        assert!(
+            bare["op"].is_null() && bare["docs"].is_null(),
+            "{principal:?}: the row is served, and bare: {bare}"
+        );
+    }
+    let limit = std::num::NonZeroUsize::new(4096).expect("non-zero");
+    let under_the_home = ChangesQuery { since: low, limit, under: Some(home.tumbler().clone()), drafts_only: false };
+    let guest_under_the_home = served(wp.changes(&FeedClass::of(after.world(), None), &under_the_home));
+    assert!(
+        guest_under_the_home.contains_key(&home_at),
+        "a guest's page under the home carries the bare row: its class reduces to the home"
+    );
 }
 
 /// Mints four drafts and tears `commits.log` back to the first.

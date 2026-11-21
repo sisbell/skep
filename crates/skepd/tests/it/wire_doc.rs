@@ -657,12 +657,18 @@ fn doc_owner_of_address_row_states_the_allocation_test() {
 /// examples are the slot-2 frame and the attested slot-5 frame, byte for
 /// byte; §Credential refusals carries the system account's token in a
 /// bullet of its own — whoever asks, at every slot, on claimed and
-/// unclaimed boards alike — names the op in `mint_home_first`'s cell, puts
-/// a published slot's creation among the board-state gate's inputs and the
-/// mailbox's outside it; and §The change feed lists the op among the mints
-/// whose row names the minted document. The daemon's answers are pinned in
-/// skep-core's and skep-febe's suites and in `well_known.rs`; this pins
-/// that the contract says so.
+/// unclaimed boards alike — names the op in `mint_home_first`'s cell, and
+/// a minting `publish` beside it, puts a published slot's creation among
+/// the board-state gate's inputs and the mailbox's outside it; and §The
+/// change feed lists the op among the mints whose row names the minted
+/// document. The mailbox the board creates with the home page is said
+/// where a reader looks for it: the `create_new_document` row's rule, its
+/// one ack and its one signature; the well-known row's slot 2, answered
+/// standing, and its mail paragraph, a stranger answered `withheld`
+/// wherever a home stands; and the change feed's `[home, mailbox]` row, its
+/// kept `attest` and its `drafts=true` page. The daemon's answers are
+/// pinned in skep-core's and skep-febe's suites and in `well_known.rs` and
+/// `mailbox.rs`; this pins that the contract says so.
 #[test]
 fn doc_states_the_well_known_creation_its_slots_its_refusals_and_its_feed_row() {
     let row = op_row("create_well_known_document");
@@ -730,7 +736,9 @@ fn doc_states_the_well_known_creation_its_slots_its_refusals_and_its_feed_row() 
         "its number 5 holds no document, ever",
         "Refused WHOEVER ASKS",
         "on claimed and unclaimed boards alike: it stands in the MINT class",
-        "a `fork`, a `version` or a `stage` by a principal whose account's space has never held a document, and a `create_well_known_document` (§Namespace) by the owner of the `account` it names, at any `slot`, where that account holds no document",
+        "a `fork`, a `version` or a `stage` by a principal whose account's space has never held a document; a `create_well_known_document` (§Namespace) by the owner of the `account` it names, at any `slot`, where that account holds no document",
+        "and a `publish` at its mint form (`mint: true`, §The publish shot and head-float) by the owner of the `account` it names, where that account holds no document",
+        "becomes the account's doc 1 and creates its mailbox in the same commit",
         "a `create_well_known_document` by the account's owner at a slot whose document is created PUBLISHED — the bio's (3), the link page's (4), the policy document's (5)",
         "the mailbox's creation (`create_well_known_document` at slot 2, the one slot whose document is private)",
     ] {
@@ -747,6 +755,34 @@ fn doc_states_the_well_known_creation_its_slots_its_refusals_and_its_feed_row() 
         feed.contains("the **minted** document for `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`"),
         "§The change feed lists the well-known creation among the mints"
     );
+    // The mailbox the board creates with the home page (the mailbox design
+    // §3): the create's row, the slot-2 call's answer, the mail paragraph
+    // and the feed's row and exemption say so.
+    let create = op_row("create_new_document");
+    for fact in [
+        "An account's first mint also creates the account's MAILBOX, `<account>.0.2`, private and empty, in the same commit",
+        "the ack names the home, and `doc_metadata` dates both at the ack's `at`",
+        "The account's first mint also creates its mailbox, document 2; no mint by this op creates any other of them",
+        "the commit's `attest` signs the home's act alone",
+    ] {
+        assert!(create.contains(fact), "the create_new_document row says {fact:?}: {create}");
+    }
+    assert!(!create.contains("this op never mints one"), "the create row no longer says it mints no well-known document");
+    for fact in [
+        "The MAILBOX the board creates itself: an account's first `create_new_document` creates it in the same commit as the home page",
+        "the board creates it with the account's home page, in the same commit",
+        "`doc_not_registered` only for one that has none",
+    ] {
+        assert!(row.contains(fact), "the create_well_known_document row says {fact:?}: {row}");
+    }
+    assert!(!row.contains("a client creates it just before the first of them"), "no client creates the mailbox");
+    for fact in [
+        "an account's first `create_new_document` or `fork` naming the home FIRST, then the MAILBOX its commit created, `[home, mailbox]`",
+        "a `create_new_document` or `fork` row reduced from `[home, mailbox]` to `[home]`, which KEEP their `attest`",
+        "An account's first-mint row names its mailbox, a draft, so the account holder's `drafts=true` page carries it",
+    ] {
+        assert!(feed.contains(fact), "§The change feed says {fact:?}");
+    }
 }
 
 /// The registrar's gate (REG-2.1) as the contract states it. `register_node`'s

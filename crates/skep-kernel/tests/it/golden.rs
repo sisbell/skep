@@ -74,7 +74,12 @@
 //!   the fixture's cross-owner version already journals — and each shot
 //!   member's terms hold the base its shot was made against, a record the
 //!   fixture's ops never journal: the checkpoint's body and every dump move;
-//!   the segment and the fixture's ops do not.
+//!   the segment and the fixture's ops do not;
+//! - M3's create path creates an account's mailbox in the commit that mints
+//!   the account's first document: the fixture's first create, op 3,
+//!   commits a second record, so the segment, the checkpoint's coordinate
+//!   and body and every boundary and dump from op 3 on move; the fixture's
+//!   ops do not.
 
 use std::collections::BTreeMap;
 use std::fs;

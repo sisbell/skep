@@ -111,10 +111,11 @@ fn one_principals_supplement_answers_no_others_session_and_the_guest_searches_th
     assert_eq!(consumer.search(as_two, "marmalade for principal two", &SearchOpts::default()).unwrap().places.iter().map(|p| p.doc.to_string()).collect::<Vec<_>>(), [draft_two.to_string()]);
     assert!(consumer.search(as_three, "marmalade for principal two", &SearchOpts::default()).unwrap().places.is_empty());
     // The counts per account at the call's class: two's home from the
-    // published part and two's draft from two's part; three sees the home
-    // alone.
+    // published part, and from two's part two's draft and the mailbox the
+    // board made with two's home — the home's own row naming the two, the
+    // home passed over there; three sees the home alone.
     let account_two_addr = skep_client::address::parse_address(&account_two).unwrap();
-    assert_eq!(consumer.counts(as_two).get(&account_two_addr), Some(&2));
+    assert_eq!(consumer.counts(as_two).get(&account_two_addr), Some(&3));
     assert_eq!(consumer.counts(as_three).get(&account_two_addr), Some(&1));
     assert_eq!(consumer.counts(Who::Guest).get(&account_two_addr), Some(&1));
     // The state per face: the files are two.

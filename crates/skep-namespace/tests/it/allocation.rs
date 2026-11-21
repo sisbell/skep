@@ -11,7 +11,8 @@ use skep_address::{content_subspace, link_subspace, ordinal, Address, GateViolat
 use skep_kernel::Kernel;
 use skep_namespace::{
     first_version_address, system_account, CreateDocumentError, HasM3, M3Rec, M3State, MintError,
-    Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, FIRST_ORDINARY_DOCUMENT, SYSTEM_PRINCIPAL,
+    Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, FIRST_ORDINARY_DOCUMENT, MAILBOX_SLOT,
+    SYSTEM_PRINCIPAL,
 };
 
 #[test]
@@ -318,12 +319,14 @@ fn the_first_ordinary_document_is_number_64() {
 /// take four hundred steps a fixed generator picks: a document minted
 /// through one of the three doors that mint one — the create op, `fork`, and
 /// the bare mint a cross-owner version makes — or a record that fills the
-/// account's next empty named slot. Every mint answers the account's next
-/// document by the helper: doc 1, then the first ordinary document and on,
-/// in every account, the system account's included. So none lies in the
-/// block, a slot's record moves no count wherever it falls among the mints,
-/// and under counts far past the block a number of it reads registered
-/// exactly where a record placed a document.
+/// account's next empty named slot. An account's first create or fork places
+/// its mailbox beside it where none stands, and the bare mint places none.
+/// Every mint answers the account's next document by the helper: doc 1,
+/// then the first ordinary document and on, in every account, the system
+/// account's included. So none lies in the block, a slot's record moves no
+/// count wherever it falls among the mints, and under counts far past the
+/// block a number of it reads registered exactly where a record placed a
+/// document.
 #[test]
 fn no_mint_ever_answers_a_document_number_of_the_reserved_block() {
     let k = mem_kernel(genesis_world());
@@ -374,6 +377,11 @@ fn no_mint_ever_answers_a_document_number_of_the_reserved_block() {
                 m3.mint_document(acct, false)
             }),
         };
+        // The create path's first mint places the account's mailbox beside
+        // it, where no record placed one first; the bare mint places none.
+        if *minted == 0 && door != 2 && !filled.contains(&MAILBOX_SLOT) {
+            filled.push(MAILBOX_SLOT);
+        }
         *minted += 1;
         assert_eq!(
             doc,
@@ -650,12 +658,13 @@ fn membership_is_exact_chain_membership() {
 /// number of the block by the document a record placed there, never by the
 /// count (§2; the mailbox design §2: a slot can be named, and linked to,
 /// before anything stands at it). With the account's second document minted
-/// the count covers every number of the block, and all of them read
-/// unregistered at all three membership reads, so nothing mints under one.
-/// One record then fills one named slot: that slot is registered and is a
-/// home like any document, and no other number is. In the system account
-/// genesis filled three of the named slots, and those three alone read
-/// registered, before its counter passes the block and after.
+/// the count covers every number of the block, and every one but the
+/// mailbox's — placed by the home's own commit — reads unregistered at all
+/// three membership reads, so nothing mints under one. One record then fills
+/// another named slot: that slot is registered and is a home like any
+/// document, and no number but the two is. In the system account genesis
+/// filled three of the named slots, and those three alone read registered,
+/// before its counter passes the block and after.
 #[test]
 fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_document() {
     let (k, acct, doc) = kernel_with_account_and_doc();
@@ -665,7 +674,9 @@ fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_doc
     assert_eq!(second, nth_document(&acct, 2), "the count stands past the block");
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&doc) && m3.is_registered_document(&second));
-    for number in 2..FIRST_ORDINARY_DOCUMENT {
+    let mailbox = slot(&acct, MAILBOX_SLOT);
+    assert!(m3.is_registered_document(&mailbox), "{mailbox}: the home's commit placed the mailbox");
+    for number in (2..FIRST_ORDINARY_DOCUMENT).filter(|&number| number != MAILBOX_SLOT) {
         let empty = slot(&acct, number);
         assert!(!m3.is_registered_document(&empty), "{empty} reads registered");
         assert!(!m3.is_allocated(&empty), "{empty} reads allocated");
@@ -679,16 +690,16 @@ fn a_number_of_the_reserved_block_is_registered_only_where_a_record_placed_a_doc
         assert_eq!(m3.mint_link(&empty).unwrap_err(), MintError::HomeNotRegistered, "{empty}");
     }
 
-    let filled = slot(&acct, 2);
+    let filled = slot(&acct, 3);
     let m3 = m3.apply_m3(Seq(9), &M3Rec::allocate(filled.clone(), false));
     for number in 2..FIRST_ORDINARY_DOCUMENT {
         let placed = slot(&acct, number);
-        let is_the_filled_one = placed == filled;
-        assert_eq!(m3.is_registered_document(&placed), is_the_filled_one, "{placed}");
-        assert_eq!(m3.is_allocated(&placed), is_the_filled_one, "{placed}");
+        let is_a_filled_one = placed == filled || placed == mailbox;
+        assert_eq!(m3.is_registered_document(&placed), is_a_filled_one, "{placed}");
+        assert_eq!(m3.is_allocated(&placed), is_a_filled_one, "{placed}");
         assert_eq!(
             m3.entity_level(&placed),
-            is_the_filled_one.then_some(Level::Document),
+            is_a_filled_one.then_some(Level::Document),
             "{placed}"
         );
     }

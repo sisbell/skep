@@ -563,18 +563,20 @@ fn the_seed_writes_as_the_system_principal_through_the_one_staging_draft() {
 }
 
 /// R6 — THE CEREMONY's NUMBERS on the seeded board: the claim lands at
-/// `SEED_HEAD + 12`, `H.1` names it and its records above it are the head's
+/// `SEED_HEAD + 13` — the home mint two records, the home and the mailbox
+/// the account's first mint creates beside it — `H.1` names it and its
+/// records above it are the head's
 /// insert and publish (the draft stands from genesis), and `/changes` from
 /// position 0 lists the seed's commits first, each the system principal's,
 /// then the ceremony's.
 #[test]
-fn the_claim_lands_twelve_records_above_the_seed_and_the_feed_lists_the_seed_first() {
+fn the_claim_lands_thirteen_records_above_the_seed_and_the_feed_lists_the_seed_first() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     claim_board(port);
     let claim_at = board_term(port).expect("H.1").log_position;
-    assert_eq!(claim_at, SEED_HEAD + 12, "the ceremony's fifth commit, twelve records above the seed");
+    assert_eq!(claim_at, SEED_HEAD + 13, "the ceremony's fifth commit, thirteen records above the seed");
     assert_eq!(
         head_position(port),
         claim_at + 10,
@@ -585,7 +587,7 @@ fn the_claim_lands_twelve_records_above_the_seed_and_the_feed_lists_the_seed_fir
     let rows = json(&body)["changes"].as_array().expect("changes").clone();
     let ats: Vec<u64> = rows.iter().map(|r| r["at"].as_u64().expect("at")).collect();
     let mut want = seed_ats();
-    want.extend([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12, claim_at + 10]);
+    want.extend([SEED_HEAD + 2, SEED_HEAD + 4, SEED_HEAD + 7, SEED_HEAD + 10, SEED_HEAD + 13, claim_at + 10]);
     assert_eq!(ats, want, "the seed's rows, the ceremony's five, H.1's publish");
     for row in rows.iter().take(seed_ats().len()) {
         assert_eq!(row["key"].as_str(), Some("system"), "{row}");

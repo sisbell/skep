@@ -2792,6 +2792,11 @@ commits nothing:
 | `supersede_refused` | permanent | `index` = the entry in `supersede`; at `head_moved`, `index` = 0 and `addr` = the trunk's head | the plan's refusal of a `supersede` entry (the deposits, above) — read as the other lists' are, after them, the cause as `detail`: `head_moved` (a member stands and the base is not the trunk's head, so the shot would mint the base's daughter: the list refused whole, ahead of every entry's own check), then `not_member`, `base`, `duplicate` |
 | `original_refused` | permanent | `index` = the entry in `originals` | the plan's refusal of an entry of the private rider (the deposits, above) — read after the retract list's and ahead of the read-with list's, the cause as `detail`: `absent`, `not_owner`, `public`, `duplicate`, `not_content_span`, `too_large`, `fenced_type`, `rest_outside`, `unclaimed`; or the target's class, the daemon's own cell ahead of the store, as `retract_refused` carries it: `audit_view`, `not_retraction`, `not_revocation` |
 
+The daemon's mint class stands ahead of every row above: a `publish` at
+the mint form by the owner of an `account` that holds no document is
+refused `credential_refused:mint_home_first` (§Credential refusals) —
+the edition would be the account's doc 1, and an account's doc 1 is its
+home, minted by `create_new_document` with the mailbox beside it.
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
 `doc`'s state, so from a bare session it is refused there even on a
@@ -3074,14 +3079,18 @@ resolves AFTER every token below.
 
 1. The MINT class:
    * `mint_home_first` — MINT-FIRST: a `fork`, a `version` or a `stage`
-     by a principal whose account's space has never held a document, and
-     a `create_well_known_document` (§Namespace) by the owner of the
+     by a principal whose account's space has never held a document; a
+     `create_well_known_document` (§Namespace) by the owner of the
      `account` it names, at any `slot`, where that account holds no
-     document. Mint the
-     home first (`create_new_document`, which becomes the account's
-     doc 1). The well-known creation's cell answers the account's OWNER
-     alone: anyone else answers `not_owner` instead, and is never told
-     whether the account is empty.
+     document; and a `publish` at its mint form (`mint: true`, §The
+     publish shot and head-float) by the owner of the `account` it names,
+     where that account holds no document — its edition would be the
+     account's doc 1. Mint the home first (`create_new_document`, which
+     becomes the account's doc 1 and creates its mailbox in the same
+     commit). The well-known creation's cell and the minting publish's
+     answer the account's OWNER alone: anyone else falls through to the
+     gates below and to `not_owner`, and is never told whether the
+     account is empty.
    * `mint_home_public` — the first-mint publication door (PUB-8.20): an
      explicit `published:false` on the **first** `create_new_document`
      into an empty account you own. The home is public from birth;
@@ -3406,11 +3415,20 @@ refused `credential_refused:mint_home_public` (permanent) — the home is
 public from birth; create it first, then everything else is private by
 default.
 
+An account's first mint also creates the account's MAILBOX,
+`<account>.0.2`, private and empty, in the same commit: the ack names the
+home, and `doc_metadata` dates both at the ack's `at`, which is the
+commit's position — one record past where the home alone would put it.
+No later mint creates one. So every account that holds a home page holds
+its mailbox from the same position, and no client takes a step for it
+(`create_well_known_document` below).
+
 The address answered follows the account's own count. The home page is
 document 1, and after it an account's documents are numbered from 64: a
 second document stands at the account's address followed by `.0.64`, a
 third at `.0.65`. Numbers 2–63 are reserved for well-known documents, in
-every account, and this op never mints one.
+every account. The account's first mint also creates its mailbox,
+document 2; no mint by this op creates any other of them.
 
 On a CLAIMED board a mint BORN PUBLISHED — an explicit `published:true`
 into an account that already holds a document, or an account's first
@@ -3424,7 +3442,10 @@ and `body` EMPTY: the member present and empty, `be32(0)`. No minted
 address enters the frame, so a client signs before the commit; two such
 mints by one principal sign identical bytes, which the design accepts. A
 later reader derives the parent account by `effective_owner` over the
-minted document and composes the same frame. The account's first mint —
+minted document and composes the same frame. On an account's first mint
+the commit's `attest` signs the home's act alone: the mailbox the same
+commit creates enters no frame, so the signature confirms nothing about
+it. The account's first mint —
 the home, flagless or `published:true` — is outside the publish class
 and takes no `attest` from a BARE session alone (PUB-6.43's exemption;
 the claim ceremony's own mint): from a SIGNED session it is
@@ -3585,7 +3606,11 @@ The slot fixes the document's state, and no member of the request changes
 it: a document is published or private from its creation on, so a public
 page at a fixed address is created published. Each is created EMPTY — it
 holds no content and no version — is the account OWNER's ALONE and is
-created ONCE. → `ack_addr` (the document's address).
+created ONCE. → `ack_addr` (the document's address). The MAILBOX the board
+creates itself: an account's first `create_new_document` creates it in
+the same commit as the home page (§Namespace, `create_new_document`), so
+on an account that holds its home a call at slot 2 is answered the
+mailbox standing, `"committed": false`, as a second call is (below).
 
 <!-- wire: request create_well_known_document -->
 ```json
@@ -3670,10 +3695,13 @@ the tokens and their order).
 MAIL NEEDS NO MAILBOX DOCUMENT. The address stands from the moment the
 account does: a link may point at `<account>.0.2` while nothing is
 minted there, so reaching a person, the search for their mail, a reply
-and a thread all work for an account that never created its mailbox.
+and a thread all work for an account whose mailbox is not yet created.
 The document is where its owner's own links about their mail are kept,
-and a client creates it just before the first of them. So with every
-slot: `<account>.0.3`, `.0.4` and `.0.5` name their places before
+and the board creates it with the account's home page, in the same
+commit. So `<account>.0.2` answers a stranger `withheld` for every
+account that has a home page, and `doc_not_registered` only for one that
+has none, which its home's own absence already shows. Slots 3, 4 and 5
+differ: `<account>.0.3`, `.0.4` and `.0.5` name their places before
 anything is created there, and answer `doc_not_registered` until it is.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
@@ -6627,12 +6655,12 @@ the position alone):
 <!-- wire: sse commit_event -->
 ```
 event: commit
-data: {"log_position":459}
+data: {"log_position":460}
 ```
 
 A worked exchange on a board the registry seed and the claim ceremony
-have left at 458 (§The change feed) — connect, receive the initial head
-(458), then a write elsewhere commits at 459:
+have left at 459 (§The change feed) — connect, receive the initial head
+(459), then a write elsewhere commits at 460:
 
 ```
 GET /events HTTP/1.1
@@ -6646,12 +6674,12 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 
 event: commit
-data: {"log_position":458}
+data: {"log_position":459}
 
 :ka
 
 event: commit
-data: {"log_position":459}
+data: {"log_position":460}
 ```
 
 Rules:
@@ -6698,7 +6726,10 @@ Each entry:
   `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for
-  `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`,
+  `create_new_document`/`fork`/`version`/`stage`/`create_well_known_document`
+  — an account's first `create_new_document` or `fork` naming the home
+  FIRST, then the MAILBOX its commit created, `[home, mailbox]`, which a
+  reader who cannot read the mailbox sees reduced to `[home]` —
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
   trunk is the document it advances) FIRST, then, at the mint form, the
   EDITION it was minted under, then the RENDERING draft, ALWAYS, whether
@@ -6776,12 +6807,17 @@ Each entry:
   on a row whose `docs` your class REDUCES (the straddle renderings
   above), the third absence: there the entry may well be signed, and its
   verdict is undeterminable from your feed alone — save a `publish` row
-  reduced from `[member, D]` to `[member]`, which KEEPS its `attest`: THE
-  EXEMPTION, a row keeping its signature where THE PREIMAGE NAMES NO
-  MEMBER THE REDUCTION WITHHOLDS — the shot signs the member's runs by
-  value and the base, never the draft, so a reader of the member
-  composes the body from public reads alone and the signature confirms
-  nothing about the draft. On the
+  reduced from `[member, D]` to `[member]`, and a `create_new_document`
+  or `fork` row reduced from `[home, mailbox]` to `[home]`, which KEEP
+  their `attest`: THE EXEMPTION, a row keeping its signature where THE
+  PREIMAGE NAMES NO MEMBER THE REDUCTION WITHHOLDS — the shot signs the
+  member's runs by value and the base, never the draft, so a reader of
+  the member composes the body from public reads alone and the signature
+  confirms nothing about the draft; a home's mint signs its parent
+  account over an empty body, never the mailbox its commit creates, so a
+  reader of the home composes the frame from the home's
+  `effective_owner` alone and the signature confirms nothing about the
+  mailbox. On the
   origin's own feed an absent `attest` above the claim on a row served
   WHOLE is a verdict — the entry is unsigned — so a party re-serving this
   feed carries the member as it received it and never drops it. On a bare
@@ -6901,10 +6937,11 @@ page is answered from:
   `attest` member — ABSENT, not `null` — the entry's signature being a
   function of the home the row withholds, which served would confirm a
   guess at that home; the row carries no `key` either, so its verdict is
-  undeterminable from your feed, and whole on the owner's. The one
-  reduced row that keeps its `attest` is a `publish`'s whose reduction
-  dropped the staging draft alone (the `attest` member above): its
-  preimage names no member the reduction withholds.
+  undeterminable from your feed, and whole on the owner's. The reduced
+  rows that keep their `attest` are a `publish`'s whose reduction dropped
+  the staging draft alone, and a `create_new_document`'s or a `fork`'s
+  whose reduction dropped the mailbox alone (the `attest` member above):
+  their preimage names no member the reduction withholds.
 
 A principal's page is its SUPPLEMENT merged over the published stream:
 its own account's draft writes, its ancestor accounts' and its
@@ -6950,15 +6987,18 @@ page is empty, `last` your fence. Two residues of lost testimony
 entry re-derived from the journal for an arrangement write or a mint
 into a PUBLISHED document names no document — the journal enumerates
 the drafts and link homes a commit touched, never a published document
-an arrangement write or a mint touched — and so is absent from the
-plain `under=` narrowing; and a bare `publish` entry whose shot wrote
+an arrangement write or a mint touched, save the home an account's first
+mint created beside its mailbox, which it names first as the recorded
+row does — and so is absent from the plain `under=` narrowing; and a bare `publish` entry whose shot wrote
 nothing in its rendering draft is absent from that draft's `under=` and
 `drafts=true` pages, the journal witnessing no write there. The plain
 feed stays complete.
 `drafts=true` narrows to the entries
 whose reduced `docs` name a DRAFT you may read — your supplement alone,
 empty for a guest by construction, the live universally-granted history
-included and the revoked never. The two compose. Their consumers are the
+included and the revoked never. An account's first-mint row names its
+mailbox, a draft, so the account holder's `drafts=true` page carries it,
+the published home named first beside it. The two compose. Their consumers are the
 client's own rules, stated once here: RESUME-BY-READ (PUB-8.32) —
 `/changes?under=<own prefix>` from your last known position BEFORE any
 re-mint, a minting op having no cross-restart memo; and the widening
@@ -6988,45 +7028,48 @@ but the system's, which sees the draft beside it) and one `defines`
 link per type, three records apart, to 436, each a public entry with
 `key: "system"`, so a fresh board stands at 436 before any client writes.
 The claim ceremony's five commits follow (§A first board): positions 438,
-439, 442, 445, 448 — the delegate, the home mint, the record insert, the
-genesis link, the claim link — and the claim's own step then writes the
-board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 451 — the
-draft stands from genesis, so the claim's head mints none — and the
-publish into `H` at 458, seven records with its correspondence record,
+440, 443, 446, 449 — the delegate, the home mint (two records: the home
+and the mailbox the account's first mint creates beside it), the record
+insert, the genesis link, the claim link — and the claim's own step then
+writes the board's first head `H.1` (§The other endpoints, the published
+head document): the head record's insert into the staging draft at 452 —
+the draft stands from genesis, so the claim's head mints none — and the
+publish into `H` at 459, seven records with its correspondence record,
 the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 460 — its row carrying the
-minted pair —, the home mint at 461, a second — private — document at 462
+`attest`): `delegate` commits at position 461 — its row carrying the
+minted pair —, the home mint at 463 — its row naming the home and then
+the mailbox its commit created —, a second — private — document at 464
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 465 (one range mint, one stretch, one placement), `make_link`
-at 468 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=458`, read AS
-PRINCIPAL 1 — the owner of the private document, whose class sees every
+`insert` at 467 (one range mint, one stretch, one placement), `make_link`
+at 470 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=459`, read AS
+PRINCIPAL 1 — the owner of the private documents, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":460,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":461,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":462,"docs":["1.0.2.0.64"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":465,"docs":["1.0.2.0.64"],"key":"bare","op":"insert","time":1786838400033},{"at":468,"docs":["1.0.2.0.64"],"key":"bare","link":"1.0.2.0.64.0.2.1","op":"make_link","time":1786838400047}],"last":468,"more":false}
+{"changes":[{"at":461,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":463,"docs":["1.0.2.0.1","1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":464,"docs":["1.0.2.0.64"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":467,"docs":["1.0.2.0.64"],"key":"bare","op":"insert","time":1786838400033},{"at":470,"docs":["1.0.2.0.64"],"key":"bare","link":"1.0.2.0.64.0.2.1","op":"make_link","time":1786838400047}],"last":470,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=458&limit=2`:
+The first page of the same feed, `GET /changes?since=459&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":460,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":461,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":461,"more":true}
+{"changes":[{"at":461,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":463,"docs":["1.0.2.0.1","1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":463,"more":true}
 ```
 
-The same feed read as the GUEST (no token): the private document's
-mint, insert and link are masked — omitted, with `last` the last visible
-position and `more` false, since nothing visible remains:
+The same feed read as the GUEST (no token): the home mint's row is
+served reduced to the home, the private mailbox withheld, and the private
+document's mint, insert and link are masked — omitted, with `last` the
+last visible position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":460,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":461,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":461,"more":false}
+{"changes":[{"at":461,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":463,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":463,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the
@@ -7046,16 +7089,18 @@ data dir written before this feature existed, or a record lost to a crash
 metadata field `null` — the op's own terms included, its op being unknown
 — (and masked at your class from what the journal shows it touched); its
 `attest` is served where the store still holds the slot, and is otherwise
-absent. A pre-feature data dir holding three writes (a delegate at 2, a
-mint at 3, an insert at 6 — written by the engine directly, before any
-daemon; all in the published world, so every class sees them), then
+absent. A pre-feature data dir holding three writes (a delegate at 2, an
+account's first mint at 4 — the home and the mailbox its commit creates —
+and an insert at 7 — written by the engine directly, before any daemon;
+each with the published home first among what it touched, so every class
+sees them), then
 opened by this daemon, whose open seeds the link-type registry above them
 (§Registry): the first page of three, `GET /changes?since=0&limit=3`,
 byte-exact, `more` true for the seed's rows past it:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":true}
+{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":4,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":7,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":7,"more":true}
 ```
 
 **Retention.** The feed is kept whole from genesis: the daemon's
@@ -7380,7 +7425,7 @@ POST /session          {"principal": 0}                # bootstrap, bare
 POST /op   (session)   {"op": "next_account_prefix", "parent": "1"}
 POST /op   (session)   {"op": "delegate", "new_prefix": <that>, "new_id": 900}
 POST /session          {"principal": 900}              # the owner, bare
-POST /op   (session)   {"op": "create_new_document", "account": <account>}    # doc 1 — the home mint
+POST /op   (session)   {"op": "create_new_document", "account": <account>}    # doc 1 — the home mint, and the mailbox <account>.0.2 in its commit
 ```
 
 Compose the enrollment record (§The claim ceremony and credentials) and

@@ -108,6 +108,7 @@ pub mod journal;
 pub(crate) mod land;
 pub(crate) mod reads;
 pub mod record;
+pub(crate) mod shared;
 pub(crate) mod undo;
 pub(crate) mod windows;
 

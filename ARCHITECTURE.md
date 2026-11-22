@@ -775,14 +775,27 @@ each ceremony:
 - Under `merge` (default off) — MERGING VERSIONS, the editor's act on a
   daughter: `merge.rs` the module and the one rule; `merge/compose.rs` the
   PURE CORE, `compose_runs` over three run lists, `base_of` and `script`;
-  `merge/reads.rs` the READS over a board, writing nothing, the read of
-  the publication's correspondence records and the mapping of a past
-  state through them among them; `merge/land.rs` the LANDING and
-  `resume`; `merge/windows.rs` THE SHOT's WINDOW PARTS, the merged list's
-  window runs read and composed through the publication family's one
-  core; `merge/record.rs` the `merge` record kind, its currency and
-  `verify`; `merge/journal.rs` the merge journal — its unit suite in
-  `merge/tests.rs` over the record's vectors and in
+  `merge/reads.rs` the READS over a board, writing nothing — `compose`,
+  `head_of` and the feed walk — with the inputs and the result in
+  `merge/reads/inputs.rs`, every refusal in `merge/reads/refusal.rs`, the
+  origin rule and the address arithmetic in `merge/reads/addresses.rs`,
+  the reader and a session's end in `merge/reads/reader.rs`, the read of
+  the publication's correspondence records and the mapping of a past state
+  through them in `merge/reads/correspondence.rs`, the shape's reads in
+  `merge/reads/readings.rs` and the join's oracle in
+  `merge/reads/join.rs`; `merge/land.rs` the LANDING, `resume`, the record
+  of a publication's landing and `replaced`, with the landing's types in
+  `merge/land/landing.rs`, its walk and the read-first in
+  `merge/land/standing.rs`, the writer and the write ids in
+  `merge/land/writer.rs`, the shot in `merge/land/shot.rs`, the merge
+  records read and written in `merge/land/records.rs`, the draft landing
+  in `merge/land/draft.rs` and the faults it faces in
+  `merge/land/faults.rs`; `merge/undo.rs` the take-backs, the undo, the
+  withdrawal and its undo; `merge/windows.rs` THE SHOT's WINDOW PARTS, the
+  merged list's window runs read and composed through the publication
+  family's one core; `merge/record.rs` the `merge` record kind, its
+  currency and `verify`; `merge/journal.rs` the merge journal — its unit
+  suite in `merge/tests.rs` over the record's vectors and in
   `merge/tests/scripted.rs` and its children `compose`, `land`,
   `land_begun`, `land_refusals`, `undo`, `withdraw`, `land_again`,
   `records`, `journals`, `fences`, `session_end` and `windows` over a
@@ -794,7 +807,8 @@ each ceremony:
   take-backs' one `set_arrangement` — with the records' read and that
   mapping, which skep-shell's `text.diff` names too, its unit suite in
   `history/tests.rs` over the fake board, its daemon walk in
-  `tests/it/restore.rs`. Of the
+  `tests/it/restore.rs`. `merge/shared.rs` names the merge internals
+  `history` uses. Of the
   SURFACES the `skep merge` and `skep restore` commands are built —
   `skep-cli`'s `commands/merge.rs` and `commands/restore.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface

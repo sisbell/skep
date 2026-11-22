@@ -25,7 +25,7 @@ use crate::board::frames::{self, T_CORRESPONDENCE};
 use crate::board::{whole_image, Image, Token};
 use crate::dial::{Request, Response};
 use crate::halt::Halt;
-use crate::merge::reads::OnEnd;
+use crate::merge::shared::OnEnd;
 use crate::merge::{Refusal, Run, SHOT_RUN_CAP};
 use crate::publication::{ISpan, Record};
 

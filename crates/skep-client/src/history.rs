@@ -105,14 +105,13 @@ use crate::address::parse_address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
-use crate::merge::reads::{
-    owners_records, records_of, runs_of, session_ended, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
+use crate::merge::shared::{
+    judge, owners_records, records_of, runs_of, session_ended, Act, OnEnd, Reader,
 };
-use crate::merge::undo::{judge, Act};
-use crate::merge::Run;
+use crate::merge::{Refusal, Run, SHOT_RUN_CAP};
 use crate::publication::Record;
 
-pub use crate::merge::reads::mapped;
+pub use crate::merge::shared::mapped;
 
 /// A draft's past state, read and mapped, before the write.
 #[derive(Debug, Clone, PartialEq, Eq)]

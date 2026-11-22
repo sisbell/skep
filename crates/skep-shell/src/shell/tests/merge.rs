@@ -34,7 +34,7 @@
 //! `held_lines` over the draft's held lines, a burst held behind them, and
 //! the undo going out once the run is dropped; the rows refused `stopped`
 //! and `poisoned` under those holds with nothing dialed; the
-//! re-open landing nothing, reading the side at the marker's position and
+//! re-open landing nothing, reading the side as compose read it and
 //! settling a gap the draft no longer arranges; `resolutions` refused where
 //! they name no gap or no choice the gap admits, nothing landed; the
 //! landing on the trunk through the publication family's shot with the
@@ -42,7 +42,12 @@
 //! the withdrawal's typed at that write's own position and refused past the
 //! agent's own burst, nothing wiped, and a gap the agent settles, by an edit
 //! or a resolution, recorded `agent`; the draft side composed and landed
-//! with no claim, its re-open reading the side as merged; the owner's draft
+//! with no claim, its re-open reading the side as merged — at the marker's
+//! position where the side was written since, at the position the landing's
+//! record names where it was written between the composition and the
+//! landing, and at the marker's where no record names the landing, which
+//! the re-open records once, a landing cut off over an earlier recorded one
+//! re-opening as itself (skep #1127); the owner's draft
 //! staged before the first version refused `base_unknown` with `reason`
 //! `bare_source` naming the document while no version stands, and composed
 //! over the document as it stood before that version once one does, a
@@ -57,7 +62,9 @@
 //! composed over the source the board serves for it, landed, re-opened,
 //! taken back and published with no claim, its words asked as windows and
 //! its record found from it, and composed again over the member with no
-//! gap; a fork with no source, or one in another chain, refused
+//! gap; a fork written between its composition and its landing landed over
+//! the draft, its state tested against the one the person's record keeps
+//! (skep #770); a fork with no source, or one in another chain, refused
 //! `base_unknown`, and one of the bare document `bare_source` whatever its
 //! account while no version stands, composed over the document once one
 //! does; the person's own draft named as the fork side refused
@@ -2296,11 +2303,13 @@ fn a_landing_over_a_held_mint_form_panel_is_refused_and_every_panel_stands_as_it
 /// naming B — a private draft — and the report's draft side carrying the
 /// position it was read at; L's `publication.open` carries no claim. B
 /// written since, the re-open reads the side AS COMPOSE READ IT — the
-/// draft side's position the marker's, the runs the first report's, B's
-/// new words nowhere in them — and lands nothing. `merge.land` opens the
-/// panel itself, B named `also`, and lands E.3 holding both sides' words
-/// with NO claim, `supersede []` (the mutants that claim a private draft,
-/// read a moved side as it stands, or drop `also` and window B's words).
+/// draft side's position the marker's and its state the landing's, the
+/// runs the first report's, B's new words nowhere in them — and lands
+/// nothing. `merge.land` opens the panel itself, B named `also`, and lands
+/// E.3 holding both sides' words with NO claim, `supersede []` (the mutants
+/// that claim a private draft, read a moved side as it stands, read the
+/// side at the position its record names though nothing was written under
+/// it before the landing, or drop `also` and window B's words).
 #[test]
 fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_side_as_merged() {
     use skep_client::board::frames::doc_metadata;
@@ -2329,6 +2338,7 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     let reopened = compose();
     assert_eq!((reopened["outcome"].as_str(), reopened["sides"][1]["position"].as_u64(), reopened["position"].as_u64()), (Some("reopened"), marker["at"].as_u64(), marker["at"].as_u64()), "the side at the marker's position: {reopened}");
     assert_eq!(reopened["runs"], landed["runs"], "the side as compose read it, B's new words nowhere");
+    assert_eq!(reopened["sides"][1]["arranged"], landed["sides"][1]["arranged"], "the side's state the landing's: {reopened}");
     assert_eq!(g.position(), before, "nothing landed");
     // The landing on the trunk: no claim.
     let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -2338,6 +2348,181 @@ fn the_draft_side_composes_and_lands_with_no_claim_and_its_re_open_reads_the_sid
     assert!(landed["record"].is_string(), "{landed}");
     let text = g.text(&e3, 21);
     assert!(text.contains(" jumps") && text.contains(" quietly") && text.len() == 21, "both sides' words, B's as the document's own: {text:?}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Returns the claimant's draft side B and the level draft L it lands in.
+///
+/// B is staged from E.1, behind the head, with " quietly" written after
+/// "the fox", and L is staged from E.2.
+fn draft_side(g: &Ground, f: &Family) -> (String, String) {
+    let b = g.addr(frames::stage(&f.e1, None));
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "8"}, "values": [" quietly"], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&f.e2, None));
+    (b, l)
+}
+
+/// Returns the merge of E.2 with the draft side `b`, read as it stands.
+fn composed_with(g: &Ground, f: &Family, b: &str) -> Merged {
+    composed_over(g, f, Side::Draft { at: parse_address(b).unwrap(), position: None })
+}
+
+/// Writes the claimant's own record of [`KIND`], by hand.
+///
+/// It is the record `merged` describes, landed in `draft` at `position`,
+/// kept in a private journal of the claimant's own account as
+/// [`record_of_the_kind`] keeps another account's.
+fn own_record(g: &Ground, merged: &Merged, draft: &str, position: u64, side: &str) -> String {
+    let own = Other { account: "1.0.1".to_string(), token: bare(g, 1) };
+    record_of_the_kind(g, &own, merged, RecordLanding::Draft { draft: parse_address(draft).unwrap(), position }, side)
+}
+
+/// Returns a report's runs, each as its origin, first ordinal and width.
+fn report_runs(report: &Value) -> Vec<(String, u64, u64)> {
+    let runs = report["runs"].as_array().unwrap_or_else(|| panic!("the runs: {report}"));
+    runs.iter().map(|r| (r["origin"].as_str().unwrap().to_string(), r["i_start"].as_u64().unwrap(), r["width"].as_u64().unwrap())).collect()
+}
+
+/// Returns a composition's runs as [`report_runs`] spells a report's.
+fn merged_runs(merged: &Merged) -> Vec<(String, u64, u64)> {
+    merged.composed.runs.iter().map(|p| (p.run.origin.to_string(), p.run.i_start, p.run.width)).collect()
+}
+
+/// Checks that a side written inside a landing's gap re-opens as composed.
+///
+/// Against the daemon (skep #1127): the draft side B is composed as the
+/// merge's side at P, then written; the landing's one write then puts that
+/// composition in L and the person's own record names it, the side read at
+/// P — a write under the side between a composition and its landing, made
+/// by hand. Composed again into L, the merge re-opens as it landed:
+/// `position` the marker's, the draft side's `position` P and its state the
+/// record's, the runs the composition's, B's later words nowhere, nothing
+/// written. `merge.land` then publishes E.3 and records it under the
+/// composition's own key, its sides the composition's (the mutants that
+/// keep the side as read at the marker's position, or read no record at the
+/// draft side, answer the later words and record the member under another
+/// key).
+#[test]
+fn a_draft_side_written_between_its_composition_and_its_landing_re_opens_as_composed() {
+    use skep_client::merge::current;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (b, l) = draft_side(&g, &f);
+    let merged = composed_with(&g, &f, &b);
+    // The write inside the gap, then the landing and its record.
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "values": [" again"], "as_of": g.position()}));
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &b);
+    own_record(&g, &merged, &l, at, &b);
+    assert_ne!(merged_runs(&composed_with(&g, &f, &b)), merged_runs(&merged), "the premise: B as it stands composes another list");
+    let before = g.position();
+    let reopened = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&reopened);
+    assert_eq!(
+        (reopened["outcome"].as_str(), reopened["position"].as_u64(), reopened["sides"][1]["position"].as_u64()),
+        (Some("reopened"), Some(at), Some(merged.as_of)),
+        "the side at the position the landing's record names: {reopened}"
+    );
+    assert_eq!(reopened["sides"][1]["arranged"], merged.record.to_value()["sides"][1]["arranged"], "the side's state the record's: {reopened}");
+    assert_eq!(report_runs(&reopened), merged_runs(&merged), "the list that landed, B's later words nowhere: {reopened}");
+    assert_eq!(g.position(), before, "nothing written");
+    // The landing on the trunk, recorded under the composition's own key.
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!(landed["member"].as_str(), Some(e3.as_str()), "{landed}");
+    let text = g.text(&e3, 27);
+    assert!(text.contains(" quietly") && !text.contains(" again") && text.len() == 21, "the words that landed: {text:?}");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = current(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &merged.key).expect("the lookup").expect("the member's record");
+    assert!(matches!(&record.landed, Some(RecordLanding::Member { member, .. }) if member.to_string() == e3), "{record:?}");
+    assert_eq!((record.link.map(|l| l.to_string()), record.sides), (landed["record"].as_str().map(str::to_string), merged.record.sides.clone()), "the sides the composition read");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a landing no record names re-opens at the marker's position.
+///
+/// Against the daemon (skep #1127): the draft side B is composed as the
+/// merge's side and landed in L by hand — the landing's one write and no
+/// record, as a landing cut off before its record leaves it — and B is
+/// written since. Named as `into`, L re-opens with the side read at the
+/// marker's position, nothing naming another: the runs the composition's,
+/// B's later words nowhere, and the person's own record of the landing
+/// written under the composition's key, the board's position moved by its
+/// writes. A second call answers the same and writes nothing (the mutants
+/// that read a moved side as it stands, or refuse a landing no record
+/// names).
+#[test]
+fn a_draft_side_landing_with_no_record_re_opens_at_the_markers_position_and_is_recorded_once() {
+    use skep_client::merge::landed_draft;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (b, l) = draft_side(&g, &f);
+    let merged = composed_with(&g, &f, &b);
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &b);
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "values": [" again"], "as_of": g.position()}));
+    let compose = || g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let before = g.position();
+    let reopened = compose();
+    assert_report_declared(&reopened);
+    assert_eq!(
+        (reopened["outcome"].as_str(), reopened["position"].as_u64(), reopened["sides"][1]["position"].as_u64()),
+        (Some("reopened"), Some(at), Some(at)),
+        "the side at the marker's position: {reopened}"
+    );
+    assert_eq!(report_runs(&reopened), merged_runs(&merged), "the list that landed, B's later words nowhere: {reopened}");
+    let recorded = g.position();
+    assert!(recorded > before, "the record's writes");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = landed_draft(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &merged.key, "1.0.1").expect("the lookup").expect("the landing's record");
+    assert_eq!((record.landed.clone(), record.key()), (Some(RecordLanding::Draft { draft: parse_address(&l).unwrap(), position: at }), merged.key.clone()), "{record:?}");
+    let again = compose();
+    assert_eq!((again["outcome"].as_str(), again["sides"][1]["position"].as_u64(), report_runs(&again)), (Some("reopened"), Some(at), merged_runs(&merged)), "{again}");
+    assert_eq!(g.position(), recorded, "nothing written again");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a cut-off landing re-opens as itself over an earlier record.
+///
+/// Against the daemon (skep #1127): the draft side B is composed as the
+/// merge's side and landed in L by hand, the person's own record naming
+/// that landing. B is written, composed again — another key, another list
+/// — and landed in L by hand with no record, as a landing cut off before
+/// its record leaves it: L's marker names the second landing's position,
+/// and the person's only record of the merge the first's. Named as `into`,
+/// L re-opens as the merge it holds, the second composition's runs, and
+/// that landing is recorded: the person's newest record of the merge names
+/// L at the marker's position under the second composition's key (the
+/// mutant that composes the side at the position any record naming L keeps
+/// answers the first landing's runs and records nothing).
+#[test]
+fn a_landing_cut_off_before_its_record_over_an_earlier_recorded_one_re_opens_as_itself() {
+    use skep_client::merge::landed_draft;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (b, l) = draft_side(&g, &f);
+    let first = composed_with(&g, &f, &b);
+    let landed_first = mark(&g, &bare(&g, 1), &l, &first, &b);
+    own_record(&g, &first, &l, landed_first, &b);
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "values": [" again"], "as_of": g.position()}));
+    let second = composed_with(&g, &f, &b);
+    assert!(second.key != first.key && merged_runs(&second) != merged_runs(&first), "the premise: another key and another list");
+    let at = mark(&g, &bare(&g, 1), &l, &second, &b);
+    let before = g.position();
+    let reopened = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((reopened["outcome"].as_str(), reopened["position"].as_u64()), (Some("reopened"), Some(at)), "{reopened}");
+    assert_eq!(report_runs(&reopened), merged_runs(&second), "the merge L holds, never the earlier landing's: {reopened}");
+    assert!(g.position() > before, "the cut-off landing's record written");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = landed_draft(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &second.key, "1.0.1").expect("the lookup").expect("the landing's record");
+    assert_eq!((record.landed.clone(), record.key()), (Some(RecordLanding::Draft { draft: parse_address(&l).unwrap(), position: at }), second.key.clone()), "{record:?}");
     g.shell.shutdown();
     sd.shutdown();
 }
@@ -3107,6 +3292,43 @@ fn a_fork_edited_since_its_landing_is_composed_again_and_the_landing_publishes_w
         matches!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::SideMoved { ref side, recorded: SideState::At(_), now: Some(now) }) if side.to_string() == fork && now == edited),
         "the fork edited since"
     );
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a fork written inside a landing's gap lands over the draft.
+///
+/// Against the daemon (skep #770): another account's fork is composed as
+/// the merge's side, then written by its owner; the landing's one write then
+/// puts that composition in L and the person's own record names it, by hand
+/// — a write under the fork between a composition and its landing, so its
+/// last write lies before the marker's position. Composed again into L, the
+/// fork's state is another than the one that record keeps: the merge is
+/// composed again and lands over L, never re-opened, its fork side's
+/// `arranged` the fork's new state and L holding the fork's later words (the
+/// mutant that reads no record of the person's at the fork side tests the
+/// marker's position alone and re-opens).
+#[test]
+fn a_fork_written_between_its_composition_and_its_landing_lands_over_the_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let fork = forked(&g, &other, &f.e1, " quietly");
+    let l = g.addr(frames::stage(&f.e2, None));
+    let merged = composed_over(&g, &f, Side::Fork(parse_address(&fork).unwrap()));
+    // The write inside the gap, then the landing and its record.
+    let moved = edit_fork(&g, &other, &fork, 16, " now");
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &fork);
+    own_record(&g, &merged, &l, at, &fork);
+    assert!(moved < at, "the premise: the fork's last write lies before the landing");
+    assert_eq!(g.text(&l, 25), "the fox jumps quietly", "L holds the merge as composed");
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": fork, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&landed);
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str(), landed["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "landed over L, never re-opened: {landed}");
+    assert_eq!((landed["sides"][1]["arranged"].clone(), landed["replaced"].clone()), (json!(moved), json!([])), "the fork's new state, nothing taken out of L: {landed}");
+    assert_eq!(g.text(&l, 25), "the fox jumps quietly now", "the fork's later words");
     g.shell.shutdown();
     sd.shutdown();
 }

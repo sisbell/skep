@@ -782,8 +782,12 @@ each ceremony:
   window runs read and composed through the publication family's one
   core; `merge/record.rs` the `merge` record kind, its currency and
   `verify`; `merge/journal.rs` the merge journal — its unit suite in
-  `merge/tests.rs` over the record's vectors and a scripted board, its
-  daemon walk in `tests/it/merge.rs`. Beside it under the same feature,
+  `merge/tests.rs` over the record's vectors and in
+  `merge/tests/scripted.rs` and its children `compose`, `land`,
+  `land_begun`, `land_refusals`, `undo`, `withdraw`, `land_again`,
+  `records`, `journals`, `fences`, `session_end` and `windows` over a
+  scripted board, its daemon walk in `tests/it/merge.rs`. Beside it under
+  the same feature,
   `history.rs` THE RESTORE — a draft's past state made current over the
   merge's reader, the state mapped through the publication's
   correspondence records by its own mapping of images, and the

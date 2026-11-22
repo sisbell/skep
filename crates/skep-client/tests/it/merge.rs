@@ -59,8 +59,11 @@
 //! the copy's mint (skep #913); an undo after an edit refused with
 //! the edit kept; an undo typed at the editor's own last ack landing once
 //! its later edits are taken back, and refused past another hand's change
-//! (skep #811); and words published since the landing brought back by the
-//! undo as the published words they became. And THE TWO
+//! (skep #811); words published since the landing brought back by the
+//! undo as the published words they became; and a member's own words — a
+//! deposit naming the member, minted under its chain — written back as
+//! themselves by the withdrawal, its undo and the undo, never as the
+//! trunk's words of the same ordinals. And THE TWO
 //! LANDINGS THE FAKE ALONE CHECKED (skep #775's note): into a free-standing
 //! draft, admitted with no base and no marker — its feed row carrying the
 //! request's merge beside a null base, by which the undo finds the landing
@@ -1986,6 +1989,63 @@ fn a_withdrawal_is_taken_back_and_the_undo_after_it_takes_the_landing_back() {
     assert_eq!(image(&rig.board, &token, &draft, 14), c, "the words before the merge");
     let meta = rig.metadata(&token, &draft);
     assert_eq!((&meta["base"], &meta["base_copied"]), (&staged["base"], &staged["base_copied"]), "the base before the merge: {meta}");
+    assert!(meta["merge"].is_null(), "no marker: {meta}");
+    session.close().expect("close");
+}
+
+/// The take-backs write a member's own words back as themselves.
+///
+/// On the real daemon (skep #1121): `e.1` holds "abc", the trunk's words,
+/// and "z", a declared deposit naming the member and so minted under its
+/// chain at the member's first ordinal, the trunk's "a"'s. `s` is staged
+/// from `e.1`, and a merge is landed in it by hand, its words unchanged,
+/// its base re-recorded on `e.1` and the marker stamped. The withdrawal,
+/// the withdrawal's undo and the undo each set the draft's words in one
+/// write: after each the image is the stage's runs and the bytes are the
+/// deposit's.
+#[test]
+fn the_take_backs_write_a_members_own_words_back_as_themselves() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let e = published_document(&rig.board, &session, &rig.device);
+    let e1 = shot(&rig.board, &session, &rig.device, &rig.bare, &e, None, &[Staged::Fresh { text: "abc" }]);
+    let (e_s, e1_s) = (e.to_string(), e1.to_string());
+    let mut deposit = json!({"op": "insert", "doc": e1_s, "at": {"subspace": "1", "ordinal": "4"}, "values": ["z"], "deposit": T_ENROLL, "as_of": typed_at(&rig.board, &token, &e1_s)});
+    // The entry frame of an insert names the trunk, whichever member the
+    // frame names.
+    deposit["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), &e, &entry_body_insert(Some(&addr(T_ENROLL)), b"z".chunks(1)));
+    acked(session.op(&deposit));
+    let theirs = vec![(format!("{e}.0.1.1"), 3), (format!("{e1}.0.1.1"), 1)];
+    assert_eq!(image(&rig.board, &token, &e1, 4), theirs, "the premise: the deposit minted under the member's chain");
+    let s = addr(acked_addr(&acked(rig.board.op(Some(&rig.bare), &frames::stage(&e1_s, None)))).expect("the staged draft"));
+    let s_s = s.to_string();
+    let staged = rig.metadata(&token, &s);
+    // The landing by hand: the stage's runs, each origin the document that
+    // minted it.
+    let runs = [frames::shot_run(&e_s, &theirs[0].0, 3), frames::shot_run(&e1_s, &theirs[1].0, 1)];
+    let landing = frames::set_arrangement(&s_s, &runs, typed_at(&rig.board, &token, &s_s), Some((&e1_s, 4)), Some((&e1_s, 4)), Some((&[], None)), None);
+    let at = acked_at(&acked(rig.board.op(Some(&rig.bare), &landing))).expect("the landing's position");
+    let marker = rig.metadata(&token, &s)["merge"].clone();
+    assert_eq!(marker["at"].as_u64(), Some(at), "the premise: the landing's marker: {marker}");
+    let held = |after: &str| {
+        assert_eq!(image(&rig.board, &token, &s, 4), theirs, "after {after}: the stage's runs, the deposit under the member's chain");
+        assert_eq!(text_of(&rig, &token, &s, 4), "abcz", "after {after}: the deposit's bytes, never the trunk's first");
+    };
+    held("the landing");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let withdrawn = withdraw(&rig.board, merger, &s, &kind, None).expect("withdrawn");
+    held("the withdrawal");
+    assert!(rig.metadata(&token, &s)["merge"].is_null(), "the marker cleared");
+    unwithdraw(&rig.board, merger, &s, &kind, withdrawn.position, None, None).expect("the withdrawal taken back");
+    held("the withdrawal's undo");
+    assert_eq!(rig.metadata(&token, &s)["merge"], marker, "the marker as the landing left it");
+    let undone = undo(&rig.board, merger, &s, &kind, None, None).expect("the landing taken back");
+    assert_eq!(undone.restored, Some((e1.clone(), 4)), "the base read before the landing");
+    held("the undo");
+    let meta = rig.metadata(&token, &s);
+    assert_eq!((&meta["base"], &meta["base_copied"]), (&staged["base"], &staged["base_copied"]), "the base before the landing: {meta}");
     assert!(meta["merge"].is_null(), "no marker: {meta}");
     session.close().expect("close");
 }

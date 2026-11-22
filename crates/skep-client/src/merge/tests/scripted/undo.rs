@@ -5,10 +5,14 @@
 //! at the editor's own last ack, or at the landing where that ack is
 //! earlier, advising a take-back, and refused past the head or past another
 //! hand's change; C mapped through the records of the merger's own origins,
-//! refused past the cap; nothing to undo after a publication, or after a
-//! merge's shot, its words naming the merge's version; an inherited marker;
-//! a baseless landing undone by its feed row, and run again; and the state
-//! before the landing read at `nearest`, refused where reclaimed.
+//! refused past the cap, and faced where a record maps it past the largest
+//! ordinal; a member's own word in C sent under the member's
+//! chain, told from the trunk's word of its ordinal where a baseless landing
+//! is judged taken back, and counted as a run of its own at the cap; nothing
+//! to undo after a publication, or after a merge's shot, its words naming
+//! the merge's version; an inherited marker; a baseless landing undone by
+//! its feed row, and run again; and the state before the landing read at
+//! `nearest`, refused where reclaimed.
 
 use super::*;
 
@@ -332,6 +336,126 @@ fn an_undo_whose_c_maps_past_the_cap_is_refused_over_cap_with_nothing_sent() {
     dialer.clear();
     assert_eq!(undo(&board, merger(&session, &signer), &a(S), &a(K), None, None), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
     assert!(dialer.frames("read_link").iter().any(|f| f["a"] == record), "the records read first: {:?}", dialer.names());
+    assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "nothing sent");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert!(dialer.world().standing(S).1.is_some(), "the marker stands");
+}
+
+/// A record mapping C past the largest ordinal is faced, nothing sent.
+///
+/// A correspondence record the board serves names `S`'s own words in C as
+/// a published span whose last I-address passes the range of an ordinal.
+/// It is the board's fault, faced after the records' read and before any
+/// frame, never a sum made unchecked and sent as a run (SP-19): nothing
+/// sent, nothing committed, the marker standing.
+#[test]
+fn an_undo_over_a_record_mapping_c_past_the_largest_ordinal_is_faced_with_nothing_sent() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    landed_in_s(&board, &session, &signer);
+    let record = plant_record(&mut dialer.world(), 1, u64::MAX, 3);
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect_err("the record maps C past the range");
+    let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+    assert!(face.state.contains("past the largest ordinal") && face.act.contains("board fault"), "{face:?}");
+    assert!(dialer.frames("read_link").iter().any(|f| f["a"] == record), "the records read first: {:?}", dialer.names());
+    assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "nothing sent");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert!(dialer.world().standing(S).1.is_some(), "the marker stands");
+}
+
+/// A member's own word in C is sent under the member's chain (skep #1121).
+///
+/// C holds the base's text and, at the adjoining ordinal, one word a
+/// deposit naming `D.2` minted under the member's chain, so the core's runs
+/// join the two as one run of `D`. The undo sends each run as itself — the
+/// member's word at `D.2.0.1.12`, its `origin` the member — and the draft
+/// holds C again, never the trunk's word of that ordinal (the mutant that
+/// spells the write from the core's runs sends one run of `D`).
+#[test]
+fn the_undo_sends_a_members_own_word_under_the_members_chain() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let c = vec![run(D, 1, 11), run(&member(), 12, 1)];
+    {
+        let mut w = dialer.world();
+        w.text(&member(), 12, "z");
+        w.change(S, c.clone());
+    }
+    let at = landed_by_hand(&board, &session, &dialer, &draft_m());
+    dialer.clear();
+    let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+    assert_eq!(undone.restored, Some((a(&format!("{D}.1")), 11)), "the pair read before the landing");
+    let query = &dialer.frames("find_links_ftt")[0]["q"];
+    assert_eq!(query["from"], json!([frames::i_span(&format!("{D}.0.1.1"), 12)]), "the premise: the core joins the member's word to the trunk's, one run of D");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["as_of"].as_u64(), Some(at), "typed against the landing's position: {}", sent[0]);
+    let runs = [frames::shot_run(D, &format!("{D}.0.1.1"), 11), frames::shot_run(&member(), &format!("{}.0.1.12", member()), 1)];
+    assert_eq!(sent[0]["runs"], json!(runs), "each run on the chain that minted it, the member its word's origin");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, c, "C again, the member's word its own");
+}
+
+/// A trunk's word standing for a member's is no landing taken back.
+///
+/// Skep #1121, P4: C holds a word minted under `D.2`'s chain. After the
+/// landing of the baseless draft, a re-arrangement leaves the base's text
+/// and, in that word's place, the trunk's word of the same ordinal: the
+/// core's runs of the two states are one, their words are not. The undo,
+/// typed at the caller's own last acknowledgment, the re-arrangement's, is
+/// not answered `NothingToUndo`: it lands C with the member's word (the
+/// mutant that compares the core's runs answers the merge already taken
+/// back and sends nothing).
+#[test]
+fn a_baseless_landing_is_not_taken_back_where_the_trunks_word_stands_for_a_members() {
+    let plain = "1.0.1.0.67";
+    let c = vec![run(D, 1, 11), run(&member(), 12, 1)];
+    let mut w = draft_landing_world();
+    w.text(&member(), 12, "z");
+    w.doc(plain, false, ACCOUNT, c.clone());
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    // The landing by hand: a baseless draft records nothing, and its row
+    // carries the request's merge.
+    let head = format!("{D}.2");
+    let typed = dialer.world().position;
+    let landing = frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
+    let at = dialer.world().apply(&landing)["at"].as_u64().expect("the landing's ack");
+    // The re-arrangement: the trunk's twelfth word where the member's stood.
+    let rearranged = frames::set_arrangement(plain, &shot_runs(&[run(D, 1, 12)]), at, None, None, None, None);
+    let r = dialer.world().apply(&rearranged)["at"].as_u64().expect("the re-arrangement's ack");
+    dialer.clear();
+    let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), Some(r), None).expect("the landing taken back");
+    assert_eq!(undone.restored, None, "no base to restore");
+    assert_eq!(dialer.positions("image"), [typed, r], "C before the landing, then the draft at its latest re-arrangement: {:?}", dialer.ops());
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["as_of"].as_u64(), Some(r), "typed against the caller's own last ack: {}", sent[0]);
+    assert_eq!(sent[0]["runs"], frame_runs(&c), "C, the member's word under its own chain");
+    assert_eq!(dialer.world().docs.get(plain).unwrap().runs, c, "C again");
+}
+
+/// An undo is refused at the cap counted on the runs it would write.
+///
+/// C holds the trunk's words and a member's by turns at adjoining ordinals:
+/// 4,097 runs as the board serves them, read in halves past its run budget,
+/// and one run of `D` as the core joins them. The undo answers `OverCap`
+/// with the written count after the records' read and before any frame:
+/// nothing sent, nothing committed, the marker standing (the mutant that
+/// counts the core's runs sends the frame).
+#[test]
+fn an_undo_is_refused_over_cap_on_the_runs_it_would_write_however_few_the_core_joins() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    dialer.world().change(S, alternating());
+    landed_by_hand(&board, &session, &dialer, &draft_m());
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(undo(&board, merger(&session, &signer), &a(S), &a(K), None, None), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
+    assert_eq!(dialer.frames("image").len(), 3, "the premise: C read in halves past the board's run budget: {:?}", dialer.names());
+    let query = &dialer.frames("find_links_ftt")[0]["q"];
+    assert_eq!(query["from"], json!([frames::i_span(&format!("{D}.0.1.1"), SHOT_RUN_CAP as u64 + 1)]), "the premise: one run of D as the core joins them, the records read first");
     assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "nothing sent");
     assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
     assert!(dialer.world().standing(S).1.is_some(), "the marker stands");

@@ -37,6 +37,12 @@
 //! an approval that a suite sends a signal at (`ceremony/console.rs`'s
 //! `hooks`), compiles only under `test-hooks`, its module and its one call
 //! each under the gate, and nothing else names it — the seventh test below.
+//!
+//! THE RESTORE OVER THE MERGE, ONE WAY: no file of `merge` names `history`
+//! in code, so what the two share — the reader, the records' read, the
+//! mapping of an image and the spelling and the judgement of the one write
+//! — is the merge's, which `history` names through `merge/shared.rs` — the
+//! eighth test below.
 
 use std::path::{Path, PathBuf};
 
@@ -372,6 +378,41 @@ fn the_approvals_hold_compiles_only_under_test_hooks() {
     }
     assert!(faults.is_empty(), "the approval's hold is a test seam (SP-28):\n{}", faults.join("\n"));
     assert_eq!(calls, 1, "the hold is called once, under its gate, in src/ceremony/console/answer.rs: the call this check reads has moved");
+}
+
+/// Checks that no file of `merge` names `history` in code.
+///
+/// The restore rides the merge (`src/merge/shared.rs`, the one list of what
+/// it takes), so an item both need is the merge's and `history` re-exports
+/// it; an import the other way would make the two one cycle. Comments are
+/// exempt, doc links included, and so are the merge's own suites.
+#[test]
+fn no_file_of_the_merge_names_the_history_module() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert!(src.join("history.rs").is_file(), "src/history.rs: the module this check reads has moved");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let (mut read, mut faults) = (0, Vec::new());
+    for file in &files {
+        let module = module_of(&src, file);
+        let of_the_merge = module == "merge" || module.starts_with("merge::");
+        if !of_the_merge || module == "merge::tests" || module.starts_with("merge::tests::") {
+            continue;
+        }
+        read += 1;
+        let text = std::fs::read_to_string(file).unwrap();
+        let code: Vec<(usize, &str)> = code_lines(&text).collect();
+        for (n, named_path) in named_paths(&code) {
+            let Some(target) = resolve(&module, &named_path) else { continue };
+            if target == "history" || target.starts_with("history::") {
+                let path = file.strip_prefix(&src).unwrap().display();
+                faults.push(format!("src/{path}:{n}: `{module}` names `{target}`"));
+            }
+        }
+    }
+    assert!(read > 0, "src/merge.rs and src/merge/: the files this check reads have moved");
+    assert!(faults.is_empty(), "the restore rides the merge, never the merge the restore; these lines name `history`:\n{}", faults.join("\n"));
 }
 
 /// Where a module stands against the ceremony.

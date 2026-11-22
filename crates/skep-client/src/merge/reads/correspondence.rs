@@ -1,16 +1,23 @@
 //! The publication's correspondence records, read and mapped through.
 //!
 //! [`records_of`] reads the records of the person's own origins among a
-//! state's runs, [`owners_records`] every origin's in its owner's account,
-//! and [`mapped`] maps a state through them, so words a publication made
-//! public come back as the published words they became (the `reads`
-//! module's doc).
+//! state's runs, and [`owners_records`] every origin's in its owner's
+//! account. [`mapped_image`] maps an image through them at its own
+//! spelling, each run keyed by its I-address prefix: the words a
+//! publication made public come back as the published span they became on
+//! the trunk's chain, and a run minted under a member's chain stays under
+//! that chain. It is the mapping of every write of a state the board held —
+//! the restore's (the `history` module) and the take-backs' (the `undo`
+//! module) — and of a comparison by identity, the diff's. [`mapped`] is
+//! the same walk over the core's runs, each origin the trunk, which no
+//! write sends.
 
 use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::parse_address;
-use crate::board::{answers, frames};
+use crate::board::{answers, frames, Image};
+use crate::halt::Halt;
 use crate::merge::compose::Run;
 use crate::publication::enumerate::MAX_WIRE_LIST;
 use crate::publication::{self, home_of_link, owned_by};
@@ -145,15 +152,84 @@ fn records_held_to(
     Ok(records)
 }
 
-/// Maps `state` through `records`: the runs a write of it sends.
+/// Returns `image` mapped through `records`, each run at its own spelling.
 ///
-/// Each run is walked from its first ordinal; the piece a record covers —
-/// the first record covering the ordinal — is mapped by `Record::map` onto
-/// the published span it became, its origin the document the record's `to`
-/// lies in; the piece no record covers is kept as read; I-adjacent pieces
-/// of one origin are merged. The order is the state's. A run of an origin
-/// no record names passes through unchanged, as does a piece whose mapped
-/// span this client cannot spell.
+/// It is what a write of a state the board held sends, and what a
+/// comparison by identity across a publication compares. Each run is walked
+/// from its first I-address on its own chain, the run's prefix: the piece
+/// the first record covering an I-address covers, up to that record's end
+/// or the run's, is mapped onto the span the record's `to` names at the same
+/// offset; the piece no record covers, up to the next record's start on the
+/// chain or the run's end, is kept as read; consecutive pieces I-adjacent on
+/// one chain are merged; and the ordinals are tiled again from 1. A run
+/// minted under a member's chain is keyed by that chain, never its trunk's,
+/// so it is mapped, kept and compared as itself. An image no record touches
+/// comes back with the same identities at the same positions, a run a part
+/// boundary cut one run again.
+///
+/// # Errors
+///
+/// A record that maps a piece past the largest ordinal is the board's
+/// fault, faced, and nothing is mapped (SP-19).
+pub fn mapped_image(image: &Image, records: &[publication::Record]) -> Result<Image, Halt> {
+    let past_the_range = || {
+        Halt::face(
+            "a correspondence record maps words past the largest ordinal",
+            "the record's published span, at the offset of a piece it covers, passes the range of an I-address",
+            "this is a board fault; nothing was compared or written",
+        )
+    };
+    let mut pieces: Vec<(String, u64, u64)> = Vec::with_capacity(image.runs().len());
+    for run in image.runs() {
+        let mut into = 0u64;
+        while into < run.width {
+            // The run's I-addresses lie within `u64` (the image's invariant).
+            let (at, left) = (run.first + into, run.width - into);
+            let covering = records.iter().find(|r| {
+                r.from.chain == run.prefix && r.from.first <= at && at - r.from.first < r.from.width
+            });
+            let (prefix, first, width) = match covering {
+                Some(record) => {
+                    let offset = at - record.from.first;
+                    let first = record.to.first.checked_add(offset).ok_or_else(past_the_range)?;
+                    (&record.to.chain, first, (record.from.width - offset).min(left))
+                }
+                None => {
+                    let next = records
+                        .iter()
+                        .filter(|r| r.from.chain == run.prefix && r.from.first > at)
+                        .map(|r| r.from.first - at)
+                        .min();
+                    (&run.prefix, at, next.map_or(left, |next| next.min(left)))
+                }
+            };
+            match pieces.last_mut() {
+                Some((last, start, positions))
+                    if last == prefix && start.checked_add(*positions) == Some(first) =>
+                {
+                    *positions += width
+                }
+                _ => pieces.push((prefix.clone(), first, width)),
+            }
+            into += width;
+        }
+    }
+    // A mapped piece's last I-address past `u64` is refused here.
+    Image::tiled(pieces).ok_or_else(past_the_range)
+}
+
+/// Maps `state`, a state as the core's runs, through `records`.
+///
+/// It is [`mapped_image`]'s walk over runs whose origin is the trunk, for
+/// drawing a state: a member's own words stand in it as the trunk's
+/// positions of the same ordinals, so no write sends it. Each run is walked
+/// from its first ordinal; the piece a record covers — the first record
+/// covering the ordinal — is mapped by `Record::map` onto the published
+/// span it became, its origin the document the record's `to` lies in; the
+/// piece no record covers is kept as read; I-adjacent pieces of one origin
+/// are merged. The order is the state's. A run of an origin no record names
+/// passes through unchanged, as does a piece whose mapped span this client
+/// cannot spell.
 pub fn mapped(state: &[Run], records: &[publication::Record]) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::new();
     let mut push = |run: Run| match out.last_mut() {

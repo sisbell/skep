@@ -780,8 +780,9 @@ each ceremony:
   `merge/reads/inputs.rs`, every refusal in `merge/reads/refusal.rs`, the
   origin rule and the address arithmetic in `merge/reads/addresses.rs`,
   the reader and a session's end in `merge/reads/reader.rs`, the read of
-  the publication's correspondence records and the mapping of a past state
-  through them in `merge/reads/correspondence.rs`, the shape's reads in
+  the publication's correspondence records and the mapping of an image, and
+  of a state's runs, through them in `merge/reads/correspondence.rs`, the
+  shape's reads in
   `merge/reads/readings.rs` and the join's oracle in
   `merge/reads/join.rs`; `merge/land.rs` the LANDING, `resume`, the record
   of a publication's landing and `replaced`, with the landing's types in
@@ -791,7 +792,8 @@ each ceremony:
   records read and written in `merge/land/records.rs`, the draft landing
   in `merge/land/draft.rs` and the faults it faces in
   `merge/land/faults.rs`; `merge/undo.rs` the take-backs, the undo, the
-  withdrawal and its undo; `merge/windows.rs` THE SHOT's WINDOW PARTS, the
+  withdrawal and its undo, with the spelling of their one write;
+  `merge/windows.rs` THE SHOT's WINDOW PARTS, the
   merged list's window runs read and composed through the publication
   family's one core; `merge/record.rs` the `merge` record kind, its
   currency and `verify`; `merge/journal.rs` the merge journal — its unit
@@ -803,12 +805,14 @@ each ceremony:
   the same feature,
   `history.rs` THE RESTORE — a draft's past state made current over the
   merge's reader, the state mapped through the publication's
-  correspondence records by its own mapping of images, and the
-  take-backs' one `set_arrangement` — with the records' read and that
-  mapping, which skep-shell's `text.diff` names too, its unit suite in
+  correspondence records by the merge's mapping of images, and the
+  take-backs' one `set_arrangement` in their spelling — with the records'
+  read, and that mapping and that spelling re-exported, which skep-shell's
+  `text.diff` and skep-cli's `skep restore` name there, its unit suite in
   `history/tests.rs` over the fake board, its daemon walk in
   `tests/it/restore.rs`. `merge/shared.rs` names the merge internals
-  `history` uses. Of the
+  `history` uses, and no file under `merge` names `history`:
+  `tests/it/tidy.rs` checks it. Of the
   SURFACES the `skep merge` and `skep restore` commands are built —
   `skep-cli`'s `commands/merge.rs` and `commands/restore.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface

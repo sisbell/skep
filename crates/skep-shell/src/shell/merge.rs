@@ -1740,7 +1740,8 @@ impl Shell {
     /// `draft` and the lines of the principal's standing on it — nothing
     /// read at any; `store_unreadable`, `no_account`; the library's
     /// (`skep_client::merge::withdraw`): `unreadable`, `no_such_document`,
-    /// `not_owner`, `no_merge` naming the draft, the board's
+    /// `not_owner`, `no_merge` naming the draft, `over_cap` where the
+    /// draft's words are in more runs than one write may name, the board's
     /// `arrangement_moved` verbatim, a halt's face, and `session_died`.
     pub(super) fn merge_withdraw(&self, args: &Value) -> Result<Value, Refusal> {
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;

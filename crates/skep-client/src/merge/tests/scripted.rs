@@ -7,7 +7,9 @@
 //! of each answer, with no daemon. Beside them stand the names the areas
 //! share: the documents and the account the tests run over, the sign-in,
 //! the race's inputs, the draft landing's world, inputs and landing, the
-//! landing into `S` and the record it appends, a correspondence record
+//! landing into `S` and the record it appends, a landing into `S` made by
+//! hand, the member whose chain a deposit's words are minted under and a
+//! state of its words and the trunk's by turns, a correspondence record
 //! planted in `S`, and a record filed in a journal. Each area's own helpers
 //! stand in its file.
 
@@ -1772,6 +1774,40 @@ fn draft_c() -> Vec<Run> {
 /// Runs as a `set_arrangement` frame built by hand spells them.
 fn shot_runs(m: &[Run]) -> Vec<Value> {
     m.iter().map(|r| frames::shot_run(&r.origin.to_string(), &i_addr(&r.origin, r.i_start), r.width)).collect()
+}
+
+/// Lands `runs` in `S` by hand, as a draft landing's one write does.
+///
+/// The base is re-recorded on the head `D.2` at fifteen and the marker
+/// stamped, no side named and no record written. Answers the write's
+/// position.
+fn landed_by_hand(board: &Board, session: &Session<'_>, dialer: &Scripted, runs: &[Run]) -> u64 {
+    let head = format!("{D}.2");
+    let typed = dialer.world().position;
+    let frame = frames::set_arrangement(S, &shot_runs(runs), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+    let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
+    acked_at(&ack).unwrap_or_else(|| panic!("the landing by hand was refused: {ack}"))
+}
+
+/// Returns `D.2`, a member of `D`'s chain.
+///
+/// A declared deposit naming it mints its words under the member's own
+/// chain (wire.md §The publish shot and head-float, the deposit cell;
+/// PUB-2.65), so a run whose origin it is stands in an `image` answer as
+/// `D.2.0.1.k`, where the trunk's word of the same ordinal is `D.0.1.k`,
+/// and the core's runs name `D` for both.
+fn member() -> String {
+    format!("{D}.2")
+}
+
+/// Returns a state in one run more than a write may name.
+///
+/// The trunk's word and the member's stand by turns at adjoining ordinals:
+/// each is a run of its own as the board serves and takes them, and the
+/// core's runs join them all as one run of `D`.
+fn alternating() -> Vec<Run> {
+    let member = member();
+    (1..=SHOT_RUN_CAP as u64 + 1).map(|p| run(if p % 2 == 1 { D } else { &member }, p, 1)).collect()
 }
 
 /// The record a take-back appended, read off the one `insert` served.

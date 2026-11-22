@@ -15,7 +15,7 @@ use skep_address::Address;
 
 use crate::address::parse_address;
 use crate::board::answers::{self, IRun, Metadata};
-use crate::board::{frames, guest_closed, Answer, AtAnswer, Board, Rejection, Token};
+use crate::board::{frames, guest_closed, Answer, AtAnswer, Board, Image, Rejection, Token};
 use crate::halt::Halt;
 use crate::merge::compose::Item;
 
@@ -60,6 +60,36 @@ pub(crate) struct Imaged {
     /// the read where it was read at the head: a later read as of it
     /// answers the same image. `None` where no answer carried one.
     pub(in crate::merge) as_of: Option<u64>,
+}
+
+impl Imaged {
+    /// Returns the runs as an [`Image`], each at the spelling the board served.
+    ///
+    /// A run keeps its own prefix, a member's chain as the member's, where
+    /// the core's runs name the trunk alone ([`runs_of`]); a run holding no
+    /// address is dropped, as `whole_image` drops one, and the ordinals are
+    /// the image's own from 1. It is what a write of a state the board held
+    /// is mapped and spelled from: the restore's, and the take-backs'.
+    ///
+    /// # Errors
+    ///
+    /// An image whose positions reach the largest ordinal is the board's
+    /// fault, faced.
+    ///
+    /// [`runs_of`]: super::runs_of
+    pub(crate) fn into_image(self) -> Result<Image, Halt> {
+        let Imaged { doc, at, runs, .. } = self;
+        let pieces =
+            runs.into_iter().filter(|r| r.width > 0).map(|r| (r.prefix, r.first, r.width));
+        Image::tiled(pieces).ok_or_else(|| {
+            let read = at.map_or_else(|| "at the head".to_string(), |at| format!("as of {at}"));
+            Halt::face(
+                "a document's image cannot be held",
+                format!("the image of {doc} {read} arranges positions up to the largest ordinal"),
+                "this is a board fault; nothing was written",
+            )
+        })
+    }
 }
 
 /// The door of the merge's reads, and the restore's: a board, the caller's

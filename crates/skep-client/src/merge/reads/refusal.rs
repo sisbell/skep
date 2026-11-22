@@ -255,9 +255,10 @@ pub enum Refusal {
     WindowWithheld(Address),
     /// A run list holds more runs than one write may name.
     ///
-    /// It is the merged list at a landing, `counts.m` (decision 13), or a
-    /// past state at a restore, the runs the write would send: refused with
-    /// the count before any frame, never split.
+    /// It is the merged list at a landing, `counts.m` (decision 13), or the
+    /// state a restore or a take-back — the undo, the withdrawal, its undo —
+    /// would set, the runs the write would send: refused with the count
+    /// before any frame, never split.
     OverCap {
         /// The runs the list holds.
         runs: usize,

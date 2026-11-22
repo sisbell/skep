@@ -439,10 +439,10 @@ impl Name {
     ///
     /// `skep_client::merge::Refusal::OverCap`, met at `merge.compose` with
     /// nothing landed (the merge record's decision 13, "refuse with count";
-    /// B3-S11's cap face at the act), and at `history.past` and
-    /// `history.restore` where the state, mapped through the records, is in
-    /// more runs than one write may name, nothing sent; the detail names `n`,
-    /// the runs, and the `cap`.
+    /// B3-S11's cap face at the act), and at `history.past`,
+    /// `history.restore`, `merge.undo` and `merge.withdraw` where the state
+    /// the one write would set is in more runs than it may name, nothing
+    /// sent; the detail names `n`, the runs, and the `cap`.
     pub const OVER_CAP: Name = Name("over_cap");
     /// A row's draft that is another account's, or a published document.
     ///

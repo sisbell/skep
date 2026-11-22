@@ -3,9 +3,10 @@
 //!
 //! The module stands behind the `merge` feature, riding the merge's reader
 //! and the one write the take-backs send (the `merge::undo` module): a
-//! restore is the same read at a position, the same records' read the undo
-//! maps its state through, and the same `set_arrangement`, with no base and
-//! no `merge`, at any position the board still answers.
+//! restore is the same read at a position, the same records' read and the
+//! same mapping of the state's image the undo makes, and the same
+//! `set_arrangement`, spelled as theirs is, with no base and no `merge`, at
+//! any position the board still answers.
 //! Two calls make the restore, the reads apart from the write, so an
 //! embedder says what the draft will hold before anything is written; two
 //! more lend its records and its mapping to a comparison by identity:
@@ -47,9 +48,10 @@
 //!   and a restore after the restore landed is a write of its own. No head
 //!   record is read first: the frame has no entry frame and signs nothing,
 //!   so SP-14's pre-check does not apply. Nothing of a merge record is
-//!   written or replaced. Each run is as [`written_runs`] spells it: its own
-//!   first I-address, and its `origin` the document that minted it, a
-//!   member's version component kept (wire.md §Arrangement, `publish`).
+//!   written or replaced. Each run is as [`written_runs`] spells it, the
+//!   take-backs' spelling: its own first I-address, and its `origin` the
+//!   document that minted it, a member's version component kept (wire.md
+//!   §Arrangement, `publish`).
 //! * [`records`] and [`mapped_image`] — THE RECORDS AND THE MAPPING OF
 //!   IMAGES, for the diff (`text.diff`; skep #1095). A publication re-mints
 //!   a draft's words, so a mark made before it, or a document that copied
@@ -66,17 +68,17 @@
 //!   drafts, whose chains carry no member's component — and each record is
 //!   read once however many images name its span. An origin the reader may
 //!   not read yields no record, the board answering no link homed where it
-//!   may not read, and its words are compared as read. [`mapped_image`] maps
-//!   one image at its own spelling, each run keyed by its I-address prefix,
-//!   so a run minted under a member's chain is compared as itself: the piece
-//!   a record covers — the first record covering its I-address — becomes the
-//!   span the record's `to` names at the same offset, every sum checked
-//!   (SP-19); the piece no record covers is kept as read; consecutive pieces
-//!   I-adjacent on one chain are one run; and the ordinals are tiled again
-//!   from 1, the extent unchanged. Their cost (SP-23): one four-set read per
-//!   distinct origin for each `MAX_WIRE_LIST` of its spans, one `read_link`
-//!   per hit homed in a document of that origin's own account, then a walk
-//!   of each run against the records.
+//!   may not read, and its words are compared as read. [`mapped_image`] is
+//!   the merge reads' mapping of one image at its own spelling, the one the
+//!   restore's write and the take-backs' are mapped by: each run is keyed by
+//!   its I-address prefix, so a run minted under a member's chain is
+//!   compared as itself, the piece a record covers becomes the span the
+//!   record's `to` names at the same offset, every sum checked (SP-19), and
+//!   the ordinals are tiled again from 1, the extent unchanged. Their cost
+//!   (SP-23): one four-set read per distinct origin for each
+//!   `MAX_WIRE_LIST` of its spans, one `read_link` per hit homed in a
+//!   document of that origin's own account, then a walk of each run against
+//!   the records.
 //!
 //! **Why the mapping.** The board's twin fence refuses a draft-native run a
 //! record already names `already_published` (wire.md §The publish shot and
@@ -98,10 +100,8 @@
 
 use std::collections::HashSet;
 
-use serde_json::Value;
-use skep_address::{content_subspace, document_of, Address};
+use skep_address::Address;
 
-use crate::address::parse_address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
@@ -111,7 +111,7 @@ use crate::merge::shared::{
 use crate::merge::{Refusal, Run, SHOT_RUN_CAP};
 use crate::publication::Record;
 
-pub use crate::merge::shared::mapped;
+pub use crate::merge::shared::{mapped, mapped_image, written_runs};
 
 /// A draft's past state, read and mapped, before the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,15 +217,7 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
     }
     let imaged = reader.imaged(draft, Some(at))?;
     let state = runs_of(&imaged.runs)?;
-    let pieces =
-        imaged.runs.into_iter().filter(|r| r.width > 0).map(|r| (r.prefix, r.first, r.width));
-    let read = Image::tiled(pieces).ok_or_else(|| {
-        Halt::face(
-            "the state's image cannot be held",
-            format!("the image of {draft} as of {at} arranges positions up to the largest ordinal"),
-            "this is a board fault; nothing was written",
-        )
-    })?;
+    let read = imaged.into_image()?;
     let records = records_of(&reader, account, &state)?;
     // Every sum of a record's numbers is made here, checked (SP-19): the
     // core's runs below are the mapped image's, never mapped again.
@@ -278,40 +270,6 @@ pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Re
     Ok(Restored { draft: draft.clone(), at: *at, position })
 }
 
-/// Returns `image`'s runs as the restore's one write spells them.
-///
-/// Each is `frames::shot_run` of the run's own first I-address in its one
-/// spelling, its width, and its `origin`: the document that minted it,
-/// version component and all — for a deposit naming a member, the member
-/// (wire.md §Arrangement, `publish`: "`origin` must be the document that
-/// minted the run's addresses"). A run minted under a member's chain is
-/// written as itself, never as the trunk's position of the same ordinal.
-///
-/// # Errors
-///
-/// A run whose first I-address is no content I-address, the board's fault,
-/// faced: an image is a board's answer, or one mapped from it.
-pub fn written_runs(image: &Image) -> Result<Vec<Value>, Halt> {
-    image
-        .runs()
-        .iter()
-        .map(|run| {
-            let named = format!("{}.{}", run.prefix, run.first);
-            let spelled = parse_address(&named)
-                .filter(|a| a.subspace() == Some(&content_subspace()))
-                .and_then(|a| Some((document_of(&a)?, a)));
-            let (origin, i_start) = spelled.ok_or_else(|| {
-                Halt::face(
-                    "an image run is no content I-address",
-                    format!("`{named}` is no address in the content subspace"),
-                    "this is a board fault; nothing was written",
-                )
-            })?;
-            Ok(frames::shot_run(&origin.to_string(), &i_start.to_string(), run.width))
-        })
-        .collect()
-}
-
 /// Reads the correspondence records of every origin among `images`' runs.
 ///
 /// Each origin's records are held to its owner's own account, read at the
@@ -339,70 +297,6 @@ pub fn records(board: &Board, token: &Token, images: &[&Image]) -> Result<Vec<Re
         }
     }
     owners_records(&Reader::new(board, Some(token), OnEnd::Rerun), &runs)
-}
-
-/// Returns `image` mapped through `records`, as a comparison by identity
-/// across a publication reads it.
-///
-/// It is the module doc's mapping of images. Each run is walked from its
-/// first I-address on its own chain, the run's prefix: the piece the first
-/// record covering an I-address covers, up to that record's end or the
-/// run's, is mapped onto the span the record's `to` names at the same
-/// offset; the piece no record covers, up to the next record's start on the
-/// chain or the run's end, is kept as read; consecutive pieces I-adjacent on
-/// one chain are merged; and the ordinals are tiled again from 1. An image
-/// no record touches comes back with the same identities at the same
-/// positions.
-///
-/// # Errors
-///
-/// A record that maps a piece past the largest ordinal is the board's
-/// fault, faced, and nothing is mapped.
-pub fn mapped_image(image: &Image, records: &[Record]) -> Result<Image, Halt> {
-    let past_the_range = || {
-        Halt::face(
-            "a correspondence record maps words past the largest ordinal",
-            "the record's published span, at the offset of a piece it covers, passes the range of an I-address",
-            "this is a board fault; nothing was compared or written",
-        )
-    };
-    let mut pieces: Vec<(String, u64, u64)> = Vec::with_capacity(image.runs().len());
-    for run in image.runs() {
-        let mut into = 0u64;
-        while into < run.width {
-            // The run's I-addresses lie within `u64` (the image's invariant).
-            let (at, left) = (run.first + into, run.width - into);
-            let covering = records.iter().find(|r| {
-                r.from.chain == run.prefix && r.from.first <= at && at - r.from.first < r.from.width
-            });
-            let (prefix, first, width) = match covering {
-                Some(record) => {
-                    let offset = at - record.from.first;
-                    let first = record.to.first.checked_add(offset).ok_or_else(past_the_range)?;
-                    (&record.to.chain, first, (record.from.width - offset).min(left))
-                }
-                None => {
-                    let next = records
-                        .iter()
-                        .filter(|r| r.from.chain == run.prefix && r.from.first > at)
-                        .map(|r| r.from.first - at)
-                        .min();
-                    (&run.prefix, at, next.map_or(left, |next| next.min(left)))
-                }
-            };
-            match pieces.last_mut() {
-                Some((last, start, positions))
-                    if last == prefix && start.checked_add(*positions) == Some(first) =>
-                {
-                    *positions += width
-                }
-                _ => pieces.push((prefix.clone(), first, width)),
-            }
-            into += width;
-        }
-    }
-    // A mapped piece's last I-address past `u64` is refused here.
-    Image::tiled(pieces).ok_or_else(past_the_range)
 }
 
 /// Returns how many positions of `state` the records cover.

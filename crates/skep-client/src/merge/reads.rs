@@ -6,9 +6,11 @@
 //! each origin the bare document ([`origin_of`]); [`head_of`], the
 //! feed-walk fallback for a bare document's head member; the read of the
 //! correspondence records of the person's own origins among a past state's
-//! runs, and [`mapped`], the state mapped through them — what the restore
-//! and the undo send, so words a publication made public since come back as
-//! the published words they became; the read of every origin's records in
+//! runs, and [`mapped_image`], a state's image mapped through them at its
+//! own spelling — what the restore and the take-backs send, so words a
+//! publication made public since come back as the published words they
+//! became and a member's own words as themselves — with [`mapped`], the
+//! same mapping over the core's runs; the read of every origin's records in
 //! its owner's own account, which a comparison by identity maps both its
 //! texts through (`history::records`); and [`Refusal`], every refusal a
 //! read or a landing can meet.
@@ -141,7 +143,7 @@ pub(super) use addresses::{
     comps, content_prefix, daughter_of, is_trunk_member, last_component, next_trunk_member,
     version_components,
 };
-pub use correspondence::mapped;
+pub use correspondence::{mapped, mapped_image};
 pub(crate) use correspondence::{owners_records, records_of};
 pub use inputs::{Family, Inputs, Merged, Role, Side};
 pub(super) use join::{check_join, first_difference};

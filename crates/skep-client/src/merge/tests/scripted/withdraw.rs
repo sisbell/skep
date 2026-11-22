@@ -7,7 +7,12 @@
 //! writing nothing twice; and a withdrawal taken back — the marker put back
 //! and the next undo taking the landing back, typed at the landing or
 //! refused where another hand edited after it, and nothing to undo past a
-//! landing or a publication.
+//! landing or a publication. And it checks the words a withdrawal and its
+//! undo keep: a member's own word sent under the member's chain, no
+//! correspondence record read by the withdrawal, a write that changed a
+//! member's word for the trunk's naming no withdrawal and leaving the next
+//! undo typed at the landing, and both refused at the cap counted on the
+//! runs they would write.
 
 use super::*;
 
@@ -454,4 +459,185 @@ fn a_withdrawals_undo_finds_nothing_to_undo_past_a_landing_or_a_publication() {
     assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
     assert_eq!(err.to_string(), format!("nothing to undo: {S} was published as version {D}.3 since, and a version stands — the way back is to publish the older text again"));
     assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
+}
+
+/// A withdrawal and its undo keep a member's own word (skep #1121).
+///
+/// The draft holds M and, after it, one word a deposit naming `D.2` minted
+/// under the member's chain, whose ordinal is the trunk's first word's. The
+/// withdrawal sends the image as read — the member's word at `D.2.0.1.1`,
+/// its `origin` the member — reading no correspondence record, and the
+/// withdrawal's undo sends the same runs with the marker put back; the
+/// draft holds the member's word throughout (the mutants that spell either
+/// write from the core's runs send the trunk's first word in its place).
+#[test]
+fn a_withdrawal_and_its_undo_send_a_members_own_word_under_the_members_chain() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    landed_in_s(&board, &session, &signer);
+    let held: Vec<Run> = draft_m().into_iter().chain([run(&member(), 1, 1)]).collect();
+    {
+        let mut w = dialer.world();
+        w.text(&member(), 1, "z");
+        w.change(S, held.clone());
+    }
+    let correspondence = frames::unit_span(frames::T_CORRESPONDENCE);
+    dialer.clear();
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["runs"], frame_runs(&held), "the image as read, each run on the chain that minted it");
+    assert_eq!(sent[0]["runs"][4], frames::shot_run(&member(), &format!("{}.0.1.1", member()), 1), "the member its word's origin, never the trunk's first word");
+    assert!(dialer.frames("find_links_ftt").iter().all(|f| f["q"]["ty"] != correspondence), "no correspondence record is read: {:?}", dialer.ops());
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, held, "the words stay, each its own");
+    dialer.clear();
+    unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["runs"], frame_runs(&held), "the same runs, the marker put back beside them");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, held, "the words stay, each its own");
+    assert!(dialer.world().standing(S).1.is_some(), "the marker back");
+}
+
+/// A withdrawal reads no correspondence record and maps nothing.
+///
+/// A record of the merger's names `S`'s own words in M as the trunk's
+/// `D·19–21` they became. The withdrawal keeps the draft's words as they
+/// stand: it never asks for the record, and sends `S·1–3` as read (the
+/// mutant that maps the image through the records sends the trunk's words).
+#[test]
+fn the_withdrawal_reads_no_correspondence_record_and_sends_the_words_as_read() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    landed_in_s(&board, &session, &signer);
+    let record = {
+        let mut w = dialer.world();
+        w.text(D, 19, "!!!");
+        plant_record(&mut w, 1, 19, 3)
+    };
+    let correspondence = frames::unit_span(frames::T_CORRESPONDENCE);
+    dialer.clear();
+    withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+    assert!(dialer.frames("find_links_ftt").iter().all(|f| f["q"]["ty"] != correspondence), "no records' read: {:?}", dialer.ops());
+    assert!(dialer.frames("read_link").iter().all(|f| f["a"] != record), "the record is never read: {:?}", dialer.ops());
+    assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_m()), "M as read, S's own words its own");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "the words stay");
+}
+
+/// A write that changed a member's word for the trunk's is no withdrawal.
+///
+/// The state before the write holds a word minted under `D.2`'s chain; the
+/// write, by hand, has a withdrawal's shape — the base re-sent, no merge —
+/// and leaves the trunk's word of the same ordinal in its place. The words
+/// at it are not those before it, so the position names no withdrawal:
+/// `NoWithdrawal`, nothing sent, the marker staying out (the mutant that
+/// compares the core's runs puts the marker back over the other word).
+#[test]
+fn a_write_that_changed_a_members_word_for_the_trunks_names_no_withdrawal() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    landed_in_s(&board, &session, &signer);
+    let held: Vec<Run> = draft_m().into_iter().chain([run(&member(), 1, 1)]).collect();
+    let swapped: Vec<Run> = draft_m().into_iter().chain([run(D, 1, 1)]).collect();
+    {
+        let mut w = dialer.world();
+        w.text(&member(), 1, "z");
+        w.change(S, held);
+    }
+    let head = format!("{D}.2");
+    let typed = dialer.world().position;
+    let frame = frames::set_arrangement(S, &shot_runs(&swapped), typed, None, Some((&head, 15)), None, None);
+    let at = dialer.world().apply(&frame)["at"].as_u64().expect("the write's ack");
+    assert_eq!(dialer.world().standing(S), (Some((head, 15)), None), "the premise: the base re-sent, the marker cleared");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(unwithdraw(&board, merger(&session, &signer), &a(S), &a(K), at, None, None), Err(Refusal::NoWithdrawal { draft: a(S), at }));
+    assert_eq!(dialer.positions("image"), [at, typed], "the premise: the words read at the write and before it: {:?}", dialer.ops());
+    assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert!(dialer.world().standing(S).1.is_none(), "the marker stays out");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, swapped, "the draft as the write left it");
+}
+
+/// A member's word changed for the trunk's keeps an undo at the landing.
+///
+/// Skep #1121 with #964, P3: the undo after a put-back is typed past it
+/// only where the words there are the landing's by identity. The landing
+/// leaves a word minted under `D.2`'s chain in the draft, and another hand
+/// then puts the trunk's word of the same ordinal in its place; the merge
+/// is withdrawn and put back, that change kept. The words at the put-back
+/// are not the landing's, so the undo, with no `own_ack`, is typed against
+/// the landing and refused `arrangement_moved`, its words naming the
+/// put-back, the change standing (the mutant that compares the core's runs
+/// types it past the put-back, and it lands over the change).
+#[test]
+fn an_undo_after_a_put_back_is_typed_at_the_landing_where_a_members_word_became_the_trunks() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let landed: Vec<Run> = draft_m().into_iter().chain([run(&member(), 1, 1)]).collect();
+    let swapped: Vec<Run> = draft_m().into_iter().chain([run(D, 1, 1)]).collect();
+    dialer.world().text(&member(), 1, "z");
+    let at = landed_by_hand(&board, &session, &dialer, &landed);
+    dialer.world().change(S, swapped.clone());
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    let back = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("put back").position;
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, swapped, "the premise: the change kept in the words");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let err = undo(&board, m, &a(S), &a(K), None, None).expect_err("the change stands in the words");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved");
+    assert_eq!(dialer.frames("set_arrangement")[0]["as_of"], json!(at), "typed against the landing, never the put-back");
+    let detail = refused.detail.as_deref().expect("the person's words");
+    assert!(detail.contains(&format!("{S} changed since the merge landed (the merge landed at position {at}, the draft changed at {back}): its words changed before the merge was put back at position {back}")), "{detail}");
+    assert!(detail.contains("an undo typed against the landing can no longer land"), "{detail}");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, swapped, "the change stands");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+}
+
+/// A withdrawal and its undo are refused at the cap on their written runs.
+///
+/// The draft holds the trunk's words and a member's by turns at adjoining
+/// ordinals, 4,097 runs as the board serves and takes them and one run of
+/// `D` as the core joins them. (a) The withdrawal answers `OverCap` with
+/// the written count after its image read: nothing sent, the marker
+/// standing. (b) The withdrawal's undo, typed at the caller's own change
+/// that left the draft so, answers it after the records' read: nothing
+/// sent, the marker staying out (the mutants that count the core's runs,
+/// or count none at the withdrawal, send a frame of 4,097 runs).
+#[test]
+fn a_withdrawal_and_its_undo_are_refused_over_cap_on_the_runs_they_would_write() {
+    let over = || Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP };
+    let wrote = |dialer: &Scripted| !(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
+    // (a) The withdrawal.
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    landed_in_s(&board, &session, &signer);
+    dialer.world().change(S, alternating());
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(withdraw(&board, m, &a(S), &a(K), None).map(drop), Err(over()), "(a)");
+    assert_eq!(dialer.frames("image").len(), 3, "(a): the premise: the image read in halves past the board's run budget: {:?}", dialer.names());
+    assert!(!wrote(&dialer), "(a): nothing sent: {:?}", dialer.names());
+    assert_eq!(dialer.world().rows.len(), rows, "(a): nothing committed");
+    assert!(dialer.world().standing(S).1.is_some(), "(a): the marker stands");
+    // (b) The withdrawal's undo.
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    landed_in_s(&board, &session, &signer);
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    let own = dialer.world().change(S, alternating());
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, Some(own), None).map(drop), Err(over()), "(b)");
+    let correspondence = frames::unit_span(frames::T_CORRESPONDENCE);
+    let asked: Vec<Value> = dialer.frames("find_links_ftt").into_iter().filter(|f| f["q"]["ty"] == correspondence).map(|f| f["q"]["from"].clone()).collect();
+    assert_eq!(asked, [json!([frames::i_span(&format!("{D}.0.1.1"), SHOT_RUN_CAP as u64 + 1)])], "(b): the premise: one run of D as the core joins them, the records read first");
+    assert!(!wrote(&dialer), "(b): nothing sent: {:?}", dialer.names());
+    assert_eq!(dialer.world().rows.len(), rows, "(b): nothing committed");
+    assert!(dialer.world().standing(S).1.is_none(), "(b): the marker stays out");
 }

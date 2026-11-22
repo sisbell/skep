@@ -168,7 +168,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Withdrawn", json!({"draft": "1.0.1.0.67", "position": 14, "record": "1.0.1.0.1.0.2.4"})),
         (
             "Past",
-            json!({"draft": "1.0.1.0.67", "at": 9, "as_of": 15, "state": [{"origin": "1.0.1.0.67", "i_start": 1, "width": 19}], "sent": [{"origin": "1.0.1.0.64", "i_start": 1, "width": 19}], "covered": 19, "marker": null}),
+            json!({"draft": "1.0.1.0.67", "at": 9, "as_of": 15, "state": [{"origin": "1.0.1.0.67", "i_start": 1, "width": 19}], "sent": [{"origin": "1.0.1.0.64", "i_start": 1, "width": 19}], "written": [{"origin": "1.0.1.0.64", "i_start": 1, "width": 19}], "covered": 19, "marker": null}),
         ),
         ("Restored", json!({"draft": "1.0.1.0.67", "at": 9, "position": 16, "as_of": 15, "marker": {"sides": ["1.0.1.0.64.1.1"], "head": "1.0.1.0.64.2", "head_copied": "13", "at": 12}})),
         ("MergeMarker", json!({"sides": ["1.0.1.0.64.1.1"], "head": "1.0.1.0.64.2", "head_copied": null, "at": null})),
@@ -309,7 +309,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  'merge.undo'(args: { session: string } | { session: string; draft: string; withdrawal: number }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
         "  'history.past'(args: { session: string; draft: string; at: number }): Promise<Outcome<Past>>;\n",
-        "export interface Past {\n  draft: string;\n  at: number;\n  as_of: number;\n  state: Run[];\n  sent: Run[];\n  covered: number;\n  marker: MergeMarker | null;\n}\n",
+        "export interface Past {\n  draft: string;\n  at: number;\n  as_of: number;\n  state: Run[];\n  sent: Run[];\n  written: Run[];\n  covered: number;\n  marker: MergeMarker | null;\n}\n",
         "  'history.restore'(args: { session: string; draft: string; at: number; as_of: number }): Promise<Outcome<Restored>>;\n",
         "  marker: MergeMarker | null;\n",
         "  head_copied: string | null;\n",
@@ -402,6 +402,29 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
+}
+
+/// Checks that the declared orphan line reads the kept links off `written`.
+///
+/// The page builds its orphan count from the past state's declaration
+/// (B3-S7; skep #1122): its sentence takes the links a restore keeps from
+/// `written`, the runs a restore made now would send, and from no other
+/// list; `sent` is declared as the core's runs, never as what the write
+/// sends; and `Run` names the two lists of `Past` whose runs name no
+/// identity where a member's own words stand (the declaration that sends
+/// the page to `sent` counts a link on a member's word orphaned, which the
+/// restore keeps, and a link on the trunk's word of the same ordinal kept,
+/// which the restore drops).
+#[test]
+fn the_past_states_declaration_reads_the_kept_links_off_the_written_runs() {
+    let past = shape("Past").expect("the past state's answer is declared").doc;
+    assert!(past.contains("less the links whose ends `written` keeps"), "the orphan line reads over `written`: {past}");
+    assert_eq!(past.matches("whose ends `").count(), 1, "and over no other list: {past}");
+    assert!(past.contains("`written` the runs a restore made now would send"), "`written` is what the write sends: {past}");
+    assert_eq!(past.matches("a restore made now would send").count(), 1, "and no other list is: {past}");
+    assert!(past.contains("for drawing and never what the write sends"), "`sent` is the core's runs: {past}");
+    let run = shape("Run").expect("a run is declared").doc;
+    assert!(run.contains("in `Past`'s `state` and `sent`") && run.contains("no identity of theirs"), "the lists whose runs name no identity are named: {run}");
 }
 
 /// Supplements that mount nothing: a session registered for its reason alone.

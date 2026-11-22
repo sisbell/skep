@@ -1,13 +1,16 @@
-//! The past state's read and its restore (`history.past`, skep #853, and
-//! `client.md` §4b.1's `history.restore` row; B3-S7).
+//! The past state's read and its restore (B3-S7).
 //!
-//! The suite checks the rules the shell alone keeps, with no daemon behind it —
+//! They are `history.past` (skep #853) and `client.md` §4b.1's
+//! `history.restore` row. The suite checks the rules the shell alone keeps,
+//! with no daemon behind it —
 //! each row's members read before the session, a bare session refused naming
 //! the restore and reading the past state, a session with no account refused
 //! the read before any dial, and a hold standing at the board refusing the
 //! write before any read and stopping no read — and, against the real daemon,
-//! the read answering the state as read and as mapped, the board's position and
-//! the marker with nothing written or noted, and the restore end to end: a
+//! the read answering the state as read and as mapped, the runs a restore
+//! would send — a member's own words under the member, as the restore then
+//! writes them (skep #1122) — the board's position and the marker with
+//! nothing written or noted, and the restore end to end: a
 //! restore over the draft's held line refused `held_lines` and landing once the
 //! line is kept; a draft put back to a past state by one `set_arrangement`
 //! naming no base and no merge, the same restore sent again answered from the
@@ -202,16 +205,15 @@ fn a_restore_over_the_drafts_held_line_is_refused_held_lines_and_lands_once_the_
     sd.shutdown();
 }
 
-/// Checks a draft put back to a past state and back again, against the
-/// daemon.
+/// Checks a draft put back to a past state and back again, against the daemon.
 ///
 /// A draft typed in three bursts — "the cat", " sat", "!!!" — and another
 /// document minted after, so the board's position stands past the page's
 /// state of the draft, has its state after the first burst read by
 /// `history.past`: the answer declared, `at` the state's position, `as_of`
-/// the board's position, `state` and `sent` the first burst's one run,
-/// nothing covered, `marker` null — the board's position unmoved, no
-/// arrangement row, the hold's last arrangement write on the draft as it
+/// the board's position, `state`, `sent` and `written` the first burst's
+/// one run, nothing covered, `marker` null — the board's position unmoved,
+/// no arrangement row, the hold's last arrangement write on the draft as it
 /// was. The draft is then restored to that state, typed at the page's
 /// state, the last burst's ack: the answer declared, `at` the state's
 /// position, `as_of` the board's position as the read found it — never the
@@ -256,8 +258,8 @@ fn a_draft_is_restored_to_a_past_state_by_one_write_and_back_through_the_answers
     crate::shapes::assert_declared("Past", &past);
     let first_burst = json!([{"origin": d, "i_start": 1, "width": 7}]);
     assert_eq!(
-        (past["draft"].as_str(), &past["at"], past["as_of"].as_u64(), &past["state"], &past["sent"], past["covered"].as_u64(), past["marker"].is_null()),
-        (Some(d.as_str()), &p1, Some(before), &first_burst, &first_burst, Some(0), true),
+        (past["draft"].as_str(), &past["at"], past["as_of"].as_u64(), &past["state"], &past["sent"], &past["written"], past["covered"].as_u64(), past["marker"].is_null()),
+        (Some(d.as_str()), &p1, Some(before), &first_burst, &first_burst, &first_burst, Some(0), true),
         "the state after the first burst, no record to map it through: {past}"
     );
     assert!(g.position() == before && arrangement_rows(&g, &d, before).is_empty(), "the read wrote nothing");
@@ -363,23 +365,24 @@ fn the_restore_is_typed_at_the_pages_state_refused_past_another_hands_change_and
     sd.shutdown();
 }
 
-/// Checks a restore across the person's own publication, against the
-/// daemon (B3-S7).
+/// Checks a restore across the person's own publication (B3-S7).
 ///
-/// A draft staged from a memberless edition holds "the quick brown fox",
-/// then " jumps"; its publication (E.1) re-windows it onto the member's
-/// words, a change to its arrangement that no ack through `op` carries.
+/// Against the daemon, a draft staged from a memberless edition holds "the
+/// quick brown fox", then " jumps"; its publication (E.1) re-windows it onto
+/// the member's words, a change to its arrangement that no ack through `op`
+/// carries.
 /// `history.past` at the state before " jumps" answers that state as the
-/// draft's own words and `sent` as the trunk's, every position covered. A
-/// restore typed at the shell's last acknowledgment on the draft — the
-/// second burst's — is the board's `arrangement_moved`, `site.current` the
-/// publication's position. Typed at the page's state — the publication's
-/// acknowledged position, the page's own act on the draft — the restore to
-/// that state lands: the text "the quick brown fox", its run the TRUNK's
-/// identity by the records' mapping, never the draft's own words back (the
-/// mutant that sends the state unmapped is the board's `already_published`;
-/// the one that answers the read's `state` as its `sent` names the draft's
-/// words where the trunk's come back).
+/// draft's own words and `sent` and `written` as the trunk's, every
+/// position covered. A restore typed at the shell's last acknowledgment on
+/// the draft — the second burst's — is the board's `arrangement_moved`,
+/// `site.current` the publication's position. Typed at the page's state —
+/// the publication's acknowledged position, the page's own act on the
+/// draft — the restore to that state lands: the text "the quick brown fox",
+/// its run the TRUNK's identity by the records' mapping, never the draft's
+/// own words back (the mutant that sends the state unmapped is the board's
+/// `already_published`; the one that answers the read's `state` as its
+/// `sent` or its `written` names the draft's words where the trunk's come
+/// back).
 #[test]
 fn a_restore_across_the_persons_own_publication_lands_and_brings_the_words_back_as_the_trunks() {
     let dir = TempDir::new().unwrap();
@@ -398,10 +401,11 @@ fn a_restore_across_the_persons_own_publication_lands_and_brings_the_words_back_
     assert_eq!(runs(25), vec![(format!("{edition}.0.1.1"), "25".to_string())], "the premise: the draft re-windowed onto the member's words");
     let past = g.call("history.past", json!({"session": g.session, "draft": d, "at": before_jumps})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Past", &past);
+    let the_trunks = json!([{"origin": edition, "i_start": 1, "width": 19}]);
     assert_eq!(
-        (&past["state"], &past["sent"], past["covered"].as_u64()),
-        (&json!([{"origin": d, "i_start": 1, "width": 19}]), &json!([{"origin": edition, "i_start": 1, "width": 19}]), Some(19)),
-        "the state the draft's own words, sent as the trunk's: {past}"
+        (&past["state"], &past["sent"], &past["written"], past["covered"].as_u64()),
+        (&json!([{"origin": d, "i_start": 1, "width": 19}]), &the_trunks, &the_trunks, Some(19)),
+        "the state the draft's own words, sent and written as the trunk's: {past}"
     );
     let restore = |as_of: u64| g.call("history.restore", json!({"session": g.session, "draft": d, "at": before_jumps, "as_of": as_of}));
     let moved = restore(jumps_at).unwrap_err();
@@ -411,6 +415,68 @@ fn a_restore_across_the_persons_own_publication_lands_and_brings_the_words_back_
     crate::shapes::assert_declared("Restored", &restored);
     assert_eq!(g.text(&d, 25), "the quick brown fox", "{restored}");
     assert_eq!(runs(19), vec![(format!("{edition}.0.1.1"), "19".to_string())], "the words back as the trunk's identity");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that the past state's read names a member's own words as its own.
+///
+/// Against the daemon (B3-S7; PUB-2.65; skep #1122), E.1 holds "the fox",
+/// the trunk's words, and "z", a declared deposit naming the member and so
+/// minted under the member's chain; S, staged from E.1, is typed into.
+/// `history.past` at the stage's position answers, declared, every run of
+/// its three lists declared: `state` and `sent` the core's runs, the
+/// deposit's word spelled as the trunk's first word, and `written` that
+/// word under E.1 at its ordinal on E.1's chain, never its V-ordinal,
+/// nothing covered. The restore to that state, typed at the page's state,
+/// leaves S arranging the runs `written` named, each
+/// `{origin}.0.1.{i_start}`, its text the stage's (the mutants that answer
+/// `written` from `sent` or from `state`, spell its origin as the trunk,
+/// answer a run's V-ordinal as its `i_start`, or leave `written` out).
+#[test]
+fn the_past_states_read_answers_a_members_own_words_under_the_member_as_the_restore_writes_them() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let member = format!("{edition}.1");
+    assert_eq!(acked["member"].as_str(), Some(member.as_str()), "{acked}");
+    // The record deposit names the member, so its word is minted under the
+    // member's chain.
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let (next, read_at) = skep_client::ceremony::deposit::next_content_ordinal(&entry.board, Some(&entry.token), &edition).unwrap();
+    g.op(json!({"op": "insert", "doc": member, "at": {"subspace": "1", "ordinal": next.to_string()}, "values": ["z"], "deposit": skep_client::board::T_ENROLL, "as_of": read_at}));
+    let runs = |doc: &str| -> Vec<(String, String)> {
+        g.op(image(doc, 1, 9))["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect()
+    };
+    let theirs = vec![(format!("{edition}.0.1.1"), "7".to_string()), (format!("{member}.0.1.1"), "1".to_string())];
+    assert_eq!(runs(&member), theirs, "the premise: the deposit minted under the member's chain");
+    let staged = g.op(stage(&member, None));
+    let s = staged["addr"].as_str().expect("an ack_addr").to_string();
+    assert_eq!(runs(&s), theirs, "the premise: the stage copies the member's words by identity");
+    let typed = g.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "9"}, "values": ["!"], "as_of": staged["at"]}))["at"].as_u64().expect("the page's state");
+    let past = g.call("history.past", json!({"session": g.session, "draft": s, "at": staged["at"]})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Past", &past);
+    for list in ["state", "sent", "written"] {
+        for run in past[list].as_array().unwrap_or_else(|| panic!("`{list}` is a list: {past}")) {
+            crate::shapes::assert_declared("Run", run);
+        }
+    }
+    let the_cores = json!([{"origin": edition, "i_start": 1, "width": 7}, {"origin": edition, "i_start": 1, "width": 1}]);
+    let the_writes = json!([{"origin": edition, "i_start": 1, "width": 7}, {"origin": member, "i_start": 1, "width": 1}]);
+    assert_eq!(
+        (&past["at"], &past["state"], &past["sent"], &past["written"], past["covered"].as_u64()),
+        (&staged["at"], &the_cores, &the_cores, &the_writes, Some(0)),
+        "the deposit's word the trunk's first in the core's runs, the member's own as written: {past}"
+    );
+    // The restore writes the runs the read named.
+    let restored = g.call("history.restore", json!({"session": g.session, "draft": s, "at": staged["at"], "as_of": typed})).unwrap_or_else(|r| panic!("typed at the page's state, the restore lands: {r}"));
+    crate::shapes::assert_declared("Restored", &restored);
+    let named: Vec<(String, String)> = past["written"].as_array().unwrap().iter().map(|r| (format!("{}.0.1.{}", r["origin"].as_str().unwrap(), r["i_start"]), r["width"].to_string())).collect();
+    assert_eq!((runs(&s), g.text(&s, 9)), (named, "the foxz".to_string()), "the stage's runs again, the member's own word among them: {restored}");
     g.shell.shutdown();
     sd.shutdown();
 }

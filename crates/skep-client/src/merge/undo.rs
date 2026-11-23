@@ -41,11 +41,19 @@
 //! withdrawal is [`NoUndo::Published`] where the draft's feed holds a
 //! `publish` row past it, naming the member that row names first, and
 //! [`NoUndo::Remarked`] where it holds none, a merge having landed and been
-//! taken out again. Its record is written only where the newest record of
-//! the kind on the draft is the withdrawal's take-back of a landing in it
-//! whose head and sides are the marker's: the landing's record composed
-//! again, `replaces` the take-back's link. The write's id names the draft,
-//! the withdrawal and the position the call read the draft at.
+//! taken out again. Its record is judged by the marker it puts back, among
+//! the merger's own records of the kind linked to the draft (**The
+//! record.**): the landing's record is the newest naming the draft as
+//! landed in at or before the marker's `at`, with its head and sides,
+//! whether replaced or not, and it is composed again, `replaces` the
+//! take-back's link, only where a take-back of it was made since the
+//! landing — the newest of the merger's records naming no landing that
+//! replaces it, its link minted past that `at`. Where none was — the
+//! landing's record standing, or taken back only before the marker's
+//! landing was made — none is written, and a record of another merge, of a
+//! merge the draft is a side of or of a landing made since never decides
+//! it. The write's id names the draft, the withdrawal and the position the
+//! call read the draft at.
 //!
 //! **The dispatch (P4).** The undo reads the draft's `doc_metadata` live
 //! and dispatches on the base record first, then the marker:
@@ -189,22 +197,30 @@
 //! undone from the feed, and a baseless document is never sent a `base`.
 //!
 //! **The record.** After the write lands, the current record naming the
-//! draft as landed in — found by the links of the kind to the draft, the
-//! newest by the order they were minted, and for an undo by the marker the
-//! one standing for the marker: the newest with its head and sides, naming
-//! a position at or before its `at` and replaced by no record linked to the
-//! draft — is replaced: a record composed from it with `landed` none and
-//! `replaces` its link is appended to the journal (`journal`, or the
-//! account's default) and linked from its atom there, the link homed in
-//! the journal beside it, unsigned, so a reader of the journal sees the
-//! merge no longer stands on the draft. A merge landed in the draft again
-//! with no take-back recorded between is the same landing (skep #790; the
-//! `land` module's doc): the undo takes back the later write, the one the
-//! marker or the feed row names, and puts the earlier write's marker back,
-//! so the first landing's record, which stands for both, stands on and
-//! none is written — as wherever the record found is the one standing for
-//! the marker put back. A marker the draft's stage copied marks no landing
-//! in it (P2), so a record found beside it is replaced. Where no record
+//! draft as landed in is replaced. The records judged are the merger's
+//! own: the links of the kind to the draft whose addresses lie in the
+//! merger's account exactly, kept before any record is read — a record
+//! names in `replaces` one of its own home's (P20), so another account's, a
+//! sub-account's among them, is never read, never replaced and never
+//! counts as replacing one of the merger's. Of those, for an undo by the
+//! marker and a withdrawal the current record is the one standing for the
+//! marker the act takes out: the newest with its head and sides, naming a
+//! position at or before its `at` — a marker naming none bounding no
+//! position — and replaced by none of the merger's records linked to the
+//! draft; for a baseless draft's undo it is the newest naming the draft as
+//! landed in, by the order their links were minted. A record composed from
+//! it with `landed` none and `replaces` its link is appended to the journal
+//! (`journal`, or the account's default) and linked from its atom there,
+//! the link homed in the journal beside it, unsigned, so a reader of the
+//! journal sees the merge no longer stands on the draft. A merge landed in
+//! the draft again with no take-back recorded between is the same landing
+//! (skep #790; the `land` module's doc): the undo takes back the later
+//! write, the one the marker or the feed row names, and puts the earlier
+//! write's marker back, so the first landing's record, which stands for
+//! both, stands on and none is written — as wherever the record found is
+//! the one standing for the marker put back. A marker the draft's stage
+//! copied marks no landing in it (P2), so a record found beside it is
+//! replaced, and a withdrawal of it finds none to replace. Where no record
 //! stands none is written, and the act stands all the same. A re-run after
 //! either act writes nothing for it (**The guarantees**) — so where the
 //! record is not written after the act's write, for a lost acknowledgment
@@ -259,9 +275,7 @@ use super::reads::{
     feed_rows, mapped_image, owners_records, runs_of, stretches, NoUndo, OnEnd, Reader, Refusal,
     SHOT_RUN_CAP,
 };
-use super::record::{
-    self, lands_the_marker, linked_to, newest, read_record, standing_for, Record, RecordLanding,
-};
+use super::record::{self, linked_to, newest, standing_for, taken_back, Record, RecordLanding};
 use crate::board::answers::MergeMarker;
 
 /// What an undo answered.
@@ -299,8 +313,10 @@ pub struct Withdrawn {
     pub draft: Address,
     /// The one write's commit position, its ack's `at`.
     pub position: u64,
-    /// The replacing record's link, homed in its journal, where a record of
-    /// the landing stood; `None` where none did, and none was written.
+    /// The replacing record's link, homed in its journal.
+    ///
+    /// It is written where a record of the merger's own stood for the marker
+    /// taken out; `None` where none did, and none was written.
     pub record: Option<Address>,
 }
 
@@ -313,9 +329,10 @@ pub struct Unwithdrawn {
     pub position: u64,
     /// The record written putting the landing's back, homed in its journal.
     ///
-    /// It is written where the newest record of the kind on the draft is
-    /// the withdrawal's take-back of a landing in it; `None` where none is,
-    /// and none was written.
+    /// It is written where the merger's own record of the landing the
+    /// marker put back marks was taken back since that landing (the
+    /// module's doc); `None` where it was not — the landing's record
+    /// standing, or none of the merger's — and none was written.
     pub record: Option<Address>,
 }
 
@@ -736,9 +753,9 @@ pub fn withdraw(
     if meta.published {
         return Err(Refusal::Published { doc: draft.clone() });
     }
-    if meta.merge.is_none() {
+    let Some(marker) = meta.merge.as_ref() else {
         return Err(Refusal::NoMerge { draft: draft.clone() });
-    }
+    };
     let as_of = as_of.ok_or_else(|| unpositioned(draft))?;
     let base = match (meta.base.as_deref().and_then(parse_address), meta.base_copied) {
         (Some(base), Some(copied)) => (base, copied),
@@ -766,7 +783,12 @@ pub fn withdraw(
     );
     writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
     let position = send(&writer, &frame, draft, as_of, Act::Withdraw)?;
-    let record = replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw, None)?;
+    // The record is judged by the marker taken out, as an undo's is; one
+    // naming no position bounds none.
+    let landing = marker.at.unwrap_or(u64::MAX);
+    let markers = Markers { taken: marker, landing, earlier: None };
+    let record =
+        replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw, Some(markers))?;
     Ok(Withdrawn { draft: draft.clone(), position, record })
 }
 
@@ -906,7 +928,7 @@ pub fn unwithdraw(
     writer.check_journal(journal, &format!("the merge cannot be put back into {draft}"))?;
     let act = Act::Unwithdraw { withdrawal, own_ack: own_ack.is_some() };
     let position = send(&writer, &frame, draft, as_of, act)?;
-    let record = restore_record(board, merger, kind, draft, &cleared.marker, &stem, journal)?;
+    let record = restore_record(board, merger, kind, draft, &cleared, &stem, journal)?;
     Ok(Unwithdrawn { draft: draft.clone(), position, record })
 }
 
@@ -1431,29 +1453,36 @@ fn undo_moved(
     }
 }
 
-/// The markers an undo by the marker judges its record by.
+/// The markers a take-back by the marker judges its record by.
 ///
-/// They are the module's doc's **The record**.
+/// They are the module's doc's **The record**: an undo by the marker's,
+/// and a withdrawal's.
 #[derive(Clone, Copy)]
 struct Markers<'a> {
-    /// The marker the undo takes back.
+    /// The marker the act takes out.
     taken: &'a MergeMarker,
     /// The landing's position, the taken marker's `at`.
+    ///
+    /// It is the largest position, bounding none, where the board serves no
+    /// `at`.
     landing: u64,
     /// The earlier landing's marker the undo put back.
     ///
     /// `None` where it put none back, or put back the one the draft's stage
-    /// copied, which marks no landing in it (P2).
+    /// copied, which marks no landing in it (P2), and for a withdrawal,
+    /// which puts none back.
     earlier: Option<&'a Restorable>,
 }
 
 /// Writes the replacing record, answering its link where one is written.
 ///
-/// It is the module's doc's record: the current record naming the draft as
-/// landed in — for an undo by the marker, `markers`, the one standing for
-/// the marker taken back ([`standing_for`]) — with `landed` none and
-/// `replaces` its link, under the act's stem; `None` where no record
-/// stands, or where that record is the one standing for the earlier
+/// It is the module's doc's record: of the merger's own records of the
+/// kind linked to the draft ([`linked_to`]), the current one naming the
+/// draft as landed in — for an undo by the marker and a withdrawal,
+/// `markers`, the one standing for the marker taken out ([`standing_for`]);
+/// for a baseless draft's undo, the newest — written again with `landed`
+/// none and `replaces` its link, under the act's stem; `None` where no
+/// record stands, or where that record is the one standing for the earlier
 /// landing's marker put back (skep #790), nothing written. It reads and
 /// writes through a writer of its own over `board` as `merger`, built for
 /// the step after the act's one write: a session's end at any of its reads
@@ -1479,12 +1508,12 @@ fn replace_record(
     let earlier = markers.and_then(|m| m.earlier);
     let on_end = if earlier.is_some() { OnEnd::EarlierBack } else { OnEnd::TakenOut };
     let writer = Writer::new(board, merger, on_end);
-    let linked = linked_to(&writer.reader, kind, draft)?;
+    let own = linked_to(&writer.reader, kind, draft, merger.account)?;
     let current = match markers {
-        None => newest(linked.into_iter().filter(|f| matches!(&f.record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft))),
+        None => newest(own.into_iter().filter(|f| matches!(&f.record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft))),
         Some(Markers { taken, landing, earlier }) => {
-            let current = standing_for(&linked, draft, taken, landing);
-            let standing = earlier.and_then(|e| standing_for(&linked, draft, &e.marker, e.at));
+            let current = standing_for(&own, draft, taken, landing);
+            let standing = earlier.and_then(|e| standing_for(&own, draft, &e.marker, e.at));
             if let (Some(current), Some(standing)) = (&current, &standing) {
                 if current.link == standing.link {
                     return Ok(None);
@@ -1520,37 +1549,35 @@ fn replace_record(
 
 /// Writes the record of a withdrawal's undo (skep #870; the module's doc).
 ///
-/// It answers the record's link where one is written.
-/// The newest record of the kind on the draft ([`linked_to`]) must be
-/// a take-back — `landed` none — replacing a landing's record that names
-/// the draft as landed in, its head the `cleared` marker's and its sides,
-/// the draft's own excepted, the marker's; the record written is that
-/// landing's record again, `replaces` the take-back's link, under `stem`.
-/// `None` where the newest record is no such take-back, nothing written.
-/// It reads and writes through a writer of its own built for the step after
-/// the act's one write ([`OnEnd::PutBack`]).
+/// It answers the record's link where one is written. Of the merger's own
+/// records of the kind linked to the draft ([`linked_to`]), the landing's
+/// record and the take-back of it made since the landing are those
+/// [`taken_back`] answers for the `cleared` marker at its `at`; the record
+/// written is that landing's record again, `replaces` the take-back's link,
+/// under `stem`. `None` where either is missing, nothing written. It reads
+/// and writes through a writer of its own built for the step after the
+/// act's one write ([`OnEnd::PutBack`]).
 ///
 /// # Errors
 ///
-/// The records' reads' refusals, then the record's writes'
+/// The records' reads' refusals ([`linked_to`]), then the record's writes'
 /// (`Writer::write_record`).
 fn restore_record(
     board: &Board,
     merger: Merger<'_>,
     kind: &Address,
     draft: &Address,
-    cleared: &MergeMarker,
+    cleared: &Restorable,
     stem: &str,
     journal: Option<&Address>,
 ) -> Result<Option<Address>, Refusal> {
     let writer = Writer::new(board, merger, OnEnd::PutBack);
-    let Some(newest) = newest(linked_to(&writer.reader, kind, draft)?) else { return Ok(None) };
-    let (None, Some(replaced)) = (&newest.record.landed, &newest.record.replaces) else { return Ok(None) };
-    let Some(landing) = read_record(&writer.reader, replaced)? else { return Ok(None) };
-    if !lands_the_marker(&landing.record, draft, cleared) {
+    let own = linked_to(&writer.reader, kind, draft, merger.account)?;
+    let Some((landing, take_back)) = taken_back(&own, draft, &cleared.marker, cleared.at) else {
         return Ok(None);
-    }
-    let record = Record { replaces: Some(newest.link.clone()), by: record::by(), link: None, ..landing.record };
+    };
+    let record =
+        Record { replaces: Some(take_back.link), by: record::by(), link: None, ..landing.record };
     let owed = |why: Unwritten, cause: String| {
         Halt::face(
             format!("the merge is back in {draft}, and the record of the withdrawal's undo is not written: {}", why.reason()),

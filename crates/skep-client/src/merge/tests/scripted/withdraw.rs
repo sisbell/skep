@@ -13,7 +13,9 @@
 //! sent by its undo as their owner published them, a write that changed a
 //! member's word for the trunk's naming no withdrawal and leaving the next
 //! undo typed at the landing, and both refused at the cap counted on the
-//! runs they would write.
+//! runs they would write. And it checks the withdrawal's undo writing the
+//! landing's record again past newer records naming the draft as a side, a
+//! sub-account's and the merger's own.
 
 use super::*;
 
@@ -675,4 +677,41 @@ fn a_withdrawal_and_its_undo_are_refused_over_cap_on_the_runs_they_would_write()
     assert!(!wrote(&dialer), "(b): nothing sent: {:?}", dialer.names());
     assert_eq!(dialer.world().rows.len(), rows, "(b): nothing committed");
     assert!(dialer.world().standing(S).1.is_none(), "(b): the marker stays out");
+}
+
+/// A withdrawal's undo looks past records naming the draft as a side.
+///
+/// Skep #1154: after a landing in `S` and its withdrawal, a newer record
+/// linked to `S` stands, landed elsewhere, `S` one of its sides: (a) a
+/// sub-account's, landed in a draft of its own; (b) the merger's own,
+/// landed in another draft of theirs. At each, the withdrawal's undo writes
+/// the landing's record again — `landed` `S` at the landing's position,
+/// `replaces` the withdrawal's record — judged by the marker it puts back
+/// (judged by the newest of every account's records linked to the draft,
+/// none is written at either; by the newest of the merger's own, none at
+/// (b)).
+#[test]
+fn a_withdrawals_undo_writes_the_landings_record_again_past_records_naming_the_draft_as_a_side() {
+    for (case, journal, landed_in) in [("(a)", "1.0.1.2.0.65", "1.0.1.2.0.66"), ("(b)", "1.0.1.0.90", "1.0.1.0.91")] {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        let taken = withdrawn.record.clone().expect("the premise: the landing's record replaced");
+        {
+            let mut w = dialer.world();
+            w.position += 1;
+            let minted = w.position;
+            let elsewhere = RecordLanding::Draft { draft: a(landed_in), position: minted };
+            file(&mut w, journal, &Record { landed: Some(elsewhere), ..merged.record.clone() }, &[landed_in, S], Some(minted));
+        }
+        dialer.clear();
+        let unwithdrawn = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+        assert!(unwithdrawn.record.is_some(), "{case}: the landing's record written again");
+        let atom = appended_record(&dialer);
+        assert_eq!(atom["landed"], json!({"draft": S, "position": at}), "{case}: the landing's: {atom}");
+        assert_eq!(atom["replaces"].as_str(), Some(taken.to_string().as_str()), "{case}: the withdrawal's record replaced");
+    }
 }

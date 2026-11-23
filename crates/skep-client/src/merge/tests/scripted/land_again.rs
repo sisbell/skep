@@ -9,8 +9,13 @@
 //! and replaced by its record; that a second landing of one key into one
 //! draft is the same landing; that merges landed one over another are taken
 //! back a landing at a time, each by its own record, a marker a stage
-//! copied put back inherited; the take-backs' refusals, each mapped; and a
-//! merge taken back unsigned where a claimed board's head is owed.
+//! copied put back inherited; that a withdrawal and its undo go by the
+//! marker's own record — the withdrawal after an undo put an earlier merge
+//! back replacing that merge's, the withdrawal's undo writing the landing's
+//! again after another merge, or the same one landed again, was undone
+//! since, and writing back none taken back before its landing; the
+//! take-backs' refusals, each mapped; and a merge taken back unsigned where
+//! a claimed board's head is owed.
 
 use super::*;
 
@@ -1560,6 +1565,244 @@ fn two_merges_of_one_head_and_sides_are_each_taken_back_by_their_own_record() {
         Some(first_record.to_string().as_str()),
         "the first landing's record replaced, never the second's"
     );
+}
+
+/// Returns the marker `doc` carries, as `doc_metadata` serves it at the head.
+fn marker_of(
+    board: &Board,
+    session: &Session<'_>,
+    doc: &str,
+) -> crate::board::answers::MergeMarker {
+    let frame = frames::doc_metadata(doc);
+    let Answer::Document(v) = board.op(Some(session.token()), &frame).expect("the read") else {
+        panic!("closed")
+    };
+    crate::board::answers::merge_marker(&v).flatten().expect("the draft's marker")
+}
+
+/// A withdrawal after an undo put a merge back replaces that merge's record.
+///
+/// Skep #1154, over skep #964's shape: the draft-side merge of `T` landed
+/// in it, then composed again — another key, the same head and sides — and
+/// landed again, its record of its own; the undo takes the second back, the
+/// first landing's marker put back. The withdrawal replaces the record
+/// standing for the marker it takes out, the first landing's, never the
+/// second's, already replaced (the mutant that replaces the newest record
+/// naming the draft as landed in replaces the second's again). The
+/// withdrawal's undo writes the first landing's record again — `landed` `T`
+/// at the first landing's position, `replaces` the withdrawal's record —
+/// which `landing_record` answers by the marker (the mutant that bounds no
+/// position writes the second landing's record).
+#[test]
+fn a_withdrawal_after_an_undo_put_an_earlier_merge_back_replaces_that_merges_record() {
+    let t = "1.0.1.0.67";
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.staged(t, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let into_t = || draft_landing(&session, &signer, Some(a(t)));
+    let inputs = Inputs { sides: vec![Side::Draft { at: a(t), position: None }], ..race_inputs() };
+    let first = compose(&board, Some(session.token()), &inputs).expect("composed");
+    let (first_at, first_record) = landing_of(&land(&board, &first, into_t()).expect("landed"));
+    let second = compose(&board, Some(session.token()), &inputs).expect("composed again");
+    let (_, second_record) = landing_of(&land(&board, &second, into_t()).expect("landed again"));
+    assert_ne!(second_record, first_record, "the premise: a record of its own");
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("the second taken back");
+    let marker = undone.marker.clone().expect("the premise: the first landing's marker put back");
+    assert_eq!(marker.at, Some(first_at), "the premise: {marker:?}");
+    dialer.clear();
+    let withdrawn = withdraw(&board, m, &a(t), &a(K), None).expect("withdrawn");
+    let taken = withdrawn.record.clone().expect("the first landing's record replaced");
+    assert_eq!(
+        appended_record(&dialer)["replaces"].as_str(),
+        Some(first_record.to_string().as_str()),
+        "the record standing for the marker taken out"
+    );
+    dialer.clear();
+    let unwithdrawn = unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, None, None)
+        .expect("the withdrawal taken back");
+    let atom = appended_record(&dialer);
+    assert_eq!(
+        atom["landed"],
+        json!({"draft": t, "position": first_at}),
+        "the first landing's record again: {atom}"
+    );
+    assert_eq!(atom["replaces"].as_str(), Some(taken.to_string().as_str()));
+    let standing = landing_record(&board, Some(session.token()), &a(K), &a(t), &marker, ACCOUNT)
+        .expect("the lookup")
+        .and_then(|r| r.link);
+    assert_eq!(standing, unwithdrawn.record, "the record a re-open of T goes by");
+}
+
+/// A withdrawal's undo writes its record past another merge's undone landing.
+///
+/// Skep #1154, the editor's own stack (P3): the race shape — merge A —
+/// landed in `T` and withdrawn; the draft-side merge of `T` — merge B —
+/// landed in it and undone, its record replaced; then the withdrawal's
+/// undo, typed at the caller's own last ack, B's undo. The newest record
+/// linked to `T` is B's take-back, of another merge, so the record is
+/// judged by the marker put back: A's landing record is written again,
+/// `landed` `T` at A's position, `replaces` the withdrawal's record, and
+/// `landing_record` answers it by the marker (the mutant that judges the
+/// newest record linked to the draft writes none).
+#[test]
+fn a_withdrawals_undo_after_another_merge_landed_and_was_undone_writes_the_landings_record_again() {
+    let t = "1.0.1.0.67";
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.staged(t, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let into_t = || draft_landing(&session, &signer, Some(a(t)));
+    let merge_a = compose(&board, Some(session.token()), &race_inputs()).expect("A composed");
+    let (a_at, _) = landing_of(&land(&board, &merge_a, into_t()).expect("A landed"));
+    let marker = marker_of(&board, &session, t);
+    let withdrawn = withdraw(&board, m, &a(t), &a(K), None).expect("A withdrawn");
+    let taken = withdrawn.record.clone().expect("the premise: A's record replaced");
+    let b_inputs =
+        Inputs { sides: vec![Side::Draft { at: a(t), position: None }], ..race_inputs() };
+    let merge_b = compose(&board, Some(session.token()), &b_inputs).expect("B composed");
+    land(&board, &merge_b, into_t()).expect("B landed");
+    let undone_b = undo(&board, m, &a(t), &a(K), None, None).expect("B taken back");
+    assert!(
+        undone_b.record.is_some() && undone_b.marker.is_none(),
+        "the premise: B's record replaced, no marker before B: {undone_b:?}"
+    );
+    dialer.clear();
+    let unwithdrawn =
+        unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, Some(undone_b.position), None)
+            .expect("A's withdrawal taken back");
+    assert_eq!(marker_of(&board, &session, t), marker, "the premise: A's marker back");
+    let atom = appended_record(&dialer);
+    assert_eq!(
+        atom["landed"],
+        json!({"draft": t, "position": a_at}),
+        "A's landing record again: {atom}"
+    );
+    assert_eq!(
+        atom["replaces"].as_str(),
+        Some(taken.to_string().as_str()),
+        "the withdrawal's record replaced"
+    );
+    let standing = landing_record(&board, Some(session.token()), &a(K), &a(t), &marker, ACCOUNT)
+        .expect("the lookup")
+        .and_then(|r| r.link);
+    assert_eq!(standing, unwithdrawn.record, "the record a re-open of T goes by");
+}
+
+/// A withdrawal's undo writes back no record taken back before its landing.
+///
+/// Skep #1154: the race shape landed in `T` and undone, its record
+/// replaced, then landed in `T` again — a write of its own — with its
+/// record unwritten, the board too busy to find the journal, so no record
+/// of the merger's stands for the marker. The withdrawal writes no record:
+/// the first landing's, below the marker's position, was replaced by the
+/// undo (the mutant that replaces the newest record naming the draft as
+/// landed in replaces it again). Its undo puts the marker back and writes
+/// none either: the first landing's record was taken back before the
+/// marker's landing was made, never since (the mutant that bounds the
+/// take-back by no position writes the first landing's record again).
+#[test]
+fn a_withdrawals_undo_writes_back_no_record_taken_back_before_its_landing() {
+    let t = "1.0.1.0.67";
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.staged(t, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let into_t = || draft_landing(&session, &signer, Some(a(t)));
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let (first_at, _) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("undone");
+    assert!(undone.record.is_some(), "the premise: the first landing's record replaced");
+    let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+    too_busy_for_the_find(&mut dialer.world());
+    assert!(
+        matches!(land(&board, &again, into_t()), Err(Refusal::Halt(Halt::Halt(_)))),
+        "the premise: landed, its record unwritten"
+    );
+    let marker = dialer.world().standing(t).1.expect("the premise: the marker");
+    assert!(marker.at > first_at, "the premise: a landing of its own: {marker:?}");
+    dialer.clear();
+    let withdrawn = withdraw(&board, m, &a(t), &a(K), None).expect("withdrawn");
+    assert_eq!(withdrawn.record, None, "no record stands for the marker taken out");
+    dialer.clear();
+    let unwithdrawn = unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, None, None)
+        .expect("the withdrawal taken back");
+    assert_eq!(dialer.world().standing(t).1, Some(marker), "the marker put back");
+    assert_eq!(unwithdrawn.record, None, "the first landing's record stays replaced");
+    assert!(
+        dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+        "nothing of a record: {:?}",
+        dialer.ops()
+    );
+}
+
+/// A withdrawal's undo writes its record after a later landing is undone.
+///
+/// Skep #1154: the race shape landed in `T` and withdrawn; composed again
+/// — its key the same, the withdrawal's record its newest — and landed in
+/// `T` again, a write of its own whose record replaces the withdrawal's;
+/// that landing undone, the marker cleared, `T` as the withdrawal left it.
+/// Typed at the caller's own last ack, the withdrawal's undo puts the first
+/// landing's marker back and writes its record again, `replaces` the
+/// withdrawal's, which `landing_record` answers by the marker: the
+/// withdrawal's record is still the take-back of the first landing,
+/// whatever replaces it since (the mutant that takes no take-back another
+/// record replaces writes none; the one that judges the newest record
+/// linked to the draft writes the second landing's).
+#[test]
+fn a_withdrawals_undo_writes_the_landings_record_again_after_the_merge_landed_again_and_was_undone()
+{
+    let t = "1.0.1.0.67";
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.staged(t, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let into_t = || draft_landing(&session, &signer, Some(a(t)));
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let (first_at, _) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+    let marker = marker_of(&board, &session, t);
+    let withdrawn = withdraw(&board, m, &a(t), &a(K), None).expect("withdrawn");
+    let taken = withdrawn.record.clone().expect("the premise: the landing's record replaced");
+    let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+    let (_, second) = landing_of(&land(&board, &again, into_t()).expect("landed again"));
+    let found = current(&board, Some(session.token()), &a(K), &again.key)
+        .expect("the lookup")
+        .expect("a record");
+    assert_eq!(
+        (found.link, found.replaces),
+        (Some(second), Some(taken.clone())),
+        "the premise: the second landing's record replaces the withdrawal's"
+    );
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("the second taken back");
+    assert_eq!(undone.marker, None, "the premise: no marker before the second landing");
+    dialer.clear();
+    let unwithdrawn =
+        unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, Some(undone.position), None)
+            .expect("the withdrawal taken back");
+    assert_eq!(marker_of(&board, &session, t), marker, "the first landing's marker back");
+    let atom = appended_record(&dialer);
+    assert_eq!(
+        atom["landed"],
+        json!({"draft": t, "position": first_at}),
+        "the first landing's record again: {atom}"
+    );
+    assert_eq!(
+        atom["replaces"].as_str(),
+        Some(taken.to_string().as_str()),
+        "the withdrawal's record replaced"
+    );
+    let standing = landing_record(&board, Some(session.token()), &a(K), &a(t), &marker, ACCOUNT)
+        .expect("the lookup")
+        .and_then(|r| r.link);
+    assert_eq!(standing, unwithdrawn.record, "the record a re-open of T goes by");
 }
 
 /// An undo over the marker a stage copied puts it back, inherited still.

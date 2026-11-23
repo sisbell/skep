@@ -9,9 +9,12 @@
 //! atom read through the journal's arrangement and never by identity), the
 //! record standing for the landing a draft's merge marker marks, found
 //! through the links of the kind to the draft whatever the merge landed in
-//! since ([`landing_record`]; an undo by the marker finds the record it
-//! replaces by the same rule), and [`verify`], the record's testimony
-//! recomputed.
+//! since, the account's own links kept before any record is read
+//! ([`landing_record`]; an undo by the marker and a withdrawal find the
+//! record they replace by the same rule, and a withdrawal's undo, by the
+//! marker it puts back, the landing's record it writes again and the
+//! take-back made since that landing it replaces), and [`verify`], the
+//! record's testimony recomputed.
 //!
 //! **Kept private.** A merge record is kept only in a private document: its
 //! journal is a private draft of the merger's own, the record's link homed
@@ -1052,10 +1055,10 @@ pub fn landed_draft(
 /// It is the record a re-open of the draft goes by, whatever the merge
 /// landed in since: a landing of the same merge in another draft writes a
 /// record of its own, newest of the merge, which [`landed_draft`] answers.
-/// The records are those of `kind` linked to the draft (`linked_to`), each
-/// record's atom read through its journal, kept where the link lies in
-/// `account` exactly, before anything else is judged: another account's
-/// record is never answered, and never replaces one of the account's own
+/// The records are those of `kind` linked to the draft whose links lie in
+/// `account` exactly, kept before any record is read (`linked_to`), each
+/// record's atom read through its journal: another account's record is
+/// never read, never answered, and never replaces one of the account's own
 /// (P20, a record replacing one of its own home). Of those it is the one
 /// standing for the marker (`standing_for`): the newest naming the draft as
 /// landed in at or before the marker's `at`, with the marker's head and
@@ -1085,26 +1088,30 @@ pub fn landing_record(
     account: &str,
 ) -> Result<Option<Record>, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
-    let own: Vec<Found> =
-        linked_to(&reader, kind, draft)?.into_iter().filter(|f| f.lies_in(account)).collect();
+    let own = linked_to(&reader, kind, draft, account)?;
     let at = marker.at.unwrap_or(u64::MAX);
     Ok(standing_for(&own, draft, marker, at).map(|f| f.record))
 }
 
-/// Returns every merge record of `kind` linked to `draft`.
+/// Returns `account`'s own merge records of `kind` linked to `draft`.
 ///
-/// They are found through the links of the kind to the draft, each
-/// record's atom read through its journal ([`read_record`]), whatever its
-/// `landed` names — a landing's record, or a take-back's, which names none
-/// (skep #870) — and whatever account's journal holds it, each with the link
-/// it was found through; a record whose journal the reader may not read is
-/// no candidate. A record's link runs to the draft it landed in, or the one
-/// a take-back took the merge out of, and to each of its sides besides the
-/// head (§4, "Its home"), so these hold the records of every landing in the
-/// draft and of their take-backs, beside those of merges the draft is a
-/// side of: [`landing_record`] reads an account's own among them, and the
-/// undo and the withdrawal the one their act replaces (the `undo` module's
-/// doc).
+/// They are found through the links of the kind to the draft, each link
+/// kept where its address lies in `account` exactly — never in an account
+/// nested under it — before its record is read: a record names in
+/// `replaces` one of its own home's (P20), so another account's record, a
+/// sub-account's among them, is never read, never judged and never counts
+/// as replacing one of the account's own, and no refusal of its journal's
+/// reads stops the account's act. Each record kept is read through its
+/// journal ([`read_record`]), whatever its `landed` names — a landing's
+/// record, or a take-back's, which names none (skep #870) — each with the
+/// link it was found through; a record whose journal the reader may not
+/// read is no candidate. A record's link runs to the draft it landed in, or
+/// the one a take-back took the merge out of, and to each of its sides
+/// besides the head (§4, "Its home"), so these hold the account's records
+/// of every landing in the draft and of their take-backs, beside those of
+/// merges the draft is a side of: [`landing_record`] reads a draft's
+/// landing record among them, and the take-backs the record their act
+/// replaces or writes again (the `undo` module's doc).
 ///
 /// # Errors
 ///
@@ -1114,6 +1121,7 @@ pub(super) fn linked_to(
     reader: &Reader<'_>,
     kind: &Address,
     draft: &Address,
+    account: &str,
 ) -> Result<Vec<Found>, Refusal> {
     let v = reader.answered(
         draft,
@@ -1121,7 +1129,7 @@ pub(super) fn linked_to(
         None,
     )?;
     let mut found = Vec::new();
-    for link in answers::addrs(&v) {
+    for link in answers::addrs(&v).into_iter().filter(|link| owned_by(link, account)) {
         let Some(link) = parse_address(link) else { continue };
         found.extend(read_record(reader, &link)?);
     }
@@ -1130,38 +1138,73 @@ pub(super) fn linked_to(
 
 /// Returns the record standing for `marker`'s landing in `draft`.
 ///
-/// It is the newest among `linked`, the records of the kind linked to the
-/// draft, that names the draft as landed in at or before `at`, the
-/// marker's position, with the marker's head and sides, and that no record
-/// linked to the draft replaces: the record of that landing, or of the
-/// same landing made earlier (skep #790), never one a take-back replaced
-/// or one of a landing made since. `None` where none stands.
+/// It is the newest among `own`, an account's own records of the kind
+/// linked to the draft ([`linked_to`]), that names the draft as landed in
+/// at or before `at`, the marker's position, with the marker's head and
+/// sides, and that none of `own` replaces: the record of that landing, or
+/// of the same landing made earlier (skep #790), never one a take-back
+/// replaced or one of a landing made since. `None` where none stands.
 pub(super) fn standing_for(
-    linked: &[Found],
+    own: &[Found],
     draft: &Address,
     marker: &MergeMarker,
     at: u64,
 ) -> Option<Found> {
-    let replaced = |f: &Found| linked.iter().any(|g| g.record.replaces.as_ref() == Some(&f.link));
-    newest(
-        linked
-            .iter()
-            .filter(|f| landed_by(f, draft, at) && lands_the_marker(&f.record, draft, marker))
-            .filter(|f| !replaced(f))
-            .cloned(),
-    )
+    let replaced = |f: &Found| own.iter().any(|g| g.record.replaces.as_ref() == Some(&f.link));
+    newest(own.iter().filter(|f| of_the_landing(f, draft, marker, at) && !replaced(f)).cloned())
 }
 
-/// Returns whether `found` names `draft` as landed in at or before `at`.
-fn landed_by(found: &Found, draft: &Address, at: u64) -> bool {
-    matches!(&found.record.landed, Some(RecordLanding::Draft { draft: d, position }) if d == draft && *position <= at)
+/// Returns the take-back a withdrawal's undo replaces and the landing's record.
+///
+/// The landing's record is the newest among `own`, an account's own
+/// records of the kind linked to the draft ([`linked_to`]), that names
+/// `draft` as landed in at or before `at`, the cleared marker's position,
+/// with `marker`'s head and sides, whether any of `own` replaces it or not:
+/// the record of that landing, or of the same landing made earlier (skep
+/// #790). The take-back is the newest among `own` that names no landing,
+/// replaces that record and was minted past `at`: one made since the
+/// landing — the withdrawal's, or that of a later act that took the marker
+/// out again — whatever record has named it in `replaces` since, a later
+/// landing of the merge among them. `None` where either is missing: no
+/// record of the landing among `own`; or none of its take-backs made since
+/// the landing — the record standing, the withdrawal's own unwritten, or
+/// the record already written again — or every one made before it, the
+/// record an earlier landing's, taken back before this landing was made
+/// with its own record unwritten. A link the board serves no position for
+/// is minted past no position.
+pub(super) fn taken_back(
+    own: &[Found],
+    draft: &Address,
+    marker: &MergeMarker,
+    at: u64,
+) -> Option<(Found, Found)> {
+    let landing = newest(own.iter().filter(|f| of_the_landing(f, draft, marker, at)).cloned())?;
+    let takes_back = |f: &&Found| {
+        f.record.landed.is_none()
+            && f.record.replaces.as_ref() == Some(&landing.link)
+            && f.at.is_some_and(|minted| minted > at)
+    };
+    let take_back = newest(own.iter().filter(takes_back).cloned())?;
+    Some((landing, take_back))
+}
+
+/// Returns whether `found` is a record of `marker`'s landing in `draft`.
+///
+/// It names the draft as landed in at or before `at`, the marker's
+/// position, with the marker's head and sides ([`lands_the_marker`]).
+fn of_the_landing(found: &Found, draft: &Address, marker: &MergeMarker, at: u64) -> bool {
+    let position = match &found.record.landed {
+        Some(RecordLanding::Draft { position, .. }) => *position,
+        _ => return false,
+    };
+    position <= at && lands_the_marker(&found.record, draft, marker)
 }
 
 /// Returns whether `record` is a landing in `draft` of `marker`'s merge.
 ///
 /// It is landed in the draft, its head the marker's, and its sides, the
 /// draft's own excepted, the marker's sides.
-pub(super) fn lands_the_marker(record: &Record, draft: &Address, marker: &MergeMarker) -> bool {
+fn lands_the_marker(record: &Record, draft: &Address, marker: &MergeMarker) -> bool {
     let landed_here =
         matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
     let head = record.head().map(|h| h.address().to_string());

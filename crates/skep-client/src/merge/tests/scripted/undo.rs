@@ -17,8 +17,10 @@
 //! version; an inherited marker; a baseless landing undone by its feed row,
 //! and run again — another account's words sent mapped among them — and
 //! taken back where its re-arrangement holds words a record maps onto C's;
-//! and the state before the landing read at `nearest`, refused where
-//! reclaimed.
+//! the state before the landing read at `nearest`, refused where
+//! reclaimed; and the record an undo and a withdrawal replace, the
+//! merger's own whatever another account files — a newer record of the
+//! landing, never read, or a take-back of the merger's record.
 
 use super::*;
 
@@ -1104,4 +1106,73 @@ fn the_pre_landing_read_goes_to_nearest_never_to_at_minus_one_itself() {
     let asked: Vec<u64> = dialer.served.lock().unwrap().iter().filter(|(line, _)| line.starts_with("at:")).map(|(_, f)| f["at"].as_u64().unwrap()).collect();
     assert_eq!(asked, [at - 1, before, before, before], "doc_metadata at at − 1, then doc_metadata, the span set and the image at nearest: {:?}", dialer.ops());
     assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_c()), "C as it stood at nearest, never M");
+}
+
+/// Files `record` in a sub-account's journal, answering its link.
+///
+/// The link runs to `S` and is minted after every other. The journal is
+/// `1.0.1.2.0.65`, a draft of the sub-account `1.0.1.2` nested under the
+/// merger's, which the merger may read.
+fn filed_by_a_sub_account(dialer: &Scripted, record: &Record) -> String {
+    let mut w = dialer.world();
+    w.position += 1;
+    let minted = w.position;
+    file(&mut w, "1.0.1.2.0.65", record, &[S], Some(minted))
+}
+
+/// An undo and a withdrawal replace the merger's own record (skep #1154).
+///
+/// P20, a record replacing one of its own home's: after a landing in `S`,
+/// a sub-account files a newer record naming `S` as landed in at the
+/// marker's position, with the marker's head and sides. The undo and the
+/// withdrawal each replace the merger's own landing record, and neither
+/// reads the sub-account's: no `read_link` names its link (the mutant that
+/// keeps every account's records replaces the sub-account's; the one that
+/// drops them after reading them reads it).
+#[test]
+fn an_undo_and_a_withdrawal_replace_the_mergers_own_record_whatever_another_account_files() {
+    for act in ["undo", "withdraw"] {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (at, own) = landing_of(&landed);
+        let in_s = RecordLanding::Draft { draft: a(S), position: at };
+        let theirs = filed_by_a_sub_account(&dialer, &Record { landed: Some(in_s), ..merged.record.clone() });
+        dialer.clear();
+        let record = match act {
+            "undo" => undo(&board, m, &a(S), &a(K), None, None).expect("undone").record,
+            _ => withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn").record,
+        };
+        assert!(record.is_some(), "{act}: a record of the merger's stood, so one replaces it");
+        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(own.to_string().as_str()), "{act}: the merger's own landing record replaced");
+        assert!(dialer.frames("read_link").iter().all(|f| f["a"] != theirs), "{act}: the sub-account's record never read: {:?}", dialer.ops());
+    }
+}
+
+/// Another account's take-back never stops an undo or a withdrawal.
+///
+/// Skep #1154, P20: after a landing in `S`, a sub-account files a
+/// take-back naming the merger's landing record in `replaces`, linked to
+/// `S`. That record is no replacement of the merger's: the undo writes its
+/// record, replacing the merger's own, and so does the withdrawal (the
+/// mutant that drops another account's records only after judging which of
+/// the merger's are replaced writes none at the undo).
+#[test]
+fn an_undo_is_not_stopped_by_another_accounts_take_back_of_the_mergers_record() {
+    for act in ["undo", "withdraw"] {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (_, own) = landing_of(&landed);
+        filed_by_a_sub_account(&dialer, &Record { landed: None, replaces: Some(own.clone()), ..merged.record.clone() });
+        dialer.clear();
+        let record = match act {
+            "undo" => undo(&board, m, &a(S), &a(K), None, None).expect("undone").record,
+            _ => withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn").record,
+        };
+        assert!(record.is_some(), "{act}: the merger's record stands, so one replaces it");
+        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(own.to_string().as_str()), "{act}: the merger's own landing record replaced");
+    }
 }

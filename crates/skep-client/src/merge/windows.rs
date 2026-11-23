@@ -829,7 +829,9 @@ fn sides_showing(merged: &Merged, span: &ISpan) -> Vec<Address> {
 ///
 /// # Errors
 ///
-/// The read's refusals but `withheld`, which answers `None`.
+/// The read's refusals but [`Refusal::Unreadable`], which answers `None` —
+/// a `withheld` naming no document this client parses at a read by
+/// identity is the board's refusal verbatim (SP-18).
 fn first_words(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, reading: &Run, ordinal: u64) -> Result<Option<String>, Refusal> {
     let items = match source {
         Source::Merged => values_for(&writer.reader, &merged.inputs.doc, &merged.maps, None, reading),
@@ -849,7 +851,7 @@ fn first_words(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, readin
 ///
 /// # Errors
 ///
-/// The reads' refusals but `withheld`.
+/// The reads' refusals but [`Refusal::Unreadable`], as [`first_words`]'s.
 fn words_before(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, ordinal: u64) -> Result<Option<String>, Refusal> {
     if ordinal <= 1 {
         return Ok(None);

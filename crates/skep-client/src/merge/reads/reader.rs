@@ -197,19 +197,23 @@ impl<'a> Reader<'a> {
         Err(Refusal::HistoryBusy)
     }
 
-    /// Maps the refusal a read of `doc` answered.
+    /// Maps the refusal a read answered.
     ///
     /// `withheld` is [`Refusal::Unreadable`] and `doc_not_registered`
     /// [`Refusal::NoSuchDocument`], each naming the document the rejection's
     /// `site.addr` names — of a read naming several, the first the board
-    /// refused in declaration order (wire.md §Rejections) — and `doc` where
-    /// it names none; the rest the board's own, surfaced verbatim.
-    pub(in crate::merge) fn refuse(&self, doc: &Address, r: &Rejection, v: &Value) -> Refusal {
-        let refused =
-            || r.site().addr.as_deref().and_then(parse_address).unwrap_or_else(|| doc.clone());
-        match r.key() {
-            "withheld" => Refusal::Unreadable(refused()),
-            "doc_not_registered" => Refusal::NoSuchDocument(refused()),
+    /// refused in declaration order (wire.md §Rejections) — else `doc`, the
+    /// document a read of one document is of; the rest the board's own,
+    /// surfaced verbatim. A read of several documents — the join's `compare`,
+    /// the read by identity — passes no `doc`, so where the board names no
+    /// document this client parses, its refusal is surfaced verbatim too,
+    /// never one of the read's documents standing in for the one it refused
+    /// (SP-18).
+    pub(in crate::merge) fn refuse(&self, doc: Option<&Address>, r: &Rejection, v: &Value) -> Refusal {
+        let named = r.site().addr.as_deref().and_then(parse_address).or_else(|| doc.cloned());
+        match (r.key(), named) {
+            ("withheld", Some(doc)) => Refusal::Unreadable(doc),
+            ("doc_not_registered", Some(doc)) => Refusal::NoSuchDocument(doc),
             _ => Refusal::Halt(r.refused(v)),
         }
     }
@@ -228,7 +232,7 @@ impl<'a> Reader<'a> {
     ) -> Result<Value, Refusal> {
         let v = self.read(frame, at)?;
         match Rejection::of(&v) {
-            Some(r) => Err(self.refuse(doc, &r, &v)),
+            Some(r) => Err(self.refuse(Some(doc), &r, &v)),
             None => Ok(v),
         }
     }
@@ -347,7 +351,7 @@ impl<'a> Reader<'a> {
         let v = self.read(&frame, at)?;
         if let Some(r) = Rejection::of(&v) {
             if r.key() != "image_too_large" {
-                return Err(self.refuse(doc, &r, &v));
+                return Err(self.refuse(Some(doc), &r, &v));
             }
             if width == 1 {
                 return Err(Refusal::TooFragmented { doc: doc.clone(), runs_seen: out.len() });
@@ -452,7 +456,7 @@ impl<'a> Reader<'a> {
                 other => other?,
             };
             if let Some(r) = Rejection::of(&v) {
-                let refusal = self.refuse(doc, &r, &v);
+                let refusal = self.refuse(Some(doc), &r, &v);
                 return if r.key() == "too_many_items" { Ok(Delivered::TooLarge(refusal)) } else { Err(refusal) };
             }
             let Some(items) = answers::delivery_values(&v) else {
@@ -491,12 +495,13 @@ impl<'a> Reader<'a> {
     /// # Errors
     ///
     /// `withheld` naming the document a span lies in, [`Refusal::Unreadable`]
-    /// naming it, and another refusal, mapped by [`Reader::refuse`] with
-    /// `holder` where the board names none; an item `null` — no value at an
-    /// address an image served — or one no value is spelled from, and an
-    /// answer short of, or past, the positions asked, faced; one position
-    /// still refused as [`Reader::values_by_ordinal`]'s is; otherwise
-    /// [`Reader::read`]'s errors.
+    /// naming it, and another refusal, mapped by [`Reader::refuse`] as a
+    /// read of several documents — one naming no document this client parses
+    /// is the board's refusal verbatim, never `holder` (SP-18); an item
+    /// `null` — no value at an address an image served — or one no value is
+    /// spelled from, and an answer short of, or past, the positions asked,
+    /// faced; one position still refused as [`Reader::values_by_ordinal`]'s
+    /// is; otherwise [`Reader::read`]'s errors.
     pub(in crate::merge) fn values_by_identity(&self, holder: &Address, spans: &[(&str, u64, u64)]) -> Result<Vec<Vec<Item>>, Refusal> {
         let widths: Vec<u64> = spans.iter().map(|s| s.2).collect();
         let room = |span: usize| {
@@ -511,7 +516,9 @@ impl<'a> Reader<'a> {
                 other => other?,
             };
             if let Some(r) = Rejection::of(&v) {
-                let refusal = self.refuse(holder, &r, &v);
+                // A read of the documents the spans lie in, which need not
+                // include `holder`: the one the board names, or its refusal.
+                let refusal = self.refuse(None, &r, &v);
                 return if r.key() == "too_many_items" { Ok(Delivered::TooLarge(refusal)) } else { Err(refusal) };
             }
             let Some(items) = answers::i_delivery_values(&v) else {

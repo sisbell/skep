@@ -150,7 +150,10 @@ pub enum Refusal {
     /// side windows from a document the reader may not read, which the board
     /// masks at its own position (wire.md §Value encodings). Its words name
     /// the document and the code alone, the same at every act; the embedder
-    /// says what the act did (SP-10).
+    /// says what the act did (SP-10). At a read of several documents — the
+    /// join's `compare`, the read by identity — it is the one the board's
+    /// `site.addr` names; a `withheld` there naming none this client parses
+    /// is [`Refusal::Halt`], the board's refusal verbatim (SP-18).
     ///
     /// Where the reads are a merge record's recomputation, [`record::verify`]
     /// answers [`Verdict::Unreadable`] naming the document instead: the
@@ -160,6 +163,11 @@ pub enum Refusal {
     /// [`Verdict::Unreadable`]: super::record::Verdict::Unreadable
     Unreadable(Address),
     /// `doc_not_registered` on the document named.
+    ///
+    /// At a read of several documents — the join's `compare`, the read by
+    /// identity — it is the one the board's `site.addr` names; one naming
+    /// none this client parses is [`Refusal::Halt`], the board's refusal
+    /// verbatim (SP-18).
     NoSuchDocument(Address),
     /// `image_too_large` down to a region of one position.
     ///

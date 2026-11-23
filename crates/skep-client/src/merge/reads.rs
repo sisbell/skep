@@ -124,7 +124,11 @@
 //! draft's or a fork's words refuses it whole (`retrieve_i`), each naming
 //! that document, so it refuses where a value is read
 //! ([`Refusal::Unreadable`]); the value rule switched off reads no value of
-//! it.
+//! it. A `withheld` or a `doc_not_registered` at a read of several
+//! documents — the join's `compare`, the read by identity — names the
+//! document the board's `site.addr` names, and one naming none this client
+//! parses is the board's refusal verbatim, [`Refusal::Halt`], never one of
+//! the read's documents in its place (SP-18).
 //!
 //! The reads go through [`Board::op`] under the caller's token, or with no
 //! token where none is given, and through [`Board::op_at`] for a read as of

@@ -13,9 +13,10 @@
 //! `verify`'s verdicts, a withheld input
 //! withholding the verdict and an unregistered one refused, a withheld run
 //! in a readable side refused naming its origin, its images read as of one
-//! position and its values at the head, a moved gap of two groups
-//! landing and verifying equal; and the `Record`'s JSON round trip, its
-//! `type` fixed.
+//! position and its values at the head, a refusal naming no document at the
+//! join's `compare` or the read by identity the board's own, verbatim, a
+//! moved gap of two groups landing and verifying equal; and the `Record`'s
+//! JSON round trip, its `type` fixed.
 
 use super::*;
 
@@ -503,6 +504,65 @@ fn a_withheld_input_withholds_the_verdict_and_an_unregistered_one_is_refused() {
     );
 }
 
+/// A refusal naming no document at the join's `compare` is surfaced verbatim.
+///
+/// The race shape landed by a shot verifies Equal, its `compare` naming the
+/// base `D.1` in ρ₁ and the head and the daughter in ρ₂. The base's grant
+/// withdrawn before the compare, then the daughter's, each answered with no
+/// site and then with a `site.addr` no address parses, is no verdict naming
+/// the base, the compare's first document: `verify` answers the board's
+/// `withheld` verbatim, the refused compare its last read. So does the
+/// daughter gone before the compare, whose `doc_not_registered` names no
+/// document (SP-18; wire.md §Rejections). A read of one document names its
+/// one argument whatever the site: the trunk withheld answers Unreadable
+/// naming it.
+#[test]
+fn a_refusal_naming_no_document_at_the_joins_compare_is_the_boards_refusal_verbatim() {
+    let (dialer, board, signer) = open(World::race());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    land(&board, &merged, shot(&session, &signer)).expect("landed");
+    let record = current(&board, Some(&token()), &a(K), &merged.key)
+        .expect("the lookup")
+        .expect("the record");
+    dialer.clear();
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+    let compare_at = dialer.served_index("at:compare");
+    // The verification's answer is the compare's refusal of `code`, as the
+    // board gave it, and the compare its last read.
+    let verbatim = |code: &str, case: &str| {
+        dialer.clear();
+        let err = verify(&board, Some(&token()), &record).expect_err(case);
+        let Refusal::Halt(Halt::Refused(r)) = &err else { panic!("{case}: {err:?}") };
+        assert_eq!(
+            (r.code.as_str(), r.detail.as_deref(), r.op.as_deref()),
+            (code, None, Some("compare")),
+            "{case}"
+        );
+        let ops = dialer.ops();
+        assert_eq!(ops.last().map(String::as_str), Some("at:compare"), "{case}: {ops:?}");
+    };
+    for site in [Value::Null, json!({"addr": "x"})] {
+        dialer.world().withheld_site = Some(site.clone());
+        for hidden in [format!("{D}.1"), format!("{D}.1.1")] {
+            dialer.world().withheld.clear();
+            dialer.world().withhold = Some((compare_at, hidden.clone()));
+            verbatim("withheld", &format!("{hidden} withheld before the compare, site {site}"));
+            assert!(dialer.world().withhold.is_none(), "the grant withdrawn mid-walk");
+        }
+        dialer.world().withheld = BTreeSet::from([D.to_string()]);
+        assert_eq!(
+            verify(&board, Some(&token()), &record),
+            Ok(Verdict::Unreadable(a(D))),
+            "the trunk withheld, site {site}"
+        );
+    }
+    dialer.world().withheld.clear();
+    dialer.world().withheld_site = None;
+    dialer.world().unregister = Some((compare_at, format!("{D}.1.1")));
+    verbatim("doc_not_registered", "the daughter gone before the compare");
+}
+
 /// A run a readable side windows from a document the reader may not
 /// read refuses where the value rule reads it, naming that document.
 ///
@@ -585,6 +645,70 @@ fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
             assert!(face.act.contains("board fault"), "{face}");
         }
         other => panic!("a reference is a board fault: {other:?}"),
+    }
+}
+
+/// The read by identity's `withheld` naming no document is surfaced verbatim.
+///
+/// The race shape with the merger's draft `S`, staged from `D.1`, adding
+/// "big " at `D·4|D·5` as a window onto `W`, another account's draft,
+/// beside the head's own fresh "big ": the dedup reads `S`'s group by
+/// identity, one `retrieve_i` of `W`'s four words, and keeps the head's;
+/// a record of it landed on the head verifies Equal. With `W` withheld and
+/// the board naming it, `compose` refuses `Unreadable(W)` and `verify`
+/// answers it. Answered with no site, then with a `site.addr` no address
+/// parses, the read by identity — of the documents its spans lie in, `S`
+/// not among them — refuses both acts with the board's `withheld`
+/// verbatim, the read their last, never `S` named in the board's place
+/// (SP-18; wire.md §Content & provenance reads).
+#[test]
+fn a_withheld_naming_no_document_at_the_read_by_identity_is_the_boards_refusal_verbatim() {
+    const W: &str = "1.0.2.0.70";
+    let mut w = World::race();
+    w.text(W, 1, "big ");
+    w.doc(W, false, "1.0.2", vec![run(W, 1, 4)]);
+    w.doc(S, false, ACCOUNT, vec![run(D, 1, 4), run(W, 1, 4), run(D, 5, 7)]);
+    w.staged(S, &format!("{D}.1"), 11);
+    let (dialer, board, _) = open(w);
+    let inputs = draft_inputs();
+    // The premise, `W` readable: the dedup reads `S`'s group by identity.
+    let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+    assert_eq!(
+        m_runs(&merged),
+        vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)],
+        "the head's 'big ' kept, S's copy dropped"
+    );
+    assert_eq!(merged.composed.values.applied, vec![GapId(1)]);
+    let by_identity = dialer.frames("retrieve_i");
+    assert_eq!(by_identity.len(), 1, "{:?}", dialer.ops());
+    assert_eq!(by_identity[0]["spans"], json!([{"start": format!("{W}.0.1.1"), "width": "4"}]));
+    let mut record = merged.record.clone();
+    record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.2")), position: 0 });
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+    // `W` withheld, the board naming it.
+    dialer.world().withheld.insert(W.to_string());
+    assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::Unreadable(a(W))));
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
+    // The board naming no document this client parses: the act refused
+    // with the read's `withheld` as the board gave it, that read its last.
+    let verbatim = |err: &Refusal, case: &str| {
+        let Refusal::Halt(Halt::Refused(r)) = err else { panic!("{case}: {err:?}") };
+        assert_eq!(
+            (r.code.as_str(), r.detail.as_deref(), r.op.as_deref()),
+            ("withheld", None, Some("retrieve_i")),
+            "{case}"
+        );
+        let ops = dialer.ops();
+        assert_eq!(ops.last().map(String::as_str), Some("retrieve_i"), "{case}: {ops:?}");
+    };
+    for site in [Value::Null, json!({"addr": "x"})] {
+        dialer.world().withheld_site = Some(site.clone());
+        dialer.clear();
+        let err = compose(&board, Some(&token()), &inputs).expect_err("refused");
+        verbatim(&err, &format!("compose, site {site}"));
+        dialer.clear();
+        let err = verify(&board, Some(&token()), &record).expect_err("refused");
+        verbatim(&err, &format!("verify, site {site}"));
     }
 }
 

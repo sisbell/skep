@@ -332,6 +332,12 @@ struct World {
     /// Before the N-th frame the dialer serves is answered, this
     /// document joins `withheld`.
     withhold: Option<(usize, String)>,
+    /// A document gone from the board in the middle of a walk.
+    ///
+    /// Before the N-th frame the dialer serves is answered, this document
+    /// leaves the world: a read naming it answers `doc_not_registered`,
+    /// which a `compare` answers with no site.
+    unregister: Option<(usize, String)>,
     /// A record landing in the middle of a walk: before the `find_links_ftt`
     /// of this count (the 2nd is the shot's re-read of a window's
     /// records) is answered, this link and this feed row stand.
@@ -345,6 +351,11 @@ struct World {
     /// `withheld` item at its own position (wire.md §Value encodings),
     /// the one predicate asked of both (wire.md §The read predicate).
     withheld: BTreeSet<String>,
+    /// The `site` a read's `withheld` carries in place of the document's.
+    ///
+    /// A cell sets one, `null` none, for a board off the wire, which names
+    /// the document on every read's `withheld` (wire.md §Rejections).
+    withheld_site: Option<Value>,
     /// `/health` names the merger's account the board's claimant.
     claimed: bool,
     /// `H.1` answers its record.
@@ -765,12 +776,17 @@ impl World {
             )
         };
         // A document argument this reader may not read: `withheld`,
-        // `site.addr` the document (wire.md §The read predicate).
+        // `site.addr` the document (wire.md §The read predicate), or the
+        // site a cell sets in its place.
+        let site = self.withheld_site.clone();
         let masked = |doc: &str| {
-            reply(
-                200,
-                json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": op, "site": {"addr": doc}}),
-            )
+            let mut rej = json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": op});
+            match &site {
+                None => rej["site"] = json!({"addr": doc}),
+                Some(Value::Null) => {}
+                Some(site) => rej["site"] = site.clone(),
+            }
+            reply(200, rej)
         };
         // An id past the wire's cap is refused at parse, as skepd's codec
         // refuses it: `malformed` under `unparseable`, nothing applied.
@@ -1638,6 +1654,11 @@ impl Dialer for Scripted {
         if w.withhold.as_ref().is_some_and(|(n, _)| *n == served) {
             let (_, doc) = w.withhold.take().unwrap();
             w.withheld.insert(doc);
+        }
+        // A document gone before this frame is answered.
+        if w.unregister.as_ref().is_some_and(|(n, _)| *n == served) {
+            let (_, doc) = w.unregister.take().unwrap();
+            w.docs.remove(&doc);
         }
         // A record landing before the find that reads it.
         if frame["op"] == "find_links_ftt" {

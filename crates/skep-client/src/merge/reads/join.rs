@@ -135,11 +135,13 @@ fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 ///
 /// # Errors
 ///
-/// A refusal other than a budget's, mapped by [`Reader::refuse`] — a
-/// `withheld` or `doc_not_registered` naming the region's document the
-/// board refused, the base's or a side's; a budget refusal down to one
-/// position each, faced; an answer that is no `compare` answer, faced;
-/// [`Reader::read`]'s errors.
+/// A refusal other than a budget's, mapped by [`Reader::refuse`] as a read
+/// of several documents — a `withheld` or `doc_not_registered` naming the
+/// region's document the board refused, the base's or a side's, and one
+/// naming no document this client parses the board's refusal verbatim,
+/// never the base (SP-18); a budget refusal down to one position each,
+/// faced; an answer that is no `compare` answer, faced; [`Reader::read`]'s
+/// errors.
 fn compare_parts(
     reader: &Reader<'_>,
     base: &Imaged,
@@ -166,7 +168,9 @@ fn compare_parts(
     let v = reader.read(&frames::compare(&rho1, &rho2), at)?;
     if let Some(r) = Rejection::of(&v) {
         if !matches!(r.key(), "too_many_blocks" | "too_many_pairs") {
-            return Err(reader.refuse(&base.doc, &r, &v));
+            // A read of the base and every side: the one the board names,
+            // or its refusal.
+            return Err(reader.refuse(None, &r, &v));
         }
         if sides.len() > 1 {
             for side in sides {

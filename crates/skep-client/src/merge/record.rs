@@ -1467,11 +1467,14 @@ pub enum Verdict {
     ///
     /// It is the trunk, the head, the base or a side, withheld at any read
     /// the recomputation makes, the join's `compare` included; the origin of
-    /// a run a side windows, met as a `withheld` item where the value rule
-    /// reads the run's values; the landed member, or the draft, withheld or
-    /// not registered; or the draft side, or the draft landed in, as of the
-    /// position the record names for it, whose history the board has
-    /// reclaimed: the verdict withheld, never made up (D14).
+    /// a run a side windows, met as a `withheld` item, or as the `withheld`
+    /// a read by identity answers, where the value rule reads the run's
+    /// values; the landed member, or the draft, withheld or not registered;
+    /// or the draft side, or the draft landed in, as of the position the
+    /// record names for it, whose history the board has reclaimed: the
+    /// verdict withheld, never made up (D14). At a read of several documents
+    /// — the join's `compare`, the read by identity — it is the document the
+    /// board names, and a `withheld` naming none is no verdict (SP-18).
     Unreadable(Address),
 }
 
@@ -1519,7 +1522,11 @@ pub enum Verdict {
 /// a run a side windows from a document the reader may not read, masked
 /// at its own position (wire.md §Value encodings) — naming the item's
 /// origin. A document the board has never registered is no withheld one
-/// (wire.md §The read predicate): it is refused.
+/// (wire.md §The read predicate): it is refused. A `withheld` or a
+/// `doc_not_registered` at a read of several documents — the join's
+/// `compare`, the read by identity — that names no document this client
+/// parses is the board's refusal verbatim, never a verdict naming one of
+/// the read's documents in the board's place (SP-18).
 ///
 /// A position the record names — its draft side's, its draft landing's —
 /// is read as named or not at all (skep #761): where the board has
@@ -1543,7 +1550,10 @@ pub enum Verdict {
 /// document the board has not registered, [`Refusal::NoSuchDocument`],
 /// among them — but `withheld`, a rejection or an item a value read meets,
 /// and a reclaimed position the record names, which answer
-/// [`Verdict::Unreadable`]; a record whose base is not the one the sides'
+/// [`Verdict::Unreadable`], save a `withheld` or a `doc_not_registered`
+/// naming no document this client parses at the join's `compare` or a read
+/// by identity, the board's refusal verbatim ([`Refusal::Halt`], SP-18);
+/// a record whose base is not the one the sides'
 /// recorded bases derive, [`Refusal::NamedBaseDisagrees`] — beside a draft
 /// side [`Refusal::DraftBaseDisagrees`], and beside a fork side faced,
 /// naming the base the record names and the one the board's records now

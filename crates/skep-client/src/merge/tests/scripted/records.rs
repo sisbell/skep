@@ -6,7 +6,11 @@
 //! a sub-account's; `landing_record`, a draft's own landing record read
 //! through the draft once the merge landed in another, another account's
 //! records, another merge's, a landing past the marker's and a record a
-//! take-back replaced passed over; `verify`'s verdicts, a withheld input
+//! take-back replaced passed over; `standing_landing`, the same read by the
+//! draft's mark alone — its marker, or a baseless draft's latest
+//! `set_arrangement` row, a plain re-arrangement leaving none — none for a
+//! draft with no marker or a published document, a refused read never none;
+//! `verify`'s verdicts, a withheld input
 //! withholding the verdict and an unregistered one refused, a withheld run
 //! in a readable side refused naming its origin, its images read as of one
 //! position and its values at the head, a moved gap of two groups
@@ -216,8 +220,10 @@ fn the_trunk_owners_record_is_current_over_a_sub_accounts() {
 /// #1140): case (j)'s fork `F` lands in a fresh draft `L`; edited by the
 /// forker, the merge composed again lands in a fresh draft `L2`, whose
 /// record is the merger's newest of the merge (`landed_draft`). By each
-/// draft's marker, `landing_record` answers that draft's own record, and
-/// it goes on answering `L`'s as records stand beside it, one at a time:
+/// draft's marker, `landing_record` answers that draft's own record, and so
+/// does `standing_landing`, given the draft alone (the mutant that answers
+/// the merger's newest record of the merge answers `L2`'s at `L`); and both
+/// go on answering `L`'s as records stand beside it, one at a time:
 /// a sub-account's record of the merge naming `L` at the marker's position,
 /// newer (the mutant that keeps every account's records answers it); that
 /// sub-account's take-back replacing `L`'s record (the mutant that lets
@@ -266,6 +272,13 @@ fn a_drafts_landing_record_is_read_through_the_draft_whatever_landed_since() {
     };
     assert_eq!(standing(&l2, &marked_elsewhere), Some(elsewhere.clone()), "L2's own");
     assert_eq!(standing(&l, &marked), Some(own.clone()), "L's own, the merge landed in L2 since");
+    let by_mark = |draft: &Address| {
+        standing_landing(&board, Some(session.token()), &a(K), draft, ACCOUNT)
+            .expect("the lookup")
+            .and_then(|r| r.link)
+    };
+    assert_eq!(by_mark(&l2), Some(elsewhere.clone()), "L2's own, by the draft alone");
+    assert_eq!(by_mark(&l), Some(own.clone()), "L's own, by the draft alone");
     // Each record stands beside L's in turn, its link minted after every
     // other, as a later write's is.
     let to = [l.to_string(), F.to_string()];
@@ -291,7 +304,77 @@ fn a_drafts_landing_record_is_read_through_the_draft_whatever_landed_since() {
     assert_eq!(standing(&l, &marked), Some(own.clone()), "a landing past the marker's");
     let newer = plant(theirs, &landed_in_l(&merged.record, at));
     plant(theirs, &Record { landed: None, replaces: Some(newer), ..merged.record.clone() });
-    assert_eq!(standing(&l, &marked), Some(own), "a newer record of the merger's, taken back");
+    assert_eq!(
+        standing(&l, &marked),
+        Some(own.clone()),
+        "a newer record of the merger's, taken back"
+    );
+    assert_eq!(by_mark(&l), Some(own), "every record beside L's, by the draft alone");
+}
+
+/// The landing standing in a draft is read by the draft's mark alone.
+///
+/// The draft landing's world: `S`, staged and carrying no marker, answers
+/// none, and so does `D`, a published document, the feed never walked for
+/// either. `P` and `P2`, drafts the board records no base for, answer none
+/// before any landing; the merge landed in `P`, then in `P2`, `P` answers
+/// its own record by its latest `set_arrangement` row on the supplement and
+/// `P2` its own (the mutant that answers the merger's newest record of the
+/// merge answers `P2`'s at `P`; the one that reads no mark with no base
+/// record answers neither). A plain re-arrangement of `P` since, naming no
+/// merge, leaves no landing standing there (the mutant that keeps the
+/// latest row naming a merge answers `P`'s record). `P` withheld is refused
+/// `Unreadable` and a draft the board never registered `NoSuchDocument`,
+/// each naming the draft, never none (SP-14).
+#[test]
+fn the_landing_standing_in_a_draft_is_read_by_its_mark_alone() {
+    let (p, p2) = ("1.0.1.0.67", "1.0.1.0.68");
+    let mut w = draft_landing_world();
+    w.doc(p, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.doc(p2, false, ACCOUNT, vec![run(D, 1, 11)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let standing = |draft: &str| {
+        standing_landing(&board, Some(session.token()), &a(K), &a(draft), ACCOUNT)
+            .map(|r| r.and_then(|r| r.link))
+    };
+    let walked = |draft: &str| {
+        dialer.ops().iter().any(|o| {
+            o.starts_with("GET /changes?")
+                && o.contains(&format!("under={draft}"))
+                && o.contains("drafts=true")
+        })
+    };
+    dialer.clear();
+    assert_eq!(standing(S), Ok(None), "S carries no marker");
+    assert_eq!(standing(D), Ok(None), "a published document");
+    assert!(!walked(S) && !walked(D), "no feed walk: {:?}", dialer.ops());
+    assert_eq!(standing(p), Ok(None), "P before any landing");
+    assert!(walked(p), "P's own rows on the supplement: {:?}", dialer.ops());
+    // The merge landed in P, then in P2.
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let first = land(&board, &merged, draft_landing(&session, &signer, Some(a(p)))).expect("in P");
+    let (_, own) = landing_of(&first);
+    let second =
+        land(&board, &merged, draft_landing(&session, &signer, Some(a(p2)))).expect("in P2");
+    let (_, elsewhere) = landing_of(&second);
+    assert_eq!(dialer.world().standing(p), (None, None), "the premise: no base, no marker");
+    assert_eq!(standing(p), Ok(Some(own)), "P's own, the merge landed in P2 since");
+    assert_eq!(standing(p2), Ok(Some(elsewhere)), "P2's own");
+    // A plain re-arrangement of P, naming no merge.
+    let at = dialer.world().position;
+    let plain =
+        frames::set_arrangement(p, &shot_runs(&[run(D, 1, 11)]), at, None, None, None, None);
+    let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
+        panic!("closed")
+    };
+    assert!(acked_at(&ack).is_some(), "the premise: re-arranged: {ack}");
+    assert_eq!(standing(p), Ok(None), "no landing standing in P");
+    // Refused reads, each naming the draft.
+    dialer.world().withheld.insert(p.to_string());
+    assert_eq!(standing(p), Err(Refusal::Unreadable(a(p))), "P withheld");
+    let unregistered = "1.0.1.0.99";
+    assert_eq!(standing(unregistered), Err(Refusal::NoSuchDocument(a(unregistered))));
 }
 
 /// `verify`'s three verdicts: Equal where the member holds M over its

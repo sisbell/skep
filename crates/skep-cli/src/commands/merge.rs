@@ -40,13 +40,14 @@
 //! with `--into` it lands the
 //! merged list in a draft as one `set_arrangement` typed against that
 //! position — refused whole where the draft changed since, the draft's base
-//! re-recorded on the head and the merge marked beside it; with `--new` it
-//! stages a fresh draft from the head and lands there — or, where the
-//! merger's own landing of the key already stands in a draft, reports that
-//! landing and stages nothing, its `fresh` false, and where a fork or a
-//! draft side moved since the merger's own landing of the merge, so the
-//! key is another, lands in the draft that landing's record names, found
-//! with the states ignored (`landed_draft`), its `fresh` false, and where
+//! re-recorded on the head and the merge marked beside it where the board
+//! records a base for it; with `--new` it stages a fresh draft from the head
+//! and lands there — or, where the merger's own landing of the key already
+//! stands in a draft, reports that landing and stages nothing, its `fresh`
+//! false, and where a fork or a draft side moved since the merger's own landing
+//! of the merge, so the key is another, lands in the draft the merger's newest
+//! record of the merge names, found with the states ignored (`landed_draft`),
+//! its `fresh` false, and where
 //! the merge landed in a draft of the merger's that no record of theirs
 //! names — a landing cut off before its record — lands nothing and stages
 //! nothing, refused `landing_begun` naming the draft, exit 1, for `--into`
@@ -143,13 +144,17 @@
 //! `record`, `head_moved` (the newer head told, else null) and `fresh`
 //! (whether this run staged the draft, as the library's landing answers it:
 //! false for `--into` and for a landing found standing) — and, where the
-//! draft is the one the merger's own landing of the merge with a moved side
-//! names, `replaced`: each stretch of the draft as it stood at the
+//! landing goes over the merger's own landing of the merge with a moved
+//! side, `replaced`: each stretch of the draft as it stood at the
 //! composition's position that the landing replaced, `{ordinal, width,
 //! origin, i_start}`, `[]` where the merge carries all it held, the talk
 //! naming them and the `--undo` that puts them back (the owner's ruling of
-//! 2026-11-20). `--json` is every command's flag and changes nothing here:
-//! the report is JSON always.
+//! 2026-11-20). For `--into` that landing is the one standing in the draft
+//! named, read by the draft's mark — its marker, or with no recorded base
+//! its latest `set_arrangement` row — whatever the merge landed in since
+//! (`standing_landing`); for `--new` it is the one the merger's newest
+//! record of the merge names, in the draft it lands in. `--json` is every
+//! command's flag and changes nothing here: the report is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -159,10 +164,10 @@ use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
-    compose, head_of, journal, land, landed_draft, replaced, undo, unwithdraw, withdraw, Answers,
-    Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged, Merger, Misfit,
-    Options, Placement, Record, RecordLanding, Refusal, Replaced, Resolution, ResolvedBy, Side,
-    SideIx, SideState, Undone, Unwithdrawn, WindowPart, Withdrawn,
+    compose, head_of, journal, land, landed_draft, replaced, standing_landing, undo, unwithdraw,
+    withdraw, Answers, Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
+    Merger, Misfit, Options, Placement, Record, RecordLanding, Refusal, Replaced, Resolution,
+    ResolvedBy, Side, SideIx, SideState, Undone, Unwithdrawn, WindowPart, Withdrawn,
 };
 use skep_client::publication::OriginAnswer;
 use skep_client::sheet::render_inert;
@@ -355,13 +360,24 @@ fn run(
     if let Some(landing) = landing {
         let journal = asked.journal.clone();
         let step = landing.step();
-        // The merger's own earlier landing of the merge, its states ignored,
-        // where its record is of another key — a fork or a draft side moved
-        // since it: `--new` lands in its draft, never a fresh one, and a
-        // landing there says what it replaces.
+        // The draft holding the merger's own earlier landing of the merge,
+        // its states ignored, where its record is of another key — a fork or
+        // a draft side moved since it. `--into` reads the landing standing
+        // in the draft it names, whatever the merge landed in since; `--new`
+        // the merger's newest record of the merge, and lands in its draft,
+        // never a fresh one. A landing there says what it replaces.
         let earlier = match landing {
             Land::Publish(_) => None,
-            Land::Into(_) | Land::New => {
+            Land::Into(into) => {
+                standing_landing(board, Some(token), &asked.kind, into, session.account())
+                    .map_err(|r| refused(r, step))?
+                    .filter(|record| {
+                        record.key() != merged.key
+                            && record.key().stateless() == merged.key.stateless()
+                    })
+                    .map(|_| into.clone())
+            }
+            Land::New => {
                 landed_draft(board, Some(token), &asked.kind, &merged.key, session.account())
                     .map_err(|r| refused(r, step))?
                     .filter(|record| record.key() != merged.key)
@@ -376,12 +392,11 @@ fn run(
             Land::New => earlier.clone(),
             Land::Publish(_) => None,
         };
-        let stretches = match (&into, &earlier) {
-            (Some(into), Some(earlier)) if into == earlier => {
-                Some(replaced(board, Some(token), into, &merged).map_err(|r| refused(r, step))?)
-            }
-            _ => None,
-        };
+        let stretches = earlier
+            .as_ref()
+            .map(|draft| replaced(board, Some(token), draft, &merged))
+            .transpose()
+            .map_err(|r| refused(r, step))?;
         let landing = match landing {
             Land::Publish(answers) => Landing::Shot { merger, draft: None, answers: (**answers).clone(), journal },
             Land::Into(_) | Land::New => Landing::Draft { merger, into, journal },

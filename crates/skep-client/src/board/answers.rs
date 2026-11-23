@@ -876,8 +876,10 @@ pub fn merge_marker(v: &Value) -> Option<Option<MergeMarker>> {
 
 /// Returns the marker a `doc_metadata` answer's `merge` member spells.
 ///
-/// `None` where the member is no object naming its head.
-fn marker_of(v: &Value) -> Option<MergeMarker> {
+/// A feed row's `merge` reads alike, with no `head_copied` and an `at` only
+/// where its write put a marker back (wire.md §The change feed). `None`
+/// where the member is no object naming its head.
+pub(crate) fn marker_of(v: &Value) -> Option<MergeMarker> {
     let m = v["merge"].as_object()?;
     Some(MergeMarker {
         sides: m.get("sides")?.as_array()?.iter().filter_map(|s| s.as_str().map(str::to_string)).collect(),

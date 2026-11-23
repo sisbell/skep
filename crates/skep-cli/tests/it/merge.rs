@@ -56,7 +56,13 @@
 //! the key open, so `--new` stages a draft of its own; and a landing found
 //! standing — a sub-account keyed with a file of its own, the claimant's
 //! record its `prior`, its second `--new` reporting its own landing with
-//! `fresh` false, nothing staged or written.
+//! `fresh` false, nothing staged or written; and a landing over the
+//! merger's earlier landing of a fork edited since — `--new` in the draft
+//! the newest record names, `--into` over the landing standing in the draft
+//! named whatever the merge landed in or took back elsewhere since, by a
+//! staged draft's marker or a free-standing draft's latest landing row —
+//! naming what it replaced and the `--undo` that puts it back, and a
+//! landing of another merge or of the same key naming nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -915,62 +921,213 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     session.close().expect("close");
 }
 
+/// A merge of the forker's fork landed in `L`, then edited on both sides.
+///
+/// The fork of `D.1`, " sat" removed, is merged into `L` — the draft `--into`
+/// names, else a fresh one `--new` stages — "the big cat"; the person writes
+/// "zz " into `L`, and the forker writes " now" into the fork in place, so
+/// the merge's key is another, its fork's state moved. `first` is the first
+/// landing's report and `held` is `L` as it then stands, "zz the big cat".
+struct Edited {
+    kind: String,
+    d: Address,
+    base: Address,
+    head: Address,
+    fork: String,
+    l: String,
+    first: Value,
+    held: Vec<(String, String)>,
+}
+
+impl Edited {
+    /// Lands the merge in `into`, or a fresh draft, and edits both sides.
+    ///
+    /// The document and the fork are seeded first.
+    ///
+    /// # Panics
+    ///
+    /// Panics where a seeding write is refused, or where the first landing is
+    /// not the one asked or does not hold the big cat.
+    fn new(rig: &Rig, session: &Session<'_>, into: Option<&Address>) -> Edited {
+        let token = session.token().clone();
+        let kind = rig.draft().to_string();
+        let d = rig.document(session);
+        let base = rig.shot(session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+        let head = rig.shot(session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+        let forker = rig.forker();
+        let fork = rig.fork(&forker, &base).to_string();
+        let forked_at = rig.board.health().unwrap().log_position();
+        let deleted = Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork, 8, 4, forked_at, None)));
+        let mut e = Edited { kind, d, base, head, fork, l: String::new(), first: Value::Null, held: Vec::new() };
+        let into = into.map(ToString::to_string);
+        let landing = match &into {
+            Some(into) => vec!["--into", into.as_str()],
+            None => vec!["--new"],
+        };
+        e.first = report(&e.merge(rig, &landing));
+        assert_eq!(e.first["landed"]["fresh"], json!(into.is_none()), "{}", e.first);
+        assert!(e.first["landed"].get("replaced").is_none(), "a first landing replaces nothing: {}", e.first);
+        e.l = e.first["landed"]["draft"].as_str().expect("L").to_string();
+        assert_eq!(rig.image(&token, &addr(&e.l), 11), runs_of(&e.first), "L holds the big cat");
+        let at = rig.board.health().unwrap().log_position();
+        Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": e.l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["zz "], "as_of": at})));
+        let typed = acked_at(&deleted).expect("the forker's last ack");
+        Rig::acked(rig.board.op(Some(&forker), &json!({"op": "insert", "doc": e.fork, "at": {"subspace": "1", "ordinal": "8"}, "values": [" now"], "as_of": typed})));
+        e.held = rig.image(&token, &addr(&e.l), 14);
+        e
+    }
+
+    /// Runs `skep merge` over the fork, landing as `landing` asks.
+    fn merge(&self, rig: &Rig, landing: &[&str]) -> Run {
+        let d = self.d.to_string();
+        let mut args = vec!["--doc", d.as_str(), "--fork", self.fork.as_str(), "--kind", self.kind.as_str()];
+        args.extend_from_slice(landing);
+        rig.merge(&args)
+    }
+
+    /// Returns the report of `r` once it names what the landing replaced.
+    ///
+    /// `r` is a landing over `L`: it is in `L`, `fresh` false, its
+    /// `landed.replaced` the person's insertion — ordinal 1 and width 3 — and
+    /// the talk names the stretch and the `--undo` that puts it back.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `r` is no report, or the report or the talk says other.
+    fn replaced(&self, r: &Run) -> Value {
+        let (l, kind) = (self.l.as_str(), self.kind.as_str());
+        let v = report(r);
+        assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(l), json!(false)), "landed in L: {v}");
+        assert_eq!(v["landed"]["replaced"], json!([{"ordinal": 1, "width": 3, "origin": l, "i_start": 1}]), "the person's insertion: {v}");
+        assert!(r.err.contains(&format!("this landing replaced 1 stretch of {l} as it stood at position {}", v["as_of"])), "{}", r.err);
+        assert!(r.err.contains(&format!("ordinals 1–3; skep merge --undo {l} --kind {kind} puts them back")), "{}", r.err);
+        v
+    }
+}
+
 /// A fork edited since its landing lands over the draft it landed in.
 ///
-/// It names what it replaced (skep #770; the owner's ruling of 2026-11-20). The
-/// forker's fork of `D.1`, " sat" removed, is merged `--new` into a fresh draft
-/// L, "the big cat"; the person writes "zz " into L, and the forker writes "
-/// now" into the fork in place. The merge's key is then another, its fork's
-/// state moved, and `skep merge --fork … --new` lands in L, never a fresh draft
-/// — `landed.fresh` false — its `landed.replaced` the person's insertion,
+/// It names what it replaced (skep #770; the owner's ruling of 2026-11-20).
+/// The fork is merged `--new` into a fresh draft L and both sides are edited
+/// since ([`Edited`]). The merge's key is then another, its fork's state
+/// moved, and `skep merge --fork … --new` lands in L, never a fresh draft —
+/// `landed.fresh` false — its `landed.replaced` the person's insertion,
 /// ordinal 1 and width 3, the talk naming the stretch and the `--undo` that
-/// puts it back; `skep merge --undo L` then puts it back, L holding "zz the big
-/// cat" again (the mutants that land `--new` by the library's key alone, and
-/// that say nothing of what was replaced).
+/// puts it back; `skep merge --undo L` then puts it back, L holding "zz the
+/// big cat" again (the mutants that land `--new` by the library's key alone,
+/// and that say nothing of what was replaced).
 #[test]
 fn a_fork_edited_since_its_landing_lands_over_the_draft_naming_what_it_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let rig = Rig::new(dir.path());
     let session = rig.session();
     let token = session.token().clone();
-    let kind = rig.draft().to_string();
-    let d = rig.document(&session);
-    let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
-    rig.shot(&session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
-    let forker = rig.forker();
-    let fork = rig.fork(&forker, &base);
-    let forked_at = rig.board.health().unwrap().log_position();
-    let deleted = Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
-    let (d_s, fork_s) = (d.to_string(), fork.to_string());
-    let new = ["--doc", d_s.as_str(), "--fork", fork_s.as_str(), "--kind", kind.as_str(), "--new"];
-
-    // THE FIRST LANDING, in a fresh draft L.
-    let first = report(&rig.merge(&new));
-    assert_eq!(first["landed"]["fresh"], json!(true), "{first}");
-    assert!(first["landed"].get("replaced").is_none(), "a fresh landing replaces nothing: {first}");
-    let l = first["landed"]["draft"].as_str().expect("the fresh draft").to_string();
-    assert_eq!(rig.image(&token, &addr(&l), 11), runs_of(&first), "L holds the big cat");
-    // The person writes into L; the forker writes into the fork.
-    let at = rig.board.health().unwrap().log_position();
-    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["zz "], "as_of": at})));
-    let typed = acked_at(&deleted).expect("the forker's last ack");
-    Rig::acked(rig.board.op(Some(&forker), &json!({"op": "insert", "doc": fork_s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" now"], "as_of": typed})));
-    let held = rig.image(&token, &addr(&l), 14);
+    let e = Edited::new(&rig, &session, None);
 
     // `--new` again: landed over L, naming the person's insertion.
-    let r = rig.merge(&new);
-    let v = report(&r);
-    assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(l.as_str()), json!(false)), "landed in L, never a fresh draft: {v}");
-    assert_eq!(v["landed"]["replaced"], json!([{"ordinal": 1, "width": 3, "origin": l, "i_start": 1}]), "the person's insertion: {v}");
-    assert!(r.err.contains(&format!("this landing replaced 1 stretch of {l} as it stood at position {}", v["as_of"])), "{}", r.err);
-    assert!(r.err.contains(&format!("ordinals 1–3; skep merge --undo {l} --kind {kind} puts them back")), "{}", r.err);
-    assert_eq!(rig.image(&token, &addr(&l), 15), runs_of(&v), "L holds the new M: the big cat now");
-    assert_ne!(v["record"]["sides"][1]["arranged"], first["record"]["sides"][1]["arranged"], "the fork's state moved: {v}");
+    let v = e.replaced(&e.merge(&rig, &["--new"]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "L holds the new M: the big cat now");
+    assert_ne!(v["record"]["sides"][1]["arranged"], e.first["record"]["sides"][1]["arranged"], "the fork's state moved: {v}");
 
     // `--undo L` puts the insertion back.
-    let undone = report(&rig.merge(&["--undo", &l, "--kind", &kind]));
-    assert_eq!(undone["draft"].as_str(), Some(l.as_str()), "{undone}");
-    assert_eq!(rig.image(&token, &addr(&l), 14), held, "L as it stood before the landing, \"zz \" and all");
+    let undone = report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(undone["draft"].as_str(), Some(e.l.as_str()), "{undone}");
+    assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "L as it stood before the landing, \"zz \" and all");
+    session.close().expect("close");
+}
+
+/// A landing `--into` a draft names what it replaces whatever landed since.
+///
+/// The fork is merged `--new` into L and both sides are edited since
+/// ([`Edited`]); the merge composed again lands `--into L2`, a draft staged
+/// from the head, so the merger's newest record of the merge names L2. `skep
+/// merge --into L` reads the landing standing in L by L's marker: its
+/// `landed.replaced` is the person's insertion, the talk naming it and the
+/// `--undo` that puts it back, and `--undo L` puts it back (skep #1153; the
+/// mutant that reads the merger's newest record of the merge says nothing
+/// was replaced). A landing of another merge in L — the daughter `D.1.1`
+/// over the same head — says nothing replaced (the mutant that keeps a
+/// record of another merge reports L's words).
+#[test]
+fn a_landing_into_a_draft_names_what_it_replaces_after_the_merge_landed_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let e = Edited::new(&rig, &session, None);
+    let l2 = rig.stage(&e.head).to_string();
+    let elsewhere = report(&e.merge(&rig, &["--into", &l2]));
+    assert_eq!(elsewhere["landed"]["draft"].as_str(), Some(l2.as_str()), "{elsewhere}");
+    assert!(elsewhere["landed"].get("replaced").is_none(), "no landing stood in L2: {elsewhere}");
+
+    let v = e.replaced(&e.merge(&rig, &["--into", &e.l]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "L holds the new M: the big cat now");
+    let undone = report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(undone["draft"].as_str(), Some(e.l.as_str()), "{undone}");
+    assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "L as it stood before the landing, \"zz \" and all");
+
+    // Another merge landed in L: nothing of it replaced is said.
+    let daughter = rig.shot(&session, &e.d, Some((&e.base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    let r = rig.merge(&["--doc", &e.d.to_string(), "--alternative", &daughter.to_string(), "--kind", &e.kind, "--into", &e.l]);
+    let v = report(&r);
+    assert_eq!(v["landed"]["draft"].as_str(), Some(e.l.as_str()), "{v}");
+    assert!(v["landed"].get("replaced").is_none(), "a landing of another merge: {v}");
+    assert!(!r.err.contains("this landing replaced"), "{}", r.err);
+    session.close().expect("close");
+}
+
+/// A landing `--into` names what it replaces once another was taken back.
+///
+/// As the test above, with L2's landing taken back by `--undo L2` before
+/// `--into L`, so the merger's newest record of the merge is the take-back's,
+/// which names no draft (skep #1153; the mutant that reads it says nothing
+/// was replaced).
+#[test]
+fn a_landing_into_a_draft_names_what_it_replaces_after_a_landing_elsewhere_was_taken_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let e = Edited::new(&rig, &session, None);
+    let l2 = rig.stage(&e.head).to_string();
+    report(&e.merge(&rig, &["--into", &l2]));
+    let undone = report(&rig.merge(&["--undo", &l2, "--kind", &e.kind]));
+    assert_eq!(undone["draft"].as_str(), Some(l2.as_str()), "the premise: L2's landing taken back: {undone}");
+
+    let v = e.replaced(&e.merge(&rig, &["--into", &e.l]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "L holds the new M: the big cat now");
+    report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "L as it stood before the landing, \"zz \" and all");
+    session.close().expect("close");
+}
+
+/// A landing `--into` a draft with no recorded base names what it replaces.
+///
+/// A, minted by `create_new_document`, carries no base and so no marker (N4):
+/// the fork is merged `--into A` and both sides are edited since
+/// ([`Edited`]), and the merge composed again lands `--into A2`, another such
+/// draft. `skep merge --into A` reads the landing standing in A by its latest
+/// `set_arrangement` row on the feed: its `landed.replaced` is the person's
+/// insertion, and `--undo A`, which goes by that row, puts it back (skep
+/// #1153; the mutant that reads no landing in a draft with no marker says
+/// nothing was replaced).
+#[test]
+fn a_landing_into_a_draft_with_no_recorded_base_names_what_it_replaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let free = rig.draft();
+    let e = Edited::new(&rig, &session, Some(&free));
+    let meta = rig.read(&token, &frames::doc_metadata(&e.l));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "the premise: no base, no marker: {meta}");
+    let a2 = rig.draft().to_string();
+    report(&e.merge(&rig, &["--into", &a2]));
+
+    let v = e.replaced(&e.merge(&rig, &["--into", &e.l]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "A holds the new M: the big cat now");
+    report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "A as it stood before the landing, \"zz \" and all");
     session.close().expect("close");
 }
 
@@ -1496,7 +1653,9 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
 /// An undo of a merge landed twice puts the first landing back and says so.
 ///
 /// Skep #964 with #790: the race shape's daughter merged into `S` by
-/// `--into S`, then again — the same landing, its record the first's, the
+/// `--into S`, then again — the same landing, its record the first's, no
+/// `replaced` reported (the mutant that keeps a record of the same key reports
+/// one, skep #1153), the
 /// marker at the second write, where `--new` finds it standing and says so,
 /// writing nothing (skep #980). `--undo S` puts the first landing's marker
 /// back as the board stamped it: the report carries it under `marker`, the
@@ -1519,6 +1678,7 @@ fn an_undo_of_a_merge_landed_twice_puts_the_first_landing_back_and_says_so() {
     let marker = rig.read(&token, &frames::doc_metadata(&s_s))["merge"].clone();
     let second = land();
     assert!(second["position"].as_u64() > first["position"].as_u64() && second["record"] == first["record"], "the premise: the same landing: {second}");
+    assert!(second.get("replaced").is_none(), "the same landing replaces nothing of its own: {second}");
     let before = rig.board.health().unwrap().log_position();
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--new", "--kind", &kind_s]);
     assert_eq!(report(&r)["landed"], json!({"draft": s_s, "position": second["position"], "record": first["record"], "head_moved": null, "fresh": false}), "found standing at the second write");

@@ -10,7 +10,9 @@
 //! record standing for the landing a draft's merge marker marks, found
 //! through the links of the kind to the draft whatever the merge landed in
 //! since, the account's own links kept before any record is read
-//! ([`landing_record`]; an undo by the marker and a withdrawal find the
+//! ([`landing_record`], or [`standing_landing`] with the mark read off the
+//! draft as it stands — its marker, or a baseless draft's latest
+//! `set_arrangement` row; an undo by the marker and a withdrawal find the
 //! record they replace by the same rule, and a withdrawal's undo, by the
 //! marker it puts back, the landing's record it writes again and the
 //! take-back made since that landing it replaces), and [`verify`], the
@@ -80,7 +82,9 @@ use super::compose::{
     Choice, Gap, GapId, GapKind, Options, Placement, Resolution, ResolvedBy, Run, RunCounts,
     SideIx, Spot, ValueLog,
 };
-use super::reads::{self, last_component, origin_of, OnEnd, Reader, Refusal, Role, Side};
+use super::reads::{
+    self, feed_rows, last_component, origin_of, OnEnd, Reader, Refusal, Role, Side,
+};
 
 /// The kind's `type` member, `merge`.
 ///
@@ -1028,7 +1032,7 @@ pub(super) fn current_among(
 /// holding the person's latest landing of the merge, still the one to land
 /// in. It answers the newest record alone, so it names no earlier draft once
 /// the merge landed in another since: the record a draft's own landing
-/// stands on is [`landing_record`]'s, read by that draft's marker.
+/// stands on is [`standing_landing`]'s, read by that draft's mark.
 ///
 /// # Errors
 ///
@@ -1067,7 +1071,8 @@ pub fn landed_draft(
 /// #790), never one a take-back replaced, one of a landing made since or
 /// one of another merge. A marker whose `at` the board serves none bounds
 /// no position. `None` where none stands: a landing cut off before its
-/// record among them.
+/// record among them. [`standing_landing`] reads the mark off the draft as it
+/// stands and answers this for it.
 ///
 /// # Errors
 ///
@@ -1091,6 +1096,81 @@ pub fn landing_record(
     let own = linked_to(&reader, kind, draft, account)?;
     let at = marker.at.unwrap_or(u64::MAX);
     Ok(standing_for(&own, draft, marker, at).map(|f| f.record))
+}
+
+/// Returns `account`'s own record of the merge landing standing in `draft`.
+///
+/// The landing is the one the board marks in the draft as it stands, never
+/// one found by the draft's words (the landing lane's R2), and the record is
+/// [`landing_record`]'s for that mark, whatever the merge landed in since.
+/// The draft's `doc_metadata` is read first. Where the board records a base
+/// for the draft, the mark is its marker (`merge`). Where it records none,
+/// the draft carries no marker (wire.md §Arrangement, `merge`), and the mark
+/// is its latest `set_arrangement` row on the supplement where that row's
+/// `merge` names a head: its sides and head, at the row's position (wire.md
+/// §The change feed), as the `land` module finds a baseless landing
+/// standing. `None` where no landing stands: a published document, read no
+/// further; a draft whose base record carries no marker; a baseless draft
+/// whose latest `set_arrangement` row names no merge — an undo's, a
+/// restore's, a plain re-arrangement's — or that has none; and a mark no
+/// record of the account's stands for, a landing cut off before its record
+/// among them. An embedder reads it before a landing into a draft it names,
+/// for the landing that one goes over.
+///
+/// # Errors
+///
+/// In this order:
+///
+/// - the draft's `doc_metadata` refused `withheld`, as
+///   [`Refusal::Unreadable`], or `doc_not_registered`, as
+///   [`Refusal::NoSuchDocument`], naming it, and an answer of a shape this
+///   client does not know, faced;
+/// - on a draft with no recorded base, the feed walk's (`feed_rows`): a
+///   transport fault, [`Refusal::Halt`];
+/// - [`landing_record`]'s.
+///
+/// The death signal under the token at any read is
+/// [`Refusal::SessionEnded`], the lookup made again on a new session.
+pub fn standing_landing(
+    board: &Board,
+    token: Option<&Token>,
+    kind: &Address,
+    draft: &Address,
+    account: &str,
+) -> Result<Option<Record>, Refusal> {
+    let reader = Reader::new(board, token, OnEnd::Rerun);
+    let meta = reader.metadata(draft, None)?;
+    if meta.published {
+        return Ok(None);
+    }
+    let marker = match meta.base {
+        Some(_) => meta.merge,
+        None => latest_row_mark(&reader, draft)?,
+    };
+    match marker {
+        Some(marker) => landing_record(board, token, kind, draft, &marker, account),
+        None => Ok(None),
+    }
+}
+
+/// Returns the mark a baseless draft's latest `set_arrangement` row makes.
+///
+/// It walks the supplement under the draft (`drafts=true`) and keeps the
+/// last `set_arrangement` row: its `merge`, where that names a head, as the
+/// marker it stands for — its sides and head, `at` the row's position, the
+/// head's extent unknown — else none (wire.md §The change feed).
+///
+/// # Errors
+///
+/// The feed walk's (`feed_rows`), through `reader`.
+fn latest_row_mark(reader: &Reader<'_>, draft: &Address) -> Result<Option<MergeMarker>, Refusal> {
+    let mut latest = None;
+    feed_rows(reader, &draft.to_string(), true, 0, |row| {
+        if row["op"].as_str() == Some("set_arrangement") {
+            latest = answers::marker_of(row).map(|m| MergeMarker { at: row["at"].as_u64(), ..m });
+        }
+    })?;
+    Ok(latest)
 }
 
 /// Returns `account`'s own merge records of `kind` linked to `draft`.

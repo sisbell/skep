@@ -2034,9 +2034,10 @@ sends the shot without its claim); and the publication's budget on
 its in-lock reads and its staged bytes, `publication_over_budget` (the reads the one commit
 makes under the daemon's serialization lock, priced AHEAD of the lock
 off a lock-free snapshot — the caller's link-holding home count × the
-links, read-with and supersede entries, plus the draft's content run
-count × the
-request's runs — past M7's `MAX_PUBLICATION_READS` = 65536; or the
+links, originals, read-with and supersede entries, plus, per draft the
+commit re-windows, the pieces its lists place × the runs its run-list
+holds while they are placed, plus one per re-inserted run — past M7's
+`MAX_PUBLICATION_READS` = 65536; or the
 bytes the commit would stage, priced from M7's worst-case table off the
 request — a record per piece a run mints, a copy at its slots' spans and
 its claim per links entry, a retraction, a read-with, a claim per
@@ -2619,19 +2620,27 @@ claim joins the class `nullify` refuses to retract — a merged version
 stands for good, and so does the fact that it took the daughter in; the
 owner's `nullify` of it is `nullify_audit_view`, and no act retracts it.
 
-**The in-lock reads' budget** (the link-sets design §5.7). The four
-reads the one commit makes under the daemon's serialization lock — the
-claim read per `links` entry, the presence read per `read_with`
-entry and the claim read per `supersede` entry, each over the caller's
-link-holding homes; the twin fence's stab
-per re-inserted run; and the kept-place check's resolution over the
-draft's run-list per placed run — are PRICED BEFORE THE LOCK IS TAKEN,
-off a lock-free snapshot of the head: the caller's link-holding home
-count × (`links` entries + `read_with` entries + `supersede` entries),
-plus the draft's
-content run count × the request's runs, against `MAX_PUBLICATION_READS`
-= 65536 (16 × `MAX_SLOT_SPANS`) — AND THE STAGED BYTES, the price's
-fifth term (the link-sets design §5.6, M6): the bytes the one commit
+**The in-lock reads' budget** (the link-sets design §5.7). The reads
+the one commit makes under the daemon's serialization lock — the claim
+read per `links` entry and per `originals` entry, the presence read per
+`read_with` entry and the claim read per `supersede` entry, each over
+the caller's link-holding homes; the twin fence's stab per re-inserted
+run; and the re-window's run-list steps, each placed piece's check,
+placement and removal walking and copying the draft's run-list — are
+PRICED BEFORE THE LOCK IS TAKEN, off a lock-free snapshot of the head:
+the caller's link-holding home count × (`links` entries + `originals`
+entries + `read_with` entries + `supersede` entries), plus, per draft the
+commit re-windows — the rendering draft where `places` carries a place,
+each `also` draft where its `also_places` entry does — the pieces its
+lists place × (its content run count + the runs those pieces can add:
+one where a place is no run start of the draft, one where a place's
+reach is neither a run start nor the draft's end, and one per piece of a
+run past its first), plus one per re-inserted run, against
+`MAX_PUBLICATION_READS` = 65536 (16 × `MAX_SLOT_SPANS`) — a run no list
+places costs the re-window nothing, and a piece is a run's share of the
+pairing, or a stray run's per record covering it — AND THE STAGED
+BYTES, the price's fifth term (the link-sets design §5.6, M6): the
+bytes the one commit
 would stage, priced from the worst-case table off the request — per
 draft-native run its placement and its correspondence record, per piece
 the pairing cuts it into, and its values; per kept place the
@@ -2655,18 +2664,20 @@ The counts may move between the pricing and the commit: the budget is
 conservative by design, a request it admits may cost a little more
 under the lock and one it refuses would have cost at least its price.
 What the reads admit: 4096 entries over 16 link-holding homes, 1024
-over 64, 256 over 256; a draft of 256 content runs re-supplied as 256
-runs, or 4096 runs windowing a draft of 16; the two terms share the one
-budget. What the bytes refuse that the caps alone do not: a request
-within the 8 MiB body can command far more staged bytes than one
+over 64, 256 over 256; one typed word — one placed run on the draft's
+run boundaries — in a draft of up to 65,000 runs, a first publication
+of a draft of 255 runs placed run for run, or 16 placed runs in a draft
+of 4,000; the terms share the one budget. What the bytes refuse that the
+caps alone do not: a request within the 8 MiB body can command far more
+staged bytes than one
 transaction holds — a `links` entry's member-position slot is up to
 4096 stored spans for 36 bytes of body, a stored span is about ten
 times its spelling, and a run re-supplying the positions of many
 earlier runs is re-windowed piece by piece — so the price, not the
 body cap, is what keeps a publication's staging inside the budget. The
 same board prices the same request the same, so the act that exists is
-a narrower request — fewer entries, narrower slots, or a draft re-read
-into fewer runs — which the ceremony prices before the act. Off the same
+a narrower request — fewer entries, narrower slots, or fewer places —
+which the ceremony prices before the act. Off the same
 snapshot, a request whose `links` name an `old` has its BASE read too:
 the runs the member its `base` names arranges over its positions
 1..`base_extent`, which (3) leaves out of what a successor must cover. A

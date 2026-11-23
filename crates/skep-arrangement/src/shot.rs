@@ -6,8 +6,9 @@
 //! drafts `also` names — THE NAMED DRAFTS, [`Shot::named_drafts`], the family
 //! rule's one spelling with [`Shot::is_draft_native`]), and the whole shot,
 //! the composite's arrangement input, taken from the client and never read
-//! off any draft's arrangement at commit — the runs it re-inserts and their
-//! count ([`Shot::reinserted_runs`], [`Shot::reinserted_values`]), and its
+//! off any draft's arrangement at commit — the runs it re-inserts, their
+//! count and their grouping by named draft ([`Shot::reinserted_runs`],
+//! [`Shot::reinserted_values`], [`Shot::reinserted_runs_by_draft`]), and its
 //! address form on both sides of the commit: [`Shot::address_form`] for the
 //! request, [`M5State::address_form_of`] for the member it minted, and
 //! [`run_origin_document`], the classifier each of them asks. The two sides
@@ -18,6 +19,9 @@
 //! and [`crate::VSpec`] are values: the pieces of a shot travel together, and
 //! a `base` handed over without the extent its copy took would be a base the
 //! composite cannot compose against (PUB-2.42).
+
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 
 use num_traits::One;
 use skep_address::{content_subspace, document_of, Address, Nat};
@@ -286,15 +290,53 @@ impl Shot {
     /// named draft — `draft_doc` as [`named_drafts`](Shot::named_drafts)
     /// yields it, the document the draft projects to — in the order given;
     /// none for a document that is no named draft, since the shot re-inserts
-    /// no run of it. The per-home spelling the twin fence reads each named
-    /// draft's own records by, the lock set takes each named draft's link key
-    /// by, and the feed row names each named draft by: request arithmetic,
-    /// reading nothing.
+    /// no run of it. Request arithmetic, reading nothing: the named drafts
+    /// are tested once per call and each run's origin once, so a caller
+    /// asking of one draft pays `O(k + n)`; a caller asking of every named
+    /// draft asks [`reinserted_runs_by_draft`](Shot::reinserted_runs_by_draft)
+    /// instead, which pays one pass for all of them.
     pub fn reinserted_runs_of<'s>(&'s self, draft_doc: &'s Address) -> impl Iterator<Item = &'s Run> + 's {
+        let named = self.is_draft_native(draft_doc);
         self.runs
             .iter()
             .map(|stated| &stated.run)
-            .filter(move |run| self.is_draft_native(draft_doc) && run_origin_document(run).as_ref() == Some(draft_doc))
+            .filter(move |run| named && run_origin_document(run).as_ref() == Some(draft_doc))
+    }
+
+    /// Returns THE NAMED DRAFTS, each once, with the runs this shot
+    /// re-inserts of its identity.
+    ///
+    /// The drafts come as [`named_drafts`](Shot::named_drafts) yields them —
+    /// the rendering draft first, then each `also` draft in the request's
+    /// order — each as the document it projects to and kept at its first
+    /// occurrence, so two entries projecting to one document are one draft
+    /// here; each draft's runs are [`reinserted_runs_of`](Shot::reinserted_runs_of)
+    /// of it, in the order given, a named draft no run is of holding none.
+    /// So the groups partition [`reinserted_runs`](Shot::reinserted_runs):
+    /// every re-inserted run lies in exactly one. The per-home spelling the
+    /// twin fence reads each named draft's own records by, the lock set
+    /// takes each named draft's link key by, the price counts the fence's
+    /// stabs by and the feed row names each named draft by. Request
+    /// arithmetic, reading nothing, in one pass: the drafts indexed once,
+    /// then each run's origin looked up in the index — `O((k + n) log k)`
+    /// over `k` named drafts and `n` runs, where asking
+    /// [`reinserted_runs_of`](Shot::reinserted_runs_of) per draft would pay
+    /// `O(k · (k + n))`.
+    pub fn reinserted_runs_by_draft(&self) -> Vec<(Address, Vec<&Run>)> {
+        let mut groups: Vec<(Address, Vec<&Run>)> = Vec::new();
+        let mut index: BTreeMap<Address, usize> = BTreeMap::new();
+        for draft in self.named_drafts() {
+            if let Entry::Vacant(slot) = index.entry(draft.clone()) {
+                slot.insert(groups.len());
+                groups.push((draft, Vec::new()));
+            }
+        }
+        for ShotRun { run, .. } in &self.runs {
+            if let Some(&k) = run_origin_document(run).as_ref().and_then(|origin| index.get(origin)) {
+                groups[k].1.push(run);
+            }
+        }
+        groups
     }
 
     /// Returns how many values this shot re-inserts.

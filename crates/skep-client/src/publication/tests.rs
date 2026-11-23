@@ -2139,7 +2139,7 @@ fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
     assert!(borrowed[first_in_e + 1..].iter().all(|r| r.kind != DepositKind::EditionClaim), "one claim row");
     let mut plain = request.clone();
     plain.claim = false;
-    assert_eq!(request.priced(3, 2, &[]).bytes - plain.priced(3, 2, &[]).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
+    assert_eq!(request.priced(3, &[], &[]).bytes - plain.priced(3, &[], &[]).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
     assert!(request.body().as_bytes().len() > plain.body().as_bytes().len(), "the row is in the signed body");
     // The board: `E` holds `E.1`, so the claim is refused naming `E`.
     dialer.clear();
@@ -2389,10 +2389,13 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     // A shot off the memberless edition `E` as its base, whose address the
     // placing record's terms store: the daemon's term, `stored_tumbler_bytes`
     // of it (skep #1111).
-    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: Some(&term), term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_runs: &[], stray_records: &[0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
+    // The rendering draft in two runs, the placed run its first: one piece
+    // × two runs, and the run's fence stab.
+    let two_runs = [image_run(D, 1, 1, 1), image_run(D, 5, 1, 2)];
+    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: Some(&term), term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_images: &[], stray_records: &[0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 100, homes: 3, draft_image: &two_runs };
     let within = price::price(&shape);
     assert!(within.admits(), "{within:?}");
-    assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0, 0], 1, 2));
+    assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0, 0], 1, 2 + 1));
     let base_comps: Vec<u64> = E.split('.').map(|c| c.parse().expect("a component")).collect();
     let based = price::stored_tumbler_bytes(&base_comps);
     assert_eq!(within.bytes, price::SHOT_BYTES + based + price::PLACED_RUN_BYTES + price::CORRESPONDENCE_RECORD_BYTES + price::KEPT_PLACE_BYTES + price::REINSERTED_VALUE_BYTES);
@@ -2404,21 +2407,21 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     assert_eq!(named.bytes, within.bytes + price::stored_tumbler_bytes(&comps), "{named:?}");
     let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
     let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 4097, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
+    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] }), [price::Term::Runs]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 4097, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] }), [price::Term::Retract]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_image: &[] }), [price::Term::Body]);
     let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
+    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] });
     assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
-    assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 - price::MAX_PUBLICATION_READS) as u64)]);
+    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 4096, body_bytes: 0, homes: 17, draft_image: &[] });
+    assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 + 1 - price::MAX_PUBLICATION_READS) as u64)], "17 homes × 4096 entries, and the one run's fence stab");
     let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
     let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
     let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
+    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_image: &[] });
     assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
     let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
+    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_image: &[] }).admits(), "one such entry is inside both budgets");
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────
@@ -2907,8 +2910,8 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
         (unplaced.places[2], unplaced.stray_records[2]) = (None, 0);
         let mut twice = (*taken).clone();
         twice.stray_records[2] = 2;
-        assert_eq!(taken.priced(0, 0, &[]).bytes, unplaced.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the part, at its one record");
-        assert_eq!(twice.priced(0, 0, &[]).bytes, taken.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
+        assert_eq!(taken.priced(0, &[], &[]).bytes, unplaced.priced(0, &[], &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the part, at its one record");
+        assert_eq!(twice.priced(0, &[], &[]).bytes, taken.priced(0, &[], &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
         assert!(taken.price.admits(), "{what}: {:?}", taken.price);
         // Sent: the board finds the record in O by its `to`, checks D
         // arranges O's words at 30, and re-windows D there.
@@ -4166,7 +4169,8 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     assert_eq!(request.price.values, 15, "both drafts' distinct positions");
     let mut unplaced = (*request).clone();
     unplaced.also_places[0].places = vec![None; 4];
-    assert_eq!(request.priced(0, 4, &[1]).reads, unplaced.priced(0, 4, &[1]).reads + 4, "A's one run enters the reads' draft term where its list places it, once per run of the request");
+    assert_eq!(e.also[0].image, vec![image_run(A, 1, 5, 1)], "the premise: A's five words, its image's one run");
+    assert_eq!(request.priced(0, &e.image, &e.also).reads, unplaced.priced(0, &e.image, &e.also).reads + 1, "A's one placed run enters the re-window's term as one piece over A's one run, where its list places it");
     dialer.clear();
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
     assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer));
@@ -4380,19 +4384,20 @@ fn an_also_drafts_published_words_shown_as_its_own_again_offer_nothing_their_pub
     assert_eq!(dialer.world().docs[D].runs, vec![run(E, 1, 34), run(O, 1, 5)], "D re-windowed onto E's words");
 }
 
-/// THE READS' DRAFT TERM IS THE BOARD's (`price_publication_reads` since
-/// skep #739): the content run count of every draft a list places, summed
-/// — the rendering draft where `places` carries a place, each `also` draft
-/// where its `also_places` entry does — times the request's runs, and NONE
-/// for a draft no list places. A family request placing the rendering
-/// draft and one of two `also` drafts prices `(D's runs + A's runs) ×
-/// runs`, the unplaced `B` adding nothing; one placing no draft has no
-/// draft term; one placing `A` alone reads `A` alone. `also_places` is no
-/// sixth list — bounded by `runs`, it needs no cap of its own — and the
-/// staged bytes count a kept place per LIST that places a run (the
-/// board's `placed_in`).
+/// THE RE-WINDOW's TERM IS THE BOARD's (`price_publication_reads`): per
+/// draft a list places — the rendering draft where `places` carries a
+/// place, each `also` draft where its `also_places` entry does — the pieces
+/// it places × (its image's runs + the runs they cut), and NONE for a draft
+/// no list places; beside it the fence's stab per draft-native run. A
+/// family request placing the rendering draft's two runs on its run
+/// boundaries and `A`'s one prices `2 × 4 + 1 × 1`, the unplaced `B` adding
+/// nothing; one placing no draft has no re-window term; one placing `A`
+/// alone reads `A` alone; `A`'s run placed where its reach cuts a run of
+/// `A`'s image counts the run it adds. `also_places` is no sixth list —
+/// bounded by `runs`, it needs no cap of its own — and the staged bytes
+/// count a kept place per LIST that places a run (the board's `placed_in`).
 #[test]
-fn the_reads_draft_term_sums_every_draft_a_list_places_as_the_boards_does() {
+fn the_re_window_term_sums_every_draft_a_list_places_as_the_boards_does() {
     const B: &str = "1.0.1.0.73";
     let (d, a_draft, b, term) = (a(D), a(A), a(B), a(E));
     let drafts = vec![d.clone(), a_draft.clone(), b.clone()];
@@ -4400,19 +4405,72 @@ fn the_reads_draft_term_sums_every_draft_a_list_places_as_the_boards_does() {
     let also = |a_places: Vec<Option<u64>>, b_places: Vec<Option<u64>>| vec![AlsoPlaces { draft: a_draft.clone(), places: a_places }, AlsoPlaces { draft: b.clone(), places: b_places }];
     let none: [Option<u64>; 3] = [None; 3];
     let no_also = also(vec![None; 3], vec![None; 3]);
-    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), base: None, term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_runs: &[1, 9], stray_records: &[0, 0, 0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 3, draft_runs: 4 };
-    assert_eq!(price::price(&base).reads, 0, "no list places a draft: no draft is read");
+    // D's image in four runs — E's words, D's run at 20, A's at 30, E's
+    // again at 35 — A's in one, B's in nine, B's run at 4.
+    let d_image = [image_run(E, 1, 19, 1), image_run(D, 1, 10, 20), image_run(A, 1, 5, 30), image_run(E, 20, 5, 35)];
+    let a_image = [image_run(A, 1, 5, 1)];
+    let mut b_image = vec![image_run(B, 8, 3, 1), image_run(B, 1, 7, 4)];
+    b_image.extend((0..7u64).map(|k| image_run(B, 20 + 2 * k, 1, 11 + k)));
+    let images: [&[IRun]; 2] = [&a_image, &b_image];
+    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), base: None, term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_images: &images, stray_records: &[0, 0, 0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 3, draft_image: &d_image };
+    assert_eq!(price::price(&base).reads, 3, "no list places a draft: nothing re-windowed, the three runs' fence stabs alone");
     let placed = [Some(20), Some(30), None];
     let family = also(vec![None, Some(1), None], vec![None; 3]);
     let priced = price::price(&price::Shape { places: &placed, also_places: &family, ..base.clone() });
-    assert_eq!(priced.reads, (4 + 1) * 3, "D's four runs and A's one, once per run of the request; B, unplaced, adds none");
+    assert_eq!(priced.reads, 2 * 4 + 1 + 3, "D's two placed pieces × its four runs and A's one × its one; B, unplaced, adds none");
     assert_eq!(priced.lists, [3, 2, 0, 0, 0, 0], "places counts its two entries; also_places is no list of the price, the rider its sixth");
     let also_alone = price::price(&price::Shape { also_places: &family, ..base.clone() });
-    assert_eq!(also_alone.reads, 3, "an also draft's re-window alone reads that draft");
+    assert_eq!(also_alone.reads, 1 + 3, "an also draft's re-window alone reads that draft");
     let b_too = also(vec![None, Some(1), None], vec![None, None, Some(4)]);
-    assert_eq!(price::price(&price::Shape { places: &placed, also_places: &b_too, ..base.clone() }).reads, (4 + 1 + 9) * 3, "every draft a list places");
+    assert_eq!(price::price(&price::Shape { places: &placed, also_places: &b_too, ..base.clone() }).reads, 2 * 4 + 1 + 9 + 3, "every draft a list places, each its own term");
+    let a_longer = [image_run(A, 1, 9, 1)];
+    let cut: [&[IRun]; 2] = [&a_longer, &b_image];
+    assert_eq!(price::price(&price::Shape { also_places: &family, also_images: &cut, ..base.clone() }).reads, (1 + 1) + 3, "A's run ends inside A's one run: the run its reach cuts off");
     let in_places_alone = price::price(&price::Shape { places: &placed, ..base.clone() });
     assert_eq!(priced.bytes, in_places_alone.bytes + price::KEPT_PLACE_BYTES, "A's run placed by two lists stages a kept place per list, one piece each");
+}
+
+/// THE RE-WINDOW's TERM, SHAPE FOR SHAPE WITH THE BOARD's CELLS (skep-links'
+/// `the_re_window_is_priced_on_the_pieces_its_lists_place` and
+/// `the_re_window_is_priced_per_piece_and_per_cut`): a draft of 300 runs
+/// re-supplied whole with ONE place prices one piece × 300 runs and 300
+/// fence stabs, admitted, where the request's runs × the draft's would be
+/// 300 × 300; a draft of 200 runs placed run for run prices 200 × 200 + 200,
+/// admitted; a draft of one run of eight positions re-supplied as eight
+/// one-position runs, every other one placed, prices 4 × (1 + 7) + 8; of 512
+/// positions, 256 × (1 + 511) + 512, past the budget.
+#[test]
+fn the_re_window_term_prices_the_boards_shapes_as_the_board_does() {
+    let (draft, term) = (a(D), a(E));
+    let reads = |runs: &[Run], places: &[Option<u64>], image: &[IRun]| -> price::Price {
+        price::price(&price::Shape { runs, drafts: std::slice::from_ref(&draft), draft: Some(&draft), base: None, term: &term, mint: false, claim: false, places, also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: image })
+    };
+    // A draft of `n` one-position runs, each inserted at its front: the k-th
+    // run of its image holds the (n + 1 − k)-th word.
+    let fragmented = |n: u64| -> (Vec<Run>, Vec<IRun>) {
+        let image: Vec<IRun> = (1..=n).map(|k| image_run(D, n + 1 - k, 1, k)).collect();
+        (image.iter().map(|r| run(D, r.first, 1)).collect(), image)
+    };
+    let (runs, image) = fragmented(300);
+    let mut one = vec![None; 300];
+    one[0] = Some(1);
+    let word = reads(&runs, &one, &image);
+    assert_eq!(word.reads, 300 + 300, "one piece × 300 runs, 300 fence stabs");
+    assert!(word.admits() && 300 * 300 > price::MAX_PUBLICATION_READS, "{word:?}");
+    let (runs, image) = fragmented(200);
+    let every: Vec<Option<u64>> = (1..=200).map(Some).collect();
+    let first = reads(&runs, &every, &image);
+    assert_eq!(first.reads, 200 * 200 + 200, "200 pieces × 200 runs, none cut");
+    assert!(first.admits(), "{first:?}");
+    let alternating = |n: u64| {
+        let runs: Vec<Run> = (1..=n).map(|k| run(D, k, 1)).collect();
+        let places: Vec<Option<u64>> = (1..=n).map(|k| (k % 2 == 1).then_some(k)).collect();
+        reads(&runs, &places, &[image_run(D, 1, n, 1)])
+    };
+    assert_eq!(alternating(8).reads, 4 * (1 + 7) + 8);
+    let wide = alternating(512);
+    assert_eq!(wide.reads, 256 * (1 + 511) + 512);
+    assert!(wide.over.iter().any(|(t, _)| *t == price::Term::Reads), "past the budget: {wide:?}");
 }
 
 /// `kept_place_moved` NAMING AN `also` DRAFT: `site.addr` is the draft that
@@ -5525,8 +5583,8 @@ fn a_cut_copys_rest_is_composed_by_identity_through_the_records_and_kept_by_a_fr
     let spelled = |old: &str| originals.iter().find(|o| o["old"] == old).unwrap()["rest"].clone();
     assert_eq!(spelled(&heading), json!([{"start": format!("{E}.0.1.15"), "width": "1"}]));
     assert_eq!(spelled(&emph), json!([{"start": format!("{D}.0.1.22"), "width": "2"}]));
-    let without = Request { originals: Vec::new(), ..(*request).clone() }.priced(0, 0, &[]);
-    assert!(request.priced(0, 0, &[]).bytes > without.bytes + 2 * price::RETRACTION_BYTES, "the fresh marks priced beside the retractions");
+    let without = Request { originals: Vec::new(), ..(*request).clone() }.priced(0, &[], &[]);
+    assert!(request.priced(0, &[], &[]).bytes > without.bytes + 2 * price::RETRACTION_BYTES, "the fresh marks priced beside the retractions");
     let sent = send(&p, &inputs, &mut request).unwrap();
     assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
     let w = dialer.world();

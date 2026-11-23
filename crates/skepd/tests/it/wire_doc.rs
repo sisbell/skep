@@ -1209,7 +1209,7 @@ fn doc_states_the_supersession_claim_a_publication_carries() {
         "not_member",
         "base, the daughter the member the shot appends to",
         "duplicate, a second entry naming one daughter",
-        "links, read-with and supersede entries",
+        "links, originals, read-with and supersede entries",
     ] {
         assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
     }
@@ -2705,8 +2705,9 @@ fn doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_
 /// frame's `id` waits at the serialization lock and is answered the
 /// acknowledgment from the memo, a refusal judged afresh, the `500` the one
 /// gap; §The publish shot and head-float states the in-lock reads' budget
-/// — the four terms, the constant, the refusal ahead of the permit and the
-/// locks, its table row — and the position-fenced read, the ordinals'
+/// — the four terms, the re-window's counting the pieces its lists place,
+/// the constant, the refusal ahead of the permit and the locks, its table
+/// row — and the position-fenced read, the ordinals'
 /// pin across commits and the frontier's galloping probe; and §Rejection
 /// codes carries the budget's token with the constant. The daemon's
 /// answers are pinned in `publish.rs`; this pins that the contract says so.
@@ -2735,7 +2736,10 @@ fn doc_states_the_received_frame_the_pending_frame_the_reads_budget_and_the_fenc
     for fact in [
         "**The in-lock reads' budget**".to_string(),
         "PRICED BEFORE THE LOCK IS TAKEN".to_string(),
-        "the caller's link-holding home count × (`links` entries + `read_with` entries + `supersede` entries), plus the draft's content run count × the request's runs".to_string(),
+        "the caller's link-holding home count × (`links` entries + `originals` entries + `read_with` entries + `supersede` entries), plus, per draft the commit re-windows".to_string(),
+        "the pieces its lists place × (its content run count + the runs those pieces can add".to_string(),
+        "plus one per re-inserted run, against".to_string(),
+        "a run no list places costs the re-window nothing".to_string(),
         format!("`MAX_PUBLICATION_READS` = {} (16 × `MAX_SLOT_SPANS`)", skep_links::MAX_PUBLICATION_READS),
         "ahead of the write permit, both locks and every other refusal of a publication's".to_string(),
         "the budget is conservative by design".to_string(),

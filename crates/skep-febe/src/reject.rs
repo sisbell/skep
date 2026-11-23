@@ -610,16 +610,17 @@ pub enum RejectCode {
     /// AHEAD OF THE LOCK; lane S4).
     ///
     /// The daemon's own cell, raised ahead of its serialization lock off a
-    /// lock-free snapshot: the caller's link-holding home count × (`links`
-    /// entries + `read_with` entries + `supersede` entries) + the draft's
-    /// content run count × the
-    /// request's runs, past M7's `MAX_PUBLICATION_READS` — the four reads
-    /// the composite makes under the lock, bounded before it is taken.
-    /// `detail` names the price's four terms and the budget, `site` nothing.
-    /// Permanent by the catch-all: the same board prices the same request
-    /// the same, so the act that exists is a narrower request — fewer
-    /// entries, or a draft re-read into fewer runs. Nothing is committed
-    /// and no lock was taken.
+    /// lock-free snapshot: the caller's link-holding home count ×
+    /// (`links` + `originals` + `read_with` + `supersede` entries), plus
+    /// the re-window's steps — per draft the commit re-windows, the pieces
+    /// its lists place × the runs its run-list holds while they are placed
+    /// — plus the twin fence's stab per re-inserted run, past M7's
+    /// `MAX_PUBLICATION_READS` — the reads the composite makes under the
+    /// lock, bounded before it is taken. `detail` names the price's four
+    /// terms, their total and the budget, `site` nothing. Permanent by the
+    /// catch-all: the same board prices the same request the same, so the
+    /// act that exists is a narrower request — fewer entries, or fewer
+    /// places. Nothing is committed and no lock was taken.
     PublicationOverBudget,
     // ── M6 content/provenance read (MalformedSpan also covers
     //    RetrieveError::MalformedSpec; the last four are M6's own budget

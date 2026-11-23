@@ -1945,7 +1945,7 @@ fn local_price(state: &PanelState) -> lib::Price {
     request.read_with = count.read_with.clone();
     request.count = count;
     let homes = e.homes.len() + state.inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.priced(homes, e.image.len(), &e.also_run_counts())
+    request.priced(homes, &e.image, &e.also)
 }
 
 // ── The shapes, as the page reads them ───────────────────────────────────

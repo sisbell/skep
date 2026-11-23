@@ -117,12 +117,12 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, EntryBody, MemberPositions, PublishBody, ShotBase, SlotElement};
 
 use crate::address::parse_address;
-use crate::board::answers::{self, LinkSpan, MergeMarker};
+use crate::board::answers::{self, IRun, LinkSpan, MergeMarker};
 use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{disjoint_places, enumerate_with, is_formatting, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
+use super::enumerate::{disjoint_places, enumerate_with, is_formatting, place_selection, AlsoImage, Enumeration, Placement, Record, RecordWalk, Via};
 use super::parts::{compose_part, Answer, OwedAnswer, PartComposition, PartKey};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind};
@@ -681,13 +681,16 @@ impl Request {
     }
 
     /// Prices the request as it stands, with the caller's home count, the
-    /// rendering draft's content run count and each `also` draft's in
-    /// `also`'s order (`Enumeration::also_run_counts`): the price counts a
-    /// draft's runs only where its list places it.
-    pub fn priced(&self, homes: usize, draft_runs: usize, also_runs: &[usize]) -> Price {
+    /// rendering draft's image and each `also` draft's (the enumeration's
+    /// `image` and `also`): the price reads a draft's runs only where its
+    /// list places it, each `also_places` entry beside the image of the draft
+    /// it names — none where the enumeration imaged no such draft.
+    pub fn priced(&self, homes: usize, image: &[IRun], also: &[AlsoImage]) -> Price {
         let entries = self.entry_shapes();
         let originals = self.original_shapes();
         let term = self.term().clone();
+        let images: BTreeMap<&Address, &[IRun]> = also.iter().map(|a| (&a.draft, a.image.as_slice())).collect();
+        let also_images: Vec<&[IRun]> = self.also_places.iter().map(|entry| images.get(&entry.draft).copied().unwrap_or(&[])).collect();
         // The named drafts — the rendering draft, then each of `also` — whose
         // runs are re-inserted and priced as values; none at a bare shot.
         let drafts: Vec<Address> = self.draft.iter().chain(&self.also).cloned().collect();
@@ -704,7 +707,7 @@ impl Request {
             claim: self.claim,
             places: &self.places,
             also_places: &self.also_places,
-            also_runs,
+            also_images: &also_images,
             stray_records: &self.stray_records,
             entries: &entries,
             retract: self.retract.len(),
@@ -712,7 +715,7 @@ impl Request {
             read_with: self.read_with.len(),
             body_bytes: self.body().as_bytes().len(),
             homes,
-            draft_runs,
+            draft_image: image,
         })
     }
 
@@ -1117,7 +1120,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         as_of: door.as_of().max(e.as_of),
     };
     let homes = e.homes.len() + inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.price = request.priced(homes, e.image.len(), &e.also_run_counts());
+    request.price = request.priced(homes, &e.image, &e.also);
     Ok(Built::Request(Box::new(request)))
 }
 

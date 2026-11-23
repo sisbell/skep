@@ -947,12 +947,6 @@ impl Enumeration {
         self.candidates.iter().enumerate().filter(|(_, c)| c.offered()).map(|(i, _)| i).collect()
     }
 
-    /// Returns each `also` draft's content run count — its image's runs —
-    /// in `also`'s order: the price's term for a draft its list places.
-    pub fn also_run_counts(&self) -> Vec<usize> {
-        self.also.iter().map(|a| a.image.len()).collect()
-    }
-
     /// Returns the offered links grouped by home — the oracle's grouping.
     pub fn offered_by_home(&self) -> Vec<(Address, Vec<Address>)> {
         self.homes

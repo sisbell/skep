@@ -78,7 +78,7 @@ use skep_address::{
     content_subspace, document_of, is_prefix, subtree_of, validate, Address, Level, Nat, Span,
     SpanSet, Tumbler,
 };
-use skep_arrangement::{trunk_head, trunk_of, Caller, HasM5, Pairing, Run, Shot};
+use skep_arrangement::{trunk_head, trunk_of, Caller, HasM5, MintedRun, Pairing, Run, Shot};
 use skep_namespace::M3State;
 use std::sync::LazyLock;
 
@@ -1429,12 +1429,26 @@ pub fn member_image(shot: &Shot, pairing: &Pairing) -> Vec<Run> {
             .map(|d| trunk_of(&d))
             .is_some_and(|d| shot.is_draft_native(&d));
         if native {
-            out.extend(pairing.iter().filter(|p| p.index == index).map(|p| p.to.clone()));
+            out.extend(pieces_at(pairing, index).iter().map(|p| p.to.clone()));
         } else {
             out.push(stated.run.clone());
         }
     }
     out
+}
+
+/// Returns the pairing's pieces of the `runs` entry at `index`, in I-order.
+///
+/// They are the consecutive entries [`Pairing`]'s contract keeps for one
+/// index, the pairing lying in `runs`' order, so its indices ascend: found
+/// by two binary searches, `O(log m)` over `m` pieces, where a scan per run
+/// would pay the whole pairing for each. Empty for an entry the shot placed
+/// no piece of — a run of no named draft's identity. The one lookup the
+/// member's image and the re-window make.
+pub(super) fn pieces_at(pairing: &[MintedRun], index: usize) -> &[MintedRun] {
+    let first = pairing.partition_point(|piece| piece.index < index);
+    let past = pairing.partition_point(|piece| piece.index <= index);
+    &pairing[first..past.max(first)]
 }
 
 /// A member-position end, built by [`member_end`]: the stored endset and

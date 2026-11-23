@@ -98,17 +98,18 @@ impl TwoAccounts {
 /// THE PRICE AHEAD OF THE LOCK (the link-sets design §5.7, W8 (1)): the
 /// producer answers the four terms where a publication's in-lock reads are
 /// priced past `MAX_PUBLICATION_READS`, and nothing at the budget. The
-/// draft term: the maker's draft fragmented into seventeen runs by
+/// re-window's term: the maker's draft fragmented into seventeen runs by
 /// seventeen inserts at its first position — each value's identity above
-/// the last's, so no run merges — and a shot of 4096 runs over it, a kept
-/// place carried so the re-window reads the draft, prices at 17 × 4096,
-/// past the budget's 16 × 4096; the same shot off a sixteen-run draft is at
-/// the budget and admitted, and the seventeen-run shot with NO place carried
-/// reads no draft and is admitted too. The home term: one link deposited in
-/// the maker's home makes it the one link-holding home, and a read-with
-/// list one entry past the budget is refused on it where the shot names no
-/// draft. The other's account prices no homes of the maker's, and an op
-/// that is no publish is nothing's.
+/// the last's, so no run merges — and a shot of 4096 stray runs over it,
+/// each carrying a kept place, so each is one piece placed over the draft's
+/// runs, prices at 4096 × 17, past the budget's 4096 × 16; the same shot off
+/// a sixteen-run draft is at the budget and admitted; the seventeen-run shot
+/// with ONE place carried prices one piece × 17 and is admitted, and with NO
+/// place carried re-windows nothing and is admitted too. The home term:
+/// one link deposited in the maker's home makes it the one link-holding
+/// home, and a read-with list one entry past the budget is refused on it
+/// where the shot names no draft. The other's account prices no homes of
+/// the maker's, and an op that is no publish is nothing's.
 #[test]
 fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     use serde_json::json;
@@ -143,30 +144,34 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         also_places: Vec::new(),
         deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new(), originals: Vec::new(), base_runs: Vec::new() },
     };
-    // A drafted shot carries one kept place — beside its first run, a stray
-    // place — so the re-window reads the draft; a draftless one none.
+    // A drafted shot carries a kept place beside every run — each a stray
+    // place at the draft's first position, one piece apiece — so the
+    // re-window places a piece per run; a draftless one none.
     let publish = |shot: Shot, read_with: usize| {
-        let places = if shot.draft.is_some() { vec![Some(VPos::content(Nat::from(1u32)))] } else { Vec::new() };
+        let places = if shot.draft.is_some() { vec![Some(VPos::content(Nat::from(1u32))); shot.runs.len()] } else { Vec::new() };
         publish_at(shot, places, read_with)
     };
-    // The draft term, at the budget and one run past it.
+    // The re-window's term, at the budget and one run of the draft past it.
     fragment(16);
     let snap = board.engine.kernel().snapshot();
     assert_eq!(snap.world().m5().content_run_count(&draft), 16, "sixteen inserts at the front: sixteen runs");
-    assert_eq!(publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id), None, "16 × 4096 is the budget");
+    assert_eq!(publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id), None, "4096 pieces × 16 runs is the budget");
     fragment(1);
     let snap = board.engine.kernel().snapshot();
     // The staged bytes beside the reads: the shot, the rendering draft's
-    // address in its slot, 4096 by-reference placements and the one stray
-    // place's stab (no record: one piece), inside the transaction budget.
-    let staged = SHOT_BYTES + stored_tumbler_bytes(draft.tumbler()) + 4096 * PLACED_RUN_BYTES + KEPT_PLACE_BYTES;
+    // address in its slot, 4096 by-reference placements and each stray
+    // place's two records (no record covers it: one piece), inside the
+    // transaction budget.
+    let staged = SHOT_BYTES + stored_tumbler_bytes(draft.tumbler()) + 4096 * (PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     assert_eq!(
         publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id),
-        Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
-        "17 × 4096 is past it: every term named"
+        Some(PublicationReadRefusal { homes: 0, entries: 0, rewindow: 4096 * 17, fence: 0, total: 4096 * 17, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
+        "4096 × 17 is past it: every term named"
     );
+    let one_place = publish_at(shot(Some(draft.clone()), 4096), vec![Some(VPos::content(Nat::from(1u32)))], 0);
+    assert_eq!(publication_read_refusal(snap.world(), &one_place, maker_id), None, "one place carried: one piece × 17 runs, never the request's every run");
     let unplaced = publish_at(shot(Some(draft.clone()), 4096), Vec::new(), 0);
-    assert_eq!(publication_read_refusal(snap.world(), &unplaced, maker_id), None, "no place carried: the re-window reads no draft, and the draft term is nothing");
+    assert_eq!(publication_read_refusal(snap.world(), &unplaced, maker_id), None, "no place carried: the re-window places nothing, and its term is nothing");
     // The home term: one link-holding home, a list one entry past the budget.
     exec(&board.febe, maker, json!({"op": "make_link", "home": board.home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
     let snap = board.engine.kernel().snapshot();
@@ -175,7 +180,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     assert!(staged <= MAX_TXN_BYTES, "the read-withs stage inside the transaction budget: {staged}");
     assert_eq!(
         publication_read_refusal(snap.world(), &over, maker_id),
-        Some(PublicationReadRefusal { homes: 1, entries: MAX_PUBLICATION_READS + 1, draft_runs: 0, runs: 0, total: MAX_PUBLICATION_READS + 1, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
+        Some(PublicationReadRefusal { homes: 1, entries: MAX_PUBLICATION_READS + 1, rewindow: 0, fence: 0, total: MAX_PUBLICATION_READS + 1, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
         "one home times one entry past the budget"
     );
     assert_eq!(publication_read_refusal(snap.world(), &publish(shot(None, 0), MAX_PUBLICATION_READS), maker_id), None, "at the budget");
@@ -212,7 +217,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     assert_eq!(publication_read_refusal(snap.world(), &wide(1), maker_id), None, "one wide entry is inside both budgets");
     let refusal = publication_read_refusal(snap.world(), &wide(100), maker_id).expect("a hundred are past the transaction budget");
     assert!(refusal.bytes_over() && !refusal.reads_over(), "the bytes, not the reads: {refusal:?}");
-    assert_eq!((refusal.homes, refusal.entries, refusal.draft_runs, refusal.runs, refusal.byte_budget), (1, 100, 0, 4096, MAX_TXN_BYTES));
+    assert_eq!((refusal.homes, refusal.entries, refusal.rewindow, refusal.fence, refusal.byte_budget), (1, 100, 0, 0, MAX_TXN_BYTES));
     assert!(refusal.staged_bytes > MAX_TXN_BYTES && refusal.staged_bytes < 2 * MAX_TXN_BYTES, "{}", refusal.staged_bytes);
 }
 

@@ -1,10 +1,12 @@
 //! THE WORST-CASE TABLE (the link-sets design §5.6, M6): the bytes the
 //! kernel prices each kind of record a publication stages at, one constant
 //! per entry kind; the price of a request's staged bytes from it
-//! ([`price_staged_bytes`], the fifth term of the pre-lock price); and two
-//! sums against the transaction budget — the maximal request's, a product
-//! of caps, and the reachable request's, what a body within the frame
-//! routes' cap can command.
+//! ([`price_staged_bytes`], the fifth term of the pre-lock price), over THE
+//! PIECES each run is cut into ([`run_pieces`]), which the reads' price
+//! prices the re-window's splices by too; and two sums against the
+//! transaction budget — the maximal request's, a product of caps, and the
+//! reachable request's, what a body within the frame routes' cap can
+//! command.
 //!
 //! Every figure is the staged bytes AS THE KERNEL PRICES THEM: the journal
 //! frame per record — its 12-byte header and the 28 bytes the frame payload
@@ -323,6 +325,94 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
     stored_tumbler_bytes(span.start()) + stored_tumbler_bytes(span.width())
 }
 
+/// One run of a shot as the two prices read it (THE PIECES): the pieces the
+/// commit can cut it into, by the family it lies in.
+///
+/// [`run_pieces`] answers it per run; [`price_staged_bytes`] prices each
+/// piece's records from it, and the reads' price
+/// (`price_publication_reads`) the re-window's splices, so the two read one
+/// bound off one stab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RunPieces {
+    /// A draft-native run, of any named draft's identity, cut into at most
+    /// this many pieces: one more than the endpoints of other draft-native
+    /// runs lying strictly inside its extent, since the pairing cuts a run
+    /// only where an earlier run's minted piece begins or ends.
+    Native(u64),
+    /// A run of no named draft's identity that some list places — a STRAY,
+    /// re-windowed through the records: one piece per correspondence record
+    /// overlapping it, wherever homed, at least one.
+    Stray(u64),
+    /// A run of no named draft's identity that no list places: placed by
+    /// reference, cut nowhere and re-windowed nowhere.
+    Unplaced,
+}
+
+impl RunPieces {
+    /// Returns the pieces a list that places the run re-windows; none for a
+    /// run no list places.
+    pub(super) fn pieces(self) -> u64 {
+        match self {
+            RunPieces::Native(pieces) | RunPieces::Stray(pieces) => pieces,
+            RunPieces::Unplaced => 0,
+        }
+    }
+}
+
+/// Returns how many lists carry a place at `index`: the rendering draft's
+/// `places` and each `also_places` entry — one re-window per list that
+/// places the run.
+pub(super) fn placed_in(places: &[Option<VPos>], also_places: &[AlsoPlaces], index: usize) -> u64 {
+    let rendering = u64::from(places.get(index).is_some_and(Option::is_some));
+    let also = also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
+    rendering.saturating_add(also)
+}
+
+/// Returns each run of `shot`, in `runs`' order, as [`RunPieces`]: a
+/// draft-native run's pieces bounded off the request, a stray's counted by
+/// one stab — `placed` answering whether any list carries a place at an
+/// index.
+///
+/// A draft-native run is one whose origin is a named draft's
+/// ([`Shot::is_draft_native`] of its origin, the one test the commit's
+/// placement asks); its pieces are bounded by the draft-native runs'
+/// endpoints, sorted — `O(n log n)` in them. A run of any other origin that
+/// a list places is a stray, re-windowed through the records: one stab of
+/// the TO slot by its span across every home, the correspondence records
+/// overlapping it wherever homed, at least one; the stab asks no visibility
+/// class, since a record the commit will not read only raises the bound.
+/// Every other run is [`RunPieces::Unplaced`], and is read no further.
+pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(usize) -> bool) -> Vec<RunPieces> {
+    // The draft-native runs' endpoints, sorted: the pieces bound reads them.
+    let mut ends: Vec<Tumbler> = shot.reinserted_runs().flat_map(|run| [run.i_start().tumbler().clone(), run.reach()]).collect();
+    ends.sort();
+    let pieces_bound = |run: &Run| -> u64 {
+        let (start, reach) = (run.i_start().tumbler(), run.reach());
+        let first = ends.partition_point(|end| end <= start);
+        let past = ends.partition_point(|end| *end < reach);
+        1 + past.saturating_sub(first) as u64
+    };
+    let ty = enc([correspondence_type()]);
+    shot.runs
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let origin = document_of(entry.run.i_start()).map(|d| trunk_of(&d));
+            if origin.is_some_and(|origin| shot.is_draft_native(&origin)) {
+                RunPieces::Native(pieces_bound(&entry.run))
+            } else if placed(index) {
+                // The stray stab, across every home and at no visibility
+                // class: the records the commit may read are among these.
+                let span = Endset::from_spans([entry.run.iextent()]);
+                let records = world.links().match_links(&[(TO, &span), (TYPE, &ty)], View::Active).len() as u64;
+                RunPieces::Stray(records.max(1))
+            } else {
+                RunPieces::Unplaced
+            }
+        })
+        .collect()
+}
+
 /// Prices the bytes a publication would stage, from the table: an UPPER
 /// bound on what the kernel charges the transaction, read off the request
 /// and one stab of every home's records per stray place.
@@ -337,17 +427,13 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///   edition's mint at the mint form,
 ///   and the edition claim where the deposits claim, at either form;
 /// * per draft-native run — of any named draft, the rendering `draft`'s or
-///   an `also` draft's, a record costing the same in either home
-///   ([`Shot::is_draft_native`] of its origin, the one test the commit's
-///   placement asks) — its PIECES × ([`PLACED_RUN_BYTES`] +
+///   an `also` draft's, a record costing the same in either home — its
+///   PIECES (`RunPieces::Native`) × ([`PLACED_RUN_BYTES`] +
 ///   [`CORRESPONDENCE_RECORD_BYTES`]), and × [`KEPT_PLACE_BYTES`] beside
 ///   PER LIST THAT PLACES IT — the rendering draft's `places`, and each
 ///   `also_places` entry whose list carries a place at the entry, every such
-///   list re-windowing its own draft at the run — the pieces bounded off the
-///   request as one more than the endpoints of other draft-native runs lying
-///   strictly inside the run's extent, since the pairing cuts a run only
-///   where an earlier run's minted piece begins or ends; a run overlapping
-///   no other is one piece;
+///   list re-windowing its own draft at the run; a run overlapping no other
+///   is one piece;
 /// * the re-inserted values, the DISTINCT positions the draft-native runs
 ///   name ([`Shot::reinserted_values`]) × [`REINSERTED_VALUE_BYTES`] — an
 ///   atom's bytes past two ride the draft's content, which the price does
@@ -355,11 +441,8 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 /// * per run of any other origin [`PLACED_RUN_BYTES`], and per list that
 ///   places it — a STRAY run of published identity, the document's own or
 ///   another document's, re-windowed through the records in each draft
-///   whose list carries a place at it — one stab of the TO slot by its span
-///   across every home, the correspondence records overlapping it wherever
-///   homed × [`KEPT_PLACE_BYTES`], one piece per record, at least one; the
-///   stab asks no visibility class, since a record the commit will not read
-///   only raises this bound;
+///   whose list carries a place at it — its pieces, one per record
+///   overlapping it (`RunPieces::Stray`, one stab), × [`KEPT_PLACE_BYTES`];
 /// * per `links` entry [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of
 ///   every span its three slots spell — an `addrs` element as its unit
 ///   span, a tag as a unit span at the member's depth, a `spans` element as
@@ -382,10 +465,9 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 /// already claimed, an original already retracted) stage less, a
 /// run named twice stages its identity once, a member-position end's
 /// pieces merge where the member's runs are I-adjacent, and a byte of prose
-/// costs a fraction of an atom. Request arithmetic — `O(n log n)` in the
-/// draft-native runs for the endpoints' sort, linear in the lists — plus
-/// the stray stabs and one `readlink` per rest; saturating, so an absurd
-/// request prices at `u64::MAX`.
+/// costs a fraction of an atom. Request arithmetic — `run_pieces`'s, and
+/// linear in the lists — plus the stray stabs and one `readlink` per rest;
+/// saturating, so an absurd request prices at `u64::MAX`.
 pub fn price_staged_bytes<W: LinkWorld>(
     world: &W,
     target: &PublishTarget,
@@ -393,6 +475,23 @@ pub fn price_staged_bytes<W: LinkWorld>(
     places: &[Option<VPos>],
     also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
+) -> u64 {
+    let pieces = run_pieces(world, shot, |index| placed_in(places, also_places, index) > 0);
+    staged_bytes(world, target, shot, places, also_places, deposits, &pieces)
+}
+
+/// Returns [`price_staged_bytes`]'s figure over `pieces`, the shot's runs
+/// as [`run_pieces`] read them — the one body both prices share, so the
+/// reads' price stabs each stray once for its two terms.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn staged_bytes<W: LinkWorld>(
+    world: &W,
+    target: &PublishTarget,
+    shot: &Shot,
+    places: &[Option<VPos>],
+    also_places: &[AlsoPlaces],
+    deposits: &PublishDeposits,
+    pieces: &[RunPieces],
 ) -> u64 {
     let mut bytes = SHOT_BYTES;
     if let Some(base) = &shot.base {
@@ -407,39 +506,20 @@ pub fn price_staged_bytes<W: LinkWorld>(
     if deposits.claim {
         bytes += EDITION_CLAIM_BYTES;
     }
-    // The draft-native runs' endpoints, sorted: the pieces bound reads them.
-    let mut ends: Vec<Tumbler> = shot.reinserted_runs().flat_map(|run| [run.i_start().tumbler().clone(), run.reach()]).collect();
-    ends.sort();
-    let pieces_bound = |run: &Run| -> u64 {
-        let (start, reach) = (run.i_start().tumbler(), run.reach());
-        let first = ends.partition_point(|end| end <= start);
-        let past = ends.partition_point(|end| *end < reach);
-        1 + past.saturating_sub(first) as u64
-    };
-    let ty = enc([correspondence_type()]);
-    // The lists that place an entry: the rendering draft's, and each `also`
-    // draft's — one re-window per list that carries a place at it.
-    let placed_in = |index: usize| -> u64 {
-        let rendering = u64::from(places.get(index).is_some_and(Option::is_some));
-        let also = also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
-        rendering.saturating_add(also)
-    };
-    for (index, entry) in shot.runs.iter().enumerate() {
-        let placed = placed_in(index);
-        let origin = document_of(entry.run.i_start()).map(|d| trunk_of(&d));
-        if origin.is_some_and(|origin| shot.is_draft_native(&origin)) {
-            let pieces = pieces_bound(&entry.run);
-            bytes = bytes.saturating_add(pieces.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
-            bytes = bytes.saturating_add(placed.saturating_mul(pieces.saturating_mul(KEPT_PLACE_BYTES)));
-        } else {
-            bytes = bytes.saturating_add(PLACED_RUN_BYTES);
-            if placed > 0 {
-                // The stray stab, across every home and at no visibility
-                // class: the records the commit may read are among these.
-                let span = Endset::from_spans([entry.run.iextent()]);
-                let records = world.links().match_links(&[(TO, &span), (TYPE, &ty)], View::Active).len() as u64;
-                bytes = bytes.saturating_add(placed.saturating_mul(records.max(1).saturating_mul(KEPT_PLACE_BYTES)));
+    // Per run its pieces' records, and a kept place's two per piece per list
+    // that places it: the rendering draft's, and each `also` draft's.
+    for (index, run) in pieces.iter().enumerate() {
+        let placed = placed_in(places, also_places, index);
+        match *run {
+            RunPieces::Native(cut) => {
+                bytes = bytes.saturating_add(cut.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
+                bytes = bytes.saturating_add(placed.saturating_mul(cut.saturating_mul(KEPT_PLACE_BYTES)));
             }
+            RunPieces::Stray(cut) => {
+                bytes = bytes.saturating_add(PLACED_RUN_BYTES);
+                bytes = bytes.saturating_add(placed.saturating_mul(cut.saturating_mul(KEPT_PLACE_BYTES)));
+            }
+            RunPieces::Unplaced => bytes = bytes.saturating_add(PLACED_RUN_BYTES),
         }
     }
     let values = u64::try_from(shot.reinserted_values()).unwrap_or(u64::MAX);

@@ -337,13 +337,15 @@ pub struct PublicationReadRefusal {
     /// The `links`, `originals`, `read_with` and `supersede` entries,
     /// summed: the entries whose read ranges over the caller's homes.
     pub entries: usize,
-    /// The content runs of every draft the commit re-windows, summed — the
+    /// The re-window's steps: per document the commit re-windows — the
     /// rendering draft where `places` carries a place, each `also` draft
-    /// where its `also_places` entry does; `0` for a shot re-windowing none.
-    pub draft_runs: usize,
-    /// The request's runs.
-    pub runs: usize,
-    /// The reads' price: `homes × entries + draft_runs × runs`.
+    /// where its `also_places` entry does — the pieces its lists place ×
+    /// (its content runs + the runs those pieces can add), summed; `0` for a
+    /// shot re-windowing none.
+    pub rewindow: usize,
+    /// The twin fence's stabs: one per re-inserted run.
+    pub fence: usize,
+    /// The reads' price: `homes × entries + rewindow + fence`.
     pub total: usize,
     /// The reads' budget, M7's `MAX_PUBLICATION_READS`.
     pub budget: usize,
@@ -370,13 +372,15 @@ impl PublicationReadRefusal {
 /// serialization lock.
 ///
 /// It is M7's [`price_publication_reads`] over `world` as the caller — the
-/// caller's link-holding homes × (`links` + `read_with` entries), plus the
-/// re-windowed drafts' content runs × the request's runs, the work of the
-/// composite's four in-lock reads counted before any is made, against M7's
-/// one reads budget; and the bytes the commit would stage, priced from M7's
-/// worst-case table off the request, against the kernel's transaction
-/// budget, so no request reaches the kernel's `txn_over_budget` with its
-/// records staged — [`ReadPrice::over_budget`], the one comparison,
+/// caller's link-holding homes × (`links` + `originals` + `read_with` +
+/// `supersede` entries), plus the re-window's steps per document it
+/// re-windows (the pieces its lists place × the runs its run-list holds
+/// while they are placed) and the twin fence's stab per re-inserted run,
+/// the work of the composite's in-lock reads counted before any is made,
+/// against M7's one reads budget; and the bytes the commit would stage,
+/// priced from M7's worst-case table off the request, against the kernel's
+/// transaction budget, so no request reaches the kernel's `txn_over_budget`
+/// with its records staged — [`ReadPrice::over_budget`], the one comparison,
 /// answered with every term where either bound is passed. `None` for an op
 /// that is no `publish`, or one inside both budgets.
 ///
@@ -391,7 +395,9 @@ impl PublicationReadRefusal {
 /// plan's reads and the kept-place checks stay where the composite makes
 /// them; this bounds them and reads nothing of theirs but one stab, per
 /// stray place in either list, of the correspondence records across every
-/// home — the records the caller may read, wherever homed, are among them.
+/// home — the records the caller may read, wherever homed, are among them —
+/// and, where the price stands inside the budget without them, one walk of
+/// each re-windowed draft's run-list for the cuts its places make.
 pub fn publication_read_refusal(
     world: &World,
     op: &Op,
@@ -410,12 +416,12 @@ pub fn publication_read_refusal(
     if !price.over_budget() {
         return None;
     }
-    let ReadPrice { homes, entries, draft_runs, runs, staged_bytes } = price;
+    let ReadPrice { homes, entries, rewindow, fence, staged_bytes } = price;
     Some(PublicationReadRefusal {
         homes,
         entries,
-        draft_runs,
-        runs,
+        rewindow,
+        fence,
         total: price.total(),
         budget: ReadPrice::BUDGET,
         staged_bytes,

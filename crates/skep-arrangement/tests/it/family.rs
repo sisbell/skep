@@ -123,6 +123,62 @@ fn a_shot_naming_also_re_inserts_the_other_drafts_runs_as_fresh_identity() {
     assert_eq!(bytes_of(&s, &doc2()), [b"x", b"y"].map(|b| b.to_vec()).to_vec(), "doc2 untouched");
 }
 
+/// THE GROUPING: `reinserted_runs_by_draft` is the named drafts in order,
+/// each once — two entries projecting to one document one draft, at its
+/// first place — each with exactly `reinserted_runs_of` of it, the groups
+/// together holding every re-inserted run once; and over 4,097 named drafts
+/// and 4,096 runs, every run of the last draft's identity, it answers in
+/// one pass, inside the house's two seconds, where asking each draft for its
+/// runs would test every named draft per run per draft.
+#[test]
+fn the_reinserted_runs_group_by_named_draft_in_one_pass() {
+    let doc1_member = a(&[1, 0, 1, 0, 1, 1]);
+    assert_eq!(trunk_of(&doc1_member), doc1(), "the premise: a member address under doc1 projects to doc1");
+    let shot = family(
+        vec![doc2(), doc1_member],
+        vec![
+            shot_run(&doc2(), &ca2(1), 2),
+            shot_run(&pdoc(), &pca(1), 3),
+            shot_run(&doc1(), &ca(1), 3),
+            shot_run(&doc2(), &ca2(2), 1),
+        ],
+    );
+    let groups = shot.reinserted_runs_by_draft();
+    assert_eq!(
+        groups.iter().map(|(draft, _)| draft.clone()).collect::<Vec<_>>(),
+        vec![doc1(), doc2()],
+        "the rendering draft first, then `also`; doc1 once though named twice"
+    );
+    for (draft, runs) in &groups {
+        assert_eq!(
+            *runs,
+            shot.reinserted_runs_of(draft).collect::<Vec<_>>(),
+            "{draft}: the runs of its identity, in the order given"
+        );
+    }
+    assert_eq!(
+        groups.iter().map(|(_, runs)| runs.len()).sum::<usize>(),
+        shot.reinserted_runs().count(),
+        "every re-inserted run in exactly one group"
+    );
+    // 4,096 `also` drafts beside doc1, and 4,096 runs of the last one's.
+    let also: Vec<Address> = (0..4096u32).map(|k| a(&[1, 0, 2, 0, 1 + k])).collect();
+    let last = also.last().cloned().expect("the drafts");
+    let runs: Vec<ShotRun> = (0..4096u32).map(|k| shot_run(&last, &a(&[1, 0, 2, 0, 4096, 0, 1, 1 + k]), 1)).collect();
+    let wide = Shot { base: None, draft: Some(doc1()), also, keep_base: false, runs };
+    let started = std::time::Instant::now();
+    let groups = wide.reinserted_runs_by_draft();
+    let elapsed = started.elapsed();
+    assert_eq!(groups.len(), 4097, "every named draft once");
+    assert_eq!(
+        groups.last().map(|(draft, runs)| (draft.clone(), runs.len())),
+        Some((last, 4096)),
+        "every run in the last draft's group"
+    );
+    assert!(groups[..4096].iter().all(|(_, runs)| runs.is_empty()), "no run of any other draft's identity");
+    assert!(elapsed < std::time::Duration::from_secs(2), "one pass over 4,097 drafts and 4,096 runs: {elapsed:?}");
+}
+
 #[test]
 fn an_identity_two_named_drafts_share_is_minted_once_and_placed_by_reference_after() {
     // The alternative holds the staging draft's words BY IDENTITY (a

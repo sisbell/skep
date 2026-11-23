@@ -2522,18 +2522,22 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // (B3-S10) — then each `also` draft the commit writes, in the request's
         // order: a run of its identity re-inserted, or its `also_places`
         // entry carrying a place, the two writes the commit can make in it;
-        // all of it request arithmetic (`Shot::named_drafts`, the rendering
-        // draft first, `Shot::reinserted_runs_of`, and the entries).
+        // all of it request arithmetic, each named draft once
+        // (`Shot::reinserted_runs_by_draft`, the rendering draft first, its
+        // runs grouped in one pass, and the entries' drafts projected once).
         Op::Publish { target, shot, also_places, deposits, .. } => {
             let reinserted = shot.reinserted_values();
-            let rewindowed = |draft: &Address| {
-                also_places.iter().any(|entry| trunk_of(&entry.draft) == *draft && entry.carries_a_place())
-            };
+            let rewindowed: BTreeSet<Address> = also_places
+                .iter()
+                .filter(|entry| entry.carries_a_place())
+                .map(|entry| trunk_of(&entry.draft))
+                .collect();
             let drafts: Vec<Address> = shot
-                .named_drafts()
+                .reinserted_runs_by_draft()
+                .into_iter()
                 .enumerate()
-                .filter(|(k, draft)| *k == 0 || shot.reinserted_runs_of(draft).next().is_some() || rewindowed(draft))
-                .map(|(_, draft)| draft)
+                .filter(|(k, (draft, runs))| *k == 0 || !runs.is_empty() || rewindowed.contains(draft))
+                .map(|(_, (draft, _))| draft)
                 .collect();
             // The homes the deposits name by address (the link-sets design
             // §5.7): a `links` entry's home, and the private home of the

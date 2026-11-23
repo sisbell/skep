@@ -143,6 +143,48 @@ fn the_request_image_and_the_member_image_spell_one_canonical_row() {
     );
 }
 
+/// THE PAIRING's PIECES BY INDEX: `pieces_at` answers exactly the entries a
+/// scan for the index would, over a pairing whose indices hold several
+/// pieces each and skip a run no draft holds — the first run's three, none
+/// for the edition's run, one placed by reference, two — and nothing past
+/// the last index; so the member's image replaces each draft-native run by
+/// its own fresh runs, in order, and keeps the edition's run as it is.
+#[test]
+fn the_pairings_pieces_at_an_index_are_the_entries_a_scan_finds() {
+    let draft = a(&[1, 0, 1, 0, 1]);
+    let piece = |from: u32, to: u32, index: usize, minted: bool| MintedRun { from: run(&ca(from), 1), to: run(&pca(to), 1), home: draft.clone(), index, minted };
+    let shot = Shot {
+        base: None,
+        draft: Some(draft.clone()),
+        also: vec![],
+        keep_base: false,
+        runs: vec![
+            ShotRun { origin: draft.clone(), run: run(&ca(1), 3) },
+            ShotRun { origin: a(&[1, 0, 1, 0, nth_doc(3)]), run: run(&pca(1), 1) },
+            ShotRun { origin: draft.clone(), run: run(&ca(2), 1) },
+            ShotRun { origin: draft.clone(), run: run(&ca(5), 2) },
+        ],
+    };
+    let pairing: Pairing = vec![
+        piece(1, 2, 0, true),
+        piece(2, 3, 0, true),
+        piece(3, 4, 0, true),
+        piece(2, 3, 2, false),
+        piece(5, 5, 3, true),
+        piece(6, 6, 3, true),
+    ];
+    for index in 0..6 {
+        let scanned: Vec<&MintedRun> = pairing.iter().filter(|p| p.index == index).collect();
+        assert_eq!(pieces_at(&pairing, index).iter().collect::<Vec<_>>(), scanned, "index {index}");
+    }
+    assert!(pieces_at(&[], 0).is_empty(), "an empty pairing holds no piece");
+    assert_eq!(
+        member_image(&shot, &pairing),
+        vec![run(&pca(2), 1), run(&pca(3), 1), run(&pca(4), 1), run(&pca(1), 1), run(&pca(3), 1), run(&pca(5), 1), run(&pca(6), 1)],
+        "each draft-native run by its own pieces' fresh runs, the edition's run as it is"
+    );
+}
+
 /// `resolve_end` over the three forms once the member is minted: a stored
 /// end as it is, a named end's tags to the member and the edition, a
 /// member-position end through the member's image.
@@ -218,6 +260,33 @@ fn a_family_publication_takes_each_also_drafts_link_key_and_its_content_key_wher
     let other_alone = shot(vec![other.clone()], vec![ShotRun { origin: other.clone(), run: run(&other_ca(1), 1) }]);
     let keys = publication_lock_keys(&target, &other_alone, &[None], &[], &none);
     assert!(keys.contains(&M3State::link_lock_key(&other)) && !keys.contains(&M3State::link_lock_key(&draft)), "{keys:?}");
+}
+
+/// THE LOCK SET AT THE WIRE's CAPS, IN ONE PASS: a shot naming 4,097 drafts
+/// — the rendering draft and 4,096 `also` — and 4,096 runs of the last
+/// one's identity, that draft's `also_places` entry placing one, takes the
+/// last draft's link key and its content key and no other named draft's,
+/// inside the house's two seconds: the runs grouped by draft once and the
+/// entry looked up once, where asking each draft for its runs would test
+/// the named drafts once per run per draft.
+#[test]
+fn the_lock_set_of_four_thousand_drafts_groups_their_runs_in_one_pass() {
+    let edition = a(&[1, 0, 1, 0, nth_doc(3)]);
+    let draft = a(&[1, 0, 2, 0, 1]);
+    let also: Vec<Address> = (2..=4097u32).map(|k| a(&[1, 0, 2, 0, k])).collect();
+    let last = also.last().cloned().expect("the drafts");
+    let runs: Vec<ShotRun> = (1..=4096u32).map(|j| ShotRun { origin: last.clone(), run: run(&a(&[1, 0, 2, 0, 4097, 0, 1, j]), 1) }).collect();
+    let shot = Shot { base: None, draft: Some(draft.clone()), also, keep_base: false, runs };
+    let mut placed = vec![None; 4096];
+    placed[0] = Some(VPos::content(Nat::from(1u32)));
+    let entry = [AlsoPlaces { draft: last.clone(), places: placed }];
+    let started = std::time::Instant::now();
+    let keys = publication_lock_keys(&PublishTarget::Document(edition.clone()), &shot, &[], &entry, &PublishDeposits::default());
+    let elapsed = started.elapsed();
+    assert!(keys.contains(&M3State::link_lock_key(&last)) && keys.contains(&M3State::content_lock_key(&last)), "the last draft's two keys");
+    assert!(!keys.contains(&M3State::link_lock_key(&draft)) && !keys.contains(&M3State::content_lock_key(&draft)), "no run, no place: none of the rendering draft's");
+    assert_eq!(keys.len(), 4, "the shot's two, and the last draft's two: {keys:?}");
+    assert!(elapsed < std::time::Duration::from_secs(2), "one pass over 4,097 drafts and 4,096 runs: {elapsed:?}");
 }
 
 /// THE LOCK SET's VERSION KEY: a member base takes its own `version_lock_key`

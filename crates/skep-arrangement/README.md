@@ -92,7 +92,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   read off the member's address, in the
   address form the signature covers (the document's own runs by value,
   windows by address). What the shot re-inserts is answered too —
-  `Shot::reinserted_runs` and its count — and `publish` states where
+  `Shot::reinserted_runs`, its count, and the same runs grouped by the
+  named draft whose identity they are (`Shot::reinserted_runs_by_draft`,
+  one pass for every draft) — and `publish` states where
   that fresh identity lands: the last addresses of the document's own
   content chain, which a reader the ack does not tell (the media cell
   index) reads it back from. Everything `publish` checks before it probes an

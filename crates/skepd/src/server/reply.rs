@@ -864,10 +864,11 @@ pub(super) fn retract_refused(kind: OpKind, r: RetractClassRefusal) -> Reply {
 /// as M10 builds it ([`Rejection::classified`]) with the bound passed and
 /// its figures as its `detail`, in fixed sentences: for the reads,
 /// `{total} in-lock reads priced over the budget of {budget}: {homes}
-/// link-holding homes × {entries} links and read-with entries +
-/// {draft_runs} draft runs × {runs} runs`; for the staged bytes,
-/// `{staged_bytes} bytes would be staged against the transaction budget of
-/// {byte_budget}`; both where both are passed, joined by `; `; and
+/// link-holding homes × {entries} links, originals, read-with and supersede
+/// entries + {rewindow} re-window steps + {fence} re-inserted runs`; for the
+/// staged bytes, `{staged_bytes} bytes would be staged against the
+/// transaction budget of {byte_budget}`; both where both are passed, joined
+/// by `; `; and
 /// `; narrow the request` closing either. The daemon's one cell of that
 /// code, answered ahead of the plain sequence's permit and locks
 /// (`publication_read_refusal`), marshaled by the one codec.
@@ -876,9 +877,9 @@ pub(super) fn publication_over_budget(kind: OpKind, price: &PublicationReadRefus
     let mut bounds: Vec<String> = Vec::new();
     if price.reads_over() {
         bounds.push(format!(
-            "{} in-lock reads priced over the budget of {}: {} link-holding homes × {} links and \
-             read-with entries + {} draft runs × {} runs",
-            price.total, price.budget, price.homes, price.entries, price.draft_runs, price.runs
+            "{} in-lock reads priced over the budget of {}: {} link-holding homes × {} links, \
+             originals, read-with and supersede entries + {} re-window steps + {} re-inserted runs",
+            price.total, price.budget, price.homes, price.entries, price.rewindow, price.fence
         ));
     }
     if price.bytes_over() {

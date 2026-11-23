@@ -1753,12 +1753,16 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 /// four terms read off one snapshot — the caller's link-holding homes by
 /// `homes_under` of the account (doc1 holding the record of `E.1`'s shot,
 /// `N` holding `L`, `E.1` holding `M`: three, whatever the caller may read of
-/// them), the `links` and `read_with` entries summed, the draft's content
-/// runs where a place is carried for it — the one draft the re-window reads;
-/// none where no place is — and the request's runs — and the one comparison
-/// against `MAX_PUBLICATION_READS`: a request at the budget is inside it,
-/// one past it is over, the system caller prices no homes, and a shot naming
-/// no draft no runs of one. AND THE FIFTH TERM (lane F4): the staged bytes, priced
+/// them), the `links` and `read_with` entries summed, the re-window's steps
+/// where a place is carried — the one piece placed × doc1's one run; none
+/// where no place is — and the twin fence's stab per re-inserted run,
+/// placed or not — and the one comparison against `MAX_PUBLICATION_READS`:
+/// a request at the budget is inside it, one past it is over, the system
+/// caller prices no homes, and a shot naming no draft re-windows nothing and
+/// re-inserts nothing. THE FENCE's TERM decides at the edge: three homes ×
+/// 21,845 read-with entries is one read short of the budget, so one
+/// re-inserted run stands at the budget and a second is past it. AND THE
+/// FIFTH TERM (lane F4): the staged bytes, priced
 /// from the table off the request — the shot, a by-reference run's
 /// placement, a draft-native run's placement and record, its values, the
 /// copy at its own slots' spans (a member-position span at the fewer of its
@@ -1788,10 +1792,11 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         originals: vec![],
         base_runs: vec![],
     };
-    // No place: the draft is not read, and the draft term is nothing.
+    // No place: nothing is re-windowed, and the re-window's term is nothing.
     let unplaced = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &deposits);
-    assert_eq!(unplaced.draft_runs, 0, "no place carried: the re-window reads no draft");
-    // A place beside the draft-native run: the draft's one run is the term.
+    assert_eq!(unplaced.rewindow, 0, "no place carried: the re-window places no piece");
+    assert_eq!(unplaced.fence, 1, "the draft-native run's fence stab, placed or not");
+    // A place beside the draft-native run: one piece over the draft's one run.
     let price = price_publication_reads(world, P1, &target, &the_shot, &places(2, &[(1, 1)]), &[], &deposits);
     // The fifth term, from the table: the member-position `from` of width 3
     // over a shot of two runs is at most two content spans of the edition's
@@ -1819,26 +1824,38 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         + 2 * READ_WITH_BYTES;
     assert_eq!(
         price,
-        ReadPrice { homes: 3, entries: 3, draft_runs: 1, runs: 2, staged_bytes: staged + KEPT_PLACE_BYTES },
-        "three link-holding homes under the account; one links entry and two read-withs; one run in doc1, placed; two runs in the shot; the staged bytes from the table with the one kept place"
+        ReadPrice { homes: 3, entries: 3, rewindow: 1, fence: 1, staged_bytes: staged + KEPT_PLACE_BYTES },
+        "three link-holding homes under the account; one links entry and two read-withs; one piece placed over doc1's one run, its place and its reach on doc1's run boundaries; one re-inserted run; the staged bytes from the table with the one kept place"
     );
-    assert_eq!(unplaced, ReadPrice { draft_runs: 0, staged_bytes: staged, ..price }, "unplaced: no draft term, no kept place staged");
+    assert_eq!(unplaced, ReadPrice { rewindow: 0, staged_bytes: staged, ..price }, "unplaced: no re-window term, no kept place staged");
     assert_eq!(staged, 7_279, "the figure, at the shallow depth");
-    assert_eq!(price.total(), 3 * 3 + 2, "homes × entries + draft runs × runs");
+    assert_eq!(price.total(), 3 * 3 + 1 + 1, "homes × entries + the re-window's steps + the fence's stabs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
     assert_eq!(ReadPrice::BYTE_BUDGET, skep_kernel::MAX_TXN_BYTES);
-    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 0, runs: 0, staged_bytes: ReadPrice::BYTE_BUDGET };
+    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET };
     assert!(!at_budget.over_budget(), "at both budgets is inside them");
-    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 1, runs: 1, staged_bytes: 0 };
+    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 1, fence: 0, staged_bytes: 0 };
     assert!(past.over_budget() && past.reads_over_budget() && !past.bytes_over_budget(), "one read past the budget is over");
-    let heavy = ReadPrice { homes: 0, entries: 0, draft_runs: 0, runs: 0, staged_bytes: ReadPrice::BYTE_BUDGET + 1 };
+    let stabbed = ReadPrice { rewindow: 0, fence: 1, ..past };
+    assert!(stabbed.reads_over_budget(), "one fence stab past the budget is over");
+    let heavy = ReadPrice { homes: 0, entries: 0, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET + 1 };
     assert!(heavy.over_budget() && heavy.bytes_over_budget() && !heavy.reads_over_budget(), "one byte past the transaction budget is over");
-    let huge = ReadPrice { homes: usize::MAX, entries: 2, draft_runs: usize::MAX, runs: 2, staged_bytes: 0 };
+    let huge = ReadPrice { homes: usize::MAX, entries: 2, rewindow: usize::MAX, fence: 2, staged_bytes: 0 };
     assert_eq!(huge.total(), usize::MAX, "the price saturates");
     assert_eq!(price_publication_reads(world, Caller::System, &target, &the_shot, &[], &[], &deposits).homes, 0, "no account, no homes");
     let draftless = Shot { draft: None, ..the_shot.clone() };
-    assert_eq!(price_publication_reads(world, P1, &target, &draftless, &[], &[], &deposits).draft_runs, 0, "no draft, no draft runs");
+    let undrafted = price_publication_reads(world, P1, &target, &draftless, &places(2, &[(1, 1)]), &[], &deposits);
+    assert_eq!((undrafted.rewindow, undrafted.fence), (0, 0), "no draft: nothing re-windowed, no run re-inserted");
+    // The fence's term at the edge: 3 × 21,845 read-with entries is 65,535.
+    let read_withs = PublishDeposits { read_with: vec![set_s(); 21_845], ..PublishDeposits::default() };
+    let one_run = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &read_withs);
+    assert_eq!((one_run.homes * one_run.entries, one_run.rewindow, one_run.fence), (MAX_PUBLICATION_READS - 1, 0, 1));
+    assert!(!one_run.reads_over_budget(), "one re-inserted run: at the budget");
+    let two_runs = shot_off_head(&k, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
+    let over = price_publication_reads(world, P1, &target, &two_runs, &[], &[], &read_withs);
+    assert_eq!((over.rewindow, over.fence, over.total()), (0, 2, MAX_PUBLICATION_READS + 1));
+    assert!(over.reads_over_budget() && !over.bytes_over_budget(), "a second re-inserted run, placed nowhere, is past the budget on the fence's stab");
 }
 
 /// THE STAGED BYTES' SHAPES (lane F4): what the fifth term prices off the
@@ -2589,11 +2606,12 @@ fn a_family_shot_re_windows_every_named_draft_at_its_own_places_in_one_commit_an
     assert_eq!(records_in_doc2(&k).len(), 2, "doc2's record for `z` beside its first");
 }
 
-/// THE PRICE of a family publication: the draft term is the SUM over every
-/// draft a list places — the rendering draft's run count where `places`
-/// carries a place, each `also` draft's where its `also_places` entry does,
-/// none where no list places anything — and the fence's one stab per run
-/// counts the request's runs, of whichever named draft. THE STAGED BYTES
+/// THE PRICE of a family publication: the re-window's term is the SUM over
+/// every document a list places, each its own term — the rendering draft's
+/// one placed piece × its run count where `places` carries a place, each
+/// `also` draft's where its `also_places` entry does, none where no list
+/// places anything — and the fence's one stab per re-inserted run counts
+/// the runs of every named draft's identity. THE STAGED BYTES
 /// price an `also` draft's run as any draft-native run's, its record beside
 /// it (the gap the survey found closed), and a kept place PER LIST that
 /// places a run — the rendering draft's `places` and each `also` entry.
@@ -2615,12 +2633,12 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     let doc2_places = vec![AlsoPlaces { draft: doc2(), places: vec![None, Some(vp(1, 2))] }];
     let price = |places: &[Option<VPos>], also: &[AlsoPlaces]| price_publication_reads(world, P1, &into, &with, places, also, &none);
     let unplaced = price(&[], &[]);
-    assert_eq!(unplaced.draft_runs, 0, "no list places anything: nothing is re-windowed, no draft term");
-    assert_eq!(unplaced.runs, 2, "one stab per run of the request, of whichever named draft");
-    assert_eq!(price(&places(2, &[(0, 1)]), &[]).draft_runs, d1, "the rendering draft's run count where `places` carries a place");
-    assert_eq!(price(&[], &doc2_places).draft_runs, d2, "the `also` draft's run count where its entry carries a place");
-    assert_eq!(price(&places(2, &[(0, 1)]), &doc2_places).draft_runs, d1 + d2, "summed over every draft a list places");
-    assert_eq!(price(&[], &[AlsoPlaces { draft: doc2(), places: vec![None, None] }]).draft_runs, 0, "an entry with no place places nothing");
+    assert_eq!(unplaced.rewindow, 0, "no list places anything: nothing is re-windowed, no re-window term");
+    assert_eq!(unplaced.fence, 2, "one stab per re-inserted run, of whichever named draft");
+    assert_eq!(price(&places(2, &[(0, 1)]), &[]).rewindow, d1, "the rendering draft's one placed piece × its run count where `places` carries a place");
+    assert_eq!(price(&[], &doc2_places).rewindow, d2, "the `also` draft's one placed piece × its run count where its entry carries a place");
+    assert_eq!(price(&places(2, &[(0, 1)]), &doc2_places).rewindow, d1 + d2, "each draft its own term, summed");
+    assert_eq!(price(&[], &[AlsoPlaces { draft: doc2(), places: vec![None, None] }]).rewindow, 0, "an entry with no place places nothing");
     let (homes, entries) = (unplaced.homes, unplaced.entries);
     assert_eq!((price(&places(2, &[(0, 1)]), &doc2_places).homes, price(&places(2, &[(0, 1)]), &doc2_places).entries), (homes, entries), "the other terms stand");
     // The staged bytes: each named draft's run with its record, the five
@@ -2632,4 +2650,155 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     assert_eq!(price_staged_bytes(world, &into, &with, &[], &[], &none), drafted + runs_and_records, "the `also` draft's run priced as any draft-native run's, its record beside it");
     assert_eq!(price_staged_bytes(world, &into, &with, &places(2, &[(0, 1), (1, 4)]), &doc2_places, &none), drafted + runs_and_records + 3 * KEPT_PLACE_BYTES, "a kept place per list that places a run");
     assert_eq!(unplaced.staged_bytes, drafted + runs_and_records, "the price carries the same figure");
+}
+
+// ───────────────────────── the re-window's term ─────────────────────────
+
+/// doc1 fragmented by `count` inserts of one value at its first position —
+/// each value's identity above the last's, so no two runs merge.
+fn fragment(k: &Kernel<World>, count: usize) {
+    for _ in 0..count {
+        Vstream::new(k)
+            .insert(P1, &doc1(), vp(1, 1), vec![Val::new([b'a'])], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
+            .expect("an insert at the front");
+    }
+}
+
+/// doc1's whole image as a birth shot, run for run, beside each run's place:
+/// the V-ordinal doc1 arranges it at.
+fn whole_image(k: &Kernel<World>) -> (Shot, Vec<Option<VPos>>) {
+    let mut at = 1u32;
+    let mut places = Vec::new();
+    let mut runs = Vec::new();
+    for r in runs_of(k, &doc1()) {
+        places.push(Some(vp(1, at)));
+        at += width_of(&r);
+        runs.push(shot_run(&doc1(), r.i_start(), width_of(&r)));
+    }
+    (shot(None, runs), places)
+}
+
+/// THE RE-WINDOW's TERM IS ITS PLACED PIECES': per document the commit
+/// re-windows, the pieces its lists place × the runs its run-list holds
+/// while they are placed, never the request's every run. doc1 in 200 runs,
+/// published whole with every run placed at its own place — a first
+/// publication — prices 200 pieces × 200 runs, no run cut, beside 200 fence
+/// stabs: inside the budget. At 300 runs, the whole image with ONE place —
+/// a typed word — prices one piece × 300 runs and admits, where every run
+/// of the request multiplied by the draft's would be 300 × 300, past the
+/// budget; every run placed is past it, its lower bound answered with no
+/// run walked; and no place at all prices nothing for the re-window, the
+/// fence's stab per run standing either way.
+#[test]
+fn the_re_window_is_priced_on_the_pieces_its_lists_place() {
+    use skep_links::{price_publication_reads, MAX_PUBLICATION_READS};
+
+    let k = kernel_over(edition_world());
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    fragment(&k, 200);
+    let (first, every) = whole_image(&k);
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_run_count(&doc1()), 200, "the premise: two hundred runs");
+    let published = price_publication_reads(s.world(), P1, &into, &first, &every, &[], &none);
+    assert_eq!((published.rewindow, published.fence), (200 * 200, 200), "200 pieces × 200 runs, each place and reach on a run boundary; one stab per run");
+    assert!(!published.reads_over_budget(), "a first publication of 200 runs, placed run for run, is inside the budget");
+    fragment(&k, 100);
+    let (whole, every) = whole_image(&k);
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_run_count(&doc1()), 300, "the premise: three hundred runs");
+    let price = |places: &[Option<VPos>]| price_publication_reads(s.world(), P1, &into, &whole, places, &[], &none);
+    let word = price(&places(300, &[(0, 1)]));
+    assert_eq!((word.rewindow, word.fence), (300, 300), "one piece × 300 runs; 300 fence stabs");
+    assert!(!word.reads_over_budget() && 300 * 300 > MAX_PUBLICATION_READS, "admitted, where the request's runs × the draft's would be past the budget");
+    let all = price(&every);
+    assert_eq!(all.rewindow, 300 * 300, "every run placed: the lower bound, no run cut counted");
+    assert!(all.reads_over_budget());
+    let unplaced = price(&[]);
+    assert_eq!((unplaced.rewindow, unplaced.fence), (0, 300), "no place: an unplaced run adds nothing to the re-window's term");
+}
+
+/// THE PIECES AND THE CUTS: a run the pairing cuts into three pieces is
+/// priced per piece, and each piece past the first a run more — over doc1's
+/// one run `a b c`, the run re-supplied after `b` alone, so `b`'s endpoints
+/// cut it, prices three pieces × (one run + two); a run placed strictly
+/// inside a run of the draft cuts it at both ends — one piece × (one run +
+/// two). THE ALTERNATING SHAPE: doc1's one run of 512 positions re-supplied
+/// as 512 one-position runs, every other one placed, prices 256 pieces ×
+/// (one run + the 511 its places cut), past the budget though its pieces ×
+/// its runs alone would be 256 — each piece splitting what is left of the
+/// run, so the run-list grows to 512 as they are placed; the same shape over
+/// eight positions prices 4 × (1 + 7), its arithmetic in small.
+#[test]
+fn the_re_window_is_priced_per_piece_and_per_cut() {
+    use skep_links::price_publication_reads;
+
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    let s = k.snapshot();
+    let after_b = shot(None, vec![shot_run(&doc1(), &ca(2), 1), shot_run(&doc1(), &ca(1), 3)]);
+    let cut = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(1, 1)]), &[], &none);
+    assert_eq!((cut.rewindow, cut.fence), (3 * (1 + 2), 2), "three pieces, two runs between them");
+    let inside = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(0, 2)]), &[], &none);
+    assert_eq!(inside.rewindow, 1 + 2, "`b` placed inside `a b c`: a cut at each end");
+    let alternating = |positions: u32| {
+        let k = kernel_over(edition_world());
+        draft_holding(&k, &"x".repeat(positions as usize));
+        assert_eq!(runs_of(&k, &doc1()).len(), 1, "the premise: one run");
+        let runs: Vec<ShotRun> = (1..=positions).map(|j| shot_run(&doc1(), &ca(j), 1)).collect();
+        let placed: Vec<(usize, u32)> = (0..positions as usize).step_by(2).map(|index| (index, index as u32 + 1)).collect();
+        let s = k.snapshot();
+        price_publication_reads(s.world(), P1, &into, &shot(None, runs), &places(positions as usize, &placed), &[], &none)
+    };
+    let small = alternating(8);
+    assert_eq!((small.rewindow, small.fence), (4 * (1 + 7), 8), "the first place opens the run, every reach cuts it, every later place cuts it again");
+    let wide = alternating(512);
+    assert_eq!((wide.rewindow, wide.fence), (256 * (1 + 511), 512));
+    assert!(wide.reads_over_budget(), "past the budget: {wide:?}");
+}
+
+/// THE FENCE AND THE LOCK SET, ONE PASS EACH: a family shot naming 64 owned
+/// drafts — doc1 rendering, 63 `also` — and 4,096 runs, every one of the
+/// last draft's identity, whose last word an earlier shot published, is
+/// refused `AlreadyPublished` at that word, naming the member it was minted
+/// into: the fence read every run of the family, each in its own draft's
+/// records, and nothing is committed. It answers inside the house's two
+/// seconds, the lock set and the fence each grouping the runs by draft in
+/// one pass over the request, where asking each draft for its runs would
+/// test the named drafts once per run per draft — 64 × 4,096 × 32 tests,
+/// twice.
+#[test]
+fn a_family_of_sixty_four_drafts_and_4096_runs_is_fenced_in_one_pass() {
+    use skep_arrangement::M5State;
+    use skep_content::ContentStore;
+    use skep_links::LinkState;
+
+    let edition = doc(65);
+    let m3 = many_documents(64).apply_m3(Seq(0), &M3Rec::allocate(edition.clone(), true));
+    let k = kernel_over(World { m3, content: ContentStore::default(), m5: M5State::genesis(), links: LinkState::genesis() });
+    let last = doc(64);
+    let word = |j: u32| a(&[1, 0, 1, 0, nth_doc(64), 0, 1, j]);
+    let vals: Vec<Val> = (0..4096).map(|_| Val::new([b'w'])).collect();
+    Vstream::new(&k).insert(P1, &last, vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("the last draft's words");
+    let w = writer(&k);
+    let into = PublishTarget::Document(edition.clone());
+    let none = PublishDeposits::default();
+    let lone = Shot { base: None, draft: Some(last.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&last, &word(4096), 1)] };
+    let (e1, _) = w.publication(P1, &into, &lone, &[], &[], &none).expect("the last word published");
+    let family = Shot {
+        base: Some(skep_arrangement::Base { member: e1.clone(), extent: n(1) }),
+        draft: Some(doc(1)),
+        also: (2..=64).map(doc).collect(),
+        keep_base: false,
+        runs: (1..=4096).map(|j| shot_run(&last, &word(j), 1)).collect(),
+    };
+    let before = k.current_seq();
+    let started = std::time::Instant::now();
+    let refusal = refused(w.publication(P1, &into, &family, &[], &[], &none));
+    let elapsed = started.elapsed();
+    assert_eq!(refusal, PublicationError::AlreadyPublished { site: e1 }, "the fence met the published word at the last run");
+    assert_eq!(k.current_seq(), before, "nothing committed");
+    assert!(elapsed < std::time::Duration::from_secs(2), "the lock set and the fence over 64 drafts and 4,096 runs: {elapsed:?}");
 }

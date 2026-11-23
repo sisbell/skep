@@ -9,12 +9,13 @@
 //! body against the frame routes' request-body cap, 8 MiB; THE VALUES — the
 //! distinct draft-native positions against the shot's re-insert budget; THE
 //! IN-LOCK READS — the person's link-holding home count × (`links` +
-//! `originals` + `read_with` entries) + the content run count of EVERY DRAFT A LIST
-//! PLACES (the rendering draft where `places` carries a place, each `also`
-//! draft where its `also_places` entry does, summed; a draft no list
-//! places is not re-windowed, not read, and adds none — the board's
-//! `price_publication_reads` since skep #739) × the request's
-//! runs, against `MAX_PUBLICATION_READS` = 65,536; THE STAGED BYTES — the
+//! `originals` + `read_with` entries), plus, per draft a list places (the
+//! rendering draft where `places` carries a place, each `also` draft where
+//! its `also_places` entry does; a draft no list places is not re-windowed
+//! and adds none), the pieces its list places × (its image's runs + the
+//! runs those pieces can cut, read off its image), plus one per
+//! draft-native run — the board's `price_publication_reads`, term for term
+//! — against `MAX_PUBLICATION_READS` = 65,536; THE STAGED BYTES — the
 //! bytes the one commit would stage, from the table, against the kernel's
 //! transaction budget, 64 MiB. The table's figures are MIRRORED from the
 //! daemon's `crates/skep-links/src/writes/publication/sizes.rs` and pinned
@@ -37,7 +38,7 @@ use skep_address::Address;
 use super::enumerate::MAX_WIRE_LIST;
 use super::request::AlsoPlaces;
 use super::{ISpan, Run};
-use crate::board::answers::LinkSpan;
+use crate::board::answers::{IRun, LinkSpan};
 
 /// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
 pub const MAX_SLOT_SPANS: usize = 4096;
@@ -177,12 +178,14 @@ pub struct Shape<'a> {
     pub places: &'a [Option<u64>],
     /// Each `also` draft's own kept places, one entry per draft `also`
     /// names in its order, each list parallel to the runs: a list carrying
-    /// a place re-windows its draft, priced as `places` is — the draft's run
-    /// count into the reads, a kept place's bytes per piece it places.
+    /// a place re-windows its draft, priced as `places` is — its pieces over
+    /// the draft's runs into the reads, a kept place's bytes per piece it
+    /// places.
     pub also_places: &'a [AlsoPlaces],
-    /// Each `also` draft's content run count — its image's runs — parallel
-    /// to `also_places`; counted where that draft's list carries a place.
-    pub also_runs: &'a [usize],
+    /// Each `also` draft's image, whole, in V-order, parallel to
+    /// `also_places`: its runs and their starts, read where that draft's list
+    /// carries a place.
+    pub also_images: &'a [&'a [IRun]],
     /// Per run, the records covering it where it is a run re-composed by
     /// reference with a place — a stray run of the document's own identity
     /// the twin pre-check re-composed, or a counterpart's covered piece in
@@ -204,12 +207,12 @@ pub struct Shape<'a> {
     /// them; the design names no read for the daemon's exact count, so this
     /// is the caller's figure.
     pub homes: usize,
-    /// The rendering draft's content run count — its image's runs; counted
-    /// where `places` carries a place, as each `also` draft's `also_runs`
-    /// entry is where its list does: the price's draft term is the SUM over
-    /// every draft a list places, zero for a draft no list places (the
-    /// board's `price_publication_reads` since skep #739).
-    pub draft_runs: usize,
+    /// The rendering draft's image, whole, in V-order: its runs and their
+    /// starts, read where `places` carries a place, as each `also` draft's
+    /// image is where its list does — the re-window's term is the SUM over
+    /// every draft a list places, nothing for a draft no list places (the
+    /// board's `price_publication_reads`).
+    pub draft_image: &'a [IRun],
 }
 
 /// The price.
@@ -339,24 +342,30 @@ pub fn distinct_draft_positions(runs: &[Run], drafts: &[Address]) -> u64 {
     total
 }
 
+/// Returns the runs the pieces `list` places can add to its draft's
+/// run-list, read off the draft's `image` — the board's cuts: per run the
+/// list places, one where its place opens no run of the image, one where
+/// its reach neither opens one nor closes the image, and its `pieces` past
+/// the first.
+fn cuts(image: &[IRun], list: &[Option<u64>], runs: &[Run], pieces: &[u64]) -> usize {
+    let end = image.last().map_or(1, |last| last.ordinal.saturating_add(last.width));
+    let opens_a_run = |ordinal: u64| image.binary_search_by_key(&ordinal, |run| run.ordinal).is_ok();
+    let mut cuts = 0usize;
+    for (index, (place, run)) in list.iter().zip(runs).enumerate() {
+        let Some(place) = *place else { continue };
+        let reach = place.saturating_add(run.width);
+        let cut = usize::from(!opens_a_run(place)) + usize::from(reach < end && !opens_a_run(reach)) + usize::try_from(pieces[index].saturating_sub(1)).unwrap_or(usize::MAX);
+        cuts = cuts.saturating_add(cut);
+    }
+    cuts
+}
+
 /// Prices the request's shape against every cap.
 pub fn price(shape: &Shape<'_>) -> Price {
     let drafts = shape.drafts;
     let is_draft = |run: &Run| drafts.contains(&run.origin);
     let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with, shape.originals.len()];
     let values = distinct_draft_positions(shape.runs, drafts);
-    // The draft term: the run count of every draft a list places, summed —
-    // the rendering draft where `places` carries a place, each `also` draft
-    // where its entry does — and none for a draft no list places.
-    let rendering_placed = shape.places.iter().any(Option::is_some);
-    let draft_runs = shape
-        .also_places
-        .iter()
-        .zip(shape.also_runs)
-        .filter(|(entry, _)| entry.carries_a_place())
-        .map(|(_, runs)| *runs)
-        .fold(if rendering_placed { shape.draft_runs } else { 0 }, usize::saturating_add);
-    let reads = shape.homes.saturating_mul(shape.entries.len() + shape.originals.len() + shape.read_with).saturating_add(draft_runs.saturating_mul(shape.runs.len()));
     // The lists that place an entry: the rendering draft's and each `also`
     // draft's — one re-window per list that carries a place at it, each
     // priced a kept place's bytes per piece (the board's `placed_in`).
@@ -365,6 +374,70 @@ pub fn price(shape: &Shape<'_>) -> Price {
         let also = shape.also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
         rendering.saturating_add(also)
     };
+    // THE PIECES, per run, the board's `run_pieces`: a draft-native run's
+    // bound by the endpoints of its own draft's runs, sorted, since a run is
+    // cut only where another run of the same chain begins or ends; a stray
+    // run a list places one piece per record covering it, at least one; any
+    // other run none.
+    let ends: Vec<(Address, Vec<u64>)> = drafts
+        .iter()
+        .map(|draft| {
+            let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
+            ends.sort_unstable();
+            (draft.clone(), ends)
+        })
+        .collect();
+    let pieces_bound = |run: &Run| -> u64 {
+        let ends = ends.iter().find(|(draft, _)| *draft == run.origin).map(|(_, ends)| ends.as_slice()).unwrap_or(&[]);
+        let first = ends.partition_point(|e| *e <= run.i_start);
+        let past = ends.partition_point(|e| *e < run.reach());
+        1 + past.saturating_sub(first) as u64
+    };
+    let pieces: Vec<u64> = shape
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| match (is_draft(run), placed_in(index) > 0) {
+            (true, _) => pieces_bound(run),
+            (false, true) => (shape.stray_records.get(index).copied().unwrap_or(0) as u64).max(1),
+            (false, false) => 0,
+        })
+        .collect();
+
+    // THE IN-LOCK READS, the board's terms: the entries over the homes; per
+    // draft a list places the pieces it places × (its image's runs + the
+    // runs those pieces can cut), the cuts read only where the price stands
+    // inside the budget without them, as the board walks them; and the
+    // fence's stab per draft-native run.
+    let mut rewindows: Vec<(&[Option<u64>], &[IRun])> = Vec::new();
+    if shape.places.iter().any(Option::is_some) {
+        rewindows.push((shape.places, shape.draft_image));
+    }
+    for (entry, image) in shape.also_places.iter().zip(shape.also_images) {
+        if entry.carries_a_place() {
+            rewindows.push((&entry.places, image));
+        }
+    }
+    let placed_pieces = |list: &[Option<u64>]| -> usize {
+        let placed = list.iter().zip(&pieces).filter(|(place, _)| place.is_some());
+        placed.map(|(_, p)| usize::try_from(*p).unwrap_or(usize::MAX)).fold(0usize, usize::saturating_add)
+    };
+    // Each draft's term with the cuts counted or not: pieces × (runs + cuts).
+    let steps = |with_cuts: bool| -> usize {
+        rewindows
+            .iter()
+            .map(|(list, image)| {
+                let cut = if with_cuts { cuts(image, list, shape.runs, &pieces) } else { 0 };
+                placed_pieces(list).saturating_mul(image.len().saturating_add(cut))
+            })
+            .fold(0usize, usize::saturating_add)
+    };
+    let fence = shape.runs.iter().filter(|run| is_draft(run)).count();
+    let priced = |rewindow: usize| shape.homes.saturating_mul(shape.entries.len() + shape.originals.len() + shape.read_with).saturating_add(rewindow).saturating_add(fence);
+    let mut reads = priced(steps(false));
+    if reads <= MAX_PUBLICATION_READS {
+        reads = priced(steps(true));
+    }
 
     // The staged bytes, the daemon's `price_staged_bytes` term by term.
     let mut bytes = SHOT_BYTES;
@@ -380,35 +453,14 @@ pub fn price(shape: &Shape<'_>) -> Price {
     if shape.claim {
         bytes += EDITION_CLAIM_BYTES;
     }
-    // The pieces bound, per named draft: the endpoints of that draft's runs,
-    // sorted, since a run is cut only where another run of the same chain
-    // begins or ends.
-    let ends: Vec<(Address, Vec<u64>)> = drafts
-        .iter()
-        .map(|draft| {
-            let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
-            ends.sort_unstable();
-            (draft.clone(), ends)
-        })
-        .collect();
-    let pieces_bound = |run: &Run| -> u64 {
-        let ends = ends.iter().find(|(draft, _)| *draft == run.origin).map(|(_, ends)| ends.as_slice()).unwrap_or(&[]);
-        let first = ends.partition_point(|e| *e <= run.i_start);
-        let past = ends.partition_point(|e| *e < run.reach());
-        1 + past.saturating_sub(first) as u64
-    };
     for (index, run) in shape.runs.iter().enumerate() {
         let placed = placed_in(index);
         if is_draft(run) {
-            let pieces = pieces_bound(run);
-            bytes = bytes.saturating_add(pieces.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
-            bytes = bytes.saturating_add(placed.saturating_mul(pieces.saturating_mul(KEPT_PLACE_BYTES)));
+            bytes = bytes.saturating_add(pieces[index].saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
+            bytes = bytes.saturating_add(placed.saturating_mul(pieces[index].saturating_mul(KEPT_PLACE_BYTES)));
         } else {
             bytes = bytes.saturating_add(PLACED_RUN_BYTES);
-            if placed > 0 {
-                let records = shape.stray_records.get(index).copied().unwrap_or(0) as u64;
-                bytes = bytes.saturating_add(placed.saturating_mul(records.max(1).saturating_mul(KEPT_PLACE_BYTES)));
-            }
+            bytes = bytes.saturating_add(placed.saturating_mul(pieces[index].saturating_mul(KEPT_PLACE_BYTES)));
         }
     }
     bytes = bytes.saturating_add(values.saturating_mul(REINSERTED_VALUE_BYTES));

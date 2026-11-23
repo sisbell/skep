@@ -48,13 +48,19 @@
 //! `tests/it/publication.rs`.
 //!
 //! Beside the composite sits its price, [`price_publication_reads`]: the
-//! four reads the composite makes under the lock and, its fifth term, the
-//! bytes it would stage, priced from the child module `sizes` — the
-//! worst-case bytes per entry kind as the kernel prices them, the table a
-//! panel prices a request's records from before the act — which a
-//! transport asks of a snapshot ahead of its lock and refuses past
-//! [`MAX_PUBLICATION_READS`] or past the kernel's transaction budget. The
-//! composite reads and stages as it did; the price merely bounds it.
+//! reads the composite makes under the lock — the plan's per home and
+//! entry, the twin fence's per re-inserted run — the re-window's run-list
+//! steps per document it re-windows, the pieces its lists place × the runs
+//! its run-list holds while they are placed, and, its fifth term, the bytes
+//! it would stage, priced from the child module `sizes` — the worst-case
+//! bytes per entry kind as the kernel prices them, the table a panel prices
+//! a request's records from before the act, over the pieces each run is cut
+//! into, which both terms read — which a transport asks of a snapshot ahead
+//! of its lock and refuses past [`MAX_PUBLICATION_READS`] or past the
+//! kernel's transaction budget. The composite reads and stages as it did;
+//! the price merely bounds it.
+
+use std::collections::BTreeMap;
 
 use skep_address::{document_of, shift, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
@@ -140,12 +146,49 @@ impl AlsoPlaces {
     }
 }
 
-/// Returns the `also_places` entry for `draft` — a document an `also` entry
-/// projects to — where one carries a place; `None` where none names it or
-/// its list is all `None`. The one lookup the re-window, the lock set and
-/// the two prices make, so each reads the same entry per draft.
-fn also_places_of<'a>(also_places: &'a [AlsoPlaces], draft: &Address) -> Option<&'a AlsoPlaces> {
-    also_places.iter().find(|entry| trunk_of(&entry.draft) == *draft && entry.carries_a_place())
+/// Returns the `also_places` entries that carry a place, by the document
+/// each one's draft projects to — the first such entry per document, as a
+/// lookup in list order finds it.
+///
+/// Built once per request, each entry's draft projected once, it is the one
+/// lookup [`rewindows`] makes for the re-window, the lock set and the
+/// reads' price, so each reads the same entry per draft: `O(log k)` a
+/// draft, where a scan of the list per `also` draft would pay the list's
+/// length in projections for each.
+fn also_places_by_draft(also_places: &[AlsoPlaces]) -> BTreeMap<Address, &AlsoPlaces> {
+    let mut by_draft = BTreeMap::new();
+    for entry in also_places.iter().filter(|entry| entry.carries_a_place()) {
+        by_draft.entry(trunk_of(&entry.draft)).or_insert(entry);
+    }
+    by_draft
+}
+
+/// Returns THE RE-WINDOWS the commit makes, in its order: each draft, as the
+/// document it projects to, beside the kept places it is re-windowed at —
+/// the rendering draft at `places` where it carries a place, then each
+/// `also` draft at its `also_places` entry where one carries a place, in
+/// `also`'s order; none for a shot naming no rendering draft.
+///
+/// The one sequence step 9 of [`stage_publication`] stages, the lock set
+/// takes each draft's content key by and the reads' price prices, read off
+/// `by_draft` ([`also_places_by_draft`]); a list with no place re-windows
+/// nothing and is left out. Request arithmetic.
+fn rewindows<'a>(
+    shot: &Shot,
+    places: &'a [Option<VPos>],
+    by_draft: &BTreeMap<Address, &'a AlsoPlaces>,
+) -> Vec<(Address, &'a [Option<VPos>])> {
+    let Some(rendering) = shot.draft_document() else { return Vec::new() };
+    let mut out = Vec::new();
+    if places.iter().any(Option::is_some) {
+        out.push((rendering, places));
+    }
+    for draft in shot.also.iter().map(trunk_of) {
+        if let Some(entry) = by_draft.get(&draft) {
+            out.push((draft, entry.places.as_slice()));
+        }
+    }
+    out
 }
 
 /// The price of a publication: the four in-lock reads the design names,
@@ -156,8 +199,8 @@ fn also_places_of<'a>(also_places: &'a [AlsoPlaces], draft: &Address) -> Option<
 /// It is what [`price_publication_reads`] answers and a transport refuses
 /// on ([`ReadPrice::over_budget`]), carried whole so the refusal can name
 /// each term: the caller's link-holding home count, the entries that read
-/// per home, the draft's content run count, the request's runs, and the
-/// staged bytes against the transaction budget.
+/// per home, the re-window's steps, the twin fence's stabs, and the staged
+/// bytes against the transaction budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPrice {
     /// The caller's link-holding homes: `homes_under` of the caller's
@@ -170,19 +213,23 @@ pub struct ReadPrice {
     /// over the caller's homes — (3)'s claim read, (4′)'s claim read, (5)'s
     /// presence read and (6)'s claim read.
     pub entries: usize,
-    /// The content runs of every draft the re-window reads, summed:
-    /// `content_run_count` of the rendering draft where `places` carries a
-    /// place, and of each `also` draft whose `also_places` entry carries one
-    /// — the drafts the commit re-windows, each read once per placed run;
-    /// `0` for a shot that re-windows nothing. A named draft no list places
-    /// is not read and adds no term; the fence's stab per run is priced
-    /// below.
-    pub draft_runs: usize,
-    /// The request's runs, `shot.runs.len()`: the kept-place check costs
-    /// the draft's run count per placed run, and the twin fence one stab per
-    /// re-inserted run — of whichever named draft, each run one stab of its
-    /// own draft's records — so the runs bound both.
-    pub runs: usize,
+    /// The re-window's steps, summed over every document the commit
+    /// re-windows — the rendering draft where `places` carries a place, each
+    /// `also` draft whose `also_places` entry carries one, two lists naming
+    /// one document one term: the pieces its lists place × the runs its
+    /// run-list holds while they are placed — its content runs, and the
+    /// runs those pieces can add. Each piece's check, placement and removal
+    /// walk and copy that run-list, and each piece cutting a run lengthens
+    /// it for the pieces after; a run no list places costs nothing here,
+    /// the re-window passing it by, and `0` is a shot that re-windows
+    /// nothing. Where the request is priced past the budget with no cut
+    /// counted, the cuts are not walked for, and this is that lower bound.
+    pub rewindow: usize,
+    /// The twin fence's stabs: one per re-inserted run, of whichever named
+    /// draft — each run one stab of its own draft's records
+    /// ([`Shot::reinserted_runs_by_draft`], its groups summed), whether or
+    /// not any list places it.
+    pub fence: usize,
     /// The bytes the commit would stage, as [`price_staged_bytes`] prices
     /// them from the worst-case table: an upper bound on what the kernel
     /// charges the transaction, held to [`ReadPrice::BYTE_BUDGET`].
@@ -199,12 +246,10 @@ impl ReadPrice {
     /// kernel's `txn_over_budget` (M6: "met only by a bug or a race").
     pub const BYTE_BUDGET: u64 = MAX_TXN_BYTES;
 
-    /// Returns the reads' price: `homes × entries + draft_runs × runs`,
+    /// Returns the reads' price: `homes × entries + rewindow + fence`,
     /// saturating.
     pub fn total(&self) -> usize {
-        self.homes
-            .saturating_mul(self.entries)
-            .saturating_add(self.draft_runs.saturating_mul(self.runs))
+        self.homes.saturating_mul(self.entries).saturating_add(self.rewindow).saturating_add(self.fence)
     }
 
     /// Returns whether the reads are priced past [`ReadPrice::BUDGET`].
@@ -233,20 +278,30 @@ impl ReadPrice {
 /// its staged bytes, read off the snapshot a transport admits on, ahead of
 /// its lock.
 ///
-/// It reads two counts of the world and two of the request, and walks
-/// nothing: the caller's link-holding homes by [`homes_under`] of the
-/// caller's account (one seek per home found, the account's prefix read
-/// off M3's principal table), each re-windowed draft's content run count by
-/// M5's one map lookup — the rendering draft where `places` carries a place,
-/// each `also` draft where its `also_places` entry does, summed; a named
-/// draft no list places adds none — the entries and the runs off the
-/// request's lists. A caller that is no principal — `Caller::System`, which
-/// no request path carries — has no account and so no homes, and prices the
-/// draft term alone. The staged bytes are [`price_staged_bytes`]'s — request
-/// arithmetic over the table, and one stab of every home's records per stray
-/// place. The counts may move between this read and the composite's own,
-/// where the transport takes its lock after it (the survey's C8): the budget
-/// is conservative by design, and the composite reads under the lock exactly
+/// The caller's link-holding homes are [`homes_under`] of the caller's
+/// account (one seek per home found, the account's prefix read off M3's
+/// principal table); a caller that is no principal — `Caller::System`, which
+/// no request path carries — has no account and so no homes. The entries
+/// and the fence's stabs are request arithmetic, the stabs counted off the
+/// one grouping the fence walks ([`Shot::reinserted_runs_by_draft`]). The
+/// re-window is priced per document the commit re-windows, in three reads:
+/// THE PIECES each placed run is cut into — the pairing's bound for a
+/// draft-native run, one stab of every home's records for a stray — read
+/// once beside the staged bytes, which [`price_staged_bytes`] prices off
+/// the same pieces from the table; THE RUNS, each re-windowed document's
+/// content run count by M5's one map lookup; and THE CUTS, last, read only
+/// where the price stands inside the budget without them — one walk of each
+/// re-windowed document's run-list for its run starts and its end, each
+/// placed run counting a cut where its place is no run start, one where its
+/// reach is neither a run start nor the end, and one per piece past its
+/// first. Each re-windowed document's walk is at most its run count, which
+/// the term already charges once per placed piece, so what the cuts walk is
+/// inside the budget; a price past the budget without them walks nothing and
+/// answers that lower bound, past it all the same.
+///
+/// The counts may move between this read and the composite's own, where
+/// the transport takes its lock after it (the survey's C8): the budget is
+/// conservative by design, and the composite reads under the lock exactly
 /// as it did before it was priced.
 ///
 /// [`homes_under`]: crate::LinkState::homes_under
@@ -266,10 +321,10 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .map_or(0, |account| world.links().homes_under(&enc([account])).len()),
         Caller::System => 0,
     };
-    let draft_runs = rewindowed_drafts(shot, places, also_places)
-        .map(|draft| world.m5().content_run_count(&draft))
-        .fold(0usize, usize::saturating_add);
-    ReadPrice {
+    let pieces = sizes::run_pieces(world, shot, |index| sizes::placed_in(places, also_places, index) > 0);
+    let by_draft = also_places_by_draft(also_places);
+    let terms = RewindowTerm::of(world.m5(), shot, &rewindows(shot, places, &by_draft), &pieces);
+    let mut price = ReadPrice {
         homes,
         entries: deposits
             .links
@@ -277,25 +332,113 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .saturating_add(deposits.originals.len())
             .saturating_add(deposits.read_with.len())
             .saturating_add(deposits.supersede.len()),
-        draft_runs,
-        runs: shot.runs.len(),
-        staged_bytes: price_staged_bytes(world, target, shot, places, also_places, deposits),
+        rewindow: terms.iter().map(|term| term.steps(0)).fold(0usize, usize::saturating_add),
+        fence: shot.reinserted_runs_by_draft().iter().map(|(_, runs)| runs.len()).fold(0usize, usize::saturating_add),
+        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces),
+    };
+    if !price.reads_over_budget() {
+        price.rewindow = terms
+            .iter()
+            .map(|term| term.steps(term.cuts(world.m5(), shot, &pieces)))
+            .fold(0usize, usize::saturating_add);
+    }
+    price
+}
+
+/// One document the commit re-windows, as the reads' price charges it: the
+/// lists that re-window it, the pieces they place and its content runs.
+struct RewindowTerm<'a> {
+    /// The document, as the drafts its lists name project to it.
+    draft: Address,
+    /// Every list that re-windows it, in the commit's order.
+    lists: Vec<&'a [Option<VPos>]>,
+    /// The pieces its lists place, summed: [`sizes::RunPieces::pieces`] of
+    /// each run a list carries a place at.
+    pieces: usize,
+    /// Its content run count, read off the snapshot.
+    runs: usize,
+}
+
+impl<'a> RewindowTerm<'a> {
+    /// Returns one term per document `rewindows` names — two lists naming
+    /// one document summed into one term, at its first place — each with
+    /// its pieces and its run count.
+    fn of(
+        m5: &M5State,
+        shot: &Shot,
+        rewindows: &[(Address, &'a [Option<VPos>])],
+        pieces: &[sizes::RunPieces],
+    ) -> Vec<RewindowTerm<'a>> {
+        let mut terms: Vec<RewindowTerm<'a>> = Vec::new();
+        let mut index: BTreeMap<&Address, usize> = BTreeMap::new();
+        for &(ref draft, list) in rewindows {
+            let k = *index.entry(draft).or_insert_with(|| {
+                let runs = m5.content_run_count(draft);
+                terms.push(RewindowTerm { draft: draft.clone(), lists: Vec::new(), pieces: 0, runs });
+                terms.len() - 1
+            });
+            let placed = placed_runs(shot, list)
+                .map(|(index, _, _)| usize::try_from(pieces[index].pieces()).unwrap_or(usize::MAX))
+                .fold(0usize, usize::saturating_add);
+            let term = &mut terms[k];
+            term.lists.push(list);
+            term.pieces = term.pieces.saturating_add(placed);
+        }
+        terms
+    }
+
+    /// Returns the term's steps where its pieces can add `cuts` runs:
+    /// pieces × (runs + cuts), saturating.
+    fn steps(&self, cuts: usize) -> usize {
+        self.pieces.saturating_mul(self.runs.saturating_add(cuts))
+    }
+
+    /// Returns THE CUTS: the runs the pieces placed can add to the
+    /// document's run-list, read by one walk of it.
+    ///
+    /// A piece's placement and the removal of the words it replaces leave
+    /// the run-list as long as it was where the run's place opens a run of
+    /// the document and its reach opens one or closes the document, and
+    /// longer by a run at each end that cuts a run instead; a run of several
+    /// pieces leaves a run between each two. So each placed run counts one
+    /// where its place is no run start, one where its reach is neither a run
+    /// start nor past the last position, and its pieces past the first —
+    /// read off the snapshot's run starts, which the replacements before it
+    /// keep, since a placed piece is published identity no draft-native
+    /// neighbour merges with. `0` for runs placed whole, run for run.
+    fn cuts(&self, m5: &M5State, shot: &Shot, pieces: &[sizes::RunPieces]) -> usize {
+        let mut starts: Vec<Nat> = Vec::with_capacity(self.runs);
+        let mut end = Nat::from(1u32);
+        for run in m5.content_runs(&self.draft) {
+            starts.push(end.clone());
+            end += run.width();
+        }
+        let opens_a_run = |ordinal: &Nat| starts.binary_search(ordinal).is_ok();
+        let mut cuts = 0usize;
+        for list in &self.lists {
+            for (index, place, entry) in placed_runs(shot, list) {
+                let reach = &place.ordinal + entry.run.width();
+                let cut = usize::from(!opens_a_run(&place.ordinal))
+                    + usize::from(reach < end && !opens_a_run(&reach))
+                    + usize::try_from(pieces[index].pieces().saturating_sub(1)).unwrap_or(usize::MAX);
+                cuts = cuts.saturating_add(cut);
+            }
+        }
+        cuts
     }
 }
 
-/// Returns the drafts the commit re-windows, each as the document it
-/// projects to, in the order it re-windows them: the rendering draft where
-/// `places` carries a place, then each `also` draft whose `also_places`
-/// entry carries one, in `also`'s order — the drafts whose content key the
-/// lock set takes and whose run count the price reads. Request arithmetic.
-fn rewindowed_drafts<'a>(
+/// Returns the runs `list` carries a place at, each with its index and its
+/// place, in `runs`' order — an entry past the runs being nothing's, as the
+/// re-window reads it.
+fn placed_runs<'a>(
     shot: &'a Shot,
-    places: &'a [Option<VPos>],
-    also_places: &'a [AlsoPlaces],
-) -> impl Iterator<Item = Address> + 'a {
-    let rendering = shot.draft_document().filter(|_| places.iter().any(Option::is_some));
-    let also = shot.also.iter().map(trunk_of).filter(move |draft| also_places_of(also_places, draft).is_some());
-    rendering.into_iter().chain(also)
+    list: &'a [Option<VPos>],
+) -> impl Iterator<Item = (usize, &'a VPos, &'a ShotRun)> + 'a {
+    list.iter()
+        .zip(&shot.runs)
+        .enumerate()
+        .filter_map(|(index, (place, entry))| place.as_ref().map(|place| (index, place, entry)))
 }
 
 impl From<HomeFault> for PublicationError {
@@ -363,9 +506,10 @@ impl From<EmitCoreError> for PublicationError {
 ///    source gate. Refused as `Publish`.
 /// 3. THE TWIN FENCE, reading nothing but `stg.working()` and staging
 ///    nothing: PER NAMED DRAFT — the rendering draft first, then each `also`
-///    draft, in the request's order (`Shot::named_drafts`) — for each
-///    draft-native run of that draft's identity (`Shot::reinserted_runs_of`),
-///    the correspondence records homed in THAT draft whose `from` overlaps
+///    draft, in the request's order, each once — for each draft-native run
+///    of that draft's identity (`Shot::reinserted_runs_by_draft`, every
+///    draft's runs grouped in one pass over the request), the
+///    correspondence records homed in THAT draft whose `from` overlaps
 ///    the run's I-span — one home's stab of the FROM slot
 ///    ([`match_links_in`], `O(log n)` per probe plus the home's hits and
 ///    nothing of any other home's), each hit kept by the stored type slot's
@@ -598,8 +742,8 @@ where
         let ty = enc([correspondence_type()]);
         let world = stg.working();
         let links = world.links();
-        for draft in shot.named_drafts() {
-            for run in shot.reinserted_runs_of(&draft) {
+        for (draft, runs) in shot.reinserted_runs_by_draft() {
+            for run in runs {
                 let span = run.iextent();
                 for hit in links.match_links_in(&draft, (FROM, [&span]), &[(TYPE, &ty)], View::Active) {
                     let Some(record) = links.readlink(&hit) else { continue };
@@ -637,13 +781,8 @@ where
     //    working world the ones before it left — every stray read at the
     //    caller's own visibility class.
     let trunk = trunk_of(doc);
-    if let Some(draft) = shot.draft_document() {
-        stage_rewindow(stg, readable, caller, &draft, &trunk, shot, places, &pairing)?;
-        for other in shot.also.iter().map(trunk_of) {
-            if let Some(entry) = also_places_of(also_places, &other) {
-                stage_rewindow(stg, readable, caller, &other, &trunk, shot, &entry.places, &pairing)?;
-            }
-        }
+    for (draft, list) in rewindows(shot, places, &also_places_by_draft(also_places)) {
+        stage_rewindow(stg, readable, caller, &draft, &trunk, shot, list, &pairing)?;
     }
     Ok((member, pairing))
 }
@@ -871,8 +1010,12 @@ where
 ///     (links move with identity, `reinstate`'s rule).
 ///
 /// Cost: per place, one resolution of the entry's span over the draft's
-/// run-list, and two records per piece; per stray place one stab of the TO
-/// slot across every home beside it, each hit asked of `readable` once.
+/// run-list, its pieces found in the pairing by two binary searches
+/// (`plan::pieces_at`); per piece two records, each splicing the run-list —
+/// a walk and a copy of it, the longer by every run a piece before it cut —
+/// which [`price_publication_reads`] charges as its re-window term; per
+/// stray place one stab of the TO slot across every home beside it, each
+/// hit asked of `readable` once.
 ///
 /// # Errors
 ///
@@ -912,9 +1055,8 @@ where
         // draft is being re-windowed at it — the records' for a stray entry,
         // a run of published identity no pairing holds, of whichever
         // document, read wherever homed at the caller's own visibility class.
-        let mut pieces: Vec<stray::Piece> = pairing
+        let mut pieces: Vec<stray::Piece> = plan::pieces_at(pairing, index)
             .iter()
-            .filter(|piece| piece.index == index)
             .map(|piece| stray::Piece { from: piece.from.clone(), to: piece.to.clone() })
             .collect();
         if pieces.is_empty() {
@@ -1239,12 +1381,13 @@ fn publication_lock_keys(
     // re-inserted (its records are minted there); each re-windowed draft's
     // content key — the rendering draft's where `places` carries a place,
     // each `also` draft's where its own list does.
-    for draft in shot.named_drafts() {
-        if shot.reinserted_runs_of(&draft).next().is_some() {
+    for (draft, runs) in shot.reinserted_runs_by_draft() {
+        if !runs.is_empty() {
             keys.push(M3State::link_lock_key(&draft));
         }
     }
-    keys.extend(rewindowed_drafts(shot, places, also_places).map(|draft| M3State::content_lock_key(&draft)));
+    let by_draft = also_places_by_draft(also_places);
+    keys.extend(rewindows(shot, places, &by_draft).into_iter().map(|(draft, _)| M3State::content_lock_key(&draft)));
     for entry in &deposits.links {
         if let NamedAddress::Address(home) = &entry.home {
             keys.push(M3State::link_lock_key(home));

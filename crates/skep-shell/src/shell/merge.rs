@@ -1055,7 +1055,10 @@ impl Shell {
             R::NotAPosition { at, nearest, .. } => other("not_a_position", json!({"at": at, "nearest": nearest})),
             R::ForkBaseMoved { fork, source, head } => other("fork_base_moved", json!({"fork": s(&fork), "source": s(&source), "head": s(&head)})),
             R::BaseNotInChain { into, head } => other("base_not_in_chain", json!({"into": s(&into), "head": s(&head)})),
-            R::WindowWithheld(origin) => other("window_withheld", json!({"origin": s(&origin)})),
+            R::WindowWithheld { origin, positions } => {
+                let positions: Vec<Value> = positions.iter().map(|&(ordinal, width)| json!({"ordinal": ordinal, "width": width})).collect();
+                other("window_withheld", json!({"origin": s(&origin), "positions": positions}))
+            }
             R::NeedsSignedSession => other("needs_signed_session", json!({})),
             R::SupersedeRefused { index, cause } => {
                 let head = match &cause {

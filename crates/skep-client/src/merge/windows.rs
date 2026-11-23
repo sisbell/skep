@@ -60,6 +60,13 @@
 //! M the draft holds at two places goes out as two, each at its own place,
 //! and no place is named twice. What the draft does not arrange takes none.
 //!
+//! **What the base carries** ([`carried`]; PUB-6.24). The board's source
+//! gate consults no origin for a run the shot's base already arranges, so
+//! the words a `withheld` at the shot refuses ([`Refusal::WindowWithheld`])
+//! are never such a run's: the head's image, read at the composition's one
+//! position, is judged as the board judges the base, its runs on one chain
+//! joined where they overlap or abut.
+//!
 //! **The twins** (PUB-3.9, the twin fence; wire.md §The publish shot and
 //! head-float; the link-sets design §5.5, §5.7). A draft side's word a
 //! correspondence record already names as published would be refused
@@ -340,6 +347,34 @@ pub(super) fn kept_places(runs: &[AnsweredRun], image: Option<&[IRun]>) -> Vec<(
         }
     }
     out
+}
+
+/// Returns whether the shot's base carries `run`: whether `base`'s runs on
+/// `run`'s chain, joined where they overlap or abut, hold every word of it.
+///
+/// It is the source gate's own test of a run the base already arranges,
+/// which the board carries with no consult (PUB-6.24; wire.md §The publish
+/// shot and head-float, the source gate) — so two base runs adjoining in
+/// I-space carry a run neither holds whole, wherever the base arranges them.
+/// `base` is the base's image, its runs in V order; a run of width 0 holds
+/// no word, and is carried.
+pub(super) fn carried(base: &[IRun], run: &Run) -> bool {
+    let chain = content_prefix(&run.origin);
+    let mut held: Vec<(u64, u64)> = base
+        .iter()
+        .filter(|r| r.prefix == chain)
+        .map(|r| (r.first, r.first.saturating_add(r.width)))
+        .collect();
+    held.sort_unstable();
+    // How far the joined runs hold the run's words from its first on.
+    let mut reach = run.i_start;
+    for (first, end) in held {
+        if first > reach {
+            break;
+        }
+        reach = reach.max(end);
+    }
+    reach >= run.reach()
 }
 
 /// Returns M as `answers` leave it — the list a shot places, the read-first

@@ -11,7 +11,8 @@
 //! record homed in a third account never read; and the restore's read of
 //! the same records: another account's words written as the words its owner
 //! published, and as read where no record of them is answered, the board's
-//! `withheld` at the write naming that account's draft.
+//! `withheld` at the write naming that account's draft and the stretches of
+//! the state its words stand in.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -306,16 +307,17 @@ fn a_record_not_homed_in_its_origins_account_is_not_kept() {
 }
 
 /// Returns the fake board of a restore of `S` whose state as of 12 holds
-/// `S`'s first eleven words and `Z`'s first four.
+/// `state`, each run as [`runs_at`] takes it.
 ///
 /// The records' reads are [`by_home`]'s, `Z`'s query answered `z_hits`,
 /// and the write is answered `write`.
-fn holding_z(z_hits: Vec<String>, write: Value) -> Arc<Fake> {
-    let state = runs_at(&[(&format!("{S}.0.1"), 1, 11), (&format!("{Z}.0.1"), 1, 4)]);
+fn holding_z(state: &[(&str, u64, u64)], z_hits: Vec<String>, write: Value) -> Arc<Fake> {
+    let extent: u64 = state.iter().map(|(_, _, width)| width).sum();
+    let state = runs_at(state);
     Fake::new(move |req: &Request| {
         by_home(req, &z_hits).unwrap_or_else(|| match (req.path.as_str(), fake::frame(req)["op"].as_str().unwrap_or("?")) {
             ("/op", "doc_metadata") => fake::json(200, metadata(false)),
-            ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": "0.15"}]})),
+            ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": format!("0.{extent}")}]})),
             ("/op-at", "image") => fake::json(200, state.clone()),
             ("/op", "set_arrangement") => fake::json(200, write.clone()),
             other => panic!("the restore sent a frame the fake does not answer: {other:?}"),
@@ -336,8 +338,13 @@ fn holding_z(z_hits: Vec<String>, write: Value) -> Arc<Fake> {
 /// published).
 #[test]
 fn the_restore_maps_another_accounts_words_through_its_owners_record() {
-    let (e, f) = (format!("{E}.0.1"), format!("{F}.0.1"));
-    let fake = holding_z(vec![format!("{Z}.0.2.1")], json!({"resp": "ack", "at": 21}));
+    let (s, z, e, f) =
+        (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"), format!("{F}.0.1"));
+    let fake = holding_z(
+        &[(&s, 1, 11), (&z, 1, 4)],
+        vec![format!("{Z}.0.2.1")],
+        json!({"resp": "ack", "at": 21}),
+    );
     let board = fake::board(&fake);
     let p = past(&board, &token(), &a(S), 12).expect("the past read");
     assert_eq!(p.written, image(&[(&e, 20, 11), (&f, 30, 4)]), "Z's words written as the words its owner published");
@@ -349,26 +356,62 @@ fn the_restore_maps_another_accounts_words_through_its_owners_record() {
     assert_eq!(write["runs"], json!([frames::shot_run(E, &format!("{e}.20"), 11), frames::shot_run(F, &format!("{f}.30"), 4)]));
 }
 
+/// The board's `withheld` at a restore's write, naming `Z`.
+fn z_withheld() -> Value {
+    json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": "set_arrangement", "site": {"addr": Z}})
+}
+
 /// Another account's words no record is answered for are written as read.
 ///
 /// `Z`'s query answers no hit, as the board answers a reader for a draft it
 /// may not read, every link homed there withheld from it: `Z`'s run is
 /// written as the state held it and no link of `Z`'s is read, nothing
 /// refused at the reads. The board's `withheld` at the write, naming `Z`,
-/// is [`Refusal::WindowWithheld`] naming `Z` (the mutant that answers the
-/// restored draft in place of the board's site names `S`).
+/// is [`Refusal::WindowWithheld`] naming `Z` and its words at 12–15 of the
+/// state, after `S`'s eleven (the mutant that answers the restored draft in
+/// place of the board's site names `S` and its words at 1–11).
 #[test]
 fn another_accounts_words_with_no_record_answered_are_written_as_read() {
-    let (z, e) = (format!("{Z}.0.1"), format!("{E}.0.1"));
-    let withheld = json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": "set_arrangement", "site": {"addr": Z}});
-    let fake = holding_z(Vec::new(), withheld);
+    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
+    let fake = holding_z(&[(&s, 1, 11), (&z, 1, 4)], Vec::new(), z_withheld());
     let board = fake::board(&fake);
     let p = past(&board, &token(), &a(S), 12).expect("the past read");
     assert_eq!(p.state, vec![run(S, 1, 11), run(Z, 1, 4)]);
     assert_eq!(p.written, image(&[(&e, 20, 11), (&z, 1, 4)]), "Z's words as the state held them");
     assert_eq!(asked(&fake), (vec![frames::unit_span(S), frames::unit_span(Z)], vec![json!(format!("{S}.0.2.1"))]), "Z queried, no link of Z's read");
-    assert_eq!(restore(&board, &token(), &p), Err(Refusal::WindowWithheld(a(Z))));
+    assert_eq!(
+        restore(&board, &token(), &p),
+        Err(Refusal::WindowWithheld { origin: a(Z), positions: vec![(12, 4)] })
+    );
     assert_eq!(served(&fake).pop().map(|(_, _, f)| f["runs"][1].clone()), Some(frames::shot_run(Z, &format!("{z}.1"), 4)), "the write sent Z's run as read");
+}
+
+/// The words a restore's `withheld` names are the stretches of the state
+/// the write sends that the named document's runs fill.
+///
+/// The state holds `Z`'s words, no record of them answered, in two
+/// stretches with `S`'s eleven words between: the first two runs of `Z`
+/// back to back but not I-adjacent, so the image keeps them two runs, and
+/// one run after `S`'s. The refusal names `Z` at 1–5 and 17–20, counted from
+/// 1, `S`'s words mapped to `E`'s never among them (the mutants that count
+/// from 0, join across `S`'s run, or leave `Z`'s two runs apart answer
+/// another list).
+#[test]
+fn a_restores_withheld_names_each_stretch_of_the_documents_words_in_the_state() {
+    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
+    let fake =
+        holding_z(&[(&z, 1, 2), (&z, 10, 3), (&s, 1, 11), (&z, 5, 4)], Vec::new(), z_withheld());
+    let board = fake::board(&fake);
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
+    assert_eq!(
+        p.written,
+        image(&[(&z, 1, 2), (&z, 10, 3), (&e, 20, 11), (&z, 5, 4)]),
+        "Z's three runs as read, S's words as E's"
+    );
+    assert_eq!(
+        restore(&board, &token(), &p),
+        Err(Refusal::WindowWithheld { origin: a(Z), positions: vec![(1, 5), (17, 4)] })
+    );
 }
 
 // ── the reads and the one write ──────────────────────────────────────────

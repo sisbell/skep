@@ -1864,7 +1864,11 @@ fn a_landings_record_replaces_the_mergers_newest_record_as_it_lands() {
 
 /// Every refusal the one write can answer, each mapped (item 4):
 /// `not_owner` naming the draft, `published_target`, `withheld` naming
-/// the origin, `signed_session_required`, `doc_not_registered` naming
+/// the origin and its words in C as the write sends it — none for `Z`,
+/// which no run windows; `D`'s eleven at 1–11, `S`'s three after them left
+/// out — and with no site the draft and no words (the mutant that counts
+/// the draft's own run in the site's place names `S`'s at 12–14),
+/// `signed_session_required`, `doc_not_registered` naming
 /// the draft; `source_not_registered`, `no_base_to_record`,
 /// `base_not_in_chain`, `base_extent_too_large` and the runs' codes as
 /// the library's own faults, since it sends only the base and the runs
@@ -1891,7 +1895,24 @@ fn the_take_backs_refusals_are_mapped() {
     };
     assert_eq!(refused("not_owner", Some(S)), Refusal::NotOwner { draft: a(S) });
     assert_eq!(refused("published_target", None), Refusal::Published { doc: a(S) });
-    assert_eq!(refused("withheld", Some(Z)), Refusal::WindowWithheld(a(Z)));
+    assert_eq!(
+        refused("withheld", Some(Z)),
+        Refusal::WindowWithheld { origin: a(Z), positions: Vec::new() }
+    );
+    assert_eq!(
+        dialer.frames("set_arrangement")[0]["runs"],
+        frame_runs(&draft_c()),
+        "the premise: C as the write sends it"
+    );
+    assert_eq!(
+        refused("withheld", Some(D)),
+        Refusal::WindowWithheld { origin: a(D), positions: vec![(1, 11)] }
+    );
+    let unsited = refused("withheld", None);
+    assert!(
+        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
+        "{unsited:?}"
+    );
     assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
     assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
     for code in ["source_not_registered", "no_base_to_record", "base_not_in_chain", "base_extent_too_large", "fork_base_moved", "bad_run", "dangling_source", "too_many_runs", "malformed"] {

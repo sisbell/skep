@@ -129,7 +129,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   {draft, at: as_of, as_of: position}` puts it back. The shell's own
   refusals — `merge_refused` (`not_past`, `history_reclaimed`,
   `not_a_position`) and `held_lines` among them — are `isError`, nothing
-  sent.
+  sent. A state holding words of a document the agent may not read is
+  refused `merge_refused` `window_withheld`, `isError`, nothing changed: it
+  names that document and the positions of its words in the state, the
+  draft as it stood at `at`; the state is put back once the document is
+  shared with the agent, and another such document may then be named.
 - **A merge, landed in a draft and published from it.** `merge_compose
   {doc, alternative | draft | fork, into?}` is the shell's
   `merge.compose`: the published document's head merged with ONE side —

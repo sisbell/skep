@@ -57,9 +57,10 @@
 //! the record kind's type address (decision 9's row is interim and
 //! unpinned, so the caller names it). The board's refusal is exit 1, a halt
 //! exit 3. A `withheld` refusal — a document the merger may not read, or an
-//! origin a write's run windows — names the document, and the command says
-//! beside it what the run did: nothing composed; the merge composed, and
-//! nothing published or merged; nothing taken back or out.
+//! origin a write's run windows — names the document, the second the
+//! positions of its words in the list the write sends too, and the command
+//! says beside it what the run did: nothing composed; the merge composed,
+//! and nothing published or merged; nothing taken back or out.
 //!
 //! **The journal.** A merge record is kept only in a private document: a
 //! journal is a private document of the merger's own, a published one is

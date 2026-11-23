@@ -368,7 +368,8 @@ impl Sibling {
 /// in `b`'s account and writes the words as `f`'s, which `s` then holds.
 /// The grant revoked, no record of `z`'s is answered `a`: the state is
 /// written as read, and the board refuses the write `withheld` naming `z`,
-/// nothing written and `s` as it stood.
+/// the refusal naming `z`'s five words at 1–5 of the state, nothing written
+/// and `s` as it stood.
 #[test]
 fn another_accounts_words_published_since_come_back_as_its_published_words() {
     let rig = Rig::new();
@@ -405,7 +406,10 @@ fn another_accounts_words_published_since_come_back_as_its_published_words() {
     let q = past(&rig.board, sa.token(), &s, p1).expect("the past read");
     assert_eq!((q.sent.clone(), q.records.len()), (vec![Run::new(z.clone(), 1, 5)], 0), "z's words as read");
     let before = rig.position();
-    assert_eq!(restore(&rig.board, sa.token(), &q), Err(Refusal::WindowWithheld(z.clone())));
+    assert_eq!(
+        restore(&rig.board, sa.token(), &q),
+        Err(Refusal::WindowWithheld { origin: z.clone(), positions: vec![(1, 5)] })
+    );
     assert_eq!(rig.position(), before, "nothing written");
     assert_eq!(image(&rig.board, sa.token(), &s, 5), vec![(format!("{f}.0.1.1"), 5)], "s as it stood");
     for session in [sa, sb] {

@@ -71,7 +71,8 @@
 //! `base_unknown` with `reason` `fork_of_owner`, as the fork alone and as
 //! `into` too, nothing written, and landing as the draft side (skep
 //! #1107); the refusals of a side and its line crossing as typed data
-//! naming their members with no daemon behind the shell; the agent's
+//! naming their members with no daemon behind the shell, and a write's
+//! window withheld naming its origin and its words' stretches; the agent's
 //! re-base of its own fork into a fresh draft of its own, the fork itself
 //! as `into` refused `fork_base_moved` and its landing on the person's
 //! trunk refused `not_owner`; the merged arm
@@ -418,6 +419,51 @@ fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
     let v = crossed.to_value();
     assert_eq!((crossed.name(), v["arm"].as_str(), v["draft"].as_str(), v["member"].as_str()), ("merge_refused", Some("already_published"), Some("1.0.1.0.64"), Some("1.0.1.0.65.1")), "{v}");
     assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    shell.shutdown();
+}
+
+/// Checks that a write's run windowing a document the person may not read
+/// crosses as typed data naming the document and its words' stretches.
+///
+/// The library's `WindowWithheld` is `merge_refused` with the arm
+/// `window_withheld`, `origin` the document and `positions` each stretch as
+/// `{ordinal, width}`, numbers, `[]` where the board named no document, so
+/// a page and an agent find the words from data; the session stands.
+#[test]
+fn a_window_withheld_crosses_as_typed_data_naming_the_origin_and_its_words() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(
+        &super::door::nowhere(),
+        &dir.path().join("store"),
+        SessionMode::Bare { principal: 1 },
+    );
+    let standing = register(&shell, "8e", signed_facts(2));
+    let origin = skep_client::address::parse_address("1.0.2.0.65").expect("an address");
+    let session = shell.sessions.get(&standing).unwrap();
+    let crossed = shell.merge_refusal(
+        &session,
+        Library::WindowWithheld { origin: origin.clone(), positions: vec![(4, 6), (20, 1)] },
+    );
+    let v = crossed.to_value();
+    assert_eq!(
+        (crossed.name(), v["arm"].as_str(), v["origin"].as_str()),
+        ("merge_refused", Some("window_withheld"), Some("1.0.2.0.65")),
+        "{v}"
+    );
+    assert_eq!(
+        v["positions"],
+        json!([{"ordinal": 4, "width": 6}, {"ordinal": 20, "width": 1}]),
+        "{v}"
+    );
+    let unplaced = shell
+        .merge_refusal(&session, Library::WindowWithheld { origin, positions: Vec::new() })
+        .to_value();
+    assert_eq!(unplaced["positions"], json!([]), "{unplaced}");
+    assert_eq!(
+        shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(),
+        "no_merge",
+        "the session stands"
+    );
     shell.shutdown();
 }
 

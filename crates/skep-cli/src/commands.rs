@@ -509,8 +509,9 @@ fn later_line(act: &Held) -> String {
 
 /// The step of a run a merge library refusal answers ([`refused`]).
 ///
-/// The library's two `withheld` refusals name the document and the code
-/// alone, the same at every act (SP-10); the step is what the run says
+/// The library's two `withheld` refusals name the document and the code —
+/// `WindowWithheld` the positions of its words in the state the write sends
+/// too — the same at every act (SP-10); the step is what the run says
 /// beside them — what it did, and what it did not, before the refusal.
 #[derive(Clone, Copy)]
 enum Step {
@@ -596,9 +597,10 @@ fn journal_published(journal: &Address) -> String {
 /// draft of the merger's with no record, nothing staged or written, its
 /// detail naming the draft, the position and the ways on (PUB-8.32).
 /// The two `withheld` refusals — a
-/// document the reader may not read, an origin a write's run windows —
-/// name the document alone, so their detail says beside it what `step`
-/// did and did not do ([`Step::outcome`]). The session's end keeps its own
+/// document the reader may not read, an origin a write's run windows and
+/// its words' positions in the state the write sends — name what was
+/// refused alone, so their detail says beside it what `step` did and did
+/// not do ([`Step::outcome`]). The session's end keeps its own
 /// face and code too, exit 3: the face names the step the death signal met
 /// and the way on, and `step`'s words, which say what was not done, would
 /// be false where a landing or a take-back's write stands.
@@ -613,7 +615,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::DraftBaseDisagrees { .. } => "draft_base_disagrees",
         Refusal::NamedBaseDisagrees { .. } => "base_disagrees",
         Refusal::TwoDrafts => "two_drafts",
-        Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
+        Refusal::Unreadable(_) | Refusal::WindowWithheld { .. } => "withheld",
         Refusal::NoSuchDocument(_) => "doc_not_registered",
         Refusal::TooFragmented { .. } => "image_too_large",
         Refusal::HistoryBusy => "history_busy",
@@ -638,7 +640,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::Halt(h) | Refusal::SessionEnded(h) => Stop::Halt(h),
         other => {
             let detail = match &other {
-                Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
+                Refusal::Unreadable(_) | Refusal::WindowWithheld { .. } => {
                     format!("{other}; {}", step.outcome())
                 }
                 Refusal::PublishedJournal { journal } => format!(
@@ -789,6 +791,32 @@ mod tests {
             let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Compose) else { panic!("the board's refusal") };
             assert_eq!((r.code.as_str(), r.detail.as_deref()), (code, Some(words.as_str())));
             assert_eq!(finish(Err(refused(refusal, Step::Compose))), 1);
+        }
+    }
+
+    /// Checks that a window withheld is the board's refusal naming the words.
+    ///
+    /// A write's run windowing a document the person may not read is
+    /// `withheld`, exit 1, its detail the library's words — the document and
+    /// the positions of its words in the state the write sends — with the
+    /// step's outcome beside them, at the restore and at the undo alike.
+    #[test]
+    fn a_window_withheld_is_the_boards_refusal_naming_the_words_and_the_steps_outcome() {
+        let origin = skep_client::address::parse_address("1.0.2.0.65").expect("an address");
+        let refusal = Refusal::WindowWithheld { origin, positions: vec![(4, 6), (20, 1)] };
+        let words = refusal.to_string();
+        assert!(words.contains("1.0.2.0.65") && words.contains("positions 4–9 and 20"), "{words}");
+        for (step, outcome) in
+            [(Step::Restore, "nothing was restored"), (Step::Undo, "nothing was taken back")]
+        {
+            let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), step) else {
+                panic!("the board's refusal")
+            };
+            assert_eq!(
+                (r.code.as_str(), r.detail),
+                ("withheld", Some(format!("{words}; {outcome}")))
+            );
+            assert_eq!(finish(Err(refused(refusal.clone(), step))), 1);
         }
     }
 

@@ -2,8 +2,9 @@
 //!
 //! [`Refusal`] is the one error of the composition, the landing, the undo,
 //! the withdrawal and its undo, and the restore; [`NoUndo`] says why an undo
-//! has nothing to take back. How a session's end is answered is the `reads`
-//! module's doc.
+//! has nothing to take back; [`stretches`] counts the words a
+//! [`Refusal::WindowWithheld`] names, off the runs its write sent. How a
+//! session's end is answered is the `reads` module's doc.
 
 use std::fmt;
 
@@ -247,12 +248,39 @@ pub enum Refusal {
     },
     /// `withheld` on a write naming an origin the merger may not read.
     ///
-    /// The write is the shot, the draft landing's one write, the undo's or
-    /// the withdrawal's, the origin a window one of its runs names that the
-    /// source gate refuses (§7, the shot), and nothing of the act is written.
-    /// Its words name the origin and the code alone, the same at every
-    /// write; the embedder says what the act did (SP-10).
-    WindowWithheld(Address),
+    /// The write is the shot, the draft landing's one write, the restore's
+    /// or a take-back's — the undo's, the withdrawal's, its undo's — the
+    /// origin a document one of its runs windows that the source gate
+    /// refuses (§7, the shot; wire.md §Arrangement, `set_arrangement`), and
+    /// the write is refused whole, nothing of it written. The words refused
+    /// are the runs of the list the write sends whose origin is `origin` —
+    /// at the shot, save a run the head already arranges, which the board
+    /// carries with no consult (PUB-6.24). Where the list holds words of
+    /// more than one document the merger may not read, the board names the
+    /// first in run order, and the refusal names that document and its words
+    /// alone: another may stand behind it. Its words name the origin, the
+    /// positions and the code, the same at every write; the embedder says
+    /// what the act did (SP-10).
+    WindowWithheld {
+        /// The document the board names, `site.addr`; the act's own document
+        /// where the board names none.
+        origin: Address,
+        /// The words refused, each stretch its first position, from 1, and
+        /// its width, in V order; empty where the board names no document.
+        ///
+        /// A stretch is the refused runs that stand next to each other in
+        /// the list, whatever their I-addresses (`stretches`). The list is
+        /// the state a restore, an undo, a withdrawal or a withdrawal's undo
+        /// sets — a restore's the past state as [`history::past`] answers
+        /// it, its mapping keeping every run's width — M at the draft
+        /// landing, and at the shot the list the shot places: M with the
+        /// window parts' answers applied, a part left out gone, so past a
+        /// part left out its positions are not [`WindowPart::ordinal`]'s,
+        /// which counts in M.
+        ///
+        /// [`history::past`]: crate::history::past
+        positions: Vec<(u64, u64)>,
+    },
     /// A run list holds more runs than one write may name.
     ///
     /// It is the merged list at a landing, `counts.m` (decision 13), or the
@@ -555,7 +583,28 @@ impl fmt::Display for Refusal {
             }
             Refusal::ForkBaseMoved { fork, source, head } => write!(f, "{fork} was forked from {source}, and this merge was composed on {head} — fork {head} afresh and land the merge there; nothing was merged"),
             Refusal::BaseNotInChain { into, head } => write!(f, "{into} is a draft of another document: its recorded base is no version of the document {head} heads — land the merge in a draft staged from that document; nothing was merged"),
-            Refusal::WindowWithheld(origin) => write!(f, "{origin} is not shared with you (withheld), and a run this write sends windows it"),
+            Refusal::WindowWithheld { origin, positions } => {
+                write!(f, "{origin} is not shared with you (withheld), and ")?;
+                match positions.as_slice() {
+                    [] => f.write_str("a run this write sends windows it"),
+                    [(at, 1)] => write!(f, "the word at position {at} of the state this write sends windows it"),
+                    stretches => {
+                        f.write_str("the words at positions ")?;
+                        for (k, &(first, width)) in stretches.iter().enumerate() {
+                            f.write_str(match k {
+                                0 => "",
+                                k if k + 1 == stretches.len() => " and ",
+                                _ => ", ",
+                            })?;
+                            match first.saturating_add(width.saturating_sub(1)) {
+                                last if last > first => write!(f, "{first}–{last}")?,
+                                _ => write!(f, "{first}")?,
+                            }
+                        }
+                        f.write_str(" of the state this write sends window it")
+                    }
+                }
+            }
             Refusal::OverCap { runs, cap } => write!(f, "the list is in more pieces than one write can carry — {runs}, where {cap} is the most; nothing was sent"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
@@ -593,3 +642,29 @@ impl fmt::Display for Refusal {
 }
 
 impl std::error::Error for Refusal {}
+
+/// Returns the stretches a write's refused runs fill in the list it sent.
+///
+/// `runs` are the list's runs in V order, each given as whether the board
+/// refused it and its width. A stretch is the refused runs that stand next
+/// to each other, one ending where the next begins, given as its first
+/// position, from 1, and its width: the positions
+/// [`Refusal::WindowWithheld`] names. A run not refused is never in one and
+/// parts the stretches either side of it. Every sum saturates.
+pub(in crate::merge) fn stretches(runs: impl IntoIterator<Item = (bool, u64)>) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    // The position the next run opens at.
+    let mut at = 1u64;
+    for (refused, width) in runs {
+        if refused && width > 0 {
+            match out.last_mut() {
+                Some((first, joined)) if first.saturating_add(*joined) == at => {
+                    *joined = joined.saturating_add(width)
+                }
+                _ => out.push((at, width)),
+            }
+        }
+        at = at.saturating_add(width);
+    }
+    out
+}

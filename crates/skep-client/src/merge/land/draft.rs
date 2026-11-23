@@ -13,7 +13,9 @@ use crate::address::parse_address;
 use crate::board::{acked_addr, acked_at, acked_head_moved, answers, frames, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
-use crate::merge::reads::{feed_rows, first_difference, runs_of, Family, Merged, Refusal, Side};
+use crate::merge::reads::{
+    feed_rows, first_difference, runs_of, stretches, Family, Merged, Refusal, Side,
+};
 use crate::merge::record::RecordLanding;
 
 use super::faults::{own_fault, own_fault_face, shape_face};
@@ -105,7 +107,8 @@ impl Writer<'_> {
     /// [`Refusal::ForkBaseMoved`] and
     /// [`Refusal::BaseNotInChain`], the two refusals a person meets;
     /// [`Refusal::WindowWithheld`] where a run names an origin the merger may
-    /// not read; [`Refusal::NeedsSignedSession`];
+    /// not read, naming beside it its words in M;
+    /// [`Refusal::NeedsSignedSession`];
     /// [`Refusal::NoSuchDocument`] naming the draft; a run with no address
     /// and the board's refusal of the frame's substance — the head and the
     /// extent the merge read and the base the draft records at `as_of`
@@ -188,7 +191,13 @@ impl Writer<'_> {
         };
         let site = r.site().addr.as_deref().and_then(parse_address);
         Err(match r.key() {
-            "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| into.clone())),
+            // The words refused: M's runs whose origin the board names.
+            "withheld" => {
+                let positions = stretches(
+                    target.iter().map(|run| (site.as_ref() == Some(&run.origin), run.width)),
+                );
+                Refusal::WindowWithheld { origin: site.unwrap_or_else(|| into.clone()), positions }
+            }
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(into.clone()),
             // The draft changed past the position the write was typed

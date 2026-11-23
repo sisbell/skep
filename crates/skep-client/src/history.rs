@@ -253,7 +253,8 @@ pub fn past(board: &Board, token: &Token, draft: &Address, at: u64) -> Result<Pa
 /// read, since a `past` whose `as_of` its caller set meets the same
 /// refusal sent again; [`Refusal::NotOwner`]; [`Refusal::Published`];
 /// [`Refusal::WindowWithheld`] naming an origin a run windows that the
-/// person may not read; [`Refusal::NeedsSignedSession`];
+/// person may not read, and its words' positions in [`Past::written`], the
+/// past state as [`past`] answered it; [`Refusal::NeedsSignedSession`];
 /// [`Refusal::NoSuchDocument`]; the refusals of the runs as this library's
 /// own fault, since it sends what the board itself held; the board's other
 /// refusals verbatim; the death signal under the token,
@@ -275,7 +276,7 @@ pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Re
         Answer::Closed => return Err(session_ended("restoring the draft", OnEnd::Rerun)),
         Answer::Document(v) => v,
     };
-    let position = judge(&v, draft, *as_of, Act::Restore)?;
+    let position = judge(&v, &frame, draft, *as_of, Act::Restore)?;
     Ok(Restored { draft: draft.clone(), at: *at, position })
 }
 

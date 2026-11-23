@@ -256,8 +256,8 @@ use crate::halt::{Halt, Refused};
 
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
 use super::reads::{
-    feed_rows, mapped_image, owners_records, runs_of, NoUndo, OnEnd, Reader, Refusal, Role,
-    SHOT_RUN_CAP,
+    feed_rows, mapped_image, owners_records, runs_of, stretches, NoUndo, OnEnd, Reader, Refusal,
+    Role, SHOT_RUN_CAP,
 };
 use super::record::{self, newest, read_record, Found, Record, RecordLanding};
 use crate::board::answers::MergeMarker;
@@ -1250,12 +1250,13 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
             Act::Restore => "restoring the draft",
         },
     )?;
-    judge(&v, draft, as_of, act)
+    judge(&v, frame, draft, as_of, act)
 }
 
-/// Judges a `set_arrangement`'s answer `v`, answering the write's position.
+/// Judges a `set_arrangement`'s answer `v` to `frame`, answering the write's
+/// position.
 ///
-/// The frame was typed against `as_of` for `act`; its refusals are mapped
+/// `frame` was typed against `as_of` for `act`; its refusals are mapped
 /// as the module's doc lists them, each the same at every act but
 /// `arrangement_moved`, whose words are the act's own ([`undo_moved`] for
 /// an undo's) — an undo with no `own_ack` saying it can no longer land, and
@@ -1265,13 +1266,20 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
 /// # Errors
 ///
 /// As [`undo`]'s one write's: `arrangement_moved` as the board's verdict in
-/// the person's words; [`Refusal::WindowWithheld`],
+/// the person's words; [`Refusal::WindowWithheld`], naming beside the
+/// origin its words in the state `frame` sends ([`refused_runs`]),
 /// [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`],
 /// [`Refusal::NotOwner`] and [`Refusal::Published`] by their codes; the
 /// refusals of what the library composed as its own fault; the board's
 /// other refusals verbatim; an answer that is no acknowledgment and no
 /// rejection, faced.
-pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
+pub(crate) fn judge(
+    v: &Value,
+    frame: &Value,
+    draft: &Address,
+    as_of: u64,
+    act: Act,
+) -> Result<u64, Refusal> {
     if let Some(at) = acked_at(v) {
         return Ok(at);
     }
@@ -1317,7 +1325,10 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
             op: r.op().map(str::to_string),
             body: v.clone(),
         })),
-        "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| draft.clone())),
+        "withheld" => {
+            let positions = refused_runs(frame, site.as_ref()).map(stretches).unwrap_or_default();
+            Refusal::WindowWithheld { origin: site.unwrap_or_else(|| draft.clone()), positions }
+        }
         "signed_session_required" => Refusal::NeedsSignedSession,
         "doc_not_registered" => Refusal::NoSuchDocument(draft.clone()),
         "not_owner" => Refusal::NotOwner { draft: draft.clone() },
@@ -1339,6 +1350,26 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
         | "malformed" => own_fault(&format!("{}'s write", act.name()), &r),
         _ => Refusal::Halt(r.refused(&v)),
     })
+}
+
+/// Returns `frame`'s runs in V order, each as whether the board's `site`
+/// is its origin and its width.
+///
+/// The runs are a take-back's or a restore's one write's, each as
+/// [`written_runs`] spells it — its `origin` the document that minted it,
+/// its `width` a decimal string — so each reads back; `None` where one does
+/// not, so a refusal names no position where it cannot name the right one.
+/// With no `site` no run is the origin's.
+fn refused_runs(frame: &Value, site: Option<&Address>) -> Option<Vec<(bool, u64)>> {
+    frame["runs"]
+        .as_array()?
+        .iter()
+        .map(|run| {
+            let origin = parse_address(run["origin"].as_str()?)?;
+            let width = run["width"].as_str()?.parse().ok()?;
+            Some((site == Some(&origin), width))
+        })
+        .collect()
 }
 
 /// Returns the words of an undo refused `arrangement_moved` (P3).

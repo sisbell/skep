@@ -1,7 +1,9 @@
 //! The landing's refusals over the scripted board, each mapped.
 //!
 //! The suite checks every refusal the shot and the draft landing's one
-//! write can answer; a draft word a record names, sent by reference, a
+//! write can answer, a `withheld` naming the words refused, those the head
+//! carries never among them at the shot; a draft word a record names, sent
+//! by reference, a
 //! retry keeping its ids, and `already_published` at the shot read again
 //! and sent once more, never a second member or atom; a draft the merger
 //! may not read, refused before any write; a claimed board whose head is
@@ -15,10 +17,13 @@
 use super::*;
 
 /// Every refusal the shot can answer, each mapped: `withheld` naming the
-/// origin, `signed_session_required`, `doc_not_registered`, the
-/// library's own faults as halts, the board's `board_unavailable` as the
-/// head it owes — and nothing after the refusal; `attestation_required`
-/// at the signed shot the library's own fault, never sent again.
+/// origin and its words the head does not carry — none of a run of the
+/// race's list, each of which the head `D.2` holds whole (the mutant that
+/// lists a carried run names 1–11) — `signed_session_required`,
+/// `doc_not_registered`, the library's own faults as halts, the board's
+/// `board_unavailable` as the head it owes — and nothing after the
+/// refusal; `attestation_required` at the signed shot the library's own
+/// fault, never sent again.
 #[test]
 fn the_shots_refusals_are_mapped() {
     let (dialer, board, signer) = open(World::race());
@@ -34,7 +39,13 @@ fn the_shots_refusals_are_mapped() {
     refuse("withheld", Some(Z));
     assert_eq!(
         land(&board, &merged, shot(&session, &signer)),
-        Err(Refusal::WindowWithheld(a(Z)))
+        Err(Refusal::WindowWithheld { origin: a(Z), positions: Vec::new() })
+    );
+    refuse("withheld", Some(D));
+    assert_eq!(
+        land(&board, &merged, shot(&session, &signer)),
+        Err(Refusal::WindowWithheld { origin: a(D), positions: Vec::new() }),
+        "every run of the list carried by the head"
     );
     refuse("signed_session_required", None);
     assert_eq!(
@@ -160,6 +171,61 @@ fn the_shots_refusals_are_mapped() {
         "{face}"
     );
     assert_eq!(dialer.frames("publish").len(), shots + 1, "one signed shot, never sent again");
+}
+
+/// The shot's `withheld` names the words of the list the shot places whose
+/// origin the board names, those the head carries never among them.
+///
+/// From the draft side M is the head's three runs and `S`'s "!!!", which
+/// the head does not hold: naming `S`, the refusal names 16–18, counted
+/// from 1 past the head's fifteen words. A daughter adding "!" past the
+/// head's words, `D·20`, puts at 16 a word of `D` the head does not hold:
+/// naming `D`, the refusal names it alone, the head's runs before it
+/// carried; with no site it names no word (the mutant that counts the
+/// trunk's runs in the site's place names 16).
+#[test]
+fn the_shots_withheld_names_the_words_the_head_does_not_carry() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    assert_eq!(m_runs(&merged), draft_m(), "the premise: M");
+    dialer.world().memo.insert(
+        landing_id(&merged.key.text(), "publish"),
+        permanent("publish", "withheld", json!({"addr": S})),
+    );
+    assert_eq!(
+        land(&board, &merged, shot(&session, &signer)),
+        Err(Refusal::WindowWithheld { origin: a(S), positions: vec![(16, 3)] })
+    );
+    let mut w = World::race();
+    w.text(D, 20, "!");
+    w.member(&format!("{D}.1.2"), vec![run(D, 1, 11), run(D, 20, 1)], Some(11));
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let inputs = Inputs { sides: vec![Side::Member(a(&format!("{D}.1.2")))], ..race_inputs() };
+    let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+    assert_eq!(
+        m_runs(&merged),
+        vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 20, 1)],
+        "the premise: M"
+    );
+    let refuse = |site: Value| {
+        dialer.world().memo.insert(
+            landing_id(&merged.key.text(), "publish"),
+            permanent("publish", "withheld", site),
+        );
+    };
+    refuse(json!({"addr": D}));
+    assert_eq!(
+        land(&board, &merged, shot(&session, &signer)),
+        Err(Refusal::WindowWithheld { origin: a(D), positions: vec![(16, 1)] })
+    );
+    refuse(Value::Null);
+    let unsited = land(&board, &merged, shot(&session, &signer)).expect_err("withheld");
+    assert!(
+        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
+        "{unsited:?}"
+    );
 }
 
 /// Returns the answer the record keeps for "!!!", by reference to `to`.
@@ -351,8 +417,12 @@ fn a_member_found_after_already_published_is_the_landing_with_no_second_shot() {
 ///
 /// A draft staged from another document's member meets the board's own
 /// `base_not_in_chain` as `Refusal::BaseNotInChain`. Planted under the
-/// write's id, `withheld` names the origin, `signed_session_required`
-/// and `doc_not_registered` answer theirs, every refusal of the frame's
+/// write's id, `withheld` names the origin and its words in M — none for
+/// `Z`, which no run of M windows; for `D`, its three runs back to back at
+/// 1–15, `S`'s run after them left out — and with no site the draft and no
+/// words (the mutant that counts the draft's own runs in the site's place
+/// names `S`'s at 16–18), `signed_session_required` and
+/// `doc_not_registered` answer theirs, every refusal of the frame's
 /// substance is the library's own fault and any other code rides
 /// verbatim. Each leaves the feed as it stood, the refused write the
 /// last frame sent: no journal and no record.
@@ -401,7 +471,20 @@ fn the_draft_landings_refusals_are_mapped() {
         stopped(code);
         err
     };
-    assert_eq!(refused("withheld", Some(Z)), Refusal::WindowWithheld(a(Z)));
+    assert_eq!(m_runs(&merged), draft_m(), "the premise: M");
+    assert_eq!(
+        refused("withheld", Some(Z)),
+        Refusal::WindowWithheld { origin: a(Z), positions: Vec::new() }
+    );
+    assert_eq!(
+        refused("withheld", Some(D)),
+        Refusal::WindowWithheld { origin: a(D), positions: vec![(1, 15)] }
+    );
+    let unsited = refused("withheld", None);
+    assert!(
+        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
+        "{unsited:?}"
+    );
     assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
     assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
     for code in [

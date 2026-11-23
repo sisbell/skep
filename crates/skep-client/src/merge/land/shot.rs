@@ -13,7 +13,7 @@ use skep_identity::{BoardTerm, EntryBody};
 use crate::address::parse_address;
 use crate::board::{acked_addr, acked_at, answers, frames, Answer, Rejection};
 use crate::halt::{Halt, Refused};
-use crate::merge::reads::{session_ended, values_for, Family, Merged, Refusal, Side};
+use crate::merge::reads::{session_ended, stretches, values_for, Family, Merged, Refusal, Side};
 use crate::merge::windows::{self, ShotParts};
 use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
 
@@ -39,9 +39,11 @@ impl Writer<'_> {
     /// [`Writer::send_shot`]'s; the re-read's, [`windows::retwin`]'s and a
     /// member's reads' ([`Writer::standing_member`]); a second
     /// `already_published` as [`Refusal::AlreadyPublished`], naming the draft
-    /// and the member the board names; [`Refusal::WindowWithheld`],
-    /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
-    /// board answers them; `not_owner` naming the draft side as
+    /// and the member the board names; [`Refusal::WindowWithheld`] naming
+    /// beside the origin its words in the list `shot` places that the head
+    /// does not carry, [`Refusal::NeedsSignedSession`] and
+    /// [`Refusal::NoSuchDocument`] as the board answers them; `not_owner`
+    /// naming the draft side as
     /// [`Refusal::UnownedDraft`], `supersede_refused` as
     /// [`Refusal::SupersedeRefused`] with its entry and cause,
     /// `publication_over_budget` as the board's refusal verbatim, never this
@@ -78,7 +80,16 @@ impl Writer<'_> {
         let Some(r) = Rejection::of(&v) else { return Err(shape_face("publish", &v).into()) };
         let site = r.site().addr.as_deref().and_then(parse_address);
         Err(match r.key() {
-            "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| doc.clone())),
+            // The words refused: the runs of the list the shot placed whose
+            // origin the board names, but those the head carries, which
+            // the source gate never consults (PUB-6.24).
+            "withheld" => {
+                let head = merged.maps.first().map_or(&[][..], |head| head.runs.as_slice());
+                let positions = stretches(shot.runs.iter().map(|placed| {
+                    (site.as_ref() == Some(&placed.run.origin) && !windows::carried(head, &placed.run), placed.run.width)
+                }));
+                Refusal::WindowWithheld { origin: site.unwrap_or_else(|| doc.clone()), positions }
+            }
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
             // The draft side another account's, named.

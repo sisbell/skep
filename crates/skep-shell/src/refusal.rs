@@ -477,8 +477,14 @@ impl Name {
     /// `beyond_head {at, head}`, `not_a_position {at, nearest}`, `not_past
     /// {draft, at, current}` (a past state's `at` at or past `current`, the
     /// draft's position), `fork_base_moved {fork, source, head}`,
-    /// `base_not_in_chain {into, head}`, `window_withheld {origin}`,
-    /// `needs_signed_session`, `fork_base_named {fork, base}`,
+    /// `base_not_in_chain {into, head}`, `window_withheld {origin,
+    /// positions}` (a write's run windows `origin`, a document the person may
+    /// not read, the first such in run order; `positions` the stretches of
+    /// its words in the list the write sends, each `{ordinal, width}`, its
+    /// first position from 1 and its count, numbers — the past state as
+    /// `history.past` answers it at `history.restore` — and `[]` where the
+    /// board named no document), `needs_signed_session`,
+    /// `fork_base_named {fork, base}`,
     /// `supersede_refused {index, detail, head}`, `published_journal {journal}`
     /// (a published document named as the merge journal, which keeps a record
     /// only private; nothing sent), `already_published {draft, member}` (the

@@ -149,6 +149,7 @@ pub use inputs::{Family, Inputs, Merged, Role, Side};
 pub(super) use join::{check_join, first_difference};
 pub(crate) use reader::{session_ended, OnEnd, Reader};
 pub(super) use readings::{check_shape, read_shape, values_for};
+pub(super) use refusal::stretches;
 pub use refusal::{NoUndo, Refusal};
 
 /// The most runs one shot may name.

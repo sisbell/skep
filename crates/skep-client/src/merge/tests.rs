@@ -1171,24 +1171,83 @@ fn a_run_names_its_positions_and_the_options_default_as_ruled() {
     assert!(options.dedup && !options.retype && options.resolutions.is_empty() && options.retries == 0);
 }
 
-/// The two `withheld` refusals name the document and the code alone, the
-/// same words at every act that returns them (SP-10): `Unreadable` answers
-/// the composition, the shot's value reads, the draft landing's read of its
+/// The two `withheld` refusals name the document and the code, the same
+/// words at every act that returns them (SP-10): `Unreadable` answers the
+/// composition, the shot's value reads, the draft landing's read of its
 /// draft and the take-backs' reads; `WindowWithheld` the shot's, the draft
-/// landing's and the take-backs' writes. Neither says what the act did,
-/// which the embedder says.
+/// landing's, the take-backs' and the restore's writes, naming beside the
+/// document the words refused — a stretch by its first and last position,
+/// a stretch of one by that position alone, the document and the code
+/// alone where it names none. Neither says what the act did, which the
+/// embedder says.
 #[test]
 fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder() {
     let doc = addr("1.0.2.0.70");
     let unreadable = Refusal::Unreadable(doc.clone()).to_string();
     assert_eq!(unreadable, "1.0.2.0.70 is not readable to this reader (withheld)");
-    let windowed = Refusal::WindowWithheld(doc).to_string();
-    assert!(windowed.starts_with("1.0.2.0.70 is not shared with you (withheld)"), "{windowed}");
-    for said in [&unreadable, &windowed] {
+    let windowed = |positions: Vec<(u64, u64)>| {
+        Refusal::WindowWithheld { origin: doc.clone(), positions }.to_string()
+    };
+    let unplaced = windowed(Vec::new());
+    assert_eq!(
+        unplaced,
+        "1.0.2.0.70 is not shared with you (withheld), and a run this write sends windows it"
+    );
+    let placed = windowed(vec![(4, 6), (20, 1)]);
+    assert_eq!(placed, "1.0.2.0.70 is not shared with you (withheld), and the words at positions 4–9 and 20 of the state this write sends window it");
+    let one = windowed(vec![(20, 1)]);
+    assert_eq!(one, "1.0.2.0.70 is not shared with you (withheld), and the word at position 20 of the state this write sends windows it");
+    let three = windowed(vec![(1, 2), (4, 1), (9, 3)]);
+    assert!(three.contains("the words at positions 1–2, 4 and 9–11 of the state"), "{three}");
+    for said in [&unreadable, &unplaced, &placed, &one, &three] {
         for outcome in ["nothing", "composed", "published", "shot", "merged"] {
             assert!(!said.contains(outcome), "`{outcome}`: {said}");
         }
     }
+}
+
+/// The words a `WindowWithheld` names are the stretches its write's refused
+/// runs fill: refused runs back to back are one stretch whatever their
+/// I-addresses, a run not refused parts the stretches either side of it,
+/// and every stretch opens at its first position counted from 1 (the
+/// mutants that count from 0, join across a run not refused, or leave runs
+/// back to back apart answer another list).
+#[test]
+fn the_words_withheld_are_the_stretches_the_refused_runs_fill_counted_from_one() {
+    use super::reads::stretches;
+    assert_eq!(stretches([(true, 2), (true, 3), (false, 11), (true, 4)]), vec![(1, 5), (17, 4)]);
+    assert_eq!(stretches([(false, 3), (true, 1)]), vec![(4, 1)]);
+    assert_eq!(stretches([(false, 3), (false, 1)]), Vec::new(), "nothing refused");
+    assert_eq!(stretches([]), Vec::new());
+}
+
+/// A run the shot's base carries is one the base's runs on its chain hold
+/// whole, joined where they overlap or abut, wherever the base arranges
+/// them — the board's own test (PUB-6.24): two runs adjoining in I-space
+/// and apart in V carry a run neither holds whole, and none carries a run
+/// reaching past them or one of another chain (the mutant that asks one
+/// base run to hold the run whole carries none of the first).
+#[test]
+fn a_run_the_base_carries_is_one_its_runs_on_the_runs_chain_hold_joined() {
+    use super::windows::carried;
+    use crate::board::answers::IRun;
+    let held = |first: u64, width: u64, ordinal: u64| IRun {
+        prefix: format!("{}.0.1", z()),
+        first,
+        width,
+        ordinal,
+    };
+    let head = [held(1, 2, 1), held(3, 3, 10)];
+    assert!(carried(&head, &Run::new(z(), 1, 5)), "the two adjoining runs hold it together");
+    assert!(carried(&head, &Run::new(z(), 2, 3)), "inside the two");
+    assert!(!carried(&head, &Run::new(z(), 2, 5)), "it reaches past them");
+    assert!(!carried(&head[..1], &Run::new(z(), 1, 5)), "the first alone holds two of its words");
+    assert!(!carried(&head, &Run::new(d(), 1, 5)), "another chain");
+    assert!(
+        carried(&[held(1, 4, 1), held(3, 3, 5)], &Run::new(z(), 2, 4)),
+        "overlapping runs joined"
+    );
+    assert!(!carried(&[], &Run::new(z(), 1, 1)), "no base run");
 }
 
 // ── the draft's kept places (`windows::kept_places`) ─────────────────────

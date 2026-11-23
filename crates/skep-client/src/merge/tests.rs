@@ -7,8 +7,10 @@
 //! sides placed at two spots, a `moves` gap with spots (CM-I33) — a
 //! neighbour one holder removed moving nothing, an overlapping quote
 //! contested where it overlaps, a holder's choice, and the numbers the
-//! other gaps keep under it and across the spine's re-walk; the
-//! resolutions, one per unsettled kind; the
+//! other gaps keep under it and across the spine's re-walk; the report's
+//! numbers every choice beside a side's order names, a gap the order
+//! removes taking none and one it makes numbered after the report's last;
+//! the resolutions, one per unsettled kind; the
 //! record's re-statement of them as a law over every place a gap is moved
 //! to, and of a holder's choice; the fences the module promises; the one
 //! rule as a property over generated inputs, a run both sides place among
@@ -722,6 +724,296 @@ fn the_gaps_with_spots_keep_their_numbers_across_a_spine_re_walk() {
     assert_eq!(kinds(&by_claim), vec![(GapKind::Moves, true), (GapKind::Moves, false), (GapKind::Cut, false)]);
     assert_eq!((by_claim.gaps[1].placed.clone(), by_claim.gaps[2].id), (Placement::Order(vec![SideIx(0)]), GapId(3)));
     assert!(by_claim.ignored.is_empty());
+}
+
+/// The sides of two crossed reorders over the base `D·1–5` (skep #1155).
+///
+/// Read as `A B C D E`, the head is `C r0 D A q0 B E` and the side
+/// `A q1 B E C r1 D`, with `r0`, `q0`, `q1` and `r1` at `D·20`, `D·30`,
+/// `D·31` and `D·21`. The reorders overlap, so the spine is the head's and
+/// the side's reorder is `moves` gap 1; at that order the gap inside `C D`
+/// is 2 and the one inside `A B` 3, and under the side's order they trade
+/// places in M.
+fn crossed() -> Vec<(SideIx, Vec<Run>)> {
+    two(
+        vec![rd(3, 1), rd(20, 1), rd(4, 1), rd(1, 1), rd(30, 1), rd(2, 1), rd(5, 1)],
+        vec![rd(1, 1), rd(31, 1), rd(2, 1), rd(5, 1), rd(3, 1), rd(21, 1), rd(4, 1)],
+    )
+}
+
+/// [`crossed`] with the head's `w` after `D` and the side's `z` after `E`.
+///
+/// `w` is `D·40` and `z` `D·50`. At the head's order `z`'s anchors stand
+/// apart, a `cut`, gap 4, and `w`'s together; under the side's order the
+/// two trade.
+fn crossed_ends() -> Vec<(SideIx, Vec<Run>)> {
+    two(
+        vec![rd(3, 1), rd(20, 1), rd(4, 1), rd(40, 1), rd(1, 1), rd(30, 1), rd(2, 1), rd(5, 1)],
+        vec![rd(1, 1), rd(31, 1), rd(2, 1), rd(5, 1), rd(50, 1), rd(3, 1), rd(21, 1), rd(4, 1)],
+    )
+}
+
+/// A choice beside the side's order names the gap the report numbers.
+///
+/// Over [`crossed`], `1=Order([1])` and `2=KeepOnly(0)` give M the side's
+/// order with `r0` alone inside `C D` — gap 2 at the default order, settled
+/// by the person — and both words inside `A B`, gap 3, which asks still;
+/// nothing is ignored, and the record's options compose the same M and gaps
+/// (skep #1155; the mutant that numbers the gaps by their places under the
+/// chosen order gives the keep to the gap inside `A B`).
+#[test]
+fn a_choice_beside_a_sides_order_names_the_gap_the_report_numbers() {
+    let sides = crossed();
+    let report = compose(&[rd(1, 5)], &sides);
+    assert_eq!(kinds(&report), vec![(GapKind::Moves, false), (GapKind::Order, false), (GapKind::Order, false)]);
+    assert_eq!(gap_runs(&report)[1], vec![(0, rd(20, 1)), (1, rd(21, 1))], "gap 2 inside C D");
+    let resolutions = vec![
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(2), choice: Choice::KeepOnly(SideIx(0)), by: ResolvedBy::Person },
+    ];
+    let c = compose_runs(&[rd(1, 5)], &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(
+        runs(&c),
+        vec![rd(1, 1), rd(30, 2), rd(2, 1), rd(5, 1), rd(3, 1), rd(20, 1), rd(4, 1)],
+        "A q0 q1 B E C r0 D"
+    );
+    assert_eq!(c.gaps.iter().map(|g| g.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert_eq!(gap_runs(&c)[1], gap_runs(&report)[1], "gap 2 inside C D still");
+    assert_eq!(
+        (c.gaps[1].placed.clone(), c.gaps[1].resolved_by.clone()),
+        (Placement::Order(vec![SideIx(0)]), Some(ResolvedBy::Person))
+    );
+    assert_eq!((gap_runs(&c)[2].clone(), c.gaps[2].settled), (gap_runs(&report)[2].clone(), false), "gap 3 inside A B");
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&[rd(1, 5)], &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
+}
+
+/// The dedup's log names the report's number under the side's order.
+///
+/// Over [`crossed`] with `q0` and `q1` the same bytes, the dedup keeps the
+/// head's copy inside `A B`, gap 3 at the head's order; under the side's
+/// order, `1=Order([1])`, it logs gap 3 still, that gap settled by the rule
+/// and placed `[0]` (skep #1155; the mutant that leaves the log's ids as
+/// the walk under that order first numbered them logs gap 2).
+#[test]
+fn the_dedups_log_names_the_reports_number_under_a_sides_order() {
+    let same = text(&[(30, "q"), (31, "q")]);
+    let c = compose_runs(&[rd(1, 5)], &d(), &crossed(), None, &resolve(1, Choice::Order(vec![SideIx(1)])), &same);
+    assert_eq!(c.values.applied, vec![GapId(3)]);
+    assert_eq!(gap_runs(&c)[2], vec![(0, rd(30, 1)), (1, rd(31, 1))], "gap 3 inside A B");
+    assert_eq!(
+        (c.gaps[2].placed.clone(), c.gaps[2].resolved_by.clone()),
+        (Placement::Order(vec![SideIx(0)]), Some(ResolvedBy::Rule))
+    );
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+}
+
+/// An omission beside the side's order omits the report's gap or nothing.
+///
+/// Over [`crossed_ends`] the report is the `moves` gap, the gaps inside
+/// `C D` and `A B`, and `z`'s `cut`. Beside `1=Order([1])`, `Omit` at each
+/// of gaps 2 to 4 leaves out of M that gap's runs alone, the gap holding the
+/// report's runs and placed `Omitted` — or, at the `cut` the side's order
+/// closes, stands in `ignored` and leaves M whole (skep #1155; the mutant
+/// that numbers the gaps by their places under the chosen order omits the
+/// words inside `A B` at 2 and `w` at 4).
+#[test]
+fn an_omission_beside_a_sides_order_omits_the_reports_gap_or_nothing() {
+    let sides = crossed_ends();
+    let report = compose(&[rd(1, 5)], &sides);
+    let numbered: Vec<(u32, GapKind)> = report.gaps.iter().map(|g| (g.id.0, g.kind)).collect();
+    assert_eq!(numbered, vec![(1, GapKind::Moves), (2, GapKind::Order), (3, GapKind::Order), (4, GapKind::Cut)]);
+    let order = Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person };
+    let with = |more: &[Resolution]| {
+        let resolutions = std::iter::once(order.clone()).chain(more.iter().cloned()).collect();
+        compose_runs(&[rd(1, 5)], &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread)
+    };
+    let whole = expand(&runs(&with(&[])));
+    let mut ignored = Vec::new();
+    for g in 2..=4 {
+        let omit = Resolution { gap: GapId(g), choice: Choice::Omit, by: ResolvedBy::Person };
+        let c = with(std::slice::from_ref(&omit));
+        let Some(gap) = c.gaps.iter().find(|x| x.id == GapId(g)) else {
+            assert_eq!(
+                (c.ignored.clone(), expand(&runs(&c))),
+                (vec![omit], whole.clone()),
+                "gap {g}: ignored, M whole"
+            );
+            ignored.push(g);
+            continue;
+        };
+        let reported = report.gaps.iter().find(|x| x.id == GapId(g)).expect("the report's gap");
+        assert_eq!((gap.kind, &gap.runs, &gap.placed), (reported.kind, &reported.runs, &Placement::Omitted), "gap {g}");
+        let left_out = expand(&gap.runs.iter().map(|(_, run)| run.clone()).collect::<Vec<_>>());
+        let rest: Vec<(Address, u64)> = whole.iter().filter(|p| !left_out.contains(p)).cloned().collect();
+        assert_eq!(expand(&runs(&c)), rest, "gap {g}: its runs alone left out");
+        assert!(c.ignored.is_empty(), "gap {g}: {:?}", c.ignored);
+    }
+    assert_eq!(ignored, vec![4], "the cut the side's order closes takes no choice");
+}
+
+/// A choice naming a gap the chosen order removes is ignored.
+///
+/// Over [`crossed_ends`] the side's order alone numbers its gaps 1, 2, 3
+/// and 5: `z`'s `cut`, gap 4 at the head's order, is gone, and the `cut` the
+/// side's order opens at `w` is numbered after the report's last. So `Omit`
+/// naming gap 4 beside it stands in `ignored`, and M holds `w` and `z` both
+/// (skep #1155; the mutant that numbers the gaps by their places under the
+/// chosen order omits `w`, and the one that numbers a new gap from the
+/// report's last names it 4).
+#[test]
+fn a_choice_naming_a_gap_the_chosen_order_removes_is_ignored() {
+    let sides = crossed_ends();
+    let order = Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person };
+    let options = Options { resolutions: vec![order.clone()], ..Options::default() };
+    let alone = compose_runs(&[rd(1, 5)], &d(), &sides, None, &options, &unread);
+    let numbered: Vec<(u32, GapKind)> = alone.gaps.iter().map(|g| (g.id.0, g.kind)).collect();
+    assert_eq!(numbered, vec![(1, GapKind::Moves), (2, GapKind::Order), (3, GapKind::Order), (5, GapKind::Cut)]);
+    assert_eq!(gap_runs(&alone)[3], vec![(0, rd(40, 1))], "gap 5 is w's cut");
+    let omit = Resolution { gap: GapId(4), choice: Choice::Omit, by: ResolvedBy::Person };
+    let options = Options { resolutions: vec![order, omit.clone()], ..Options::default() };
+    let c = compose_runs(&[rd(1, 5)], &d(), &sides, None, &options, &unread);
+    assert_eq!(c.ignored, vec![omit]);
+    assert_eq!(runs(&c), runs(&alone));
+    assert!(runs(&c).contains(&rd(40, 1)) && runs(&c).contains(&rd(50, 1)), "w and z both: {:?}", runs(&c));
+}
+
+/// A holder's choice and the side's order in one list name the report's gaps.
+///
+/// [`crossed`] with "xy" (`D·60–61`) at the head's end and the side's
+/// start: the report numbers the gap with spots 1, the spine's `moves` gap
+/// 2, and the gaps inside `C D` and `A B` 3 and 4. `1=Order([1])`,
+/// `2=Order([1])` and `3=KeepOnly(0)` put "xy" first, take the side's order
+/// and keep `r0` alone inside `C D`, nothing ignored, and the record's
+/// options compose the same (skep #1155; the mutant that numbers the gaps
+/// as the claims' defaults under the chosen order gives the keep to the gap
+/// inside `A B`).
+#[test]
+fn a_holders_choice_and_a_sides_order_in_one_list_name_the_reports_gaps() {
+    let sides = two(
+        vec![rd(3, 1), rd(20, 1), rd(4, 1), rd(1, 1), rd(30, 1), rd(2, 1), rd(5, 1), rd(60, 2)],
+        vec![rd(60, 2), rd(1, 1), rd(31, 1), rd(2, 1), rd(5, 1), rd(3, 1), rd(21, 1), rd(4, 1)],
+    );
+    let report = compose(&[rd(1, 5)], &sides);
+    assert_eq!(
+        kinds(&report),
+        vec![(GapKind::Moves, false), (GapKind::Moves, false), (GapKind::Order, false), (GapKind::Order, false)]
+    );
+    assert!(!report.gaps[0].spots.is_empty() && report.gaps[1].spots.is_empty(), "{:?}", report.gaps);
+    assert_eq!(gap_runs(&report)[2], vec![(0, rd(20, 1)), (1, rd(21, 1))], "gap 3 inside C D");
+    let resolutions = vec![
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(2), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(3), choice: Choice::KeepOnly(SideIx(0)), by: ResolvedBy::Person },
+    ];
+    let c = compose_runs(&[rd(1, 5)], &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(
+        runs(&c),
+        vec![rd(60, 2), rd(1, 1), rd(30, 2), rd(2, 1), rd(5, 1), rd(3, 1), rd(20, 1), rd(4, 1)],
+        "xy A q0 q1 B E C r0 D"
+    );
+    assert_eq!(c.gaps.iter().map(|g| g.id.0).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+    assert_eq!(
+        (gap_runs(&c)[2].clone(), c.gaps[2].placed.clone()),
+        (gap_runs(&report)[2].clone(), Placement::Order(vec![SideIx(0)]))
+    );
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&[rd(1, 5)], &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
+}
+
+/// Among three sides, every gap keeps its number under a chosen order.
+///
+/// Base `X Y Z` (`D·1–3`), side 0 `Y X a Z`, side 1 `X b Z Y`, side 2
+/// `X Z Y`: side 0's order is the spine, sides 1 and 2 hold `moves` gaps 1
+/// and 2, and `a` and `b` an `order` gap, 3. `2=Order([2])` takes side 2's
+/// order, which side 1 shares, so gap 1 is gone and gap 2 holds side 0's
+/// reorder, settled by the person; `3=KeepOnly(1)` keeps `b`; nothing is
+/// ignored, and the record's options compose the same (skep #1155; the
+/// mutant that numbers the `moves` gaps by side ignores both choices).
+#[test]
+fn among_three_sides_every_gap_keeps_its_number_under_a_chosen_order() {
+    let sides = vec![
+        (SideIx(0), vec![rd(2, 1), rd(1, 1), rd(20, 1), rd(3, 1)]),
+        (SideIx(1), vec![rd(1, 1), rd(21, 1), rd(3, 1), rd(2, 1)]),
+        (SideIx(2), vec![rd(1, 1), rd(3, 1), rd(2, 1)]),
+    ];
+    let numbered = |c: &Composed| c.gaps.iter().map(|g| (g.id.0, g.kind)).collect::<Vec<_>>();
+    assert_eq!(
+        numbered(&compose(&[rd(1, 3)], &sides)),
+        vec![(1, GapKind::Moves), (2, GapKind::Moves), (3, GapKind::Order)]
+    );
+    let resolutions = vec![
+        Resolution { gap: GapId(2), choice: Choice::Order(vec![SideIx(2)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(3), choice: Choice::KeepOnly(SideIx(1)), by: ResolvedBy::Person },
+    ];
+    let c = compose_runs(&[rd(1, 3)], &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 1), rd(21, 1), rd(3, 1), rd(2, 1)], "X b Z Y");
+    assert_eq!(numbered(&c), vec![(2, GapKind::Moves), (3, GapKind::Order)]);
+    let placed: Vec<(Placement, Option<ResolvedBy>)> =
+        c.gaps.iter().map(|g| (g.placed.clone(), g.resolved_by.clone())).collect();
+    let by_person = |side| (Placement::Order(vec![SideIx(side)]), Some(ResolvedBy::Person));
+    assert_eq!(placed, vec![by_person(2), by_person(1)]);
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&[rd(1, 3)], &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
+}
+
+/// The gaps only a chosen order makes are numbered after the report's last.
+///
+/// Base `X Y Z` (`D·1–3`), sides 0 and 1 `Y X Z`, side 0 with `w` between
+/// `Y` and `X`, side 2 `X Z Y`: the report is side 2's `moves` gap alone.
+/// Under side 2's order, `1=Order([2])`, that gap holds side 0's reorder
+/// and keeps 1; side 1's reorder is a `moves` gap the report did not have,
+/// 2, and the `cut` that order opens at `w` comes after it, 3 — the `moves`
+/// gaps first (skep #1155; the mutant that numbers the new `cut` first
+/// gives it 2).
+#[test]
+fn the_gaps_a_chosen_order_makes_are_numbered_after_the_reports_last_moves_first() {
+    let sides = vec![
+        (SideIx(0), vec![rd(2, 1), rd(20, 1), rd(1, 1), rd(3, 1)]),
+        (SideIx(1), vec![rd(2, 1), rd(1, 1), rd(3, 1)]),
+        (SideIx(2), vec![rd(1, 1), rd(3, 1), rd(2, 1)]),
+    ];
+    assert_eq!(kinds(&compose(&[rd(1, 3)], &sides)), vec![(GapKind::Moves, false)]);
+    let c = compose_runs(&[rd(1, 3)], &d(), &sides, None, &resolve(1, Choice::Order(vec![SideIx(2)])), &unread);
+    assert_eq!(runs(&c), vec![rd(1, 1), rd(3, 1), rd(2, 1), rd(20, 1)], "X Z Y w");
+    let numbered: Vec<(u32, GapKind)> = c.gaps.iter().map(|g| (g.id.0, g.kind)).collect();
+    assert_eq!(numbered, vec![(1, GapKind::Moves), (2, GapKind::Moves), (3, GapKind::Cut)]);
+    assert_eq!(gap_runs(&c)[0], vec![(2, rd(3, 1)), (0, rd(2, 1))], "gap 1 holds side 0's reorder");
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&[rd(1, 3)], &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
+}
+
+/// Two collisions no side filled keep their numbers under a chosen order.
+///
+/// Base `A B P C D Q E` (`D·1–7`), the head `C D A B E` and the side
+/// `A B E C D`, each removing `P` and `Q`: at the head's order the
+/// collision at `Q`, after `D`, is gap 2 and the one at `P`, after `B`, gap
+/// 3. Under the side's order they stand the other way round in M and keep
+/// their numbers, each known by the base positions it covers, so `Omit` at
+/// gap 2 settles the one at `Q` (skep #1155; the mutant that matches such a
+/// collision by its kind alone settles the one at `P`).
+#[test]
+fn two_collisions_no_side_filled_keep_their_numbers_under_a_chosen_order() {
+    let sides = two(vec![rd(4, 2), rd(1, 2), rd(7, 1)], vec![rd(1, 2), rd(7, 1), rd(4, 2)]);
+    let report = compose(&[rd(1, 7)], &sides);
+    assert_eq!(kinds(&report), vec![(GapKind::Moves, false), (GapKind::Collision, false), (GapKind::Collision, false)]);
+    assert_eq!(anchors(&report)[1..], [(Some(5), Some(1)), (Some(2), Some(7))], "Q after D, then P after B");
+    let resolutions = vec![
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(2), choice: Choice::Omit, by: ResolvedBy::Person },
+    ];
+    let c = compose_runs(&[rd(1, 7)], &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 2), rd(7, 1), rd(4, 2)], "A B E C D");
+    assert_eq!(c.gaps.iter().map(|g| g.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert_eq!(anchors(&c)[1..], [(Some(5), None), (Some(2), Some(7))], "Q after D at the end, P after B");
+    assert_eq!((c.gaps[1].placed.clone(), c.gaps[1].settled, c.gaps[2].settled), (Placement::Omitted, true, false));
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&[rd(1, 7)], &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
 }
 
 /// A holder's choice numbers every other gap as at its default: sides 0 and

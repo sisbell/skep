@@ -55,14 +55,19 @@
 //! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
 //! left open — at a `moves` gap with spots, one set of words two sides
 //! placed at two places, `order:⟨side⟩` or `keep:⟨side⟩` takes that side's
-//! placement (CM-I33); `--journal` names the merge journal (decision 7),
-//! `--kind` the record kind's type address (decision 9's row is interim and
-//! unpinned, so the caller names it). The board's refusal is exit 1, a halt
-//! exit 3. A `withheld` refusal — a document the merger may not read, or an
-//! origin a write's run windows — names the document, the second the
-//! positions of its words in the list the write sends too, and the command
-//! says beside it what the run did: nothing composed; the merge composed,
-//! and nothing published or merged; nothing taken back or out.
+//! placement (CM-I33). Every choice names a gap by its number in the report
+//! printed with no `--resolve`, which no choice renumbers: `order:⟨side⟩` at
+//! the spine's `moves` gap orders the merge by that side and leaves every
+//! other gap its number, and a choice naming a gap that order removes is
+//! applied nowhere and listed under `ignored` (skep #1155); `--journal`
+//! names the merge journal (decision 7), `--kind` the record kind's type
+//! address (decision 9's row is interim and unpinned, so the caller names
+//! it). The board's refusal is exit 1, a halt exit 3. A `withheld` refusal —
+//! a document the merger may not read, or an origin a write's run windows —
+//! names the document, the second the positions of its words in the list the
+//! write sends too, and the command says beside it what the run did: nothing
+//! composed; the merge composed, and nothing published or merged; nothing
+//! taken back or out.
 //!
 //! **The journal.** A merge record is kept only in a private document: a
 //! journal is a private document of the merger's own, a published one is
@@ -516,10 +521,10 @@ fn address(flag: &str, text: &str) -> Result<Address, Usage> {
 
 /// Parses one `--resolve ⟨gap⟩=⟨choice⟩` in its grammar.
 ///
-/// The gap is its number as the report counts it, from 1; the choice is
-/// `order:⟨side⟩,⟨side⟩…`, `after:⟨address⟩`, `before:⟨address⟩`,
-/// `keep:⟨side⟩`, `both` or `omit`, a side its index as the report numbers
-/// it.
+/// The gap is its number as the report counts it, from 1, the same in every
+/// run, whatever the other choices; the choice is `order:⟨side⟩,⟨side⟩…`,
+/// `after:⟨address⟩`, `before:⟨address⟩`, `keep:⟨side⟩`, `both` or `omit`, a
+/// side its index as the report numbers it.
 ///
 /// # Errors
 ///

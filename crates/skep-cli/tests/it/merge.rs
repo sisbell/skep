@@ -20,6 +20,9 @@
 //! `--new` staging a
 //! fresh draft from the head and landing there, the base and the merge
 //! recorded, a re-run reporting the standing landing and staging nothing;
+//! a `--resolve` list with the daughter's order chosen at the spine's
+//! `moves` gap beside an omission, each choice landing at the gap the
+//! report printed with no `--resolve` numbered (skep #1155);
 //! A MOVED HEAD — the head moved before `--publish`, the shot claiming the
 //! daughter superseded refused whole by the board, exit 1 with the head to
 //! run again on and nothing published, and the re-run with `--retries 1`
@@ -730,6 +733,52 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(position(), before, "nothing staged, nothing written");
     assert!(r.err.contains(&format!("landed in the draft {fresh} at position {at};")), "{}", r.err);
     assert!(!r.err.contains("fresh draft"), "{}", r.err);
+    session.close().expect("close");
+}
+
+/// Every choice beside a spine's order lands at the gap the report numbered.
+///
+/// The base `D.1` "ABCDEF", the head `D.2` "CrDABE" and the daughter
+/// `D.1.1` "ABECRD" reorder overlapping letters and both drop "F", so the
+/// report numbers the daughter's reorder 1, the `order` gap of "r" and "R"
+/// inside "CD" 2 and the `collision` at "F" 3. `--resolve 1=order:1
+/// --resolve 2=omit --publish` takes the daughter's order and leaves both
+/// words out — gap 2 the `order` gap, `omitted` by the agent, nothing
+/// ignored — and the member holds "ABECD" (skep #1155; the mutant that
+/// numbers the gaps by their places under the chosen order omits the
+/// collision and publishes both words).
+#[test]
+fn every_choice_beside_a_spines_order_lands_at_the_gap_the_report_numbered() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let d = rig.document(&session);
+    let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "ABCDEF" }]);
+    let crdabe = [Staged::Own { from: 3, text: "C" }, Staged::Fresh { text: "r" }, Staged::Own { from: 4, text: "D" }, Staged::Own { from: 1, text: "AB" }, Staged::Own { from: 5, text: "E" }];
+    let abecrd = [Staged::Own { from: 1, text: "AB" }, Staged::Own { from: 5, text: "E" }, Staged::Own { from: 3, text: "C" }, Staged::Fresh { text: "R" }, Staged::Own { from: 4, text: "D" }];
+    let head = rig.shot(&session, &d, Some((&base, 6)), &crdabe);
+    let daughter = rig.shot(&session, &d, Some((&base, 6)), &abecrd);
+    assert_eq!((head.to_string(), daughter.to_string()), (format!("{d}.2"), format!("{d}.1.1")));
+    let (d_s, daughter_s) = (d.to_string(), daughter.to_string());
+    // The report with no --resolve: the daughter's reorder, the order gap
+    // inside "CD", the collision at "F".
+    let v = report(&rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind]));
+    let numbered: Vec<(Option<u64>, Option<&str>)> = v["gaps"].as_array().expect("gaps").iter().map(|g| (g["id"].as_u64(), g["kind"].as_str())).collect();
+    assert_eq!(numbered, vec![(Some(1), Some("moves")), (Some(2), Some("order")), (Some(3), Some("collision"))], "{}", v["gaps"]);
+    // The list: the daughter's order chosen at gap 1 and gap 2 omitted,
+    // published in the one run.
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind, "--resolve", "1=order:1", "--resolve", "2=omit", "--publish"]);
+    let v = report(&r);
+    let gap = &v["gaps"][1];
+    assert_eq!((gap["id"].as_u64(), gap["kind"].as_str(), gap["placed"].clone(), gap["resolved_by"].as_str()), (Some(2), Some("order"), json!("omitted"), Some("agent")), "{}", v["gaps"]);
+    assert_eq!(v["ignored"], json!([]));
+    assert!(!r.err.contains("not applied"), "{}", r.err);
+    let abecd = vec![(format!("{d}.0.1.1"), "2".into()), (format!("{d}.0.1.5"), "1".into()), (format!("{d}.0.1.3"), "2".into())];
+    assert_eq!(runs_of(&v), abecd, "ABECD: the daughter's order, neither word");
+    let member = addr(v["landed"]["member"].as_str().expect("the member"));
+    assert_eq!(rig.image(&token, &member, 5), abecd, "the member holds ABECD");
     session.close().expect("close");
 }
 

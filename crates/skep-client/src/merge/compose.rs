@@ -113,9 +113,12 @@ pub struct SideIx(pub u8);
 ///
 /// The `moves` gaps with spots come first, each one fresh identity two or
 /// more sides placed at different spots (CM-I33), then the spine's. The
-/// other gaps are numbered in the order of their default places in M; a
-/// resolution that moves one keeps its number, and so does one that moves
-/// a gap with spots' words: the others are numbered as at its default.
+/// other gaps are numbered in the order of their default places in M. No
+/// resolution renumbers a gap — not one that moves it, not one that moves a
+/// gap with spots' words, not the order chosen at a spine's `moves` gap
+/// (skep #1155) — so every resolution in one list names a gap by its number
+/// in the report composed with no resolution, and a gap only a resolution
+/// makes is numbered after that report's last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GapId(pub u32);
 
@@ -376,13 +379,14 @@ pub struct ValueLog {
 pub struct Composed {
     /// The merged list, coalesced by I-adjacency as the member will hold it.
     pub runs: Vec<PlacedRun>,
-    /// Every gap by number: the `moves` gaps, then the others.
+    /// Every gap by number ([`GapId`]): the `moves` gaps, then the others.
     ///
     /// The `moves` gaps with spots come before the spine's, and the others
-    /// in the order of their default places in M. A one-sided addition
-    /// between two surviving anchors that stand together asks nothing and
-    /// is not listed, nor is a fresh identity several sides placed at one
-    /// spot.
+    /// in the order of their default places in M — at the default order,
+    /// where a side's order is chosen at a spine's `moves` gap — then every
+    /// gap only a resolution makes. A one-sided addition between two
+    /// surviving anchors that stand together asks nothing and is not listed,
+    /// nor is a fresh identity several sides placed at one spot.
     pub gaps: Vec<Gap>,
     /// The run counts.
     pub counts: RunCounts,
@@ -470,12 +474,18 @@ pub enum InPlaceOp {
 /// default, the first gap of the walk at the defaults with its kind, its
 /// place in the spine and the same runs besides the moved words, and any
 /// other gap, one the moved words make, is numbered after that walk's
-/// last. With no
-/// `spine_hint`, a spine's `moves` gap resolved by `Choice::Order` of one
-/// side re-walks the whole composition under that side's order, so the
-/// report's gaps after the `moves` gaps may be numbered afresh: a caller
-/// resolves a spine's `moves` gap first and reads the report again. Under
-/// a `spine_hint` that resolution is not applied and stands in `ignored`.
+/// last. With no `spine_hint`, a spine's `moves` gap resolved by
+/// `Choice::Order` of one side walks the whole composition again under
+/// that side's order, and every gap keeps the number the walk at the
+/// default order gave it (skep #1155): a `moves` gap the number of the one
+/// holding the same side's reorder, the one the merger chose at its own,
+/// and every other gap the number of the gap with its kind and the same
+/// runs — a collision no side filled, of the one over the same base
+/// positions — never by its place, which the order moves. A gap that walk
+/// did not have is numbered after its last, so a resolution naming one the
+/// chosen order removes stands in `ignored`, and every resolution in one
+/// list names the report's numbers. Under a `spine_hint` that resolution is
+/// not applied and stands in `ignored`.
 ///
 /// **Precondition.** Every run has a width above 0. A release build skips a
 /// run of width 0 and composes the rest. A list that places one run twice
@@ -502,46 +512,71 @@ pub fn compose_runs(
     }
     let claimed = Claimed::of(&r, &seqs, &options.resolutions);
     let hint = spine_hint.and_then(|h| r.side_ix.iter().position(|s| *s == h));
-    let first = walk(&r, &chain, &claimed, hint, None, options, values);
+    let (first, numbering) = walk(&r, &chain, &claimed, SpineOrder::Given(hint), options, values);
     if hint.is_none() {
         if let Some((side, by)) = moves_choice(&r, &first, &options.resolutions) {
-            return walk(&r, &chain, &claimed, Some(side), Some(by), options, values);
+            let chosen = SpineOrder::Chosen { side, by, numbering: &numbering };
+            return walk(&r, &chain, &claimed, chosen, options, values).0;
         }
     }
     first
 }
 
-/// Runs the seven steps over the normalized sequences under one spine choice.
+/// The order a walk's spine takes, and what its gaps are numbered by.
+enum SpineOrder<'a> {
+    /// The order `spine_of` computes, or the side a `spine_hint` names.
+    ///
+    /// The gaps are numbered by this walk.
+    Given(Option<usize>),
+    /// The order of the side a merger chose at a spine's `moves` gap.
+    ///
+    /// Every `moves` gap is settled by who chose, `by`, and every gap is
+    /// numbered by `numbering`, the walk's at the order given (skep #1155).
+    Chosen { side: usize, by: ResolvedBy, numbering: &'a Numbering },
+}
+
+/// Runs the seven steps over the normalized sequences under one spine order.
 ///
-/// `chain` is the document's chain, as `Refinement::chain` reads it, and
+/// `chain` is the document's chain, as `Refinement::chain` reads it,
 /// `claimed` the sequences once each fresh identity several sides hold is
-/// kept by one, with the gaps with spots that decided it.
+/// kept by one, with the gaps with spots that decided it, and `order` the
+/// spine's order and what the gaps are numbered by. Beside the composition
+/// it returns the numbering its gaps took, which a walk under a chosen
+/// order numbers its own by.
 fn walk(
     r: &Refinement,
     chain: &HashSet<usize>,
     claimed: &Claimed,
-    hint: Option<usize>,
-    forced: Option<ResolvedBy>,
+    order: SpineOrder<'_>,
     options: &Options,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
-) -> Composed {
+) -> (Composed, Numbering) {
     let in_base = r.in_base();
     let seqs = &claimed.seqs;
     let in_side: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
     let (removed_by, removed) = removals(r, &in_side);
     let after_claims = claimed.claims.len() as u32 + 1;
+    let (hint, forced) = match &order {
+        SpineOrder::Given(hint) => (*hint, None),
+        SpineOrder::Chosen { side, by, .. } => (Some(*side), Some(by.clone())),
+    };
     let (spine, spine_pos, mut moves) = spine_of(r, seqs, &in_base, &removed, hint, forced, after_claims);
     let stretches = additions(seqs, &in_base);
     let placed = placement(r, &stretches, &removed_by, &removed, &spine, &spine_pos);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
     let first = after_claims + moves.len() as u32;
     let (mut entries, mut applied) = gaps(r, chain, &stretches, &placed, &regions, first, options, values);
-    // A holder chosen at a gap with spots: the gaps numbered as the walk at
-    // the claims' defaults numbers its own. Only the moved words' stretches
-    // differ between the two, so the removals, the spine and the collision
-    // regions are this walk's; and the dedup changes no kind, run or place,
-    // so that walk reads no value.
-    if let Some(defaults) = &claimed.defaults {
+    if let SpineOrder::Chosen { numbering, .. } = order {
+        // A side's order chosen at a spine's `moves` gap: every gap numbered
+        // as the walk at the order given numbered it, which a holder's
+        // choice had already numbered as at the claims' defaults.
+        numbering.number(&mut entries, &mut moves, &mut applied);
+    } else if let Some(defaults) = &claimed.defaults {
+        // A holder chosen at a gap with spots: the gaps numbered as the walk
+        // at the claims' defaults numbers its own. Only the moved words'
+        // stretches differ between the two, so the removals, the spine and
+        // the collision regions are this walk's; and the dedup changes no
+        // kind, run or place, so that walk reads no value.
         let stretches = additions(defaults, &in_base);
         let placed = placement(r, &stretches, &removed_by, &removed, &spine, &spine_pos);
         let (at_defaults, _) = gaps(r, chain, &stretches, &placed, &regions, first, options, &|_, _| None);
@@ -555,13 +590,14 @@ fn walk(
         b: r.side_runs.iter().skip(1).sum(),
         m: runs.len(),
     };
-    Composed {
+    let composed = Composed {
         runs,
         gaps,
         counts,
         values: ValueLog { dedup: options.dedup, retype: options.retype, applied },
         ignored,
-    }
+    };
+    (composed, Numbering::of(entries, moves, &claimed.claims))
 }
 
 /// Returns the resolution of a spine's `moves` gap, if one is given.
@@ -1061,6 +1097,7 @@ fn removals(r: &Refinement, in_side: &[Vec<Option<usize>>]) -> (Vec<Vec<bool>>, 
 struct Moves {
     id: GapId,
     winner: usize,
+    loser: usize,
     runs: Vec<(SideIx, Run)>,
     settled: bool,
     resolved_by: Option<ResolvedBy>,
@@ -1075,7 +1112,9 @@ struct Moves {
 /// whose order differs from it (§2 R4 iii). `hint`
 /// names the side whose order wins outright; `forced` marks every `moves`
 /// gap settled by the merger who named it; the gaps are numbered from
-/// `first`, after the gaps with spots.
+/// `first`, after the gaps with spots, in the order of the sides whose
+/// reorders they hold, and a walk under a chosen order numbers them again
+/// (`Numbering::number`).
 fn spine_of(
     r: &Refinement,
     seqs: &[Vec<usize>],
@@ -1117,6 +1156,7 @@ fn spine_of(
             moves.push(Moves {
                 id: GapId(first + moves.len() as u32),
                 winner,
+                loser,
                 runs,
                 settled: forced.is_some(),
                 resolved_by: forced.clone(),
@@ -1431,6 +1471,7 @@ fn collision_regions(
 /// One side's material at a gap.
 ///
 /// It is its stretches' fragments, in the side's own order.
+#[derive(PartialEq, Eq)]
 struct Group {
     side: usize,
     frags: Vec<usize>,
@@ -1460,7 +1501,9 @@ struct Entry {
 /// no gap or an `anchor`; the collisions at one spine gap are one
 /// `collision` gap, a region no side filled listed too; then the dedup
 /// where it is on. The gaps are numbered here from `first`, in M's order
-/// after the `moves` gaps, so the dedup can name the gap it fired at.
+/// after the `moves` gaps, so the dedup can name the gap it fired at; a
+/// walk with a holder chosen, or under a chosen order, numbers them again
+/// (`number_as`, `Numbering::number`), the dedup's ids following them.
 /// `chain` is the document's chain the order rule reads.
 #[allow(clippy::too_many_arguments)]
 fn gaps(
@@ -1589,18 +1632,19 @@ struct AtDefault {
     unmoved: Unmoved,
 }
 
-/// Numbers the walk's gaps as the walk at the claims' defaults numbered
-/// its own, `defaults` (CM-I33).
+/// Numbers a walk's gaps as the walk at the claims' defaults numbers its own.
 ///
-/// A chosen holder moves the words `moved` names, and every other part of
-/// the two walks is the same. So a gap takes the number of the first gap of
-/// `defaults` not yet taken with its kind, its place in the spine and the
-/// same groups once the moved words are taken out of both — a gap whose
-/// only runs are the moved words, which stand at one spot in the one walk
-/// and at another in the other, matching none, save a collision, which its
-/// region names — and every other gap is numbered after the last of
-/// `defaults`, which were numbered from `first`, in M's order. The value
-/// log's ids follow their gaps.
+/// The walk is at the order given, and `defaults` is that walk's gaps at the
+/// claims' defaults (CM-I33); a walk under a chosen order is numbered by
+/// `Numbering::number` instead. A chosen holder moves the words `moved`
+/// names, and every other part of the two walks is the same. So a gap takes
+/// the number of the first gap of `defaults` not yet taken with its kind,
+/// its place in the spine and the same groups once the moved words are taken
+/// out of both — a gap whose only runs are the moved words, which stand at
+/// one spot in the one walk and at another in the other, matching none, save
+/// a collision, which its region names — and every other gap is numbered
+/// after the last of `defaults`, which were numbered from `first`, in M's
+/// order. The value log's ids follow their gaps.
 fn number_as(entries: &mut [Entry], applied: &mut [GapId], defaults: &[Entry], moved: &HashSet<usize>, first: u32) {
     let unmoved = |e: &Entry| -> Unmoved {
         let mut groups: Unmoved = e
@@ -1634,6 +1678,82 @@ fn number_as(entries: &mut [Entry], applied: &mut [GapId], defaults: &[Entry], m
     for id in applied.iter_mut() {
         if let Some(number) = renumbered.get(id) {
             *id = *number;
+        }
+    }
+}
+
+/// The numbers a walk at the order given gave its gaps, by what each holds.
+///
+/// It is what the walk under the order a merger chose at a spine's `moves`
+/// gap numbers its own gaps by (skep #1155). Both walks stand on one set of
+/// claimed sequences, so their stretches are the same and group alike under
+/// any spine — a collision by the survivor left of it, every other gap by
+/// its two anchors — and only the spine differs: a gap is known in both by
+/// what it holds, never by its place, which the order moves.
+struct Numbering {
+    /// The gaps of the spine's places, numbered or not.
+    entries: Vec<Entry>,
+    /// The spine's `moves` gaps.
+    moves: Vec<Moves>,
+    /// The highest number given, the gaps with spots' included.
+    last: u32,
+}
+
+impl Numbering {
+    /// Returns the numbering of a walk's gaps, the claims' among them.
+    fn of(entries: Vec<Entry>, moves: Vec<Moves>, claims: &[Claim]) -> Numbering {
+        let ids = claims.iter().map(|c| c.id).chain(moves.iter().map(|m| m.id));
+        let last = ids.chain(entries.iter().filter_map(|e| e.id)).max().map_or(0, |id| id.0);
+        Numbering { entries, moves, last }
+    }
+
+    /// Numbers the gaps of a walk under a chosen order as these were.
+    ///
+    /// A `moves` gap takes the number of the one here holding the same
+    /// side's reorder, save the one holding the reorder of the side whose
+    /// order the spine took here, which lost to the chosen side: it takes the
+    /// number of the one here holding the chosen side's, the gap the merger
+    /// chose at. Every other gap takes the number of the first gap here not
+    /// yet taken with its kind and the same groups, fragment for fragment —
+    /// a collision no side filled, of the one over the same base positions.
+    /// A gap matching none, one the chosen order makes, is numbered after
+    /// the last here, the `moves` gaps first, then the others in M's order;
+    /// a gap here matching none, one the chosen order removes, leaves its
+    /// number unused. The value log's ids follow their gaps.
+    fn number(&self, entries: &mut [Entry], moves: &mut [Moves], applied: &mut [GapId]) {
+        let mut next = self.last;
+        let winner = self.moves.first().map(|m| m.winner);
+        for gap in moves.iter_mut() {
+            let held = if Some(gap.loser) == winner { gap.winner } else { gap.loser };
+            gap.id = match self.moves.iter().find(|m| m.loser == held) {
+                Some(m) => m.id,
+                None => {
+                    next += 1;
+                    GapId(next)
+                }
+            };
+        }
+        let mut open: Vec<(GapId, &Entry)> = self.entries.iter().filter_map(|e| Some((e.id?, e))).collect();
+        let mut renumbered: HashMap<GapId, GapId> = HashMap::new();
+        for entry in entries.iter_mut() {
+            let Some(id) = entry.id else { continue };
+            let at = open.iter().position(|(_, e)| {
+                e.kind == entry.kind && e.groups == entry.groups && (!e.groups.is_empty() || e.key == entry.key)
+            });
+            let number = match at {
+                Some(at) => open.remove(at).0,
+                None => {
+                    next += 1;
+                    GapId(next)
+                }
+            };
+            entry.id = Some(number);
+            renumbered.insert(id, number);
+        }
+        for id in applied.iter_mut() {
+            if let Some(number) = renumbered.get(id) {
+                *id = *number;
+            }
         }
     }
 }

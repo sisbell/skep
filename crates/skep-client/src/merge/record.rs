@@ -89,13 +89,15 @@ pub const TYPE: &str = crate::publication::MERGE_RECORD_TYPE;
 /// The schema's version, `v`.
 pub const SCHEMA_VERSION: u64 = 1;
 
-/// The rule set's version, `rules`: §2's rule set, `merge-rules-2`.
+/// The rule set's version, `rules`: §2's rule set, `merge-rules-3`.
 ///
 /// Its gaps hold a `moves` gap with spots wherever two or more sides placed
-/// one fresh identity at different spots (CM-I33). [`verify`] composes
+/// one fresh identity at different spots (CM-I33), and each gap keeps the
+/// number the report composed with no resolution gives it, the order chosen
+/// at a spine's `moves` gap included (skep #1155). [`verify`] composes
 /// under this build's rules whatever version a record names, so a record
 /// written under an earlier set can verify `Differs` where the sets part.
-pub const RULES: &str = "merge-rules-2";
+pub const RULES: &str = "merge-rules-3";
 
 /// Returns the `by` member: this library's crate and version.
 pub(super) fn by() -> String {

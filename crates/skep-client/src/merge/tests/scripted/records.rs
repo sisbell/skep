@@ -605,7 +605,7 @@ fn the_record_round_trips_and_names_its_type() {
     let v = merged.record.to_value();
     assert_eq!(
         (v["type"].as_str(), v["v"].as_u64(), v["rules"].as_str()),
-        (Some("merge"), Some(1), Some("merge-rules-2"))
+        (Some("merge"), Some(1), Some("merge-rules-3"))
     );
     assert_eq!(
         v["gaps"][0]["runs"][0],

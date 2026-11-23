@@ -253,8 +253,10 @@ pub fn past(board: &Board, token: &Token, draft: &Address, at: u64) -> Result<Pa
 /// read, since a `past` whose `as_of` its caller set meets the same
 /// refusal sent again; [`Refusal::NotOwner`]; [`Refusal::Published`];
 /// [`Refusal::WindowWithheld`] naming an origin a run windows that the
-/// person may not read, and its words' positions in [`Past::written`], the
-/// past state as [`past`] answered it; [`Refusal::NeedsSignedSession`];
+/// person may not read, as the board names it, and its words' positions in
+/// [`Past::written`], the past state as [`past`] answered it — a `withheld`
+/// naming in `site.addr` no document this client parses is the board's
+/// refusal verbatim (SP-18); [`Refusal::NeedsSignedSession`];
 /// [`Refusal::NoSuchDocument`]; the refusals of the runs as this library's
 /// own fault, since it sends what the board itself held; the board's other
 /// refusals verbatim; the death signal under the token,

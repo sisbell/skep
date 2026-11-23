@@ -2,7 +2,8 @@
 //!
 //! The suite checks every refusal the shot and the draft landing's one
 //! write can answer, a `withheld` naming the words refused, those the head
-//! carries never among them at the shot; a draft word a record names, sent
+//! carries never among them at the shot, and one naming no document the
+//! board's refusal verbatim; a draft word a record names, sent
 //! by reference, a
 //! retry keeping its ids, and `already_published` at the shot read again
 //! and sent once more, never a second member or atom; a draft the merger
@@ -181,8 +182,9 @@ fn the_shots_refusals_are_mapped() {
 /// from 1 past the head's fifteen words. A daughter adding "!" past the
 /// head's words, `D·20`, puts at 16 a word of `D` the head does not hold:
 /// naming `D`, the refusal names it alone, the head's runs before it
-/// carried; with no site it names no word (the mutant that counts the
-/// trunk's runs in the site's place names 16).
+/// carried. With no site, or one naming no document, it is the board's
+/// refusal verbatim, never the trunk named in the board's place (the
+/// mutant that names it answers `WindowWithheld` naming `D`).
 #[test]
 fn the_shots_withheld_names_the_words_the_head_does_not_carry() {
     let (dialer, board, signer) = open(draft_landing_world());
@@ -220,12 +222,18 @@ fn the_shots_withheld_names_the_words_the_head_does_not_carry() {
         land(&board, &merged, shot(&session, &signer)),
         Err(Refusal::WindowWithheld { origin: a(D), positions: vec![(16, 1)] })
     );
-    refuse(Value::Null);
-    let unsited = land(&board, &merged, shot(&session, &signer)).expect_err("withheld");
-    assert!(
-        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
-        "{unsited:?}"
-    );
+    for site in [Value::Null, json!({"addr": "x"})] {
+        refuse(site.clone());
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("withheld");
+        let Refusal::Halt(Halt::Refused(verbatim)) = &err else {
+            panic!("{site}: {err:?}")
+        };
+        assert_eq!(
+            (verbatim.code.as_str(), verbatim.detail.as_deref()),
+            ("withheld", None),
+            "{site}"
+        );
+    }
 }
 
 /// Returns the answer the record keeps for "!!!", by reference to `to`.
@@ -413,16 +421,17 @@ fn a_member_found_after_already_published_is_the_landing_with_no_second_shot() {
 }
 
 /// Every refusal the draft landing's one write can answer is mapped.
-/// Every refusal the draft landing's one write can answer is mapped.
 ///
 /// A draft staged from another document's member meets the board's own
 /// `base_not_in_chain` as `Refusal::BaseNotInChain`. Planted under the
 /// write's id, `withheld` names the origin and its words in M — none for
 /// `Z`, which no run of M windows; for `D`, its three runs back to back at
-/// 1–15, `S`'s run after them left out — and with no site the draft and no
-/// words (the mutant that counts the draft's own runs in the site's place
-/// names `S`'s at 16–18), `signed_session_required` and
-/// `doc_not_registered` answer theirs, every refusal of the frame's
+/// 1–15, `S`'s run after them left out — and `withheld` and
+/// `fork_base_moved` with no site, or one naming no document, are the
+/// board's refusals verbatim, never the draft named in the board's place
+/// (the mutant that names it answers `WindowWithheld` naming `S`, and
+/// `ForkBaseMoved` naming `S` its own source); `signed_session_required`
+/// and `doc_not_registered` answer theirs, every refusal of the frame's
 /// substance is the library's own fault and any other code rides
 /// verbatim. Each leaves the feed as it stood, the refused write the
 /// last frame sent: no journal and no record.
@@ -480,11 +489,19 @@ fn the_draft_landings_refusals_are_mapped() {
         refused("withheld", Some(D)),
         Refusal::WindowWithheld { origin: a(D), positions: vec![(1, 15)] }
     );
-    let unsited = refused("withheld", None);
-    assert!(
-        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
-        "{unsited:?}"
-    );
+    for code in ["withheld", "fork_base_moved"] {
+        for site in [None, Some("x")] {
+            let err = refused(code, site);
+            let Refusal::Halt(Halt::Refused(verbatim)) = &err else {
+                panic!("{code}, {site:?}: {err:?}")
+            };
+            assert_eq!(
+                (verbatim.code.as_str(), verbatim.detail.as_deref()),
+                (code, None),
+                "{site:?}"
+            );
+        }
+    }
     assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
     assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
     for code in [

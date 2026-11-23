@@ -40,8 +40,10 @@ impl Writer<'_> {
     /// member's reads' ([`Writer::standing_member`]); a second
     /// `already_published` as [`Refusal::AlreadyPublished`], naming the draft
     /// and the member the board names; [`Refusal::WindowWithheld`] naming
-    /// beside the origin its words in the list `shot` places that the head
-    /// does not carry, [`Refusal::NeedsSignedSession`] and
+    /// the origin as the board names it and beside it its words in the list
+    /// `shot` places that the head does not carry — a `withheld` naming in
+    /// `site.addr` no document this client parses is the board's refusal
+    /// verbatim (SP-18) — [`Refusal::NeedsSignedSession`] and
     /// [`Refusal::NoSuchDocument`] as the board answers them; `not_owner`
     /// naming the draft side as
     /// [`Refusal::UnownedDraft`], `supersede_refused` as
@@ -82,14 +84,21 @@ impl Writer<'_> {
         Err(match r.key() {
             // The words refused: the runs of the list the shot placed whose
             // origin the board names, but those the head carries, which
-            // the source gate never consults (PUB-6.24).
-            "withheld" => {
-                let head = merged.maps.first().map_or(&[][..], |head| head.runs.as_slice());
-                let positions = stretches(shot.runs.iter().map(|placed| {
-                    (site.as_ref() == Some(&placed.run.origin) && !windows::carried(head, &placed.run), placed.run.width)
-                }));
-                Refusal::WindowWithheld { origin: site.unwrap_or_else(|| doc.clone()), positions }
-            }
+            // the source gate never consults (PUB-6.24). Where it names no
+            // document this client parses, none is typed in its place: the
+            // wire names one on every `withheld` (wire.md §Rejections), and
+            // never the trunk, whose own words the gate never consults. The
+            // answer rides verbatim (SP-18).
+            "withheld" => match site {
+                Some(origin) => {
+                    let head = merged.maps.first().map_or(&[][..], |head| head.runs.as_slice());
+                    let positions = stretches(shot.runs.iter().map(|placed| {
+                        (placed.run.origin == origin && !windows::carried(head, &placed.run), placed.run.width)
+                    }));
+                    Refusal::WindowWithheld { origin, positions }
+                }
+                None => Refusal::Halt(r.refused(&v)),
+            },
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
             // The draft side another account's, named.

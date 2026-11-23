@@ -12,7 +12,8 @@
 //! the same records: another account's words written as the words its owner
 //! published, and as read where no record of them is answered, the board's
 //! `withheld` at the write naming that account's draft and the stretches of
-//! the state its words stand in.
+//! the state its words stand in, and one naming no document the board's
+//! refusal verbatim.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -412,6 +413,40 @@ fn a_restores_withheld_names_each_stretch_of_the_documents_words_in_the_state() 
         restore(&board, &token(), &p),
         Err(Refusal::WindowWithheld { origin: a(Z), positions: vec![(1, 5), (17, 4)] })
     );
+}
+
+/// A restore's `withheld` naming no document is the board's refusal
+/// verbatim.
+///
+/// The wire names the origin on every `withheld`: an answer with no `site`,
+/// or one whose `site.addr` is no address, names none, and the restore types
+/// none in its place — never the restored draft, whose own words the board
+/// never consults (the mutant that names it answers `WindowWithheld` naming
+/// `S`). The restore reaches `judge` directly, never through the
+/// take-backs' `send`, so this cell alone holds the check in `judge`.
+#[test]
+fn a_restores_withheld_naming_no_document_is_the_boards_refusal_verbatim() {
+    let (s, z) = (format!("{S}.0.1"), format!("{Z}.0.1"));
+    for site in [None, Some(json!({"addr": "x"}))] {
+        let mut answer = z_withheld();
+        let rejection = answer.as_object_mut().expect("a rejection");
+        match site.clone() {
+            Some(named) => rejection.insert("site".to_string(), named),
+            None => rejection.remove("site"),
+        };
+        let fake = holding_z(&[(&s, 1, 11), (&z, 1, 4)], Vec::new(), answer);
+        let board = fake::board(&fake);
+        let p = past(&board, &token(), &a(S), 12).expect("the past read");
+        let err = restore(&board, &token(), &p).expect_err("withheld");
+        let Refusal::Halt(Halt::Refused(verbatim)) = &err else {
+            panic!("{site:?}: {err:?}")
+        };
+        assert_eq!(
+            (verbatim.code.as_str(), verbatim.detail.as_deref()),
+            ("withheld", None),
+            "{site:?}"
+        );
+    }
 }
 
 // ── the reads and the one write ──────────────────────────────────────────

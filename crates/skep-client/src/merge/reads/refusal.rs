@@ -261,12 +261,19 @@ pub enum Refusal {
     /// alone: another may stand behind it. Its words name the origin, the
     /// positions and the code, the same at every write; the embedder says
     /// what the act did (SP-10).
+    ///
+    /// A `withheld` whose `site.addr` is missing or names no document this
+    /// client parses is no `WindowWithheld`: the wire names the origin on
+    /// every `withheld` (wire.md §Rejections), so no document is typed in
+    /// its place, and the answer is the board's refusal verbatim,
+    /// [`Refusal::Halt`] (SP-18).
     WindowWithheld {
-        /// The document the board names, `site.addr`; the act's own document
-        /// where the board names none.
+        /// The document the board names, `site.addr`.
         origin: Address,
         /// The words refused, each stretch its first position, from 1, and
-        /// its width, in V order; empty where the board names no document.
+        /// its width, in V order; empty where no run of the list has
+        /// `origin` for its origin, and at the shot where each that does is
+        /// one the head carries.
         ///
         /// A stretch is the refused runs that stand next to each other in
         /// the list, whatever their I-addresses (`stretches`). The list is

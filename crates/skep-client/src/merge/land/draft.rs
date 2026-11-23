@@ -104,10 +104,12 @@ impl Writer<'_> {
     /// own landing named where it moved the draft after `as_of`, else the
     /// draft that changed after the merge was composed and nothing merged —
     /// or those reads' refusals, each as itself (SP-14);
-    /// [`Refusal::ForkBaseMoved`] and
-    /// [`Refusal::BaseNotInChain`], the two refusals a person meets;
+    /// [`Refusal::ForkBaseMoved`], naming the fork's source the board names,
+    /// and [`Refusal::BaseNotInChain`], the two refusals a person meets;
     /// [`Refusal::WindowWithheld`] where a run names an origin the merger may
-    /// not read, naming beside it its words in M;
+    /// not read, naming it as the board names it and beside it its words in
+    /// M — a `withheld` or a `fork_base_moved` naming in `site.addr` no
+    /// document this client parses is the board's refusal verbatim (SP-18);
     /// [`Refusal::NeedsSignedSession`];
     /// [`Refusal::NoSuchDocument`] naming the draft; a run with no address
     /// and the board's refusal of the frame's substance — the head and the
@@ -192,12 +194,18 @@ impl Writer<'_> {
         let site = r.site().addr.as_deref().and_then(parse_address);
         Err(match r.key() {
             // The words refused: M's runs whose origin the board names.
-            "withheld" => {
-                let positions = stretches(
-                    target.iter().map(|run| (site.as_ref() == Some(&run.origin), run.width)),
-                );
-                Refusal::WindowWithheld { origin: site.unwrap_or_else(|| into.clone()), positions }
-            }
+            // Where it names no document this client parses, none is typed
+            // in its place: the wire names one on every `withheld` (wire.md
+            // §Rejections), and never the draft, whose own words the source
+            // gate never consults. The answer rides verbatim (SP-18).
+            "withheld" => match site {
+                Some(origin) => {
+                    let positions =
+                        stretches(target.iter().map(|run| (run.origin == origin, run.width)));
+                    Refusal::WindowWithheld { origin, positions }
+                }
+                None => Refusal::Halt(r.refused(&v)),
+            },
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(into.clone()),
             // The draft changed past the position the write was typed
@@ -218,10 +226,16 @@ impl Writer<'_> {
                     Err(e) => e,
                 }
             }
-            "fork_base_moved" => Refusal::ForkBaseMoved {
-                fork: into.clone(),
-                source: site.unwrap_or_else(|| into.clone()),
-                head: head.clone(),
+            // The fork's source, `site.addr` on every `fork_base_moved`
+            // (wire.md §Rejection codes): where no document this client
+            // parses is named, the answer rides verbatim (SP-18).
+            "fork_base_moved" => match site {
+                Some(source) => Refusal::ForkBaseMoved {
+                    fork: into.clone(),
+                    source,
+                    head: head.clone(),
+                },
+                None => Refusal::Halt(r.refused(&v)),
             },
             "base_not_in_chain" => Refusal::BaseNotInChain { into: into.clone(), head: head.clone() },
             // The head and its extent are the merge's own reads — a member

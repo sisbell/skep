@@ -387,7 +387,9 @@ pub struct Unwithdrawn {
 ///   `marker_not_restorable` where the write puts a marker back, the draft
 ///   published since it was read, as [`Refusal::Halt`] saying nothing was
 ///   changed; [`Refusal::NotOwner`]; [`Refusal::Published`];
-///   [`Refusal::WindowWithheld`]; [`Refusal::NeedsSignedSession`];
+///   [`Refusal::WindowWithheld`] naming the document `withheld` names, and
+///   a `withheld` naming no document this client parses as the board's
+///   refusal verbatim (SP-18); [`Refusal::NeedsSignedSession`];
 ///   [`Refusal::NoSuchDocument`];
 ///   `source_not_registered`, `no_base_to_record`, `base_not_in_chain`,
 ///   `base_extent_too_large` and the runs' refusals as the library's own
@@ -1266,8 +1268,10 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
 /// # Errors
 ///
 /// As [`undo`]'s one write's: `arrangement_moved` as the board's verdict in
-/// the person's words; [`Refusal::WindowWithheld`], naming beside the
-/// origin its words in the state `frame` sends ([`refused_runs`]),
+/// the person's words; [`Refusal::WindowWithheld`] where the board's
+/// `withheld` names in `site.addr` a document this client parses, naming
+/// beside it its words in the state `frame` sends ([`refused_runs`]) — a
+/// `withheld` naming none is the board's refusal verbatim (SP-18);
 /// [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`],
 /// [`Refusal::NotOwner`] and [`Refusal::Published`] by their codes; the
 /// refusals of what the library composed as its own fault; the board's
@@ -1325,10 +1329,17 @@ pub(crate) fn judge(
             op: r.op().map(str::to_string),
             body: v.clone(),
         })),
-        "withheld" => {
-            let positions = refused_runs(frame, site.as_ref()).map(stretches).unwrap_or_default();
-            Refusal::WindowWithheld { origin: site.unwrap_or_else(|| draft.clone()), positions }
-        }
+        "withheld" => match site {
+            Some(origin) => {
+                let positions = refused_runs(frame, &origin).map(stretches).unwrap_or_default();
+                Refusal::WindowWithheld { origin, positions }
+            }
+            // The board names no document this client parses, and none is
+            // typed in its place: the wire names one on every `withheld`
+            // (wire.md §Rejections), and never the draft, whose own words
+            // the source gate never consults. It rides verbatim (SP-18).
+            None => Refusal::Halt(r.refused(v)),
+        },
         "signed_session_required" => Refusal::NeedsSignedSession,
         "doc_not_registered" => Refusal::NoSuchDocument(draft.clone()),
         "not_owner" => Refusal::NotOwner { draft: draft.clone() },
@@ -1352,22 +1363,21 @@ pub(crate) fn judge(
     })
 }
 
-/// Returns `frame`'s runs in V order, each as whether the board's `site`
-/// is its origin and its width.
+/// Returns `frame`'s runs in V order, each as whether its origin is
+/// `origin`, the document the board's `withheld` names, and its width.
 ///
 /// The runs are a take-back's or a restore's one write's, each as
 /// [`written_runs`] spells it — its `origin` the document that minted it,
 /// its `width` a decimal string — so each reads back; `None` where one does
 /// not, so a refusal names no position where it cannot name the right one.
-/// With no `site` no run is the origin's.
-fn refused_runs(frame: &Value, site: Option<&Address>) -> Option<Vec<(bool, u64)>> {
+fn refused_runs(frame: &Value, origin: &Address) -> Option<Vec<(bool, u64)>> {
     frame["runs"]
         .as_array()?
         .iter()
         .map(|run| {
-            let origin = parse_address(run["origin"].as_str()?)?;
+            let minted = parse_address(run["origin"].as_str()?)?;
             let width = run["width"].as_str()?.parse().ok()?;
-            Some((site == Some(&origin), width))
+            Some((minted == *origin, width))
         })
         .collect()
 }

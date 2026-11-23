@@ -1866,8 +1866,9 @@ fn a_landings_record_replaces_the_mergers_newest_record_as_it_lands() {
 /// `not_owner` naming the draft, `published_target`, `withheld` naming
 /// the origin and its words in C as the write sends it — none for `Z`,
 /// which no run windows; `D`'s eleven at 1–11, `S`'s three after them left
-/// out — and with no site the draft and no words (the mutant that counts
-/// the draft's own run in the site's place names `S`'s at 12–14),
+/// out — and with no site, or one naming no document, the board's refusal
+/// verbatim, never the draft named in the board's place (the mutant that
+/// names it answers `WindowWithheld` naming `S`),
 /// `signed_session_required`, `doc_not_registered` naming
 /// the draft; `source_not_registered`, `no_base_to_record`,
 /// `base_not_in_chain`, `base_extent_too_large` and the runs' codes as
@@ -1908,11 +1909,17 @@ fn the_take_backs_refusals_are_mapped() {
         refused("withheld", Some(D)),
         Refusal::WindowWithheld { origin: a(D), positions: vec![(1, 11)] }
     );
-    let unsited = refused("withheld", None);
-    assert!(
-        matches!(&unsited, Refusal::WindowWithheld { positions, .. } if positions.is_empty()),
-        "{unsited:?}"
-    );
+    for site in [None, Some("x")] {
+        let err = refused("withheld", site);
+        let Refusal::Halt(Halt::Refused(verbatim)) = &err else {
+            panic!("{site:?}: {err:?}")
+        };
+        assert_eq!(
+            (verbatim.code.as_str(), verbatim.detail.as_deref()),
+            ("withheld", None),
+            "{site:?}"
+        );
+    }
     assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
     assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
     for code in ["source_not_registered", "no_base_to_record", "base_not_in_chain", "base_extent_too_large", "fork_base_moved", "bad_run", "dangling_source", "too_many_runs", "malformed"] {

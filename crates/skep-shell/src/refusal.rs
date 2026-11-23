@@ -483,7 +483,8 @@ impl Name {
     /// its words in the list the write sends, each `{ordinal, width}`, its
     /// first position from 1 and its count, numbers — the past state as
     /// `history.past` answers it at `history.restore` — and `[]` where the
-    /// board named no document), `needs_signed_session`,
+    /// list holds no word of `origin`'s, at the shot none the head does not
+    /// carry), `needs_signed_session`,
     /// `fork_base_named {fork, base}`,
     /// `supersede_refused {index, detail, head}`, `published_journal {journal}`
     /// (a published document named as the merge journal, which keeps a record

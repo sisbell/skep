@@ -427,8 +427,9 @@ fn already_published_crosses_as_typed_data_naming_the_draft_and_the_member() {
 ///
 /// The library's `WindowWithheld` is `merge_refused` with the arm
 /// `window_withheld`, `origin` the document and `positions` each stretch as
-/// `{ordinal, width}`, numbers, `[]` where the board named no document, so
-/// a page and an agent find the words from data; the session stands.
+/// `{ordinal, width}`, numbers, `[]` where the list holds no word of the
+/// document's, so a page and an agent find the words from data; the session
+/// stands.
 #[test]
 fn a_window_withheld_crosses_as_typed_data_naming_the_origin_and_its_words() {
     let dir = TempDir::new().unwrap();

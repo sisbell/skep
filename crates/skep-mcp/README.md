@@ -170,7 +170,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the supersession claim on the daughter — none at the draft or fork
   side — then the merge record, every window part — at the fork side the
   fork's own words — answered by the agent or the landing refused
-  `window_parts_owed`.
+  `window_parts_owed`. A `resolutions` choice records only what the
+  draft holds: one it does not hold, read off the draft at every call
+  while the choice stands, is refused `malformed_args`, nothing sent, and
+  a `moves` gap without spots takes none.
   `merge_undo {}` takes a landing back, `merge_withdraw {draft}` takes a
   merge out of a draft and keeps its words, and `merge_undo {draft,
   withdrawal}` puts it back, each by one write. The composition lives with
@@ -218,12 +221,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   yet (skep #502). Nor does `search` take `opts.reindex`: the index's
   refresh, the person's act, re-reads every document the index holds while
   the call waits; the index follows the board's commits without it. A merge
-  is the agent's: a gap it settles, by `resolutions` or by an edit a
-  re-open reads, is recorded `resolved_by: "agent"`, and `merge_undo` is
-  typed against the write it takes back — the landing, or the withdrawal —
-  so any change since, the agent's own among them, refuses it
-  `arrangement_moved`, nothing wiped, where a person's editor takes the
-  person's later changes back first.
+  is the agent's: a gap it settles, by an edit a re-open reads or an
+  edit its `resolutions` name, is recorded `resolved_by: "agent"`, and
+  `merge_undo` is typed against the write it takes back — the landing, or
+  the withdrawal — so any change since, the agent's own among them,
+  refuses it `arrangement_moved`, nothing wiped, where a person's editor
+  takes the person's later changes back first.
 - **One call at a time.** Calls are served in arrival order, one at a time;
   a `fetch` of a large file, up to its body's deadline, or a `search` while
   the index is building holds the calls behind it, and the log says their

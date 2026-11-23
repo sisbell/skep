@@ -168,8 +168,8 @@
 //! another document is no landing's panel
 //! (`shell/publication.rs`, **The landing**): the row is refused
 //! `other_panel`, nothing composed or sent, that panel, the family's
-//! standing one and the composition, with any `resolutions` the call named,
-//! as they stood. The way on is `publication.cancel` of that panel — a held
+//! standing one and the composition as they stood, no `resolutions` the
+//! call named kept. The way on is `publication.cancel` of that panel — a held
 //! one re-opened first in its own form, `publication.open` naming the draft
 //! and the `doc` or `mint` the refusal names and no other member, since an
 //! open passing another is refused the same (`shell/publication.rs`, **The
@@ -218,16 +218,34 @@
 //! `head_moved`, crosses as the board answered it, nothing re-sent, the
 //! composition gone, to be made again on the head it names (skep #806).
 //! `resolutions`, `{⟨gap⟩: ⟨choice⟩}`, are UNTRUSTED: each gap id and
-//! choice checked against the composition the shell holds — a gap of the
-//! report the rules left unsettled (never one they settled, `resolved_by`
-//! `rule`: an `anchor` gap, or an `order` gap kept once, whose placement is
-//! no merger's to record), a side among the gap's runs, an anchor the gap
-//! names, and at a
+//! choice checked against the composition the shell holds, before the door
+//! (`checked_resolutions`) — a gap of the report the rules left unsettled,
+//! named once (never one they settled, `resolved_by` `rule`: an `anchor`
+//! gap, or an `order` gap kept once, whose placement is no merger's to
+//! record), a side among the gap's runs, an anchor the gap names, at a
 //! `moves` gap with spots only the side whose placement the composition
-//! took, since the draft holds the words where it holds them — anything
-//! else refused `malformed_args`, nothing landed; a checked one settles the
-//! gap in the record as the merger's, `resolved_by` `person` at the editor
-//! and `agent` with no person present ([`Surface`]).
+//! took, since the draft holds the words where it holds them, and at a
+//! spine's `moves` gap — one with no spots, a side's reorder the spine did
+//! not take (R4 iii) — none, its runs the base material each side moved,
+//! which tell no side's order of the spine from another's — anything else
+//! refused `malformed_args`, nothing landed. A resolution changes no words,
+//! so it records only a choice the draft holds as it stands: past the
+//! marker's test each is read off the words the shot publishes
+//! (`draft_holds`) — the draft's image where the panel takes the whole
+//! draft as it stands, the row's own or the page's keyed on another marker,
+//! else the panel's selection as the draft arranges it, in the draft's
+//! order (`selected_image`) — some of each listed side's words still there,
+//! in the listed order, none of a side left out or omitted, and at a gap
+//! with spots the words within the spot of the side named; one the draft
+//! does not hold is refused `malformed_args` naming `resolutions`, nothing
+//! sent, the way on an edit of the draft to the choice first. A checked
+//! choice stands with the composition for the calls after it — a
+//! re-statement, or a refusal of the shot the composition outlives,
+//! answered in its place — and is read off the draft again at each, a
+//! choice a call names at its gap taking its place; a re-open and a new
+//! compose stand a composition that carries none. The shot's record settles
+//! each gap a choice names as the merger's, `resolved_by` `person` at the
+//! editor and `agent` with no person present ([`Surface`]).
 //!
 //! **Kept once** (the merge record's §5, case (g)): words two sides added
 //! alike at one spot are kept once, the earlier side's copy, the value
@@ -498,6 +516,15 @@ struct Composition {
     /// The draft M stands in — landed by the composition, or already
     /// carrying it at a re-open.
     into: Address,
+    /// The merger's choices `merge.land` named, by the index of the gap each
+    /// settles in `merged`'s gaps: the placement each asks.
+    ///
+    /// Each was checked against the gaps (`checked_resolutions`) and is read
+    /// off the draft again at every landing call while it stands
+    /// (`draft_holds`). The gaps keep their placements as composed, and the
+    /// shot's record is settled from them under these choices
+    /// (`settle_resolutions`). Empty at a compose and at a re-open.
+    chosen: BTreeMap<usize, Placement>,
 }
 
 impl Composition {
@@ -1429,7 +1456,7 @@ impl Shell {
         let lib::Landed::Draft { into: landed_in, position, record, head_moved, staged } = landed.map_err(|r| self.merge_refusal(&session, r))? else {
             return Err(Refusal::from(Halt::face("the draft landing answered no draft", "`skep_client::merge::land` with a draft landing answers `Landed::Draft` on every path", "report it: the shell's merge row is behind the library")));
         };
-        let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone() };
+        let composition = Composition { session: session.reference.clone(), form, merged, into: landed_in.clone(), chosen: BTreeMap::new() };
         let mut extra = json!({"into": landed_in.to_string(), "position": position, "fresh": staged, "head_moved": head_moved.map(|h| h.to_string()), "record_link": record.to_string()});
         if let Some(replaced) = replaced {
             extra["replaced"] = replaced.iter().map(replaced_json).collect();
@@ -1581,7 +1608,7 @@ impl Shell {
         }
         settle_by_edit(&mut merged, &image, self.surface());
         let position = at.unwrap_or(merged.as_of);
-        let composition = Composition { session: session.reference.clone(), form, merged, into: into.clone() };
+        let composition = Composition { session: session.reference.clone(), form, merged, into: into.clone(), chosen: BTreeMap::new() };
         let answer = report_json(&composition.merged, &composition.form, "reopened", json!({"into": into.to_string(), "position": position, "fresh": false, "head_moved": Value::Null}));
         self.merges.stand(key, composition);
         Ok(answer)
@@ -1648,9 +1675,10 @@ impl Shell {
     /// object of strings; `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
     /// stands under its board and principal; `malformed_args` naming
-    /// `resolutions` where a gap id names no gap of the composition or one
-    /// the rules settled (`resolved_by` `rule`), or a choice is none the gap
-    /// admits; the write door's, in its order —
+    /// `resolutions` where a gap id names no gap of the composition, one
+    /// another id names too, one the rules settled (`resolved_by` `rule`) or
+    /// a spine's `moves` gap, or a choice is none the gap admits
+    /// (`checked_resolutions`); the write door's, in its order —
     /// `write_in_bare_session`, `another_window`, `stopped`, `poisoned` or
     /// `halted` naming `publish`, `held_lines` naming the draft the
     /// composition landed in or the draft side and the lines of the
@@ -1668,10 +1696,15 @@ impl Shell {
     /// `doc_metadata` — then
     /// `no_merge` naming the draft where the marker marks no merge of the
     /// composition's or the draft carries none, the composition dropped and
-    /// nothing keyed (skep #992), then its keying's on the draft as it stands
-    /// (`Shell::landing_panel`); or, where the shell opens one, the panel's
+    /// nothing keyed (skep #992); or, where the shell opens one, the panel's
     /// open's (`publication.open`'s steps 4 to 6), then `no_merge` naming the
-    /// draft as above, the panel opened dropped;
+    /// draft as above, the panel opened dropped; then, where choices stand —
+    /// the call's or an earlier call's — the draft's image read's where a
+    /// panel stands or is held (`Shell::whole_draft`), and `malformed_args`
+    /// naming `resolutions` where the words the shot would publish do not
+    /// hold one (`draft_holds`), nothing keyed, the composition as it stood
+    /// and the panel opened dropped; then the standing panel's keying's on
+    /// the draft as it stands (`Shell::landing_panel`);
     /// `malformed_args` naming `answers` where one is no `⟨run⟩.⟨part⟩` of a
     /// part the panel holds or one the part does not admit; the words' reads
     /// of the window parts' refusal
@@ -1690,10 +1723,13 @@ impl Shell {
         let Some(mut composition) = self.merges.standing(&key) else {
             return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
         };
-        if let Some(resolutions) = &resolutions {
-            apply_resolutions(&mut composition.merged, resolutions, self.surface())?;
-            self.merges.stand(key.clone(), composition.clone());
-        }
+        // The merger's choices: the call's own, checked against the
+        // composition before the door, over those an earlier call of the
+        // composition named, a choice the call names at a gap taking the
+        // earlier one's place.
+        let named = resolutions.as_ref().map(|r| checked_resolutions(&composition.merged.record.gaps, r)).transpose()?;
+        let mut chosen = composition.chosen.clone();
+        chosen.extend(named.iter().flatten().map(|(ix, placed)| (*ix, placed.clone())));
         let into = composition.into.clone();
         // The one write door, over the shot's drafts: the draft the
         // composition landed in and, at the draft side, the side the shot
@@ -1702,21 +1738,19 @@ impl Shell {
         let side = composition.form.also().cloned();
         let signed = self.signed(&session, Write::call("merge.land", "publish").over(std::iter::once(&into).chain(side.as_ref()).map(ToString::to_string)))?;
         // The panel: the page's over the draft at the composition's document,
-        // keyed on the draft as it stands where it was read under another
-        // merge marker, or one opened here over the whole draft, the draft
-        // side named `also`; a panel of the draft in another form refuses.
-        // Either is keyed only on a marker that marks the composition's
-        // merge, tested before any keying: the page's panel against the
-        // marker read now, the opened one against the marker its open read.
-        let doc = &composition.merged.inputs.doc;
-        let state = match self.publications.stood_for(&key, &into, doc, &session.reference)? {
-            Some(mut state) => {
+        // standing or held, or one opened here over the whole draft, the
+        // draft side named `also`; a panel of the draft in another form
+        // refuses. Either is keyed only on a marker that marks the
+        // composition's merge, tested before any keying: the page's panel
+        // against the marker read now — keyed on the draft as it stands,
+        // below, where it was read under another — and the opened one
+        // against the marker its open read.
+        let doc = composition.merged.inputs.doc.clone();
+        let (mut state, keyed) = match self.publications.stood_for(&key, &into, &doc, &session.reference)? {
+            Some(state) => {
                 let read = self.draft_marker(&session, &into)?;
-                let marker = self.carried(&key, &composition, read.as_ref())?;
-                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, doc, side.as_ref(), marker)? {
-                    return Ok(restated);
-                }
-                state
+                let marker = self.carried(&key, &composition, read.as_ref())?.clone();
+                (state, Some(marker))
             }
             None => {
                 let also = side.iter().cloned().collect();
@@ -1737,10 +1771,47 @@ impl Shell {
                     },
                 )?;
                 self.carried(&key, &composition, state.marker())?;
-                self.publications.stand(key.clone(), state.clone());
-                state
+                (state, None)
             }
         };
+        // The choices read off the words the shot publishes (the module
+        // doc): the draft's image where the panel takes the whole draft as
+        // it stands — the one the row opened, whose open read it, or the
+        // page's keyed below on another marker — else the panel's selection
+        // as the draft arranges it. They stand with the composition once the
+        // draft holds them, so a re-statement carries them to the next call,
+        // which reads them again.
+        if !chosen.is_empty() {
+            let gaps = &composition.merged.record.gaps;
+            let holds = |image: &[SelectionRun]| chosen.iter().all(|(ix, placed)| gaps.get(*ix).is_some_and(|gap| draft_holds(gap, placed, image)));
+            let held = match &keyed {
+                Some(marker) => {
+                    let draft = self.whole_draft(&session, &into)?;
+                    if state.whole() && state.marker() != Some(marker) {
+                        holds(&draft)
+                    } else {
+                        holds(&selected_image(&draft, &state.inputs.selection))
+                    }
+                }
+                None => holds(&state.inputs.selection),
+            };
+            if !held {
+                return Err(Refusal::malformed("resolutions"));
+            }
+        }
+        if named.is_some() {
+            composition.chosen = chosen;
+            self.merges.stand(key.clone(), composition.clone());
+        }
+        settle_resolutions(&mut composition.merged, &composition.chosen, self.surface());
+        match &keyed {
+            Some(marker) => {
+                if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, &doc, side.as_ref(), marker)? {
+                    return Ok(restated);
+                }
+            }
+            None => self.publications.stand(key.clone(), state.clone()),
+        }
         let switches = state.switches.clone();
         let mut answers = state.answers.clone();
         // The caller's answers, in the panel's form. The landing composes no
@@ -1983,38 +2054,42 @@ impl Shell {
 
 // ── the resolutions, and the gaps' state at a re-open ─────────────────────
 
-/// Applies the caller's `resolutions` to the composition's gaps, each
-/// checked as UNTRUSTED input against the composition (the module doc;
-/// SP-18).
+/// Returns the caller's `resolutions` checked as UNTRUSTED input against the
+/// composition's `gaps` (the module doc; SP-18): the placement each asks, by
+/// the index of the gap it names.
 ///
-/// Each is `⟨gap id⟩: ⟨choice⟩` — `keep_both` (the default kept), `omit`,
-/// `{order: [sides]}` (each a side among the gap's runs, none twice),
-/// `{keep_only: side}`, `{after: anchor}` or `{before: anchor}` (the gap's
-/// own anchor) — at a gap the rules left unsettled, settling it in the
-/// record as the merger's who acts through `surface`: `person` at the
-/// editor, `agent` with no person present. A gap the rules settled,
-/// `resolved_by` `rule` — an `anchor` gap, or an `order` gap the value
-/// rule's dedup kept once — takes none: its placement is the rules', which
-/// the library's own composition never lets a resolution move, and a
-/// record naming a merger there would say the merger placed it. At a
-/// `moves` gap with spots (CM-I33) the one choice is
-/// `{order: [side]}` or `{keep_only: side}` naming the side whose placement
-/// the composition took, a confirmation: the words are where the draft
-/// holds them, and another holder's placement is reached by moving them to
-/// its spot and composing again (`holders_moved`).
+/// Each is `⟨gap id⟩: ⟨choice⟩` — `keep_both` (the gap's placement as
+/// composed), `omit`, `{order: [sides]}` (each a side among the gap's runs,
+/// none twice), `{keep_only: side}`, `{after: anchor}` or `{before: anchor}`
+/// (the gap's own anchor) — naming each gap once, at a gap the rules left
+/// unsettled. A gap the rules settled, `resolved_by` `rule` — an `anchor`
+/// gap, or an `order` gap the value rule's dedup kept once — takes none: its
+/// placement is the rules', which the library's own composition never lets
+/// a resolution move, and a record naming a merger there would say the
+/// merger placed it. A spine's `moves` gap takes none either: its runs are
+/// the base material each side moved, so no reading of the draft can show
+/// which side's order of the spine it holds (`draft_holds`). At a `moves`
+/// gap with spots (CM-I33) the one choice is `{order: [side]}` or
+/// `{keep_only: side}` naming the side whose placement the composition took,
+/// a confirmation: the words are where the draft holds them, and another
+/// holder's placement is reached by moving them to its spot and composing
+/// again (`holders_moved`). Nothing is settled here: a choice is recorded
+/// only where the draft holds it (`draft_holds`, `settle_resolutions`).
 ///
 /// # Errors
 ///
 /// `malformed_args` naming `resolutions` at the first that fails its check
-/// — a gap the rules settled, and at a gap with spots every choice but its
-/// confirmation, among them; nothing is applied past it.
-fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>, surface: Surface) -> Result<(), Refusal> {
+/// — a gap named twice (`"1"` and `"01"` name one), a gap the rules
+/// settled, a spine's `moves` gap, and at a gap with spots every choice but
+/// its confirmation, among them.
+pub(super) fn checked_resolutions(gaps: &[Gap], resolutions: &Map<String, Value>) -> Result<BTreeMap<usize, Placement>, Refusal> {
     let malformed = || Refusal::malformed("resolutions");
+    let mut chosen = BTreeMap::new();
     for (gap, choice) in resolutions {
         let id: u32 = gap.parse().map_err(|_| malformed())?;
-        let ix = merged.record.gaps.iter().position(|g| g.id.0 == id).ok_or_else(malformed)?;
-        let gap = &merged.record.gaps[ix];
-        if gap.resolved_by == Some(ResolvedBy::Rule) {
+        let ix = gaps.iter().position(|g| g.id.0 == id).ok_or_else(malformed)?;
+        let gap = &gaps[ix];
+        if gap.resolved_by == Some(ResolvedBy::Rule) || (gap.kind == GapKind::Moves && gap.spots.is_empty()) {
             return Err(malformed());
         }
         let sides: Vec<u8> = gap.runs.iter().map(|(s, _)| s.0).collect();
@@ -2047,17 +2122,168 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>,
         if !gap.spots.is_empty() && placed.as_ref() != Some(&gap.placed) {
             return Err(malformed());
         }
+        if chosen.insert(ix, placed.unwrap_or_else(|| gap.placed.clone())).is_some() {
+            return Err(malformed());
+        }
+    }
+    Ok(chosen)
+}
+
+/// Settles each gap `chosen` names at the placement it asks (the module
+/// doc), in the record as the merger's who acts through `surface`: `person`
+/// at the editor, `agent` with no person present.
+fn settle_resolutions(merged: &mut lib::Merged, chosen: &BTreeMap<usize, Placement>, surface: Surface) {
+    for (ix, placed) in chosen {
         for gaps in [&mut merged.record.gaps, &mut merged.composed.gaps] {
-            if let Some(g) = gaps.get_mut(ix) {
-                if let Some(placed) = &placed {
-                    g.placed = placed.clone();
-                }
+            if let Some(g) = gaps.get_mut(*ix) {
+                g.placed = placed.clone();
                 g.settled = true;
                 g.resolved_by = Some(surface.settler());
             }
         }
     }
-    Ok(())
+}
+
+/// Returns whether `image` holds `placed` at `gap` (the module doc,
+/// **`merge.land`**): the words a landing's shot publishes, as the draft
+/// arranges them, read for a choice the merger names.
+///
+/// A run stands where the image holds any of its words, an edit inside them
+/// included, and is gone where it holds none; standing runs are ordered by
+/// their first ordinals (`first_ordinal`). An order of sides holds where
+/// every run of a listed side stands, their first ordinals rising side by
+/// side in the listed order, each side's runs in the gap's order, and every
+/// run of a side left out is gone; an omission where every run of the gap
+/// is gone; a placement `after` or `before` the gap's own anchor, which
+/// lays the runs as the landing did, where every run stands, in the gap's
+/// order. At a `moves` gap with spots (CM-I33) the order of one holder
+/// holds where every run of that holder's stands and the words lie within
+/// its spot (`spot_holds`), and an omission never, the library leaving the
+/// words where a holder placed them. At a spine's `moves` gap nothing
+/// holds: its runs are only the base material each side moved, and no
+/// reading of them off the draft tells one side's order of the spine from
+/// another's.
+pub(super) fn draft_holds(gap: &Gap, placed: &Placement, image: &[SelectionRun]) -> bool {
+    if !gap.spots.is_empty() {
+        let Placement::Order(sides) = placed else { return false };
+        let [side] = sides.as_slice() else { return false };
+        let Some(spot) = gap.spots.iter().find(|s| s.side == *side) else { return false };
+        let mut words: Option<(u64, u64)> = None;
+        for (_, run) in gap.runs.iter().filter(|(s, _)| s == side) {
+            let Some((first, last)) = held_ordinals(image, run) else { return false };
+            words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
+        }
+        return words.is_some_and(|words| spot_holds(image, spot, words));
+    }
+    if gap.kind == GapKind::Moves {
+        return false;
+    }
+    let gone = |run: &Run| first_ordinal(image, run).is_none();
+    // The runs taken in turn, each standing, their first ordinals rising.
+    let rising = |runs: Vec<&Run>| -> bool {
+        let firsts: Option<Vec<u64>> = runs.into_iter().map(|run| first_ordinal(image, run)).collect();
+        firsts.is_some_and(|firsts| firsts.windows(2).all(|w| w[0] < w[1]))
+    };
+    match placed {
+        Placement::Omitted => gap.runs.iter().all(|(_, run)| gone(run)),
+        Placement::After | Placement::Before => rising(gap.runs.iter().map(|(_, run)| run).collect()),
+        Placement::Order(sides) => {
+            let listed = sides.iter().flat_map(|s| gap.runs.iter().filter(move |(side, _)| side == s).map(|(_, run)| run)).collect();
+            rising(listed) && gap.runs.iter().filter(|(side, _)| !sides.contains(side)).all(|(_, run)| gone(run))
+        }
+    }
+}
+
+/// Returns the first ordinal at which `image` holds any of `run`'s words,
+/// `None` where it holds none (`held_ordinals`).
+///
+/// It is the landing's reading of a run (`draft_holds`): the run stands
+/// where this is some, an edit inside its words included, and the standing
+/// runs are ordered by it.
+fn first_ordinal(image: &[SelectionRun], run: &Run) -> Option<u64> {
+    held_ordinals(image, run).map(|(first, _)| first)
+}
+
+/// Returns the lowest and the highest ordinal at which `image` holds any
+/// position of `run`, `None` where it holds none of them.
+///
+/// The image's runs are laid from ordinal 1 in their order, so the first
+/// of the image's runs holding any of them gives the lowest, and the last
+/// the highest.
+fn held_ordinals(image: &[SelectionRun], run: &Run) -> Option<(u64, u64)> {
+    let mut at = 1u64;
+    let mut held: Option<(u64, u64)> = None;
+    for r in image {
+        if r.origin == run.origin {
+            let (lo, hi) = (r.i_start.max(run.i_start), r.reach().min(run.reach()));
+            if lo < hi {
+                let (first, last) = (at.saturating_add(lo - r.i_start), at.saturating_add(hi - 1 - r.i_start));
+                held = Some(held.map_or((first, last), |(lowest, _)| (lowest, last)));
+            }
+        }
+        at = at.saturating_add(r.width);
+    }
+    held
+}
+
+/// Returns the ordinal at which `image` first holds the content position
+/// of `origin` at the ordinal `i`, `None` where it holds it nowhere.
+///
+/// The image's runs are laid from ordinal 1 in their order.
+fn ordinal_in(image: &[SelectionRun], origin: &Address, i: u64) -> Option<u64> {
+    let mut at = 1u64;
+    for r in image {
+        if r.origin == *origin && i >= r.i_start && i < r.reach() {
+            return Some(at + (i - r.i_start));
+        }
+        at = at.saturating_add(r.width);
+    }
+    None
+}
+
+/// Returns whether `spot` holds the words `image` lays from ordinal `first`
+/// to `last` (CM-I33): after its `after` anchor and before its `before`.
+///
+/// Each anchor is read where the image holds the content position it
+/// names; one the image no longer holds bounds nothing, as an end of the
+/// document does. It is the one reading of a spot, the re-open's
+/// (`holders_moved`) and the landing's (`draft_holds`).
+fn spot_holds(image: &[SelectionRun], spot: &lib::Spot, (first, last): (u64, u64)) -> bool {
+    // The image position of the content position an anchor names.
+    let anchored = |anchor: &Address| -> Option<u64> {
+        let doc = skep_address::document_of(anchor)?;
+        let field = anchor.element_field()?;
+        if field.len() != 2 || field[0] != skep_address::content_subspace() {
+            return None;
+        }
+        ordinal_in(image, &doc, u64::try_from(&field[1]).ok()?)
+    };
+    spot.after.as_ref().and_then(anchored).is_none_or(|p| p < first) && spot.before.as_ref().and_then(anchored).is_none_or(|p| p > last)
+}
+
+/// Returns the words of `draft`'s image that `selection` holds, in the
+/// draft's order: each of its runs cut to the positions some run of the
+/// selection holds by identity (the module doc, **`merge.land`**).
+///
+/// It is what a shot of `selection` publishes from the draft, its runs
+/// placed where the draft arranges them and laid in the draft's order,
+/// whatever order the selection names them in
+/// (`skep_client::publication::place_selection`).
+pub(super) fn selected_image(draft: &[SelectionRun], selection: &[SelectionRun]) -> Vec<SelectionRun> {
+    let mut out = Vec::new();
+    for r in draft {
+        let mut held: Vec<(u64, u64)> = selection.iter().filter(|s| s.origin == r.origin).map(|s| (r.i_start.max(s.i_start), r.reach().min(s.reach()))).filter(|(lo, hi)| lo < hi).collect();
+        held.sort_unstable();
+        let mut cut: Vec<(u64, u64)> = Vec::new();
+        for (lo, hi) in held {
+            match cut.last_mut() {
+                Some(last) if last.1 >= lo => last.1 = last.1.max(hi),
+                _ => cut.push((lo, hi)),
+            }
+        }
+        out.extend(cut.into_iter().map(|(lo, hi)| SelectionRun::new(r.origin.clone(), lo, hi - lo)));
+    }
+    out
 }
 
 /// Returns the holder's placement the draft's image now holds at each
@@ -2068,31 +2294,12 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>,
 /// The gap's words are one identity whoever holds them, so they are found
 /// by the default holder's runs, and they stand at a holder's spot where
 /// they lie whole after its `after` anchor and before its `before` in the
-/// image. A spot is read by the anchors the draft still holds: one it no
-/// longer holds bounds nothing, as an end of the document does. The words
-/// are a holder's placement only where its spot is the one other holder's
-/// that holds them and the default's does not: a deleted neighbour leaves
-/// the default's spot open, and the gap stands unsettled.
+/// image (`spot_holds`). A spot is read by the anchors the draft still
+/// holds: one it no longer holds bounds nothing, as an end of the document
+/// does. The words are a holder's placement only where its spot is the one
+/// other holder's that holds them and the default's does not: a deleted
+/// neighbour leaves the default's spot open, and the gap stands unsettled.
 pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedBy) -> Vec<lib::Resolution> {
-    let in_image = |origin: &Address, i: u64| -> Option<u64> {
-        let mut at = 1u64;
-        for r in image {
-            if r.origin == *origin && i >= r.i_start && i < r.reach() {
-                return Some(at + (i - r.i_start));
-            }
-            at = at.saturating_add(r.width);
-        }
-        None
-    };
-    // The image position of the content position an anchor names.
-    let anchored = |anchor: &Address| -> Option<u64> {
-        let doc = skep_address::document_of(anchor)?;
-        let field = anchor.element_field()?;
-        if field.len() != 2 || field[0] != skep_address::content_subspace() {
-            return None;
-        }
-        in_image(&doc, u64::try_from(&field[1]).ok()?)
-    };
     let mut moved = Vec::new();
     for gap in gaps.iter().filter(|g| !g.settled && !g.spots.is_empty()) {
         let Placement::Order(placed) = &gap.placed else { continue };
@@ -2100,17 +2307,15 @@ pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedB
         let mut words: Option<(u64, u64)> = None;
         let mut whole = true;
         for (_, run) in gap.runs.iter().filter(|(side, _)| side == default) {
-            match (in_image(&run.origin, run.i_start), in_image(&run.origin, run.reach().saturating_sub(1))) {
+            match (ordinal_in(image, &run.origin, run.i_start), ordinal_in(image, &run.origin, run.reach().saturating_sub(1))) {
                 (Some(first), Some(last)) => {
                     words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
                 }
                 _ => whole = false,
             }
         }
-        let (Some((lo, hi)), true) = (words, whole) else { continue };
-        let holds = |spot: &lib::Spot| {
-            spot.after.as_ref().and_then(anchored).is_none_or(|p| p < lo) && spot.before.as_ref().and_then(anchored).is_none_or(|p| p > hi)
-        };
+        let (Some(words), true) = (words, whole) else { continue };
+        let holds = |spot: &lib::Spot| spot_holds(image, spot, words);
         if gap.spots.iter().any(|s| s.side == *default && holds(s)) {
             continue;
         }
@@ -2134,16 +2339,6 @@ pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedB
 /// are read before this, by `holders_moved`, and composed again as that
 /// holder's placement.
 fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Surface) {
-    let ordinal_of = |origin: &Address, i: u64| -> Option<u64> {
-        let mut at = 1u64;
-        for r in image {
-            if r.origin == *origin && i >= r.i_start && i < r.reach() {
-                return Some(at + (i - r.i_start));
-            }
-            at = at.saturating_add(r.width);
-        }
-        None
-    };
     for ix in 0..merged.record.gaps.len() {
         let gap = &merged.record.gaps[ix];
         if gap.settled {
@@ -2157,8 +2352,8 @@ fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Sur
         if default.is_empty() {
             continue;
         }
-        let firsts: Vec<Option<u64>> = default.iter().map(|r| ordinal_of(&r.origin, r.i_start)).collect();
-        let lasts: Vec<Option<u64>> = default.iter().map(|r| ordinal_of(&r.origin, r.i_start + r.width.saturating_sub(1))).collect();
+        let firsts: Vec<Option<u64>> = default.iter().map(|r| ordinal_in(image, &r.origin, r.i_start)).collect();
+        let lasts: Vec<Option<u64>> = default.iter().map(|r| ordinal_in(image, &r.origin, r.i_start + r.width.saturating_sub(1))).collect();
         let removed_whole = firsts.iter().chain(&lasts).all(Option::is_none);
         let placed: Vec<u64> = firsts.iter().flatten().copied().collect();
         let in_order = placed.windows(2).all(|w| w[0] < w[1]);

@@ -42,9 +42,16 @@
 //! landed naming both places, each record verifying `Equal`; words both
 //! sides added alike at one spot kept once, named in the report's and the
 //! landing's `deduped`, the record keeping the rule's placement;
-//! `resolutions` refused where they name no gap, a gap the rules settled —
-//! an `anchor` gap or one kept once — or no choice the gap admits, nothing
-//! landed; the
+//! `resolutions` refused where they name no gap, a gap twice, a gap the
+//! rules settled — an `anchor` gap or one kept once — or a spine's `moves`
+//! gap, or no choice the gap admits, nothing landed, and refused where the
+//! words the shot publishes do not hold them — the draft as landed or
+//! edited, the words of a selection the page passed, the draft as it
+//! stands under a panel opened before the compose, and a choice a
+//! re-statement carried, read again at the next call — nothing sent, the
+//! landing's reading of a choice off an image checked by its runs, their
+//! order and a gap with spots' spot, a choice the draft holds recorded as
+//! named and verifying `Equal` (skep #1147); the
 //! landing on the trunk through the publication family's shot with the
 //! claim, then the record; with no person present, the landing's undo and
 //! the withdrawal's typed at that write's own position and refused past the
@@ -1553,6 +1560,220 @@ fn the_re_open_lands_nothing_and_a_checked_resolution_lands_on_the_trunk_with_th
     sd.shutdown();
 }
 
+/// Asserts that the record of the merge `report` composed names gap `gap`
+/// placed `placed` by the person, and verifies `Equal`: the member it
+/// names holds the merge its options compose.
+fn assert_recorded(g: &Ground, report: &Value, gap: u64, placed: Value) {
+    use skep_client::merge::{current, verify, Record, Verdict};
+    let key = Record::from_value(&report["record"]).expect("the report's record").key();
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = current(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &key).expect("the lookup").expect("the landing's record");
+    let body = record.to_value();
+    let recorded = body["gaps"].as_array().unwrap().iter().find(|gp| gp["id"].as_u64() == Some(gap)).unwrap_or_else(|| panic!("the gap in the record: {body}"));
+    assert_eq!((&recorded["placed"], recorded["resolved_by"].as_str()), (&placed, Some("person")), "{body}");
+    assert_eq!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::Equal), "the record names what the member holds: {body}");
+}
+
+/// Checks that `merge.land` records only a choice the draft holds, against
+/// the daemon (skep #1147).
+///
+/// L takes the merge of E.2 with E.1.1 and is left as it landed, "the fox
+/// jumps today", the `order` gap at its default. Each choice the untouched
+/// draft does not hold — `omit`, the side's words alone, the head's alone,
+/// and last both in the other order — is refused `malformed_args` naming
+/// `resolutions`, nothing sent; `keep_both`, which it holds, lands E.3 "the
+/// fox jumps today", and the record names the gap placed `[0, 1]` by the
+/// person and verifies `Equal` (the mutant that records an unchecked
+/// choice lands `omit` over both sides' words).
+#[test]
+fn a_choice_the_draft_does_not_hold_is_refused_and_one_it_holds_is_recorded() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let landed = merged_into(&g, &f, &f.e11, &l);
+    assert_eq!(g.text(&l, 19), "the fox jumps today", "the premise: M at its default");
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    assert_eq!((landed["gaps"][0]["kind"].as_str(), &landed["gaps"][0]["placed"]), (Some("order"), &json!([0, 1])), "{landed}");
+    let before = g.position();
+    for bad in [json!("omit"), json!({"keep_only": 1}), json!({"order": [0]}), json!({"order": [1, 0]})] {
+        let refused = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): bad}})).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "{bad}: {refused}");
+    }
+    assert_eq!(g.position(), before, "nothing sent");
+    let published = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): "keep_both"}})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("MergeLanded", &published);
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str(), &published["defaults"]), (Some("landed"), Some(e3.as_str()), &json!([])), "{published}");
+    assert_eq!(g.text(&e3, 19), "the fox jumps today");
+    assert_recorded(&g, &landed, gap, json!([0, 1]));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a choice an edit of the draft made is recorded as named,
+/// against the daemon (skep #1147).
+///
+/// L takes the merge of E.2 with E.1.1, then the head's " jumps" is
+/// deleted: L reads "the fox today". The head's words alone are refused
+/// `malformed_args` naming `resolutions`, nothing sent, L no longer holding
+/// them; the side's alone land E.3 "the fox today", the record naming the
+/// gap placed `[1]` by the person, and it verifies `Equal` (the mutant that
+/// reads a choice off the composition and not the draft refuses the side's
+/// alone).
+#[test]
+fn a_choice_an_edit_of_the_draft_made_is_recorded_as_named() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let landed = merged_into(&g, &f, &f.e11, &l);
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "6", "as_of": g.position()}));
+    assert_eq!(g.text(&l, 13), "the fox today");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): {"keep_only": 0}}})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "the head's words are gone: {refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let published = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): {"keep_only": 1}}})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str(), &published["defaults"]), (Some("landed"), Some(e3.as_str()), &json!([])), "{published}");
+    assert_eq!(g.text(&e3, 13), "the fox today");
+    assert_recorded(&g, &landed, gap, json!([1]));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a choice a re-statement carried to the next call is read
+/// off the draft again there, against the daemon (skep #1147).
+///
+/// L takes the merge of E.2 with E.1.1 and the page opens its panel over
+/// the whole of L. With the head's " jumps" deleted, L holds the side's
+/// words alone, and `merge.land` taking them is re-stated, the held run
+/// cut, nothing sent. " jumps" copied back by its identity, the next call,
+/// naming no choice, is refused `malformed_args` naming `resolutions`,
+/// nothing sent: the choice it carried no longer holds. Both sides' order,
+/// which L holds again, is re-stated once, the held run whole again, and
+/// the call after it lands E.3 "the fox jumps today", the record naming the
+/// gap placed `[0, 1]` by the person and verifying `Equal` (the mutant that
+/// reads only the choices a call names lands E.3 under the side's words
+/// alone).
+#[test]
+fn a_choice_a_re_statement_carried_is_read_off_the_draft_again() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let landed = merged_into(&g, &f, &f.e11, &l);
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    page_panel(&g, &f, &l);
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "8"}, "width": "6", "as_of": g.position()}));
+    let land = |resolutions: Value| g.call("merge.land", json!({"session": g.session, "resolutions": resolutions})).unwrap_or_else(|r| panic!("{r}"));
+    let before = g.position();
+    let restated = land(json!({gap.to_string(): {"keep_only": 1}}));
+    assert_eq!((restated["outcome"].as_str(), restated["selection"][0]["placement"]["split"].is_array()), (Some("restated"), true), "the held run, cut: {restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    // " jumps" back by its identity: the side's words alone no longer held.
+    g.op(json!({"op": "copy", "doc": l, "at": {"subspace": "1", "ordinal": "8"}, "specs": [{"source": f.e2, "span": {"start": "1.8", "width": "0.6"}}], "as_of": g.position()}));
+    assert_eq!(g.text(&l, 19), "the fox jumps today");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "the carried choice read again: {refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let again = land(json!({gap.to_string(): {"order": [0, 1]}}));
+    assert_eq!(again["outcome"].as_str(), Some("restated"), "the held run whole again: {again}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let published = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str(), &published["defaults"]), (Some("landed"), Some(e3.as_str()), &json!([])), "{published}");
+    assert_eq!(g.text(&e3, 19), "the fox jumps today");
+    assert_recorded(&g, &landed, gap, json!([0, 1]));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a choice is read off the words a selection the page passed
+/// publishes, not off the whole draft, against the daemon (skep #1147).
+///
+/// L, staged from E.1 and behind, has the page's panel over E's first seven
+/// positions, "the fox", and takes the merge of E.2 with E.1.1, so L reads
+/// "the fox jumps today" and the shot publishes "the fox". `keep_both` is
+/// refused `malformed_args` naming `resolutions`, nothing sent: the
+/// selection holds neither side's words. The next call, naming no choice,
+/// is the re-statement of the base the compose moved, nothing sent — the
+/// refused choice never stood. `omit`, which the selection's words hold,
+/// lands E.3 "the fox", the record naming the gap `omitted` by the person
+/// and verifying `Equal` (the mutants that read the whole draft, taking
+/// `keep_both` and refusing `omit`, and that stand a refused choice with
+/// the composition, refusing the call after it).
+#[test]
+fn a_choice_is_read_off_the_words_a_selection_the_page_passed_publishes() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e1, None));
+    g.call(
+        "publication.open",
+        json!({"session": g.session, "draft": l, "doc": f.edition, "selection": [{"origin": f.edition, "i_start": 1, "width": 7}], "readable_drafts": [l], "published": [f.edition]}),
+    )
+    .unwrap_or_else(|r| panic!("{r}"));
+    let landed = merged_into(&g, &f, &f.e11, &l);
+    assert_eq!(g.text(&l, 19), "the fox jumps today", "the premise: M in L");
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): "keep_both"}})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "the selection holds neither side's words: {refused}");
+    let restated = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((restated["outcome"].as_str(), restated["base"].as_str()), (Some("restated"), Some(f.e2.as_str())), "the refused choice never stood: {restated}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let published = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): "omit"}})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str(), &published["defaults"]), (Some("landed"), Some(e3.as_str()), &json!([])), "{published}");
+    assert_eq!(g.text(&e3, 19), "the fox", "the selection alone");
+    assert_recorded(&g, &landed, gap, json!("omitted"));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a choice over the page's panel of the whole draft opened
+/// before the compose is read off the draft as it stands, which the
+/// landing's keying re-takes, against the daemon (skep #1147).
+///
+/// L, staged from the head, has the page's panel over the whole of it,
+/// "the fox jumps", and then takes the merge of E.2 with E.1.1, "the fox
+/// jumps today". The head's words alone are refused `malformed_args`
+/// naming `resolutions`, nothing sent: L holds the side's too. `keep_both`
+/// lands E.3 "the fox jumps today" in the one call, the record naming the
+/// gap placed `[0, 1]` by the person and verifying `Equal` (the mutant that
+/// reads the panel's selection as the open held it, from before the merge,
+/// takes the head's words alone and refuses `keep_both`).
+#[test]
+fn a_choice_over_a_panel_of_the_whole_draft_opened_before_the_compose_is_read_off_the_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    page_panel(&g, &f, &l);
+    let landed = merged_into(&g, &f, &f.e11, &l);
+    let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+    let before = g.position();
+    let refused = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): {"keep_only": 0}}})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "L holds the side's words too: {refused}");
+    assert_eq!(g.position(), before, "nothing sent");
+    let published = g.call("merge.land", json!({"session": g.session, "resolutions": {gap.to_string(): "keep_both"}})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str(), published["supersede"].clone()), (Some("landed"), Some(e3.as_str()), json!([f.e11])), "{published}");
+    assert_eq!(g.text(&e3, 19), "the fox jumps today");
+    assert_recorded(&g, &landed, gap, json!([0, 1]));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// Stages the family with words both sides add alike: D deletes "the "
 /// and adds " jumps", E.2 "fox jumps", and S writes "so " at its start and
 /// " jumps" at its end, E.1.1 "so the fox jumps". The merge of E.2 with
@@ -1891,6 +2112,187 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
     assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 3)]), vec![], "not whole");
     let settled = Gap { settled: true, resolved_by: Some(ResolvedBy::Person), ..gap.clone() };
     assert_eq!(read(&settled, &[(&e, 1, 8), (&z, 1, 5)]), vec![], "a settled gap");
+}
+
+/// Checks the landing's reading of a choice off a draft's image, with no
+/// daemon behind it (skep #1147).
+///
+/// At an `order` gap of the head's run `a` and the side's `b`: both sides'
+/// order holds over `[a, b]` and the other order over `[b, a]`, a side
+/// alone where only its run stands, the omission where neither does; a run
+/// stands by any of its words, its first position alone or its middle with
+/// both ends cut; a placement after the gap's own anchor holds where both
+/// stand in the gap's order. At a spine's `moves` gap nothing holds, over
+/// any image. At a `moves` gap with spots — the head's after `E·4` and
+/// before `E·5`, the side's after `E·8` — the quote `c` after `E·8` is the
+/// side's placement and not the head's, after `E·4` the head's and not the
+/// side's, and the omission holds at neither, nor with `c` gone (the
+/// mutants that read no order, let a side left out stand, judge a run by
+/// its ends, accept an omission over words still there, take a choice at a
+/// spine's gap, or judge a spot by the words' presence alone).
+#[test]
+fn a_choice_is_read_off_the_draft_by_its_runs_their_order_and_their_spot() {
+    use skep_client::merge::{Gap, GapId, GapKind, Placement, Run, SideIx, Spot};
+    use skep_client::publication::Run as Held;
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, d, s, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"), a("1.0.1.0.3"), a("1.0.1.0.4"));
+    let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
+    let order = |sides: &[u8]| Placement::Order(sides.iter().map(|&s| SideIx(s)).collect());
+    let holds = |gap: &Gap, placed: &Placement, image: &[(&Address, u64, u64)]| {
+        let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
+        super::super::merge::draft_holds(gap, placed, &image)
+    };
+    // The order gap: `a` the head's D·1..5, `b` the side's S·1..4, after E·7.
+    let gap = Gap {
+        id: GapId(1),
+        kind: GapKind::Order,
+        after: Some(at(7)),
+        before: None,
+        runs: vec![(SideIx(0), Run::new(d.clone(), 1, 5)), (SideIx(1), Run::new(s.clone(), 1, 4))],
+        placed: order(&[0, 1]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![],
+    };
+    let (base, ra, rb) = ((&e, 1, 7), (&d, 1, 5), (&s, 1, 4));
+    let cells = [
+        ("[a, b]", vec![base, ra, rb], vec![order(&[0, 1]), Placement::After], vec![order(&[1, 0]), order(&[1]), order(&[0]), Placement::Omitted]),
+        ("[b, a]", vec![base, rb, ra], vec![order(&[1, 0])], vec![order(&[0, 1]), Placement::After]),
+        ("[b]", vec![base, rb], vec![order(&[1])], vec![order(&[0, 1]), order(&[0]), Placement::Omitted, Placement::After]),
+        ("[]", vec![base], vec![Placement::Omitted], vec![order(&[0]), order(&[0, 1])]),
+        ("[a's first position alone, b]", vec![base, (&d, 1, 1), rb], vec![order(&[0, 1])], vec![order(&[1]), Placement::Omitted]),
+        ("[a's middle alone]", vec![base, (&d, 2, 3)], vec![order(&[0])], vec![Placement::Omitted, order(&[0, 1])]),
+        ("[b, then a's last position]", vec![rb, base, (&d, 5, 1)], vec![order(&[1, 0])], vec![order(&[0, 1])]),
+    ];
+    for (label, image, held, unheld) in &cells {
+        for placed in held {
+            assert!(holds(&gap, placed, image), "{label}: {placed:?} holds");
+        }
+        for placed in unheld {
+            assert!(!holds(&gap, placed, image), "{label}: {placed:?} does not hold");
+        }
+    }
+    // A spine's `moves` gap: base material each side moved.
+    let spine = Gap {
+        id: GapId(1),
+        kind: GapKind::Moves,
+        after: None,
+        before: None,
+        runs: vec![(SideIx(0), Run::new(e.clone(), 1, 2)), (SideIx(1), Run::new(e.clone(), 1, 2))],
+        placed: order(&[0]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![],
+    };
+    for image in [vec![(&e, 1, 7)], vec![(&e, 3, 5), (&e, 1, 2)], vec![]] {
+        for placed in [order(&[0]), order(&[1]), order(&[0, 1]), Placement::Omitted, Placement::After] {
+            assert!(!holds(&spine, &placed, &image), "a spine's moves gap: {placed:?} over {image:?}");
+        }
+    }
+    // A `moves` gap with spots: the quote `c`, Z·1..5, at the head's spot or
+    // the side's.
+    let spots = Gap {
+        id: GapId(1),
+        kind: GapKind::Moves,
+        after: None,
+        before: None,
+        runs: vec![(SideIx(0), Run::new(z.clone(), 1, 5)), (SideIx(1), Run::new(z.clone(), 1, 5))],
+        placed: order(&[0]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(8)), before: None }],
+    };
+    let side_spot = [(&e, 1, 8), (&z, 1, 5)];
+    let head_spot = [(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)];
+    assert!(holds(&spots, &order(&[1]), &side_spot) && !holds(&spots, &order(&[0]), &side_spot), "c after E·8: the side's placement");
+    assert!(holds(&spots, &order(&[0]), &head_spot) && !holds(&spots, &order(&[1]), &head_spot), "c after E·4: the head's placement");
+    assert!(holds(&spots, &order(&[1]), &[(&e, 1, 8), (&z, 2, 2)]), "c's middle alone at the side's spot: it stands there");
+    for image in [&side_spot[..], &head_spot[..], &[(&e, 1, 8)][..]] {
+        assert!(!holds(&spots, &Placement::Omitted, image), "no omission at a gap with spots: {image:?}");
+    }
+    assert!(!holds(&spots, &order(&[0]), &[(&e, 1, 8)]) && !holds(&spots, &order(&[1]), &[(&e, 1, 8)]), "c gone: no holder's placement");
+}
+
+/// Checks `merge.land`'s check of its resolutions against the composition's
+/// gaps, with no daemon behind it (skep #1147).
+///
+/// At a spine's `moves` gap every choice is refused `malformed_args`
+/// naming `resolutions` — `keep_both`, either side's order, the head's
+/// alone and `omit` — since nothing the draft holds shows which order it
+/// holds; a gap named twice, as `"2"` and `"02"`, is refused the same. At
+/// an `order` gap `keep_both` asks the placement as composed and every
+/// other choice its own, by the gap's index (the mutants that let a spine's
+/// gap take a confirmation, let the later of two names win, or read
+/// `keep_both` as another placement than the one composed).
+#[test]
+fn the_resolutions_are_checked_against_the_composed_gaps() {
+    use std::collections::BTreeMap;
+
+    use skep_client::merge::{Gap, GapId, GapKind, Placement, Run, SideIx};
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, d, s) = (a("1.0.1.0.1"), a("1.0.1.0.2"), a("1.0.1.0.3"));
+    let after = a("1.0.1.0.1.0.1.7");
+    let spine = Gap {
+        id: GapId(1),
+        kind: GapKind::Moves,
+        after: None,
+        before: None,
+        runs: vec![(SideIx(0), Run::new(e.clone(), 1, 2)), (SideIx(1), Run::new(e.clone(), 1, 2))],
+        placed: Placement::Order(vec![SideIx(0)]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![],
+    };
+    let order = Gap {
+        id: GapId(2),
+        kind: GapKind::Order,
+        after: Some(after.clone()),
+        before: None,
+        runs: vec![(SideIx(0), Run::new(d, 1, 5)), (SideIx(1), Run::new(s, 1, 4))],
+        placed: Placement::Order(vec![SideIx(0), SideIx(1)]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![],
+    };
+    let gaps = [spine, order];
+    let checked = |resolutions: Value| super::super::merge::checked_resolutions(&gaps, resolutions.as_object().unwrap());
+    let refused = |resolutions: Value| {
+        let refusal = checked(resolutions.clone()).expect_err("refused").to_value();
+        assert_eq!((refusal["name"].as_str(), refusal["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "{resolutions}: {refusal}");
+    };
+    for choice in [json!("keep_both"), json!({"order": [0]}), json!({"order": [1]}), json!({"keep_only": 0}), json!("omit")] {
+        refused(json!({"1": choice}));
+    }
+    refused(json!({"2": "omit", "02": {"keep_only": 1}}));
+    let placed = |sides: &[u8]| Placement::Order(sides.iter().map(|&s| SideIx(s)).collect());
+    assert_eq!(checked(json!({"2": "keep_both"})).unwrap(), BTreeMap::from([(1, placed(&[0, 1]))]), "keep_both: the placement as composed");
+    assert_eq!(checked(json!({"2": {"order": [1, 0]}})).unwrap(), BTreeMap::from([(1, placed(&[1, 0]))]));
+    assert_eq!(checked(json!({"2": {"keep_only": 1}})).unwrap(), BTreeMap::from([(1, placed(&[1]))]));
+    assert_eq!(checked(json!({"02": "omit"})).unwrap(), BTreeMap::from([(1, Placement::Omitted)]), "\"02\" names gap 2");
+    assert_eq!(checked(json!({"2": {"after": after.to_string()}})).unwrap(), BTreeMap::from([(1, Placement::After)]));
+}
+
+/// Checks the words a shot of a selection publishes, read off a draft's
+/// image with no daemon behind it (skep #1147).
+///
+/// The draft lays E's first seven positions, three of X's and E's next six.
+/// A selection naming E's six, then three of E's seven, reads in the
+/// draft's order, each run cut to what the selection holds; runs that meet
+/// or overlap read once; a run the draft lays apart reads at both places,
+/// and X's words, which no run names, not at all (the mutants that keep
+/// the selection's order, or lay a draft's run whole).
+#[test]
+fn a_selections_words_read_in_the_drafts_order_cut_to_what_it_holds() {
+    use skep_client::publication::Run as Held;
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, x) = (a("1.0.1.0.1"), a("1.0.1.0.2"));
+    let runs = |runs: &[(&Address, u64, u64)]| -> Vec<Held> { runs.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect() };
+    let draft = runs(&[(&e, 1, 7), (&x, 1, 3), (&e, 8, 6)]);
+    let selected = |selection: &[(&Address, u64, u64)]| super::super::merge::selected_image(&draft, &runs(selection));
+    assert_eq!(selected(&[(&e, 8, 6), (&e, 3, 3)]), runs(&[(&e, 3, 3), (&e, 8, 6)]), "the draft's order, each run cut");
+    assert_eq!(selected(&[(&e, 1, 4), (&e, 5, 3), (&e, 2, 2)]), runs(&[(&e, 1, 7)]), "runs that meet or overlap, read once");
+    assert_eq!(selected(&[(&e, 1, 13)]), runs(&[(&e, 1, 7), (&e, 8, 6)]), "a run the draft lays apart, X's words named by none");
+    assert_eq!(selected(&[]), runs(&[]), "nothing selected");
 }
 
 /// Checks that a quote two sides placed apart lands at its default naming

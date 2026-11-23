@@ -372,6 +372,15 @@ impl PanelState {
         self.marker.as_ref()
     }
 
+    /// Returns whether the open read the whole draft, no selection passed.
+    ///
+    /// Such a panel re-takes the draft as it stands where its base or its
+    /// marker moves (the module doc, **The base** and **The landing**); a
+    /// selection the page passed stays held.
+    pub(super) fn whole(&self) -> bool {
+        self.whole
+    }
+
     /// Returns `other_panel`, the refusal of a call this panel's form refuses.
     ///
     /// A landing meets it where the panel publishes into another document

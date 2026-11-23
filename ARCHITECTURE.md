@@ -793,6 +793,9 @@ each ceremony:
   in `merge/land/draft.rs` and the faults it faces in
   `merge/land/faults.rs`; `merge/undo.rs` the take-backs, the undo, the
   withdrawal and its undo, with the spelling of their one write;
+  `merge/landings.rs` the landing standing in a draft with no recorded
+  base, read off its rows for the landing, the take-backs and `record.rs`
+  alike, with the reads of a draft's past states;
   `merge/windows.rs` THE SHOT's WINDOW PARTS, the
   merged list's window runs read and composed through the publication
   family's one core; `merge/record.rs` the `merge` record kind, its

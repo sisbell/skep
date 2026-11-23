@@ -182,8 +182,11 @@ pub enum Refusal {
     /// `history_busy` on a read at a position, past the bounded retries.
     ///
     /// A read at a position is a verification's, a take-back's, a
-    /// restore's, or a composition's whose draft side names a position; a
-    /// composition that names none, and a landing, read at the head and
+    /// restore's, a composition's whose draft side names a position, or the
+    /// walk that finds the landing standing in a draft with no recorded
+    /// base, which a landing into such a draft and a lookup of its record
+    /// make (the `landings` module's doc); a composition that names none,
+    /// and a landing into any other draft or by a shot, read at the head and
     /// never meet it (the `reads` module's doc).
     HistoryBusy,
     /// `history_reclaimed` at a position the board no longer answers.
@@ -535,8 +538,8 @@ pub enum Refusal {
 /// Each is read off the draft's `doc_metadata` and, for a draft whose base
 /// is recorded with no marker beside it, off the draft's own latest feed row
 /// of the kinds that end a marker — read, never acted on; for a draft with
-/// no base record, off its latest re-arrangement past its landing's row and
-/// the state it left (the undo module's doc).
+/// no base record, off its `set_arrangement` rows and the states they left
+/// (the undo module's doc; the `landings` module's).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoUndo {
     /// The marker was inherited when the draft was staged (P2): its `at` is
@@ -560,9 +563,10 @@ pub enum NoUndo {
     ///
     /// The draft's latest marker-ending row is a `set_arrangement` naming a
     /// base and no merge — an undo's or a withdrawal's; or, on a draft with
-    /// no base record, the latest `set_arrangement` past the landing's row
-    /// names no merge and left the draft as the undo's write would, mapped
-    /// as it is (P4).
+    /// no base record, every landing its rows hold was taken back: each by a
+    /// later `set_arrangement` naming no merge that left the draft as it
+    /// stood before that landing, mapped as the undo's write is, taken back
+    /// for good whatever was written since (P4; skep #914).
     TakenBack,
     /// A withdrawal's undo found a merge in the draft since (skep #870).
     ///

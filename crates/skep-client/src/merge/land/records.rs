@@ -112,13 +112,14 @@ impl Newest {
     /// the draft was edited in between or a take-back's record went
     /// unwritten — is that record's landing: its write lands, and no record
     /// is written. The record keeps the first landing's body and position,
-    /// while the draft's marker, or for a baseless draft its feed row, names
-    /// the later write. Nothing that writes reads that position: the undo
-    /// goes by the marker's `at` or the feed row, the withdrawal by its own
-    /// read, and a take-back's record names this one by its link, carrying
-    /// no landing. `verify` reads the draft at it, where the draft held the
-    /// first landing's M. A fresh landing that finds the record standing
-    /// answers the position the marker, else the feed row, names, and the
+    /// while the draft's marker, or for a baseless draft the row of the
+    /// landing standing by its rows, names the later write. Nothing that
+    /// writes reads that position: the undo goes by the marker's `at` or
+    /// that row, the withdrawal by its own read, and a take-back's record
+    /// names this one by its link, carrying no landing. `verify` reads the
+    /// draft at it, where the draft held the first landing's M. A fresh
+    /// landing that finds the record standing answers the position the
+    /// marker, else that row, names, and the
     /// record's only where the draft marks no landing of the merge at or
     /// past it ([`Newest::draft_landing`]). A merge composed again after a
     /// fork or a draft side moved has another key, so no newest record of
@@ -145,10 +146,12 @@ impl Newest {
     /// the record's link, with no newer head told and `staged` false. The
     /// record names the write that first landed the key in the draft, and a
     /// later landing of the key there moves the mark past it (skep #790), so
-    /// a mark below that position is an earlier merge's, its marker put back
-    /// since; where `marked` answers none, or only such a one, the position
-    /// the record names is answered. `None` where the newest names no draft
-    /// landing or none stands, `marked` then never called.
+    /// a mark below that position is an earlier merge's standing again — its
+    /// marker put back, or on a draft with no recorded base its landing
+    /// beneath one taken back; where `marked` answers none, or only such a
+    /// one, the position the record names is answered. `None` where the
+    /// newest names no draft landing or none stands, `marked` then never
+    /// called.
     ///
     /// # Errors
     ///
@@ -244,12 +247,15 @@ impl Writer<'_> {
     /// no composition read since is the one that landed there. Each draft
     /// so named that no record of the merger's own of the merge stands for
     /// ([`Newest::recorded_in`]) is read as it stands, latest row first, and
-    /// the first the board still marks
-    /// this merge's landing in ([`Writer::marked_landing`]) is answered with
-    /// that mark's position: an undo, a withdrawal, another merge's landing
-    /// or a publication of the draft since leaves no landing begun. `None`
-    /// where none stands; a landing past the retention floor's reach is not
-    /// found, the walk restarting at the floor (`feed_rows`).
+    /// the first the board still marks this merge's landing in
+    /// ([`Writer::marked_landing`]) is answered with that mark's position: an
+    /// undo, a withdrawal, another merge's landing standing over it or a
+    /// publication of the draft since leaves no landing begun, while on a
+    /// draft with no recorded base a restore or any other re-arrangement
+    /// leaves it standing (skep #914). `None` where none stands; a landing
+    /// past the retention floor's reach is not found, the walk restarting at
+    /// the floor (`feed_rows`), nor is one whose draft's walk needs a past
+    /// state the board has reclaimed.
     ///
     /// # Errors
     ///

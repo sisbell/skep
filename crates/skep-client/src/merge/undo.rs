@@ -83,21 +83,27 @@
 //!   ([`NoUndo::TakenBack`]), neither a draft carrying no merge
 //!   ([`Refusal::NoMerge`]);
 //! * no base record (N4's baseless case: a free-standing draft, an admitted
-//!   fork) — the landing's position is the draft's own latest
-//!   `set_arrangement` row carrying a `merge` term, read off the supplement
-//!   (`/changes?under=S&drafts=true`, wire.md §The change feed); no such
-//!   row is nothing to undo ([`Refusal::NoMerge`]). The one write sends C
-//!   from the pre-landing read with no `base`, no `head` and no `merge`,
-//!   typed as **The typed position** says, that row's `at` the landing's
-//!   position — unless the landing was already taken back (P4). On such a
-//!   draft the feed tells an undo's row from a restore's or any plain
-//!   re-arrangement's by none of its terms, so where `set_arrangement` rows
-//!   naming no merge stand past the landing's, the draft is read at the
-//!   latest of them through `/op-at`, before the records: that state and C,
-//!   mapped through one read of the records over both (**The mapping**),
-//!   equal is the merge taken back there ([`NoUndo::TakenBack`]), nothing
-//!   sent and the draft's edits since standing; any other state leaves the
-//!   write to the board's verdict.
+//!   fork) — the landing is the one standing in the draft by its own
+//!   `set_arrangement` rows on the supplement (`/changes?under=S&drafts=true`,
+//!   wire.md §The change feed; the `landings` module's doc, skep #914): a
+//!   landing stands from its write until it is taken back, the landing
+//!   that stood when it was made then standing again, and a row naming no
+//!   merge that leaves the draft exactly as it stood before the standing
+//!   landing — that state and the one before the landing read through
+//!   `/op-at` and mapped through one read of the records over both (**The
+//!   mapping**) — is its take-back, for good, while no other row, a
+//!   restore's or any plain re-arrangement's, ends one or brings one back.
+//!   No landing row is nothing to undo ([`Refusal::NoMerge`]); landing rows
+//!   every one taken back are the merge already taken back
+//!   ([`NoUndo::TakenBack`]), nothing sent and the draft's edits since
+//!   standing (P4). Else the one write sends C, the state before the
+//!   standing landing, with no `base`, no `head` and no `merge` — `at`
+//!   without a `base` is `malformed` (wire.md §Arrangement, `merge`), so the
+//!   landing it leaves standing again is put back by the write's words
+//!   alone — typed as **The typed position** says, the landing's row's `at`
+//!   the landing's position. With no marker, a restore to the state before
+//!   the standing landing is that landing's take-back, the same write as
+//!   the undo's.
 //!
 //! **The pre-landing read.** The state before a commit at position `at` is
 //! read through `/op-at` at the answer for `at − 1`: a landing with a base
@@ -122,9 +128,11 @@
 //! the correspondence records of every origin among its runs, each read in
 //! its owner's account — a draft of the merger's and another account's
 //! draft C holds words of alike, only that draft's owner's shot homing a
-//! record in it — at the head after the pre-landing read: the restore's
-//! read and its mapping (the merge reader's `owners_records`; the `history`
-//! module's doc). So words a publication made public since the landing —
+//! record in it — at the head after the pre-landing read, or on a baseless
+//! draft the one read its rows' walk made over C and the latest state it
+//! compared with C, where it made one: the restore's read and its mapping
+//! (the merge reader's `owners_records`; the `history` module's doc). So
+//! words a publication made public since the landing —
 //! the merger's, or those of another account's draft its owner published —
 //! come back as the published words they became, on the trunk's chain, and
 //! the links on them return with them (B3-S11; B3-S7). The withdrawal's
@@ -138,11 +146,9 @@
 //! maps nothing: the words it keeps go back as read.
 //! Each run is written as [`written_runs`] spells it — its own first
 //! I-address, its `origin` the document that minted it, a member's version
-//! component kept (wire.md §Arrangement, `publish`). A baseless landing
-//! already taken back is answered after the mapping (the dispatch, above);
-//! then, at each of the three acts, a state in more runs than one write may
-//! name, counted on the runs the write sends, is [`Refusal::OverCap`],
-//! nothing sent.
+//! component kept (wire.md §Arrangement, `publish`). At each of the three
+//! acts, a state in more runs than one write may name, counted on the runs
+//! the write sends, is [`Refusal::OverCap`], nothing sent.
 //!
 //! **The typed position (P3).** The undo's one write is typed against the
 //! landing's position — the command's and an agent's rule, `own_ack` none —
@@ -162,13 +168,16 @@
 //! write is found on the draft's own feed rows past the landing — a
 //! `set_arrangement` row whose `merge` names the marker's `at` beside its
 //! head and its sides, which a landing's row never names (wire.md §The
-//! change feed) — and the draft is read through `/op-at` at the landing
-//! and at that write. Where the two states, mapped through one read of the
-//! records over both as C is (**The mapping**), are equal, the take-back
-//! and its undo moved the words and nothing else did, and the write is
-//! typed past them: a word read at the landing as a draft's own and at the
-//! put-back as the published word a shot made of it is one word, whichever
-//! account's draft it was minted in. Where they differ, a change made
+//! change feed); on a baseless draft, which carries no marker, it is the
+//! latest take-back of a landing made over this one, which left this one
+//! standing again (skep #914; the `landings` module's doc) — and the draft
+//! is read through `/op-at` at the landing and at that write. Where the
+//! two states, mapped through one read of the records over both as C is
+//! (**The mapping**), are equal, the take-back and its undo moved the
+//! words and nothing else did, and the write is typed past them: a word
+//! read at the landing as a draft's own and at the put-back as the
+//! published word a shot made of it is one word, whichever account's
+//! draft it was minted in. Where they differ, a change made
 //! between the landing and the take-back stands in the words, and the
 //! write is typed against the landing, which the board refuses, the change
 //! standing. No position below the landing's lands, the landing having
@@ -186,10 +195,11 @@
 //! acknowledgment is another hand's; the withdrawal's is its read's, so an
 //! edit between its read and its write refuses it. A re-run of a take-back
 //! takes nothing back twice: it finds the marker cleared, or on a baseless
-//! draft the undo's own row still the latest re-arrangement past the
-//! landing's, in any session and whatever position it is typed against, so
-//! the draft's edits since stand. After an undo that put an earlier
-//! landing's marker back the draft carries that merge, and the undo run
+//! draft the landing taken back by the undo's own row, for good whatever
+//! was written since, in any session and whatever position it is typed
+//! against, so the draft's edits since stand. After an undo that put an
+//! earlier landing's marker back, or on a baseless draft left the landing
+//! beneath standing again, the draft carries that merge, and the undo run
 //! again takes it back as a step of its own: each undo takes back the
 //! newest step alone. The base record is never made false: the undo
 //! restores the base read before the landing, the withdrawal re-sends the
@@ -202,42 +212,46 @@
 //! merger's account exactly, kept before any record is read — a record
 //! names in `replaces` one of its own home's (P20), so another account's, a
 //! sub-account's among them, is never read, never replaced and never
-//! counts as replacing one of the merger's. Of those, for an undo by the
-//! marker and a withdrawal the current record is the one standing for the
-//! marker the act takes out: the newest with its head and sides, naming a
-//! position at or before its `at` — a marker naming none bounding no
-//! position — and replaced by none of the merger's records linked to the
-//! draft; for a baseless draft's undo it is the newest naming the draft as
-//! landed in, by the order their links were minted. A record composed from
-//! it with `landed` none and `replaces` its link is appended to the journal
+//! counts as replacing one of the merger's. Of those, the current record
+//! is the one standing for the landing the act takes out — the marker on a
+//! draft with a base record, the standing landing's mark on a baseless one:
+//! the newest with its head and sides, naming a position at or before its
+//! `at` — a marker naming none bounding no position — and replaced by none
+//! of the merger's records linked to the draft. A record composed from it
+//! with `landed` none and `replaces` its link is appended to the journal
 //! (`journal`, or the account's default) and linked from its atom there,
 //! the link homed in the journal beside it, unsigned, so a reader of the
 //! journal sees the merge no longer stands on the draft. A merge landed in
 //! the draft again with no take-back recorded between is the same landing
 //! (skep #790; the `land` module's doc): the undo takes back the later
-//! write, the one the marker or the feed row names, and puts the earlier
-//! write's marker back, so the first landing's record, which stands for
-//! both, stands on and none is written — as wherever the record found is
-//! the one standing for the marker put back. A marker the draft's stage
-//! copied marks no landing in it (P2), so a record found beside it is
-//! replaced, and a withdrawal of it finds none to replace. Where no record
-//! stands none is written, and the act stands all the same. A re-run after
-//! either act writes nothing for it (**The guarantees**) — so where the
-//! record is not written after the act's write, for a lost acknowledgment
-//! at its writes, a board too busy to answer the find of the account's
-//! journal, or a journal the record's step finds unable to take it, the
-//! landing's record stands alone, which the halt says; a lost
-//! acknowledgment of the act's own write, the dialer's halt, leaves it
-//! alone too. A `resume` of the landing after either act finds nothing to
-//! resume of the write taken back, whether or not either record was
-//! written: it goes by the marker, which the act cleared, or put back as
-//! the earlier landing left it — the landing a `resume` then answers where
-//! it is this merge's and the draft holds M — or for a baseless draft by
-//! the latest `set_arrangement` row, the act's own, naming no merge (the
-//! `land` module's doc). A landing of the key made after either act writes
-//! a record of its own, which replaces this one: the landing's read-first
-//! takes the merger's newest record of the key, and this one names no
-//! landing (the `land` module's doc).
+//! write, the one the marker or the standing landing's row names, and the
+//! earlier write stands again — its marker put back, or on a baseless draft
+//! its landing the one beneath — so the first landing's record, which
+//! stands for both, stands on and none is written, as wherever the record
+//! found is the one standing for the landing that stands again. The write
+//! puts that landing back by its words alone on a baseless draft, naming
+//! no `merge`, so that landing reaches the record's judgement and never the
+//! frame. A marker the draft's stage copied marks no landing in it (P2), so
+//! a record found beside it is replaced, and a withdrawal of it finds none
+//! to replace. Where no record stands none is written — a landing whose
+//! record was never written leaves another merge's record standing — and
+//! the act stands all the same. A re-run after either act writes nothing
+//! for it (**The guarantees**) — so where the record is not written after
+//! the act's write, for a lost acknowledgment at its writes, a board too
+//! busy to answer the find of the account's journal, or a journal the
+//! record's step finds unable to take it, the landing's record stands
+//! alone, which the halt says; a lost acknowledgment of the act's own
+//! write, the dialer's halt, leaves it alone too. A `resume` of the landing
+//! after either act finds nothing to resume of the write taken back,
+//! whether or not either record was written: it goes by the marker, which
+//! the act cleared, or put back as the earlier landing left it — the
+//! landing a `resume` then answers where it is this merge's and the draft
+//! holds M — or for a baseless draft by the landing standing by its rows,
+//! which the act's own row took back, the landing beneath standing again
+//! (the `land` module's doc). A landing of the key made after either act
+//! writes a record of its own, which replaces this one: the landing's
+//! read-first takes the merger's newest record of the key, and this one
+//! names no landing (the `land` module's doc).
 //!
 //! **The journal, before the write.** A journal named is checked before the
 //! one write, as a landing's is (the `land` module's doc): one
@@ -269,13 +283,15 @@ use crate::address::parse_address;
 use crate::board::answers::Metadata;
 use crate::board::{acked_at, frames, Board, Image, Rejection};
 use crate::halt::{Halt, Refused};
+use crate::publication;
 
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
+use super::landings::{arranged_at, before, Before, Landings};
 use super::reads::{
     feed_rows, mapped_image, owners_records, runs_of, stretches, NoUndo, OnEnd, Reader, Refusal,
     SHOT_RUN_CAP,
 };
-use super::record::{self, linked_to, newest, standing_for, taken_back, Record, RecordLanding};
+use super::record::{self, linked_to, standing_for, taken_back, Record};
 use crate::board::answers::MergeMarker;
 
 /// What an undo answered.
@@ -289,20 +305,22 @@ pub struct Undone {
     /// the landing stood.
     ///
     /// `None` where none did, or where the one standing is the record of
-    /// the earlier landing whose marker the undo put back, which stands for
-    /// it (skep #790), and none was written.
+    /// the earlier landing standing again — its marker put back, or on a
+    /// baseless draft the landing beneath — which stands for it (skep #790),
+    /// and none was written.
     pub record: Option<Address>,
     /// The base restored — the pair read before the landing, address and
     /// extent — where the board records a base for the draft; `None` where
-    /// the undo went by the draft's feed row, a baseless document whose
-    /// landing moved nothing.
+    /// the undo went by the draft's rows, a baseless document whose landing
+    /// moved nothing.
     pub restored: Option<(Address, u64)>,
     /// The marker the draft carries again (skep #964).
     ///
     /// It is the one the draft carried before the landing, put back as it
     /// stood with its own `at`: an earlier landing's, or the one the draft's
     /// stage copied (P2). `None` where the draft carried none, the marker
-    /// cleared, and where the undo went by the draft's feed row.
+    /// cleared, and where the undo went by the draft's rows, which carry no
+    /// marker.
     pub marker: Option<MergeMarker>,
 }
 
@@ -336,15 +354,16 @@ pub struct Unwithdrawn {
     pub record: Option<Address>,
 }
 
-/// Puts a draft back as it stood before the latest merge landed in it (R6).
+/// Puts a draft back as it stood before the landing standing in it (R6).
 ///
-/// The latest landing is the write the draft's marker names, or for a
-/// baseless draft its feed row. The dispatch, the pre-landing read, the
-/// mapping, the typed position, the one write and the record are the
-/// module's doc. `own_ack` is the position of the caller's own last
-/// acknowledged write on the draft, the write typed against it where it is
-/// past the landing's and the put-back's (P3's editor rule); `None` types
-/// it against the later of those two (the command's and an agent's).
+/// The landing is the write the draft's marker names, or for a baseless
+/// draft the one standing by its rows ([`baseless_landing`]; skep #914). The
+/// dispatch, the pre-landing read, the mapping, the typed position, the one
+/// write and the record are the module's doc. `own_ack` is the position of
+/// the caller's own last acknowledged write on the draft, the write typed
+/// against it where it is past the landing's and the put-back's (P3's
+/// editor rule); `None` types it against the later of those two (the
+/// command's and an agent's).
 /// `journal` is the merge journal the replacing record goes to, or the
 /// account's default where `None`, as a landing's.
 ///
@@ -365,31 +384,46 @@ pub struct Unwithdrawn {
 /// - `own_ack` past the position that read stood at, or a read naming no
 ///   position where `own_ack` is given, as [`Refusal::Halt`] with a face,
 ///   nothing sent;
-/// - [`Refusal::NothingToUndo`] with its reason, and [`Refusal::NoMerge`],
-///   each with nothing sent — a baseless draft's [`NoUndo::TakenBack`]
-///   after the records' reads, below; the feed walk's refusals;
-/// - the pre-landing read's: [`Refusal::HistoryReclaimed`] where the board
+/// - on a draft whose base record carries no marker, the feed walk's
+///   refusals, then [`Refusal::NothingToUndo`] with [`NoUndo::Published`]
+///   or [`NoUndo::TakenBack`], or [`Refusal::NoMerge`], nothing sent;
+/// - for an undo by the marker, a marker naming no position as the
+///   library's own fault; the pre-landing read's: [`Refusal::NothingToUndo`]
+///   with [`NoUndo::Inherited`] where the draft did not exist before the
+///   landing, nothing sent; [`Refusal::HistoryReclaimed`] where the board
 ///   no longer answers the position before the landing, nothing sent; its
 ///   other refusals, a position past the board's head among them as the
 ///   library's own fault, and an image whose positions reach the largest
-///   ordinal as the board's;
-/// - for an undo by the marker, a marker before the landing naming no
-///   position or no extent as the library's own fault; the feed walk's
-///   refusals past the landing; where a write put the marker back since,
-///   the reads of the draft at the landing and at that write, refused as
-///   the pre-landing read is, and the records' reads over the two states,
-///   a run of either that is no content I-address and a record mapping
-///   either past the largest ordinal the board's faults, faced;
-/// - on a baseless draft, the read of it at its latest re-arrangement past
-///   the landing's, refused as the pre-landing read is; a run of C, or of
-///   the state there, that is no content I-address, the board's fault,
-///   faced; the records' reads' refusals at the head; a record mapping C,
-///   or the state there, past the largest ordinal, the board's fault, faced
-///   (SP-19); on a baseless draft, [`NoUndo::TakenBack`] where the state
-///   there, mapped, is C mapped, nothing sent; then [`Refusal::OverCap`]
-///   where C mapped is in more runs than one write may name, counted on the
-///   runs the write sends, nothing sent, and a run a record mapped that is
-///   no content I-address, the board's fault, faced;
+///   ordinal as the board's; a draft recording no base before the landing,
+///   or a marker there naming no position or no extent, as the library's
+///   own faults; the feed walk's refusals past the landing; where a write
+///   put the marker back since, the reads of the draft at the landing and
+///   at that write, refused as the pre-landing read is, and the records'
+///   reads over the two states, a run of either that is no content
+///   I-address and a record mapping either past the largest ordinal the
+///   board's faults, faced;
+/// - on a baseless draft, the feed walk's refusals; where a plain row
+///   follows a landing, the reads of the state before that landing and of
+///   the draft at the row, refused as the pre-landing read is —
+///   [`Refusal::HistoryReclaimed`] where the board no longer answers either,
+///   nothing sent — with the records' reads over the two, and a run of
+///   either that is no content I-address and a record mapping either past
+///   the largest ordinal the board's faults, faced (SP-19); then
+///   [`Refusal::NoMerge`] where no landing row stands, and
+///   [`Refusal::NothingToUndo`] with [`NoUndo::TakenBack`] where every
+///   landing was taken back, each with nothing sent; the pre-landing read's
+///   where the walk read no state before the standing landing, a draft not
+///   registered there the library's own fault; where a take-back of a
+///   landing made over it put it back, the reads at the landing and at that
+///   take-back, as an undo by the marker's; then the walk's reads for the
+///   landing beneath it, refused alike;
+/// - the records' reads' refusals at the head where none were read over C,
+///   a run of C that is no content I-address, the board's fault, faced; a
+///   record mapping C past the largest ordinal, the board's fault, faced
+///   (SP-19); then [`Refusal::OverCap`] where C mapped is in more runs than
+///   one write may name, counted on the runs the write sends, nothing sent,
+///   and a run a record mapped that is no content I-address, the board's
+///   fault, faced;
 /// - a journal named that cannot take the record, nothing sent (P13): one
 ///   this merger may not read, one this board does not register or another
 ///   account's, as [`Refusal::Halt`] naming the journal and the check it
@@ -417,17 +451,19 @@ pub struct Unwithdrawn {
 ///   the dialer's halt, with no re-ask;
 /// - the record's reads' refusals; a journal the record's step finds unable
 ///   to take it, as [`Refusal::Halt`] saying the merge is out of the draft
-///   — and an earlier landing's merge back in it, where its marker was put
-///   back — and the record is not written, nothing of the record written;
-///   then the record's writes' as `Writer::write_record` answers them, the
-///   act standing.
+///   — and an earlier landing's merge back in it, where one stands again —
+///   and the record is not written, nothing of the record written; then the
+///   record's writes' as `Writer::write_record` answers them, the act
+///   standing.
 ///
 /// The death signal under the merger's token, met at any step, is
 /// [`Refusal::SessionEnded`]: up to and at the one write its face says to
 /// run the undo again, nothing changed; at the record's, that the merge is
 /// out of the draft with its record unwritten — an earlier landing's merge
-/// back in it, where its marker was put back, which an undo run again
-/// takes back too — and nothing more is written.
+/// back in it, where one stands again, which an undo run again takes back
+/// too — and nothing more is written.
+///
+/// [`baseless_landing`]: super::baseless_landing
 pub fn undo(
     board: &Board,
     merger: Merger<'_>,
@@ -454,9 +490,8 @@ pub fn undo(
         }
     }
     // THE DISPATCH (P4): the base record first, then the marker.
-    let taken = meta.merge.as_ref().filter(|_| meta.base.is_some());
     let taking = match (meta.base.as_deref(), meta.merge.as_ref()) {
-        (Some(_), Some(marker)) => by_marker(reader, draft, marker)?,
+        (Some(_), Some(marker)) => by_marker(reader, draft, marker, meta.at)?,
         (Some(_), None) => {
             // Nothing to undo, never the feed (N4): the words alone are the
             // feed's, the version the member the row names first (wire.md
@@ -477,43 +512,19 @@ pub fn undo(
             };
             return Err(Refusal::NothingToUndo { draft: draft.clone(), why });
         }
-        (None, _) => {
-            let Some(LandingRows { at, rearranged }) = landing_rows(reader, draft)? else {
-                return Err(Refusal::NoMerge { draft: draft.clone() });
-            };
-            let image = match before(reader, draft, at, "the position before the landing")? {
-                Before::Stood { image, .. } => image,
-                Before::Unregistered => {
-                    return Err(own_fault_face(
-                        "the draft did not exist before its landing",
-                        format!("{draft}'s feed names a landing at position {at}, and `doc_metadata` as of the position before it answers `doc_not_registered`"),
-                    ))
-                }
-            };
-            Taking { landing: at, restored: None, image, rearranged, earlier: None, put_back: None }
-        }
+        (None, _) => by_rows(reader, draft)?,
     };
-    let Taking { landing, restored, image, rearranged, earlier, put_back } = taking;
-    // A baseless draft's latest re-arrangement past its landing, read
-    // before the records, so one read of them maps it and C alike (P4).
-    let what = "the position of the draft's latest re-arrangement";
-    let left = rearranged.map(|later| arranged_at(reader, draft, later, what)).transpose()?;
-    // THE MAPPING: C's image, and the state the draft was left in, through
-    // the records of every origin among their runs, each in its owner's
-    // account, each run at its own spelling.
-    let mut state = runs_of(image.runs())?;
-    if let Some(left) = &left {
-        state.extend(runs_of(left.runs())?);
-    }
-    let records = owners_records(reader, &state)?;
+    let Taking { taken, landing, restored, image, records, earlier, landed_before, put_back } =
+        taking;
+    // THE MAPPING: C's image through the records of every origin among its
+    // runs, each in its owner's account, each run at its own spelling — the
+    // one read the walk made over C and a state it compared with C, where
+    // it made one (P4).
+    let records = match records {
+        Some(records) => records,
+        None => owners_records(reader, &runs_of(image.runs())?)?,
+    };
     let sent = mapped_image(&image, &records)?;
-    // A baseless landing taken back (P4): the latest re-arrangement past it
-    // left the draft where this write would put it.
-    if let Some(left) = &left {
-        if mapped_image(left, &records)? == sent {
-            return Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack });
-        }
-    }
     let runs = capped_runs(&sent)?;
     // THE TYPED POSITION (P3): the landing's, the put-back's where only the
     // take-back and its undo moved the words since, or the caller's own
@@ -539,10 +550,10 @@ pub fn undo(
     let restores = earlier.is_some();
     let act = Act::Undo { landing, put_back, own_ack: own_ack.is_some(), restores };
     let position = send(&writer, &frame, draft, as_of, act)?;
-    // The record is judged by the markers, the one put back only where it
-    // marks a landing: never the one a stage copied (P2).
-    let landed_before = earlier.as_ref().filter(|e| meta.at != Some(e.at));
-    let markers = taken.map(|taken| Markers { taken, landing, earlier: landed_before });
+    // The record is judged by the landing taken back and the one standing
+    // again (**The record.**).
+    let earlier_landing = landed_before.as_ref().map(|(marker, at)| (marker, *at));
+    let markers = Markers { taken: &taken, landing, earlier: earlier_landing };
     let record = replace_record(board, merger, kind, draft, &stem, journal, act, markers)?;
     let marker = earlier.map(|e| e.marker);
     Ok(Undone { draft: draft.clone(), position, record, restored, marker })
@@ -552,6 +563,9 @@ pub fn undo(
 ///
 /// The dispatch yields it (the module's doc, **The dispatch**).
 struct Taking {
+    /// The landing's mark: the draft's marker, or on a baseless draft the
+    /// mark its row makes.
+    taken: MergeMarker,
     /// The landing's position.
     landing: u64,
     /// The base read before the landing, address and extent; `None` for a
@@ -560,12 +574,20 @@ struct Taking {
     /// C, the arrangement before the landing, as the board served it: each
     /// run under the chain that minted it.
     image: Image,
-    /// A baseless draft's latest re-arrangement past its landing's row.
-    rearranged: Option<u64>,
+    /// The records a baseless draft's walk read over C and the latest state
+    /// it compared with C, which map C as sent; `None` where it read none.
+    records: Option<Vec<publication::Record>>,
     /// The marker the state before the landing carried, which the write
     /// puts back as it stood.
     earlier: Option<Restorable>,
-    /// The latest write that put the landing's marker back since.
+    /// The landing standing again once this one is taken back, its mark and
+    /// its position, by which the record is judged (**The record.**).
+    ///
+    /// It is the earlier landing whose marker the write puts back, never
+    /// the one the draft's stage copied (P2), or on a baseless draft the
+    /// landing that stood when this one was made; `None` where none does.
+    landed_before: Option<(MergeMarker, u64)>,
+    /// The latest write that put the landing back since.
     put_back: Option<PutBack>,
 }
 
@@ -601,7 +623,7 @@ impl Restorable {
     }
 }
 
-/// The latest write that put an undo's marker back since its landing.
+/// The latest write that put an undo's landing back since it was made.
 ///
 /// It is found and judged as the module's doc's **The put-back** says.
 #[derive(Clone, Copy)]
@@ -615,14 +637,37 @@ pub(crate) struct PutBack {
     kept: bool,
 }
 
+impl PutBack {
+    /// Returns the put-back at `back` of the landing at `landing`, judged.
+    ///
+    /// The draft is read through `/op-at` at the landing and at the
+    /// put-back, and the two states, mapped through one read of the records
+    /// of every origin among them, each in its owner's account, are kept
+    /// where they are one (the module's doc, **The put-back**).
+    ///
+    /// # Errors
+    ///
+    /// The reads at the two positions, typed by `position_fault`; a run of
+    /// either state that is no content I-address, the board's fault, faced;
+    /// the records' reads' over the two states; a record mapping either past
+    /// the largest ordinal, the board's fault, faced.
+    fn judged(reader: &Reader<'_>, draft: &Address, landing: u64, back: u64) -> Result<PutBack, Refusal> {
+        let landed = arranged_at(reader, draft, landing, "the landing's position")?;
+        let put = arranged_at(reader, draft, back, "the position the merge was put back at")?;
+        let state = [runs_of(landed.runs())?, runs_of(put.runs())?].concat();
+        let records = owners_records(reader, &state)?;
+        let kept = mapped_image(&landed, &records)? == mapped_image(&put, &records)?;
+        Ok(PutBack { at: back, kept })
+    }
+}
+
 /// Reads what an undo by the marker takes back (the module's doc).
 ///
 /// It is the state before the landing at `marker`'s `at`, through the
 /// pre-landing read, with the marker that state carried (**The dispatch**),
-/// and the latest write that put `marker` back since the landing, judged by
-/// the draft's words at the landing and at it, mapped through the records
-/// of every origin among them, each in its owner's account (**The
-/// put-back**).
+/// a marker whose `at` is `minted`, the draft's own mint, standing again
+/// as no landing (P2), and the latest write that put `marker` back since
+/// the landing, judged ([`PutBack::judged`]; **The put-back**).
 ///
 /// # Errors
 ///
@@ -631,11 +676,13 @@ pub(crate) struct PutBack {
 /// did not exist before the landing; the pre-landing read's refusals; a
 /// draft recording no base before the landing, or a marker there naming no
 /// position or no extent, as the library's own faults; the feed walk's
-/// refusals; the reads at the landing and at the put-back, typed by
-/// [`position_fault`]; a run of either state that is no content I-address,
-/// the board's fault, faced; the records' reads' over the two states; a
-/// record mapping either past the largest ordinal, the board's fault, faced.
-fn by_marker(reader: &Reader<'_>, draft: &Address, marker: &MergeMarker) -> Result<Taking, Refusal> {
+/// refusals; the put-back's judgement's.
+fn by_marker(
+    reader: &Reader<'_>,
+    draft: &Address,
+    marker: &MergeMarker,
+    minted: Option<u64>,
+) -> Result<Taking, Refusal> {
     let at = marker.at.ok_or_else(|| {
         own_fault_face(
             "the marker names no position",
@@ -658,21 +705,77 @@ fn by_marker(reader: &Reader<'_>, draft: &Address, marker: &MergeMarker) -> Resu
         }
     };
     let earlier = then.merge.map(|m| Restorable::of(draft, m, "before the landing")).transpose()?;
+    // The record is judged by the marker put back only where it marks a
+    // landing: never the one a stage copied (P2).
+    let landed_before =
+        earlier.as_ref().filter(|e| minted != Some(e.at)).map(|e| (e.marker.clone(), e.at));
     // THE PUT-BACK (skep #964): the take-back and its undo alone moved the
     // words since the landing where the states at the two writes, mapped,
     // are one.
-    let put_back = match put_back_of(reader, draft, marker, at)? {
-        None => None,
-        Some(back) => {
-            let landed = arranged_at(reader, draft, at, "the landing's position")?;
-            let put = arranged_at(reader, draft, back, "the position the merge was put back at")?;
-            let state = [runs_of(landed.runs())?, runs_of(put.runs())?].concat();
-            let records = owners_records(reader, &state)?;
-            let kept = mapped_image(&landed, &records)? == mapped_image(&put, &records)?;
-            Some(PutBack { at: back, kept })
-        }
+    let put_back = put_back_of(reader, draft, marker, at)?
+        .map(|back| PutBack::judged(reader, draft, at, back))
+        .transpose()?;
+    Ok(Taking {
+        taken: marker.clone(),
+        landing: at,
+        restored: Some(old),
+        image,
+        records: None,
+        earlier,
+        landed_before,
+        put_back,
+    })
+}
+
+/// Reads what an undo takes back on a draft with no recorded base.
+///
+/// It is the landing standing in the draft by its `set_arrangement` rows
+/// (`Landings`; the module's doc, **The dispatch**): the state before it,
+/// as the walk read it with the records it compared it through, else
+/// through the pre-landing read; the latest take-back of a landing made
+/// over it, which put it back, judged ([`PutBack::judged`]; **The
+/// put-back**); and the landing that stood when it was made, which stands
+/// again once it is taken back (**The record.**).
+///
+/// # Errors
+///
+/// The feed walk's refusals; the walk's reads where a plain row follows a
+/// landing — the state before the landing and the draft at the row,
+/// [`Refusal::HistoryReclaimed`] where the board no longer answers either,
+/// their other refusals and faults as the pre-landing read's, the records'
+/// reads' refusals over the two, a record mapping either past the largest
+/// ordinal the board's fault, faced; [`Refusal::NoMerge`] where no landing
+/// row stands, and [`Refusal::NothingToUndo`] with [`NoUndo::TakenBack`]
+/// where every landing was taken back, each with nothing sent; then the
+/// pre-landing read's where the walk read no state before the landing, the
+/// put-back's judgement's, and the walk's reads for the landing beneath.
+fn by_rows(reader: &Reader<'_>, draft: &Address) -> Result<Taking, Refusal> {
+    let landings = Landings::read(reader, draft)?;
+    let Some(mut standing) = landings.standing(reader)? else {
+        return Err(if landings.any() {
+            Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }
+        } else {
+            Refusal::NoMerge { draft: draft.clone() }
+        });
     };
-    Ok(Taking { landing: at, restored: Some(old), image, rearranged: None, earlier, put_back })
+    let at = standing.at;
+    let (image, records) = match standing.before.take() {
+        Some((image, records)) => (image, Some(records)),
+        None => (landings.stood_before(reader, at)?, None),
+    };
+    let put_back =
+        standing.put_back.map(|back| PutBack::judged(reader, draft, at, back)).transpose()?;
+    let beneath = landings.beneath(reader, &standing)?;
+    Ok(Taking {
+        taken: standing.mark,
+        landing: at,
+        restored: None,
+        image,
+        records,
+        earlier: None,
+        landed_before: beneath.map(|b| (b.mark, b.at)),
+        put_back,
+    })
 }
 
 /// Returns the position of the latest write that put `marker` back.
@@ -788,7 +891,7 @@ pub fn withdraw(
     let landing = marker.at.unwrap_or(u64::MAX);
     let markers = Markers { taken: marker, landing, earlier: None };
     let record =
-        replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw, Some(markers))?;
+        replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw, markers)?;
     Ok(Withdrawn { draft: draft.clone(), position, record })
 }
 
@@ -1034,97 +1137,6 @@ fn unpositioned(draft: &Address) -> Halt {
     )
 }
 
-/// What stood before a commit (the module's doc, the pre-landing read).
-enum Before {
-    /// The draft did not exist at the position before the commit: an
-    /// inherited marker's case (P2).
-    Unregistered,
-    /// The draft's metadata and arrangement as they stood.
-    Stood {
-        /// `doc_metadata` as of the position before the commit.
-        meta: Metadata,
-        /// The arrangement as of the same position, as the board served it.
-        image: Image,
-    },
-}
-
-/// Reads the draft's state before the commit at `at`.
-///
-/// It is the pre-landing read of the module's doc: `doc_metadata` asked at
-/// `at − 1`, re-asked at the `nearest` a `not_a_position` names, then the
-/// image at that one position; `what` names that position in a fault's
-/// face.
-///
-/// # Errors
-///
-/// [`Refusal::HistoryReclaimed`] at either read, with nothing read
-/// elsewhere; a position past the board's head, or a `not_a_position`
-/// naming no `nearest`, or a write at position 0, as the library's own
-/// fault; the reads' other refusals.
-fn before(reader: &Reader<'_>, draft: &Address, at: u64, what: &str) -> Result<Before, Refusal> {
-    let below = at.checked_sub(1).ok_or_else(|| {
-        own_fault_face("a write at position 0", format!("{what} names a write of {draft} at the genesis position, before which nothing stood"))
-    })?;
-    let own_fault = |e| position_fault(draft, what, e);
-    let (position, meta) = match reader.metadata(draft, Some(below)) {
-        Ok(meta) => (below, meta),
-        Err(Refusal::NoSuchDocument(_)) => return Ok(Before::Unregistered),
-        Err(Refusal::NotAPosition { nearest: Some(nearest), .. }) => {
-            match reader.metadata(draft, Some(nearest)) {
-                Ok(meta) => (nearest, meta),
-                Err(Refusal::NoSuchDocument(_)) => return Ok(Before::Unregistered),
-                Err(e) => return Err(own_fault(e)),
-            }
-        }
-        Err(e) => return Err(own_fault(e)),
-    };
-    let image = arranged_at(reader, draft, position, what)?;
-    Ok(Before::Stood { meta, image })
-}
-
-/// Returns `draft`'s arrangement as of `at`, the position `what` names.
-///
-/// The extent and the image are both read at `at` through `/op-at`, never at
-/// the head instead, and the image is kept as the board served it, each run
-/// under the chain that minted it (the module's doc, **The mapping**).
-///
-/// # Errors
-///
-/// The reads' refusals, typed by [`position_fault`]; an image whose
-/// positions reach the largest ordinal, the board's fault, faced.
-fn arranged_at(
-    reader: &Reader<'_>,
-    draft: &Address,
-    at: u64,
-    what: &str,
-) -> Result<Image, Refusal> {
-    let imaged = reader.imaged(draft, Some(at)).map_err(|e| position_fault(draft, what, e))?;
-    Ok(imaged.into_image()?)
-}
-
-/// Types the refusal `e` of a read of `draft` at the position `what` names.
-///
-/// The position is one this library took from the board's own answers, so
-/// one past the board's head, or one inside a commit where the board named
-/// no position below it, is this library's own fault; any other refusal is
-/// itself.
-fn position_fault(draft: &Address, what: &str, e: Refusal) -> Refusal {
-    match e {
-        Refusal::BeyondHead { at, head, .. } => own_fault_face(
-            format!("{what} is past the board's head"),
-            format!(
-                "a read of {draft} as of {at} answered beyond_head{}",
-                head.map(|h| format!(" (the head is {h})")).unwrap_or_default()
-            ),
-        ),
-        Refusal::NotAPosition { at, .. } => own_fault_face(
-            format!("{what} is inside a commit and the board named no position below it"),
-            format!("a read of {draft} as of {at} answered not_a_position with no `nearest`"),
-        ),
-        e => e,
-    }
-}
-
 /// What the latest feed row that ends a marker under a draft is.
 enum Ending {
     /// A `publish` row: the merge was published from the draft.
@@ -1161,45 +1173,6 @@ fn latest_ending_row(reader: &Reader<'_>, draft: &Address) -> Result<Option<Endi
             latest = Some(Ending::TakenBack);
         }
         _ => {}
-    })?;
-    Ok(latest)
-}
-
-/// A baseless draft's latest landing, by its feed rows.
-struct LandingRows {
-    /// The `at` of the draft's latest `set_arrangement` row whose `merge`
-    /// term is present.
-    at: u64,
-    /// The `at` of the latest `set_arrangement` row past it whose `merge` is
-    /// null, where one stands: an undo's, a restore's and the person's own
-    /// alike, each a plain re-arrangement on the feed of a draft with no
-    /// base record (wire.md §The change feed).
-    rearranged: Option<u64>,
-}
-
-/// Returns the latest landing on `draft` by its feed rows.
-///
-/// It walks the supplement under the draft (`drafts=true`): the landing is
-/// the last `set_arrangement` row whose `merge` term is present — the merge
-/// it marked, `{sides, head}` (wire.md §The change feed) — and its
-/// re-arrangement the last `set_arrangement` row after that one, naming no
-/// merge. `None` where no landing row stands.
-///
-/// # Errors
-///
-/// The feed walk's (`feed_rows`), through `reader`.
-fn landing_rows(reader: &Reader<'_>, draft: &Address) -> Result<Option<LandingRows>, Refusal> {
-    let mut latest: Option<LandingRows> = None;
-    feed_rows(reader, &draft.to_string(), true, 0, |row| {
-        let Some(p) = row["at"].as_u64() else { return };
-        if row["op"].as_str() != Some("set_arrangement") {
-            return;
-        }
-        if row["merge"].is_object() {
-            latest = Some(LandingRows { at: p, rearranged: None });
-        } else if let Some(landing) = latest.as_mut() {
-            landing.rearranged = Some(p);
-        }
     })?;
     Ok(latest)
 }
@@ -1453,42 +1426,44 @@ fn undo_moved(
     }
 }
 
-/// The markers a take-back by the marker judges its record by.
+/// The landings a take-back judges its record by.
 ///
-/// They are the module's doc's **The record**: an undo by the marker's,
-/// and a withdrawal's.
+/// They are the module's doc's **The record**: an undo's — by the marker,
+/// or on a baseless draft by its rows — and a withdrawal's.
 #[derive(Clone, Copy)]
 struct Markers<'a> {
-    /// The marker the act takes out.
+    /// The mark of the landing the act takes out: the draft's marker, or a
+    /// baseless draft's standing landing's.
     taken: &'a MergeMarker,
-    /// The landing's position, the taken marker's `at`.
+    /// The landing's position, the taken mark's `at`.
     ///
     /// It is the largest position, bounding none, where the board serves no
     /// `at`.
     landing: u64,
-    /// The earlier landing's marker the undo put back.
+    /// The earlier landing standing again once the act lands, its mark and
+    /// its position.
     ///
-    /// `None` where it put none back, or put back the one the draft's stage
-    /// copied, which marks no landing in it (P2), and for a withdrawal,
-    /// which puts none back.
-    earlier: Option<&'a Restorable>,
+    /// It is the one whose marker the undo puts back, or on a baseless
+    /// draft the one that stood when the landing taken back was made.
+    /// `None` where none stands again, where the marker put back is the one
+    /// the draft's stage copied, which marks no landing in it (P2), and for
+    /// a withdrawal, which puts none back.
+    earlier: Option<(&'a MergeMarker, u64)>,
 }
 
 /// Writes the replacing record, answering its link where one is written.
 ///
 /// It is the module's doc's record: of the merger's own records of the
-/// kind linked to the draft ([`linked_to`]), the current one naming the
-/// draft as landed in — for an undo by the marker and a withdrawal,
-/// `markers`, the one standing for the marker taken out ([`standing_for`]);
-/// for a baseless draft's undo, the newest — written again with `landed`
-/// none and `replaces` its link, under the act's stem; `None` where no
-/// record stands, or where that record is the one standing for the earlier
-/// landing's marker put back (skep #790), nothing written. It reads and
-/// writes through a writer of its own over `board` as `merger`, built for
-/// the step after the act's one write: a session's end at any of its reads
-/// or writes leaves the act standing with its record unwritten
-/// ([`OnEnd::TakenOut`], or [`OnEnd::EarlierBack`] where an earlier
-/// landing's marker was put back).
+/// kind linked to the draft ([`linked_to`]), the one standing for the
+/// landing `markers` names taken out ([`standing_for`]) — written again
+/// with `landed` none and `replaces` its link, under the act's stem; `None`
+/// where no record stands for it, or where that record also stands for the
+/// earlier landing standing again (skep #790), nothing written. It reads
+/// and writes through a writer of its own over `board` as `merger`, built
+/// for the step after the act's one write: a session's end at any of its
+/// reads or writes leaves the act standing with its record unwritten
+/// ([`OnEnd::TakenOut`], or [`OnEnd::EarlierBack`] where an earlier landing
+/// stands again).
 ///
 /// # Errors
 ///
@@ -1503,26 +1478,18 @@ fn replace_record(
     stem: &str,
     journal: Option<&Address>,
     act: Act,
-    markers: Option<Markers<'_>>,
+    markers: Markers<'_>,
 ) -> Result<Option<Address>, Refusal> {
-    let earlier = markers.and_then(|m| m.earlier);
+    let Markers { taken, landing, earlier } = markers;
     let on_end = if earlier.is_some() { OnEnd::EarlierBack } else { OnEnd::TakenOut };
     let writer = Writer::new(board, merger, on_end);
     let own = linked_to(&writer.reader, kind, draft, merger.account)?;
-    let current = match markers {
-        None => newest(own.into_iter().filter(|f| matches!(&f.record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft))),
-        Some(Markers { taken, landing, earlier }) => {
-            let current = standing_for(&own, draft, taken, landing);
-            let standing = earlier.and_then(|e| standing_for(&own, draft, &e.marker, e.at));
-            if let (Some(current), Some(standing)) = (&current, &standing) {
-                if current.link == standing.link {
-                    return Ok(None);
-                }
-            }
-            current
-        }
-    };
-    let Some(current) = current.map(|found| found.record) else { return Ok(None) };
+    let Some(current) = standing_for(&own, draft, taken, landing) else { return Ok(None) };
+    let standing = earlier.and_then(|(marker, at)| standing_for(&own, draft, marker, at));
+    if standing.is_some_and(|standing| standing.link == current.link) {
+        return Ok(None);
+    }
+    let current = current.record;
     let record = Record {
         landed: None,
         claims: Vec::new(),

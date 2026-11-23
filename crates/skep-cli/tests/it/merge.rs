@@ -60,9 +60,11 @@
 //! merger's earlier landing of a fork edited since — `--new` in the draft
 //! the newest record names, `--into` over the landing standing in the draft
 //! named whatever the merge landed in or took back elsewhere since, by a
-//! staged draft's marker or a free-standing draft's latest landing row —
-//! naming what it replaced and the `--undo` that puts it back, and a
-//! landing of another merge or of the same key naming nothing.
+//! staged draft's marker or the landing standing by a free-standing
+//! draft's rows, a restore since leaving it standing (skep #914) — naming
+//! what it replaced and the `--undo` that puts it back, the landings there
+//! undone one at a time, and a landing of another merge or of the same key
+//! naming nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -1128,6 +1130,53 @@ fn a_landing_into_a_draft_with_no_recorded_base_names_what_it_replaces() {
     assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "A holds the new M: the big cat now");
     report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
     assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "A as it stood before the landing, \"zz \" and all");
+    session.close().expect("close");
+}
+
+/// A landing restored in a draft with no recorded base still stands.
+///
+/// Skep #914: A carries no base and so no marker (N4); the fork is merged
+/// `--into A` and both sides are edited since ([`Edited`]), then `skep
+/// restore` puts A back to the state the landing left, a `set_arrangement`
+/// naming no merge that leaves the landing standing. `skep merge --into A`
+/// reads that landing standing: its `landed.replaced` is `[]`, the merge
+/// carrying all A held, the talk saying it replaced nothing (the mutant that
+/// reads A's latest row of any kind says nothing of a landing). `--undo A`
+/// takes the new landing back, A as restored; `--undo A` again takes the
+/// first landing back, standing again — typed against the first undo's
+/// write, the put-back, so it lands — A as it stood before the merge, empty
+/// (the mutant that never finds the landing beneath answers it already
+/// taken back).
+#[test]
+fn a_landing_restored_in_a_draft_with_no_recorded_base_still_stands() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let free = rig.draft();
+    let e = Edited::new(&rig, &session, Some(&free));
+    let first_at = e.first["landed"]["position"].as_u64().expect("the first landing's position").to_string();
+    let restore = ["restore", "--board", &rig.origin, "--dir", s(&rig.store), "--draft", &e.l, "--at", &first_at];
+    let restored = skep(&restore, &[], None);
+    assert_eq!(restored.code, 0, "the restore: {restored:?}");
+    let held = rig.image(&token, &addr(&e.l), 11);
+    assert_eq!(held, runs_of(&e.first), "the premise: A as the landing left it, the big cat");
+
+    let r = e.merge(&rig, &["--into", &e.l]);
+    let v = report(&r);
+    assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(e.l.as_str()), json!(false)), "landed in A: {v}");
+    assert_eq!(v["landed"]["replaced"], json!([]), "the merge carries all A held: {v}");
+    assert!(r.err.contains(&format!("this landing replaced nothing of {}", e.l)), "{}", r.err);
+    assert_eq!(rig.image(&token, &addr(&e.l), 15), runs_of(&v), "A holds the new M: the big cat now");
+    let undone = report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(undone["draft"].as_str(), Some(e.l.as_str()), "{undone}");
+    assert_eq!(rig.image(&token, &addr(&e.l), 11), held, "A as restored");
+    let again = report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
+    assert_eq!(again["draft"].as_str(), Some(e.l.as_str()), "the first landing taken back: {again}");
+    let set = rig.read(&token, &frames::span_set(&e.l));
+    let content = set["set"].as_array().expect("the span set").iter().find(|s| s["start"].as_str() == Some("1.1"));
+    let width = content.map_or(0, |s| s["width"].as_str().and_then(|w| w.strip_prefix("0.")).and_then(|w| w.parse::<u64>().ok()).expect("a content width"));
+    assert_eq!(width, 0, "A as it stood before the merge, empty: {set}");
     session.close().expect("close");
 }
 

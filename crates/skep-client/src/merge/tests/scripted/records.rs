@@ -7,10 +7,11 @@
 //! through the draft once the merge landed in another, another account's
 //! records, another merge's, a landing past the marker's and a record a
 //! take-back replaced passed over; `standing_landing`, the same read by the
-//! draft's mark alone — its marker, or a baseless draft's latest
-//! `set_arrangement` row, a plain re-arrangement leaving none — none for a
-//! draft with no marker or a published document, a refused read never none;
-//! `verify`'s verdicts, a withheld input
+//! draft's mark alone — its marker, or the landing standing by a baseless
+//! draft's `set_arrangement` rows, a plain re-arrangement neither ending
+//! one nor bringing one back, and none where a past state its walk needs
+//! is reclaimed — none for a draft with no marker or a published document,
+//! a refused read never none; `verify`'s verdicts, a withheld input
 //! withholding the verdict and an unregistered one refused, a withheld run
 //! in a readable side refused naming its origin, its images read as of one
 //! position and its values at the head, a refusal naming no document at the
@@ -319,14 +320,19 @@ fn a_drafts_landing_record_is_read_through_the_draft_whatever_landed_since() {
 /// none, and so does `D`, a published document, the feed never walked for
 /// either. `P` and `P2`, drafts the board records no base for, answer none
 /// before any landing; the merge landed in `P`, then in `P2`, `P` answers
-/// its own record by its latest `set_arrangement` row on the supplement and
-/// `P2` its own (the mutant that answers the merger's newest record of the
-/// merge answers `P2`'s at `P`; the one that reads no mark with no base
-/// record answers neither). A plain re-arrangement of `P` since, naming no
-/// merge, leaves no landing standing there (the mutant that keeps the
-/// latest row naming a merge answers `P`'s record). `P` withheld is refused
-/// `Unreadable` and a draft the board never registered `NoSuchDocument`,
-/// each naming the draft, never none (SP-14).
+/// its own record by the landing standing by its `set_arrangement` rows on
+/// the supplement, nothing read at a past position with no row after the
+/// landing, and `P2` its own (the mutant that answers the merger's newest
+/// record of the merge answers `P2`'s at `P`; the one that reads no mark
+/// with no base record answers neither). Skep #914: a plain
+/// re-arrangement of `P` since, naming no merge, that leaves `P` in
+/// another state than before the landing leaves the landing standing (the
+/// mutant that reads the latest row of any kind answers none); one that
+/// leaves `P` as it stood before the landing takes it back, and it stays
+/// taken back once `P` is re-arranged to the merge's words again (the
+/// mutant that judges only the latest plain row answers `P`'s record).
+/// `P` withheld is refused `Unreadable` and a draft the board never
+/// registered `NoSuchDocument`, each naming the draft, never none (SP-14).
 #[test]
 fn the_landing_standing_in_a_draft_is_read_by_its_mark_alone() {
     let (p, p2) = ("1.0.1.0.67", "1.0.1.0.68");
@@ -360,22 +366,94 @@ fn the_landing_standing_in_a_draft_is_read_by_its_mark_alone() {
         land(&board, &merged, draft_landing(&session, &signer, Some(a(p2)))).expect("in P2");
     let (_, elsewhere) = landing_of(&second);
     assert_eq!(dialer.world().standing(p), (None, None), "the premise: no base, no marker");
-    assert_eq!(standing(p), Ok(Some(own)), "P's own, the merge landed in P2 since");
+    dialer.clear();
+    assert_eq!(standing(p), Ok(Some(own.clone())), "P's own, the merge landed in P2 since");
     assert_eq!(standing(p2), Ok(Some(elsewhere)), "P2's own");
-    // A plain re-arrangement of P, naming no merge.
-    let at = dialer.world().position;
-    let plain =
-        frames::set_arrangement(p, &shot_runs(&[run(D, 1, 11)]), at, None, None, None, None);
-    let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
-        panic!("closed")
+    assert!(
+        dialer.ops().iter().all(|o| !o.starts_with("at:")),
+        "no row after either landing, nothing read at a past position: {:?}",
+        dialer.ops()
+    );
+    // Plain re-arrangements of P, each naming no merge.
+    let rearrange = |runs: &[Run]| {
+        let at = dialer.world().position;
+        let plain = frames::set_arrangement(p, &shot_runs(runs), at, None, None, None, None);
+        let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write")
+        else {
+            panic!("closed")
+        };
+        assert!(acked_at(&ack).is_some(), "the premise: re-arranged: {ack}");
     };
-    assert!(acked_at(&ack).is_some(), "the premise: re-arranged: {ack}");
-    assert_eq!(standing(p), Ok(None), "no landing standing in P");
+    rearrange(&[run(D, 1, 5)]);
+    assert_eq!(standing(p), Ok(Some(own)), "another state than before the landing: it stands");
+    rearrange(&[run(D, 1, 11)]);
+    assert_eq!(standing(p), Ok(None), "P as before the landing: taken back");
+    rearrange(&draft_m());
+    assert_eq!(standing(p), Ok(None), "taken back for good, the merge's words again since");
     // Refused reads, each naming the draft.
     dialer.world().withheld.insert(p.to_string());
     assert_eq!(standing(p), Err(Refusal::Unreadable(a(p))), "P withheld");
     let unregistered = "1.0.1.0.99";
     assert_eq!(standing(unregistered), Err(Refusal::NoSuchDocument(a(unregistered))));
+}
+
+/// A baseless landing whose past state is reclaimed is read as none.
+///
+/// Skep #914: the merge landed in `P`, a draft the board records no base
+/// for, its record written, and `P` re-arranged since by a row naming no
+/// merge. The board's history floor then stands at the landing, so the
+/// state before it, which the walk compares that row with, is reclaimed:
+/// `standing_landing` answers none, saying nothing of a landing it cannot
+/// judge, while the library's `baseless_landing` and the undo are refused
+/// `HistoryReclaimed` naming the position before the landing, the undo with
+/// nothing sent. With no row after the landing, the floor is never met:
+/// `standing_landing` answers the landing's record, nothing read at a past
+/// position.
+#[test]
+fn a_baseless_landing_whose_past_state_is_reclaimed_is_read_as_none() {
+    let p = "1.0.1.0.67";
+    let mut w = draft_landing_world();
+    w.doc(p, false, ACCOUNT, vec![run(D, 1, 11)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let standing = || {
+        standing_landing(&board, Some(session.token()), &a(K), &a(p), ACCOUNT)
+            .map(|r| r.and_then(|r| r.link))
+    };
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let before = dialer.world().position;
+    let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(p)))).expect("in P");
+    let (at, own) = landing_of(&landed);
+    dialer.world().floor = Some(at);
+    dialer.clear();
+    assert_eq!(standing(), Ok(Some(own)), "no row after the landing: the floor never met");
+    assert!(dialer.positions("doc_metadata").is_empty(), "nothing read at a past position");
+    let typed = dialer.world().position;
+    let plain = frames::set_arrangement(p, &shot_runs(&[run(D, 1, 5)]), typed, None, None, None, None);
+    let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
+        panic!("closed")
+    };
+    assert!(acked_at(&ack).is_some(), "the premise: re-arranged: {ack}");
+    let reclaimed = Refusal::HistoryReclaimed { at: before, floor: Some(at) };
+    assert_eq!(standing(), Ok(None), "the state before the landing reclaimed: none");
+    assert_eq!(
+        baseless_landing(&board, Some(session.token()), &a(p)),
+        Err(reclaimed.clone()),
+        "the library's reader answers the reclaim as itself"
+    );
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(
+        undo(&board, merger(&session, &signer), &a(p), &a(K), None, None),
+        Err(reclaimed),
+        "the undo refused"
+    );
+    assert!(
+        dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(),
+        "nothing sent: {:?}",
+        dialer.ops()
+    );
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
 }
 
 /// `verify`'s three verdicts: Equal where the member holds M over its

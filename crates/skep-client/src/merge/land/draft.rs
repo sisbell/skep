@@ -3,8 +3,9 @@
 //! A fresh draft is staged from the head where none is named, M is sent in
 //! one `set_arrangement` typed against the position the merge was composed
 //! at, and a landing is found by the board's mark — the draft's marker, or
-//! its feed row where the draft records no base — never by its words (the
-//! `land` module's doc; the landing lane's rulings R1–R5).
+//! where the draft records no base the landing standing by its rows (the
+//! `landings` module's doc) — never by its words (the `land` module's doc;
+//! the landing lane's rulings R1–R5).
 
 use serde_json::Value;
 use skep_address::Address;
@@ -13,9 +14,8 @@ use crate::address::parse_address;
 use crate::board::{acked_addr, acked_at, acked_head_moved, answers, frames, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
-use crate::merge::reads::{
-    feed_rows, first_difference, runs_of, stretches, Family, Merged, Refusal, Side,
-};
+use crate::merge::landings::standing_mark;
+use crate::merge::reads::{first_difference, runs_of, stretches, Family, Merged, Refusal, Side};
 use crate::merge::record::RecordLanding;
 
 use super::faults::{own_fault, own_fault_face, shape_face};
@@ -98,10 +98,10 @@ impl Writer<'_> {
     ///
     /// The draft's reads' refusals — its `doc_metadata`, read as it stands,
     /// [`Refusal::NoSuchDocument`] naming the draft where the board does not
-    /// register it, the feed walk's, with `shoot` off, on a draft with no
-    /// recorded base ([`Writer::marked_landing`]) — and a draft minted after
-    /// `as_of`, faced, naming the way out; the
-    /// board's `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
+    /// register it, the reads of its rows and past states, with `shoot` off,
+    /// on a draft with no recorded base ([`Writer::marked_landing`]) — and a
+    /// draft minted after `as_of`, faced, naming the way out; the board's
+    /// `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
     /// `Refused` re-said in [`Writer::moved_words`]'s words — this merge's
     /// own landing named where it moved the draft after `as_of`, else the
     /// draft that changed after the merge was composed and nothing merged —
@@ -283,18 +283,24 @@ impl Writer<'_> {
     /// copied it from the draft it was staged from, stamped at that stage's
     /// commit (P2), while a landing's own stands past the mint, the board
     /// writing only into a draft it has registered. With no base, the draft
-    /// carries no marker, and it is the draft's latest `set_arrangement` row
-    /// on the supplement where that row's `merge` names them (wire.md §The
-    /// change feed): an undo or a restore after the landing writes a row
-    /// naming no merge, and another merge's landing a row naming another.
-    /// `None` where no such landing stands, whatever the draft holds: a
-    /// withdrawal keeps M's words, a stage copies them with the marker, and
-    /// another write can leave a list equal to M, so the words never tell a
-    /// landing (R2).
+    /// carries no marker, and it is the landing standing by the draft's
+    /// `set_arrangement` rows on the supplement where its row's `merge` names
+    /// them (skep #914; the `landings` module's doc): a landing stands from
+    /// its write until a row naming no merge leaves the draft as it stood
+    /// before it, the landing it went over then standing again, and a
+    /// restore or any other re-arrangement neither ends it nor brings it
+    /// back. A past state that walk needs, reclaimed by the board, leaves
+    /// none standing. `None` where no such landing stands, whatever the
+    /// draft holds: a withdrawal keeps M's words, a stage copies them with
+    /// the marker, and another write can leave a list equal to M, so the
+    /// words never tell a landing (R2).
     ///
     /// # Errors
     ///
-    /// The feed walk's (`feed_rows`), on a draft with no recorded base.
+    /// On a draft with no recorded base, the walk's (`standing_mark`): the
+    /// feed walk's, and where a plain row follows a landing the reads of the
+    /// draft's past states but a reclaimed one, [`Refusal::HistoryBusy`] past
+    /// the bounded retries among them, each as itself (SP-14).
     pub(super) fn marked_landing(
         &self,
         merged: &Merged,
@@ -311,13 +317,8 @@ impl Writer<'_> {
                 .and_then(|m| m.at)
                 .filter(|at| meta.at != Some(*at)));
         }
-        let mut latest = None;
-        feed_rows(&self.reader, &into.to_string(), true, 0, |row| {
-            if row["op"].as_str() == Some("set_arrangement") {
-                latest = row["at"].as_u64().filter(|_| row_marks(&row["merge"], &head, &sides));
-            }
-        })?;
-        Ok(latest)
+        let standing = standing_mark(&self.reader, into)?;
+        Ok(standing.filter(|m| m.head == head && m.sides == sides).and_then(|m| m.at))
     }
 
     /// Returns the words of a draft landing refused `arrangement_moved`.
@@ -339,8 +340,9 @@ impl Writer<'_> {
     /// # Errors
     ///
     /// The reads' refusals, each as itself (SP-14): the draft's
-    /// `doc_metadata` as it stands, the feed walk ([`Writer::marked_landing`])
-    /// and, where a landing stands, the draft's `image`.
+    /// `doc_metadata` as it stands, on a draft with no recorded base the
+    /// reads of its rows and past states ([`Writer::marked_landing`]) and,
+    /// where a landing stands, the draft's `image`.
     fn moved_words(
         &self,
         merged: &Merged,

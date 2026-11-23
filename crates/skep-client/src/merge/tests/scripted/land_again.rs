@@ -332,19 +332,25 @@ fn the_same_composition_landed_again_into_its_draft_after_a_take_back_is_judged_
 /// A resume finds a draft landing by its mark, never by the draft's words.
 ///
 /// The mark is the marker naming the merge, or on a draft with no
-/// recorded base its latest `set_arrangement` row naming it; a take-back
-/// clears it, and a draft holding M without it holds no landing to resume
-/// (skep #888). (a) The landing withdrawn, the withdrawal recorded:
-/// `resume` naming the draft, which still holds M, answers none and
-/// writes nothing, the withdrawal's record current. (b) The landing's
-/// record unwritten, the board too busy to find its journal, then the
-/// landing withdrawn: none, nothing written, no record of the key. (c) The
+/// recorded base the landing standing by its `set_arrangement` rows where
+/// it names the merge; a take-back clears it, and a draft holding M
+/// without it holds no landing to resume (skep #888). (a) The landing
+/// withdrawn, the withdrawal recorded: `resume` naming the draft, which
+/// still holds M, answers none and writes nothing, the withdrawal's record
+/// current. (b) The landing's record unwritten, the board too busy to find
+/// its journal, then the landing withdrawn: none, nothing written, no
+/// record of the key. (c) The
 /// withdrawal's record unwritten: none, nothing written, the landing's
 /// record current. (d) A draft with no recorded base, holding M's list
 /// before the landing, the landing undone: the undo's row names no merge,
 /// so none, nothing written. (e) A composition made after its landing,
 /// the marker standing: the landing at the marker's position, nothing
-/// written.
+/// written. Skep #914, on a draft with no recorded base holding another
+/// list before the landing: (f) a plain re-arrangement since that leaves
+/// M's words leaves the landing standing, and `resume` answers it at its
+/// row's position, nothing written (the mutant that reads the latest row
+/// of any kind answers none); (g) the landing undone, then the same
+/// re-arrangement: taken back for good, none, nothing written.
 #[test]
 fn a_resume_finds_a_draft_landing_by_its_mark_never_by_the_drafts_words() {
     let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
@@ -494,6 +500,38 @@ fn a_resume_finds_a_draft_landing_by_its_mark_never_by_the_drafts_words() {
         "(e): the landing, at the marker's position"
     );
     assert!(wrote(&dialer).is_empty(), "(e): nothing written: {:?}", dialer.ops());
+
+    // (f) and (g): a draft with no recorded base, holding another list
+    // before the landing, re-arranged to M's words by hand since, a
+    // `set_arrangement` naming no merge — (g) after the landing's undo.
+    for undone in [false, true] {
+        let plain = "1.0.1.0.67";
+        let mut w = draft_landing_world();
+        w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let into_plain = || draft_landing(&session, &signer, Some(a(plain)));
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let landed = land(&board, &merged, into_plain()).expect("landed");
+        if undone {
+            undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None).expect("undone");
+        }
+        let typed = dialer.world().position;
+        let frame =
+            frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, None, None, None, None);
+        dialer.world().apply(&frame)["at"].as_u64().expect("the re-arrangement's ack");
+        assert_eq!(dialer.world().docs.get(plain).unwrap().runs, draft_m(), "the premise, M");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let found = resume(&board, &merged, into_plain());
+        if undone {
+            assert_eq!(found, Ok(None), "(g): taken back for good");
+        } else {
+            assert_eq!(found, Ok(Some(as_found(&landed))), "(f): the landing standing, at its row");
+        }
+        assert!(wrote(&dialer).is_empty(), "undone {undone}: nothing written: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "undone {undone}: nothing committed");
+    }
 }
 
 /// A resume never finds a landing by a marker its draft was staged with.

@@ -207,8 +207,10 @@ pub(super) const MAX_DELIVERY_ITEMS: u64 = 1 << 17;
 /// How many times a `history_busy` on a read at a position is retried.
 ///
 /// Past them the read is [`Refusal::HistoryBusy`] (§7: "retry with backoff,
-/// bounded"). A composition naming no position, and a landing, read at the
-/// head and never meet it.
+/// bounded"). A composition naming no position, and a landing into a draft
+/// with a recorded base or by a shot, read at the head and never meet it;
+/// a landing into a draft with none reads the past states its rows' walk
+/// needs (the `landings` module's doc).
 const HISTORY_BUSY_RETRIES: u32 = 4;
 
 // ── compose ───────────────────────────────────────────────────────────────

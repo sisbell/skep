@@ -18,7 +18,13 @@
 //! merge landed leaves the draft's marker standing, so the draft's next
 //! publication would still carry the merge's claim: the talk names the
 //! marker before the write and the withdrawal beside it (`skep merge
-//! --withdraw`), and the report carries it. A restore takes no merge out.
+//! --withdraw`), and the report carries it. A restore takes no merge out
+//! of a draft with a recorded base. A draft with none carries no marker,
+//! and its landings are read off its rows (`skep_client::merge`'s
+//! `baseless_landing`; skep #914): there a restore that leaves the draft
+//! as it stood before the landing standing in it takes that landing back,
+//! as `skep merge --undo` would, and a restore to any other state leaves
+//! the landing standing.
 //!
 //! **The way back.** The report's `as_of` is the position the draft stood
 //! at before the restore — the one that puts the restore back, since the

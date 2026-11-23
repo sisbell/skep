@@ -107,7 +107,12 @@
 //! superseded by a version without their words; [`Past::marker`] carries
 //! the marker as it stands, for the embedder to say before and after the act
 //! and to name the withdrawal (`merge::withdraw`) beside it. The restore
-//! itself never takes a merge out.
+//! itself never takes a merge out of a draft with a recorded base. A draft
+//! with none carries no marker, and the landing standing in it is read off
+//! its rows (`merge::baseless_landing`; skep #914): there a restore that
+//! leaves the draft as it stood before the landing standing in it is that
+//! landing's take-back, the same write as the merge's undo, and a restore
+//! to any other state leaves the landing standing.
 
 use std::collections::HashSet;
 

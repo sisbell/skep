@@ -159,19 +159,19 @@
 //! after it: where the change is this merge's own landing, made after the
 //! composition — a composition landed again in a session holding no memo
 //! of its write, the landing found by the draft's marker or, on a draft
-//! with no recorded base, which carries none, by its latest `set_arrangement`
-//! row on the supplement (wire.md §The change feed) — it names that landing
-//! and its record, written or not, with [`resume`] the way on where the
-//! draft holds M; else it names the draft that changed and that
-//! nothing was merged. The frame carries the head the merge composed on with
-//! its extent AS READ (`head`), the same pair as the base to record where
-//! the board records a base for the draft — read off the draft's
-//! `doc_metadata` as it stands, a recorded base never cleared; a baseless
-//! draft and a fork get none, so the library never sends a `base` the board
-//! refuses `no_base_to_record` (N4) — and the merge the draft is to carry
-//! (`merge`, every side but the draft itself). The board re-records the
-//! base on the head and sets the
-//! marker in the same commit (R4); a newer version published since the
+//! with no recorded base, which carries none, as the landing standing by
+//! its `set_arrangement` rows on the supplement (wire.md §The change feed;
+//! **Finding a landing**, below) — it names that landing and its record,
+//! written or not, with [`resume`] the way on where the draft holds M; else
+//! it names the draft that changed and that nothing was merged. The frame
+//! carries the head the merge composed on with its extent AS READ (`head`),
+//! the same pair as the base to record where the board records a base for
+//! the draft — read off the draft's `doc_metadata` as it stands, a recorded
+//! base never cleared; a baseless draft and a fork get none, so the library
+//! never sends a `base` the board refuses `no_base_to_record` (N4) — and the
+//! merge the draft is to carry (`merge`, every side but the draft itself).
+//! The board re-records the base on the head and sets the marker in the
+//! same commit (R4); a newer version published since the
 //! compose is not refused: the write lands against the head it composed on
 //! and the ack names the trunk's current head as `head_moved`, which the
 //! landing carries out (R5, "land and tell"). The write is sent where the
@@ -197,23 +197,41 @@
 //! and stands beside the next stage.
 //! The record follows, its draft landing's position
 //! the write's `at`. [`resume`] finds a landing in a draft named by that same
-//! marker or row, at the position it marks, the draft holding M — never by
-//! the draft's words, which a withdrawal keeps: a landing withdrawn or
-//! undone, its mark cleared, leaves nothing to resume (R2). Nor is a
-//! landing found by a marker the draft inherited when it was staged from a
-//! marked draft: the stage copies the marker with the words, stamped at its
-//! own commit, the draft's mint (P2), so a marker whose `at` is the draft's
-//! own `at` in its `doc_metadata` marks no landing in it.
+//! mark, at the position it marks, the draft holding M — never by the
+//! draft's words, which a withdrawal keeps: a landing withdrawn or undone,
+//! its mark cleared, leaves nothing to resume (R2). Nor is a landing found
+//! by a marker the draft inherited when it was staged from a marked draft:
+//! the stage copies the marker with the words, stamped at its own commit,
+//! the draft's mint (P2), so a marker whose `at` is the draft's own `at` in
+//! its `doc_metadata` marks no landing in it.
+//!
+//! **Finding a landing** (skep #914). On every draft a landing stands from
+//! its write until it is taken back, and when it is taken back the landing
+//! it went over stands again; a restore or any other re-arrangement
+//! neither ends one nor brings one back. A draft with a recorded base shows
+//! it by its marker. A draft with none carries no marker, and the landing
+//! standing is read off its `set_arrangement` rows on the supplement (the
+//! `landings` module's doc): a row naming the merge is a landing, and a
+//! later row naming none that leaves the draft exactly as it stood before
+//! the standing landing — the two states read through `/op-at` and mapped
+//! through one read of the records over both, as the undo maps what it
+//! sends — is that landing's take-back, for good. With no plain row after
+//! the newest landing nothing is read at a past position. Where a past
+//! state the walk needs is one the board has reclaimed, no landing is
+//! found standing, so nothing is reported or recorded on a landing that
+//! cannot be judged, and `history_busy` past the bounded retries is
+//! refused as itself ([`Refusal::HistoryBusy`]; SP-14).
 //!
 //! **A fresh landing found standing** is answered where its draft marks
 //! it: the draft the merger's newest record for the key names is read as it
-//! stands, its `doc_metadata` and, with no recorded base, the feed walk's
-//! pages, and the position is that same marker's or row's. The record names
-//! the write that first landed the key in the draft, and a later landing of
-//! the key there, the same landing (skep #790), moves the mark past it; a
-//! mark below the record's position is an earlier merge's, its marker put
-//! back since, so where the draft marks none of this merge, or only such a
-//! one, the position the record names is answered.
+//! stands, its `doc_metadata` and, with no recorded base, its rows and the
+//! past states their walk needs, and the position is that same mark's. The
+//! record names the write that first landed the key in the draft, and a
+//! later landing of the key there, the same landing (skep #790), moves the
+//! mark past it; a mark below the record's position is an earlier merge's
+//! standing again — its marker put back, or with no recorded base its
+//! landing beneath one taken back — so where the draft marks none of this
+//! merge, or only such a one, the position the record names is answered.
 //!
 //! **The per-session ids.** Every write of a landing carries the id
 //! `<stem>.<frame>`, its stem `merge:` and the SHA-256, in lowercase hex,
@@ -358,8 +376,11 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 /// - the reads' refusals, for a member already holding the answered list or
 ///   for the merger's newest record for the key at a draft landing, and,
 ///   with no draft named where that record names a draft landing, for that
-///   draft's `doc_metadata` and, on a draft with no recorded base, the feed
-///   walk's pages, each as itself (SP-14);
+///   draft's `doc_metadata` and, on a draft with no recorded base, its rows
+///   and the past states their walk needs — [`Refusal::HistoryBusy`] past
+///   the bounded retries among them, a past state the board has reclaimed
+///   reading as no landing standing (the module's doc, **Finding a
+///   landing**) — each as itself (SP-14);
 /// - with no draft named where no record stands for a landing of the key,
 ///   the reads for a landing begun — the merge's head's `doc_metadata`, the
 ///   merger's drafts' rows on the supplement and each draft's own reads
@@ -451,8 +472,9 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// found with them (the module's doc) — writing nothing twice; `None` where
 /// nothing landed, with nothing written: a shot refused whole left nothing
 /// to find. The draft's mark is the marker naming this merge, or on a draft
-/// with no recorded base its latest `set_arrangement` row naming it, never
-/// the draft's words: a landing withdrawn or undone, its mark cleared, is
+/// with no recorded base the landing standing by its rows where it names
+/// this merge (the module's doc, **Finding a landing**), never the draft's
+/// words: a landing withdrawn or undone, its mark cleared or taken back, is
 /// no landing to resume, whatever the draft holds (R2); nor is a marker the
 /// draft inherited when it was staged from a draft the merge landed in,
 /// whose `at` is the draft's own mint (P2). A draft landing
@@ -475,10 +497,12 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// window part left unanswered at the shot is refused
 /// [`Refusal::WindowPartsOwed`], never answered as no landing: a landing
 /// is compared by the list its answers make (SP-14). A draft
-/// named is read as it stands — its `doc_metadata`, the feed walk's pages
-/// on a draft with no recorded base, and its `image` where the board marks
-/// the landing — each refusal answered as itself, never as no landing
-/// (SP-14).
+/// named is read as it stands — its `doc_metadata`, on a draft with no
+/// recorded base its rows and the past states their walk needs, and its
+/// `image` where the board marks the landing — each refusal answered as
+/// itself, never as no landing (SP-14), but a past state the board has
+/// reclaimed, which leaves no landing found standing (the module's doc,
+/// **Finding a landing**).
 pub fn resume(
     board: &Board,
     merged: &Merged,

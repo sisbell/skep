@@ -50,7 +50,10 @@
 //! the landing a draft's merge marker marks, found through the draft
 //! whatever the merge landed in since; [`standing_landing`], the same for
 //! the landing a draft named alone marks as it stands — its marker, or with
-//! no recorded base its latest `set_arrangement` row;
+//! no recorded base the landing standing by its `set_arrangement` rows;
+//! [`baseless_landing`], that landing, which stands from its write until it
+//! is taken back, the landing it went over then standing again (skep #914;
+//! the `landings` module's doc);
 //! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
@@ -117,6 +120,7 @@
 mod compose;
 pub mod journal;
 pub(crate) mod land;
+mod landings;
 pub(crate) mod reads;
 pub mod record;
 pub(crate) mod shared;
@@ -133,6 +137,7 @@ pub use compose::{
 pub use land::{
     land, record_published, replaced, resume, Landed, Landing, Merger, Replaced, SHOT_BODY_BUDGET,
 };
+pub use landings::baseless_landing;
 pub use windows::{given_parts, owed_parts, part_answers, Answers, Flag, Misfit, WindowPart};
 pub use reads::{
     compose, head_of, origin_of, Family, Inputs, Merged, NoUndo, Refusal, Role, Side,

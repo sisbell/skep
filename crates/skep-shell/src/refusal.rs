@@ -373,10 +373,10 @@ impl Name {
     /// another merge or none — another hand's landing or withdrawal since the
     /// compose — and the composition is dropped, nothing sent (skep #992).
     /// At `merge.undo` the landing the undo would take back — the draft's
-    /// marker, or with no base recorded its latest landing row — marks
-    /// another merge, another hand's since the compose, and the composition
-    /// is dropped, nothing sent (skep #1050). At the withdrawal the draft
-    /// carries no marker
+    /// marker, or with no base recorded the landing standing by its rows
+    /// (skep #914) — marks another merge, another hand's since the compose,
+    /// and the composition is dropped, nothing sent (skep #1050). At the
+    /// withdrawal the draft carries no marker
     /// (`skep_client::merge::Refusal::NoMerge`); at a withdrawal's undo the
     /// position names no withdrawal of the draft
     /// (`skep_client::merge::Refusal::NoWithdrawal`; skep #870). The detail

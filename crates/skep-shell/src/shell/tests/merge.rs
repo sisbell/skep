@@ -23,13 +23,14 @@
 //! or a withdrawal — refused `no_merge` naming the draft, nothing sent and
 //! the composition dropped (skep #992); an undo over a draft whose latest
 //! landing is another merge — another device's landing, the same side
-//! marked on a newer head, or the device's landing found by the latest
-//! landing row of a draft with no recorded base — refused `no_merge` naming
-//! the draft, nothing sent and the composition dropped, and over a
-//! withdrawn draft answered by the library, the composition standing for
-//! the undo once the merge is put back; the undo of its own landing in a
-//! draft with no recorded base and in a fork its owner landed in itself,
-//! whose marker names no side (skep #1050); the
+//! marked on a newer head, or the device's landing standing in a draft with
+//! no recorded base — refused `no_merge` naming the draft, nothing sent and
+//! the composition dropped, over a withdrawn draft answered by the library,
+//! the composition standing for the undo once the merge is put back, and
+//! taking its own landing back once the device's undo left it standing
+//! again in a draft with no recorded base (skep #914); the undo of its own
+//! landing in a draft with no recorded base and in a fork its owner landed
+//! in itself, whose marker names no side (skep #1050); the
 //! landing, the undo, the withdrawal and a compose into the draft refused
 //! `held_lines` over the draft's held lines, a burst held behind them, and
 //! the undo going out once the run is dropped; the rows refused `stopped`
@@ -1164,13 +1165,17 @@ fn a_landing_over_a_draft_no_longer_carrying_its_merge_is_refused_naming_the_dra
 /// composition stands, so once the device puts the merge back the undo lands, L
 /// as staged. In X, a draft never staged, which the board records no base for
 /// and so carries no marker, the device lands E.1.2's merge: the undo is
-/// refused `no_merge` naming X by X's latest landing row, nothing sent and X's
-/// words standing (the mutants that send the undo to the library unread, which
-/// takes the other hand's landing back; that test the side alone and take back
-/// the merge on E.3; that refuse a draft with a base and no marker, or drop the
-/// composition there; that keep the composition at the refusal; and that test
-/// the marker alone, or X's first landing row, and take back the device's
-/// landing in X).
+/// refused `no_merge` naming X by the landing standing in X, the device's,
+/// nothing sent and X's words standing (the mutants that send the undo to the
+/// library unread, which takes the other hand's landing back; that test the
+/// side alone and take back the merge on E.3; that refuse a draft with a base
+/// and no marker, or drop the composition there; that keep the composition at
+/// the refusal; and that test the marker alone, or X's first landing row, and
+/// take back the device's landing in X). And once the device takes its own
+/// landing in X back, the session's landing stands in X again (skep #914):
+/// the undo takes it back, X as it stood before it, no base restored and no
+/// marker (the mutant that reads X's latest landing row, taken back or not,
+/// refuses it `no_merge` and drops the composition).
 #[test]
 fn an_undo_over_a_draft_whose_latest_landing_is_another_merge_is_refused_naming_the_draft() {
     let cell = |since: SinceTheCompose| {
@@ -1242,7 +1247,7 @@ fn an_undo_over_a_draft_whose_latest_landing_is_another_merge_is_refused_naming_
     cell(SinceTheCompose::Landed);
     cell(SinceTheCompose::MarkedOnANewerHead);
     cell(SinceTheCompose::Withdrawn);
-    // X, never staged: its latest landing row is the device's.
+    // X, never staged: the landing standing in it is the device's.
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -1259,10 +1264,34 @@ fn an_undo_over_a_draft_whose_latest_landing_is_another_merge_is_refused_naming_
     let words = g.text(&x, 20);
     let before = g.position();
     let refused = g.call("merge.undo", json!({"session": g.session})).unwrap_err().to_value();
-    assert_eq!(refused, json!({"kind": "shell", "name": "no_merge", "draft": x}), "by X's latest landing row: {refused}");
+    assert_eq!(refused, json!({"kind": "shell", "name": "no_merge", "draft": x}), "by the landing standing in X: {refused}");
     assert_eq!(g.position(), before, "nothing sent");
     assert_eq!(g.text(&x, 20), words, "X's words stand");
     assert_no_merge(&g, &g.session);
+    g.shell.shutdown();
+    sd.shutdown();
+    // X again, the device's landing taken back by the device: the session's
+    // own landing stands again (skep #914), and its undo takes it back.
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let e12 = another_daughter(&g, &f, " later");
+    let x = g.draft("the hen");
+    merged_into(&g, &f, &f.e11, &x);
+    let second = second_device(&dir, &sd);
+    let landed = second.call("merge.compose", json!({"session": second.session, "doc": f.edition, "alternative": e12, "into": x})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(x.as_str())), "the premise: the device's landing in X: {landed}");
+    let (taken, _) = undo_once(&second, &second.session);
+    assert_eq!(taken["draft"].as_str(), Some(x.as_str()), "the premise: the device's landing taken back: {taken}");
+    second.shell.shutdown();
+    let (undone, marker) = undo_once(&g, &g.session);
+    assert_eq!(
+        (undone["draft"].as_str(), undone["restored"].clone(), marker),
+        (Some(x.as_str()), Value::Null, None),
+        "the session's own landing, standing again, taken back: {undone}"
+    );
+    assert_eq!(g.text(&x, 20), "the hen", "X as it stood before the session's landing");
     g.shell.shutdown();
     sd.shutdown();
 }

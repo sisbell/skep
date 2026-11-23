@@ -2,8 +2,9 @@
 //!
 //! The suite checks that a landing cut off before its record is named,
 //! never landed twice, and recorded by a `resume` naming its draft; that
-//! one begun before a take-back elsewhere, or in a draft its record's
-//! take-back left, is named, and one undone since stages afresh; and that
+//! one begun before a take-back elsewhere, in a draft its record's
+//! take-back left, or in a draft with no recorded base re-arranged since,
+//! is named, and one undone since stages afresh; and that
 //! a landing of other sides, one in another account's draft, one recorded
 //! in another state and a merge landed in its own side are no landing
 //! begun of the merge at hand.
@@ -41,24 +42,26 @@ fn head_minted(dialer: &Scripted) -> u64 {
         .at
 }
 
-/// Lands `inputs`' merge in a fresh draft, cut off before its record.
+/// Lands `inputs`' merge in `into`, or a fresh draft where `None`, cut off
+/// before its record.
 ///
 /// Over `world`, the session dies at the record's atom (wire.md
 /// §Sessions), its place among the requests read off the same landing
-/// made whole: the stage and the one write stand, no record. The death
-/// is then undone and the session's memo dropped, as a fresh session
-/// finds the board. Answers the dialer, the board and the hand, with
-/// the fresh draft and the landing's position.
+/// made whole: the stage, where one is sent, and the one write stand, no
+/// record. The death is then undone and the session's memo dropped, as a
+/// fresh session finds the board. Answers the dialer, the board and the
+/// hand, with the draft landed in and the landing's position.
 fn cut_off_before_the_record(
     world: fn() -> World,
     inputs: &Inputs,
+    into: Option<&str>,
 ) -> (Arc<Scripted>, Board, HybridSigner, Address, u64) {
     let atom = {
         let (dialer, board, signer) = open(world());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), inputs).expect("composed");
         dialer.clear();
-        land(&board, &merged, draft_landing(&session, &signer, None))
+        land(&board, &merged, draft_landing(&session, &signer, into.map(a)))
             .expect("the premise: landed whole");
         1 + dialer
             .requests()
@@ -72,7 +75,7 @@ fn cut_off_before_the_record(
         let merged = compose(&board, Some(session.token()), inputs).expect("composed");
         dialer.clear();
         dialer.world().die_at = Some(atom);
-        let err = land(&board, &merged, draft_landing(&session, &signer, None))
+        let err = land(&board, &merged, draft_landing(&session, &signer, into.map(a)))
             .expect_err("the session ended");
         let Refusal::SessionEnded(Halt::Halt(face)) = &err else {
             panic!("the death at the atom: {err:?}")
@@ -113,7 +116,7 @@ fn cut_off_before_the_record(
 #[test]
 fn a_landing_cut_off_before_its_record_is_named_never_landed_twice() {
     let (dialer, board, signer, l, at) =
-        cut_off_before_the_record(minted_head_world, &draft_inputs());
+        cut_off_before_the_record(minted_head_world, &draft_inputs(), None);
     let session = sign_in(&board, &signer);
     let fresh = || draft_landing(&session, &signer, None);
     let again =
@@ -201,7 +204,7 @@ fn a_landing_cut_off_before_its_record_is_named_never_landed_twice() {
 #[test]
 fn a_landing_begun_and_undone_since_stages_afresh() {
     let (dialer, board, signer, l, _) =
-        cut_off_before_the_record(minted_head_world, &draft_inputs());
+        cut_off_before_the_record(minted_head_world, &draft_inputs(), None);
     let session = sign_in(&board, &signer);
     let undone =
         undo(&board, merger(&session, &signer), &l, &a(K), None, None).expect("undone");
@@ -242,7 +245,7 @@ fn a_landing_begun_of_other_sides_is_not_this_merges() {
     };
     let of_t =
         Inputs { sides: vec![Side::Draft { at: a(T), position: None }], ..draft_inputs() };
-    let (dialer, board, signer, theirs, _) = cut_off_before_the_record(world, &of_t);
+    let (dialer, board, signer, theirs, _) = cut_off_before_the_record(world, &of_t, None);
     let session = sign_in(&board, &signer);
     let merged =
         compose(&board, Some(session.token()), &draft_inputs()).expect("the merge of S");
@@ -271,7 +274,7 @@ fn a_landing_begun_of_other_sides_is_not_this_merges() {
 #[test]
 fn a_landing_cut_off_before_its_record_is_completed_by_resume_naming_it() {
     let (dialer, board, signer, l, at) =
-        cut_off_before_the_record(minted_head_world, &draft_inputs());
+        cut_off_before_the_record(minted_head_world, &draft_inputs(), None);
     let session = sign_in(&board, &signer);
     let into_l = || draft_landing(&session, &signer, Some(l.clone()));
     let again =
@@ -497,4 +500,54 @@ fn a_merge_landed_in_its_own_side_is_no_landing_begun_of_a_later_one() {
     let landed = land(&board, &again, draft_landing(&session, &signer, None)).expect("landed");
     let Landed::Draft { into, staged, .. } = &landed else { panic!("{landed:?}") };
     assert!(*staged && into.to_string() != S, "a draft of its own: {landed:?}");
+}
+
+/// A landing begun in a baseless draft re-arranged since is named.
+///
+/// Skep #914: the draft landing's merge lands in `P`, named, a draft the
+/// board records no base for that held another list before, and is cut off
+/// before its record; `P` is then re-arranged by hand to the merge's words
+/// again, a row naming no merge, which leaves the landing standing. The
+/// merge composed again, a `resume` and a landing with no draft named each
+/// answer `Refusal::LandingBegun` naming `P` at the landing's position,
+/// nothing staged or written (the mutant that reads `P`'s latest row of any
+/// kind stages a second draft).
+#[test]
+fn a_landing_begun_in_a_baseless_draft_re_arranged_since_is_named() {
+    const P: &str = "1.0.1.0.67";
+    let world = || {
+        let mut w = minted_head_world();
+        w.doc(P, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w
+    };
+    let (dialer, board, signer, p, at) =
+        cut_off_before_the_record(world, &draft_inputs(), Some(P));
+    assert_eq!(p, a(P), "the premise: landed in P");
+    assert_eq!(dialer.world().standing(P), (None, None), "the premise: no base, no marker");
+    let typed = dialer.world().position;
+    let frame = frames::set_arrangement(P, &shot_runs(&draft_m()), typed, None, None, None, None);
+    dialer.world().apply(&frame)["at"].as_u64().expect("the re-arrangement's ack");
+    let session = sign_in(&board, &signer);
+    let again =
+        compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+    let begun = Refusal::LandingBegun { draft: a(P), position: at };
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &again, draft_landing(&session, &signer, None)),
+        Err(begun.clone()),
+        "the resume names P"
+    );
+    assert_eq!(
+        land(&board, &again, draft_landing(&session, &signer, None)),
+        Err(begun),
+        "the landing names P"
+    );
+    let ops = dialer.ops();
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    assert!(
+        ops.iter().all(|o| !writes.contains(&o.as_str())),
+        "nothing staged or written: {ops:?}"
+    );
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
 }

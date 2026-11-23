@@ -151,10 +151,12 @@
 //! naming them and the `--undo` that puts them back (the owner's ruling of
 //! 2026-11-20). For `--into` that landing is the one standing in the draft
 //! named, read by the draft's mark — its marker, or with no recorded base
-//! its latest `set_arrangement` row — whatever the merge landed in since
-//! (`standing_landing`); for `--new` it is the one the merger's newest
-//! record of the merge names, in the draft it lands in. `--json` is every
-//! command's flag and changes nothing here: the report is JSON always.
+//! the landing standing by its `set_arrangement` rows, which a restore or
+//! any other re-arrangement neither ends nor brings back (skep #914) —
+//! whatever the merge landed in since (`standing_landing`); for `--new` it
+//! is the one the merger's newest record of the merge names, in the draft
+//! it lands in. `--json` is every command's flag and changes nothing here:
+//! the report is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;

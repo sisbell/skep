@@ -53,8 +53,10 @@
 //! that draft to land it with its record or `--undo` it; and the report then
 //! carries the landing, naming a newer version published since where the
 //! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
-//! left open; `--journal` names the merge journal (decision 7), `--kind`
-//! the record kind's type address (decision 9's row is interim and
+//! left open — at a `moves` gap with spots, one set of words two sides
+//! placed at two places, `order:⟨side⟩` or `keep:⟨side⟩` takes that side's
+//! placement (CM-I33); `--journal` names the merge journal (decision 7),
+//! `--kind` the record kind's type address (decision 9's row is interim and
 //! unpinned, so the caller names it). The board's refusal is exit 1, a halt
 //! exit 3. A `withheld` refusal — a document the merger may not read, or an
 //! origin a write's run windows — names the document, the second the
@@ -1096,20 +1098,32 @@ fn published_line(merged: &Merged, member: &Address, claims: usize) -> String {
 /// Returns the lines naming every default the merge takes (§1.5, as the
 /// reveal lists them: kind, where, as placed).
 fn default_lines(merged: &Merged) -> Vec<String> {
-    merged
-        .composed
-        .gaps
-        .iter()
-        .filter(|g| !g.settled)
-        .map(|g| {
-            let place = match (&g.after, &g.before) {
-                (Some(after), _) => format!("after {after}"),
-                (None, Some(before)) => format!("before {before}"),
-                (None, None) => "at the document's start".to_string(),
-            };
-            format!("left at its default: gap {} ({}) {place}, placed {}", g.id.0, kind_name(g.kind), default_of(g))
-        })
-        .collect()
+    merged.composed.gaps.iter().filter(|g| !g.settled).map(default_line).collect()
+}
+
+/// Returns the line naming one gap's default: its kind, where, as placed.
+///
+/// A gap is where its anchors put it; a `moves` gap has none. One with
+/// spots — one set of words two sides placed at two places (CM-I33) — is
+/// at each side's place, and a spine's is no place but the side's order the
+/// spine took.
+fn default_line(g: &Gap) -> String {
+    let at = |after: &Option<Address>, before: &Option<Address>| match (after, before) {
+        (Some(after), _) => format!("after {after}"),
+        (None, Some(before)) => format!("before {before}"),
+        (None, None) => "at the document's start".to_string(),
+    };
+    let place = match (g.kind, &g.placed) {
+        _ if !g.spots.is_empty() => {
+            g.spots.iter().map(|s| format!("side {} {}", s.side.0, at(&s.after, &s.before))).collect::<Vec<_>>().join(", ")
+        }
+        (GapKind::Moves, Placement::Order(sides)) => {
+            let sides: Vec<String> = sides.iter().map(|s| s.0.to_string()).collect();
+            format!("in side {}'s order", sides.join(","))
+        }
+        _ => at(&g.after, &g.before),
+    };
+    format!("left at its default: gap {} ({}) {place}, placed {}", g.id.0, kind_name(g.kind), default_of(g))
 }
 
 /// Returns the sides' placeholder clause of a part's line: where one or
@@ -1217,7 +1231,7 @@ fn family_name(family: Family) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use skep_client::merge::Flag;
+    use skep_client::merge::{Flag, Spot};
 
     use super::*;
 
@@ -1259,6 +1273,47 @@ mod tests {
     fn a_quoted_passage_cannot_forge_a_line() {
         assert_eq!(quoted(Some("a\nb\x1b[31m"), "unread"), "“a<U+000A>b<U+001B>[31m”");
         assert_eq!(quoted(None, "a passage you cannot read"), "a passage you cannot read");
+    }
+
+    /// A default's line says where the gap stands (§1.5): a `moves` gap
+    /// with spots at each side's place for the one set of words, a spine's
+    /// `moves` gap in the order of the side the spine took and never "at
+    /// the document's start", and every other gap by its anchor (the
+    /// mutants that keep the anchors' line for a `moves` gap say the start).
+    #[test]
+    fn a_default_line_names_each_sides_place_and_no_place_for_the_spines_order() {
+        let a = |s: &str| parse_address(s).expect("an address");
+        let gap = |kind: GapKind, after: Option<Address>, placed: Placement, spots: Vec<Spot>| Gap {
+            id: GapId(2),
+            kind,
+            after,
+            before: None,
+            runs: vec![(SideIx(0), skep_client::merge::Run::new(a("1.0.1.0.1"), 20, 3))],
+            placed,
+            settled: false,
+            resolved_by: None,
+            spots,
+        };
+        let spots = vec![
+            Spot { side: SideIx(0), after: Some(a("1.0.1.0.1.0.1.4")), before: Some(a("1.0.1.0.1.0.1.5")) },
+            Spot { side: SideIx(1), after: None, before: Some(a("1.0.1.0.1.0.1.1")) },
+        ];
+        assert_eq!(
+            default_line(&gap(GapKind::Moves, None, Placement::Order(vec![SideIx(0)]), spots)),
+            "left at its default: gap 2 (moves) side 0 after 1.0.1.0.1.0.1.4, side 1 before 1.0.1.0.1.0.1.1, placed order:0"
+        );
+        assert_eq!(
+            default_line(&gap(GapKind::Moves, None, Placement::Order(vec![SideIx(1)]), Vec::new())),
+            "left at its default: gap 2 (moves) in side 1's order, placed order:1"
+        );
+        assert_eq!(
+            default_line(&gap(GapKind::Cut, Some(a("1.0.1.0.1.0.1.4")), Placement::After, Vec::new())),
+            "left at its default: gap 2 (cut) after 1.0.1.0.1.0.1.4, placed after:1.0.1.0.1.0.1.4"
+        );
+        assert_eq!(
+            default_line(&gap(GapKind::Corner, None, Placement::After, Vec::new())),
+            "left at its default: gap 2 (corner) at the document's start, placed order:0"
+        );
     }
 
     /// Each misfit keeps its command's words (§6): an answer that fits

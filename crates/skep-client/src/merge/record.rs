@@ -29,7 +29,8 @@
 //! the document's own arrangement from before its first version, the one
 //! the board's recorded bases derive for the sides, the sides are members
 //! or a draft the verifier may read, the rules are versioned, the value
-//! switches are in the body — so `verify` recomputes M and compares it
+//! switches are in the body — so `verify` recomputes M, under this build's
+//! rules whatever version the record names ([`RULES`]), and compares it
 //! with the landed member's image over its first `placed` positions, or the
 //! draft's at the position recorded, the daemon's `compare` the oracle the
 //! client's join is checked against (§1.3 step 4), and answers `Equal`,
@@ -74,7 +75,7 @@ use crate::publication::owned_by;
 
 use super::compose::{
     Choice, Gap, GapId, GapKind, Options, Placement, Resolution, ResolvedBy, Run, RunCounts,
-    SideIx, ValueLog,
+    SideIx, Spot, ValueLog,
 };
 use super::reads::{self, last_component, origin_of, OnEnd, Reader, Refusal, Role, Side};
 
@@ -88,8 +89,13 @@ pub const TYPE: &str = crate::publication::MERGE_RECORD_TYPE;
 /// The schema's version, `v`.
 pub const SCHEMA_VERSION: u64 = 1;
 
-/// The rule set's version, `rules`: §2's rule set is `merge-rules-1`.
-pub const RULES: &str = "merge-rules-1";
+/// The rule set's version, `rules`: §2's rule set, `merge-rules-2`.
+///
+/// Its gaps hold a `moves` gap with spots wherever two or more sides placed
+/// one fresh identity at different spots (CM-I33). [`verify`] composes
+/// under this build's rules whatever version a record names, so a record
+/// written under an earlier set can verify `Differs` where the sets part.
+pub const RULES: &str = "merge-rules-2";
 
 /// Returns the `by` member: this library's crate and version.
 pub(super) fn by() -> String {
@@ -630,10 +636,11 @@ impl Record {
     /// one missing a member this build cannot do without or spelling one it
     /// cannot read — a gap naming a side past the one byte a side is
     /// numbered by among them; a missing `landed`, `claims`, `retries`,
-    /// `replaces`, `by`, `values.applied` or `answers` reads as its empty
-    /// value, a side's missing `arranged` as [`SideState::Unrecorded`], and
-    /// `rules` is not read. A member this build does not know is left
-    /// unread.
+    /// `replaces`, `by`, `values.applied` or `answers`, or a gap's missing
+    /// `spots`, reads as its empty value, a side's missing `arranged` as
+    /// [`SideState::Unrecorded`], and `rules` is not read: [`verify`]
+    /// composes under this build's [`RULES`]. A member this build does not
+    /// know is left unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
             return None;
@@ -716,7 +723,8 @@ impl Record {
     /// or the omission its `placed` spells. A gap placed `after` is re-stated
     /// by its place alone and one placed `before` by its `before` anchor,
     /// either of which places a gap of one group by that anchor; a `moves`
-    /// gap, which has no anchors, is re-stated by its order alone.
+    /// gap, which has no anchors, is re-stated by its order alone — at one
+    /// with spots the holder whose placement M took (CM-I33).
     pub fn options(&self) -> Options {
         let mut resolutions = Vec::new();
         for gap in &self.gaps {
@@ -753,6 +761,9 @@ impl Record {
 }
 
 /// Returns one gap as the record spells it (§4, `gaps`).
+///
+/// A `moves` gap with spots carries `spots`, each `{side, after, before}`
+/// (CM-I33); every other gap carries none.
 fn gap_to_value(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
@@ -780,7 +791,7 @@ fn gap_to_value(g: &Gap) -> Value {
         .iter()
         .map(|(side, run)| json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width.to_string()}))
         .collect();
-    json!({
+    let mut gap = json!({
         "id": g.id.0,
         "kind": kind,
         "after": g.after.as_ref().map(ToString::to_string),
@@ -789,10 +800,27 @@ fn gap_to_value(g: &Gap) -> Value {
         "placed": placed,
         "settled": g.settled,
         "resolved_by": resolved_by,
-    })
+    });
+    if !g.spots.is_empty() {
+        gap["spots"] = g
+            .spots
+            .iter()
+            .map(|s| {
+                json!({
+                    "side": s.side.0,
+                    "after": s.after.as_ref().map(ToString::to_string),
+                    "before": s.before.as_ref().map(ToString::to_string),
+                })
+            })
+            .collect();
+    }
+    gap
 }
 
 /// Returns the gap a JSON object spells, its runs' origins by [`origin_of`].
+///
+/// A gap with no `spots` reads with none, as one written before a `moves`
+/// gap carried them does.
 fn gap_from_value(v: &Value) -> Option<Gap> {
     let kind = match v["kind"].as_str()? {
         "order" => GapKind::Order,
@@ -836,6 +864,16 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         Value::String(s) => parse_address(s).map(Some),
         _ => None,
     };
+    let spots = match &v["spots"] {
+        Value::Null => Vec::new(),
+        spots => spots
+            .as_array()?
+            .iter()
+            .map(|s| {
+                Some(Spot { side: side_ix(&s["side"])?, after: anchor(&s["after"])?, before: anchor(&s["before"])? })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    };
     Some(Gap {
         id: GapId(v["id"].as_u64()? as u32),
         kind,
@@ -845,6 +883,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         placed,
         settled: v["settled"].as_bool()?,
         resolved_by,
+        spots,
     })
 }
 

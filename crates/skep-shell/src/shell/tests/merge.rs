@@ -35,7 +35,12 @@
 //! the undo going out once the run is dropped; the rows refused `stopped`
 //! and `poisoned` under those holds with nothing dialed; the
 //! re-open landing nothing, reading the side as compose read it and
-//! settling a gap the draft no longer arranges; `resolutions` refused where
+//! settling a gap the draft no longer arranges; a quote two sides placed
+//! apart, a `moves` gap with spots (CM-I33) — a choice the draft does not
+//! hold refused, the words moved to the side's place read as its placement
+//! taken and composed again with the gap they meet there, and the default
+//! landed naming both places, each record verifying `Equal`; `resolutions`
+//! refused where
 //! they name no gap or no choice the gap admits, nothing landed; the
 //! landing on the trunk through the publication family's shot with the
 //! claim, then the record; with no person present, the landing's undo and
@@ -167,6 +172,9 @@ fn assert_report_declared(report: &Value) {
         crate::shapes::assert_declared("MergeGap", gap);
         for run in gap["runs"].as_array().unwrap() {
             crate::shapes::assert_declared("GapRun", run);
+        }
+        for spot in gap["spots"].as_array().into_iter().flatten() {
+            crate::shapes::assert_declared("GapSpot", spot);
         }
     }
     crate::shapes::assert_declared("RunCounts", &report["counts"]);
@@ -1598,6 +1606,219 @@ fn with_no_person_present_a_take_back_is_typed_at_its_own_write_and_a_gap_is_the
         (Some("merged"), Some("agent"), Some("omitted")),
         "the agent's resolution in the record: {merged}"
     );
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// One quote two sides placed apart, as [`quoted_apart`] stages it.
+struct Apart {
+    edition: String,
+    e2: String,
+    s: String,
+    z1: String,
+}
+
+/// Stages one quote two sides place apart, against the daemon (CM-I33).
+///
+/// Z is published as Z.1, "quote", and E.1 as "the fox". The head E.2
+/// windows Z.1's words after "the " and adds "!" at its end, "the
+/// quotefox!"; S, staged from E.1, windows the same words at its own end,
+/// "the foxquote" — one identity at two spots, `E·4|E·5` and after `E·7`.
+fn quoted_apart(g: &Ground) -> Apart {
+    let publish = |doc: &str, draft: &str| -> String {
+        g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": doc, "readable_drafts": [draft], "published": [doc]})).unwrap_or_else(|r| panic!("{r}"));
+        let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        acked["member"].as_str().unwrap_or_else(|| panic!("a member: {acked}")).to_string()
+    };
+    let z = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let z1 = publish(&z, &g.staged(&z, "quote"));
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the fox");
+    let e1 = publish(&edition, &d);
+    let s = g.addr(frames::stage(&e1, None));
+    quote(g, &z1, &s, 8);
+    quote(g, &z1, &d, 5);
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "13"}, "values": ["!"], "as_of": g.position()}));
+    let e2 = publish(&edition, &d);
+    assert_eq!(g.text(&e2, 13), "the quotefox!", "the premise: the head's place");
+    assert_eq!(g.text(&s, 12), "the foxquote", "the premise: the side's place");
+    Apart { edition, e2, s, z1 }
+}
+
+/// Windows Z.1's "quote" into `doc` before its position `at`.
+fn quote(g: &Ground, z1: &str, doc: &str, at: u64) {
+    g.op(json!({"op": "copy", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "specs": [{"source": z1, "span": {"start": "1.1", "width": "0.5"}}], "as_of": g.position()}));
+}
+
+/// Checks that a quote two sides placed apart is a `moves` gap with spots,
+/// settled by moving the words, against the daemon (CM-I33).
+///
+/// Composed into L, the draft side's merge lands the head's place, "the
+/// quotefox!", and reports gap 1 alone, a `moves` gap with spots naming
+/// `E·4|E·5` for the head and after `E·7` for the side, unsettled.
+/// `merge.land` taking the side's place there, or `keep_both`, `omit` or
+/// both sides' order, is refused `malformed_args` naming `resolutions`,
+/// nothing sent: the draft holds the words where it holds them. The word
+/// right after the quote deleted, the re-open reads the gap unsettled, the
+/// head's place left open by the anchor the draft no longer holds, and the
+/// word is put back by its identity. The person
+/// moves the quote to the end of L, after the head's "!": the re-open reads
+/// the side's place taken — gap 1 settled `person`, placed `[1]` — and
+/// composes again, so gap 2 stands, an `order` gap of the "!" and the quote
+/// at that spot, unsettled in the draft's order. Taking the side's place is
+/// then accepted, the landing's defaults naming gap 2 alone, and E.3's
+/// record, gap 1 placed `[1]` beside gap 2, verifies `Equal` (the mutants
+/// that read the move without composing again, take a choice the draft
+/// does not hold, or settle the gap where its default's place no longer
+/// holds the words, record no gap 2, a place E.3 lacks, or a settled gap 1
+/// nothing moved).
+#[test]
+fn a_quote_two_sides_place_apart_is_settled_by_moving_it_and_recorded_with_the_gap_it_meets() {
+    use skep_client::merge::{current, verify, Record, Verdict};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let a = quoted_apart(&g);
+    let l = g.addr(frames::stage(&a.e2, None));
+    let compose = || {
+        let report = g.call("merge.compose", json!({"session": g.session, "doc": a.edition, "draft": a.s, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+        assert_report_declared(&report);
+        report
+    };
+    let landed = compose();
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    assert_eq!(g.text(&l, 13), "the quotefox!", "M at the default, the head's place");
+    let gaps = landed["gaps"].as_array().unwrap();
+    assert_eq!(gaps.len(), 1, "{landed}");
+    assert_eq!((gaps[0]["id"].as_u64(), gaps[0]["kind"].as_str(), gaps[0]["placed"].clone(), gaps[0]["settled"].as_bool()), (Some(1), Some("moves"), json!([0]), Some(false)), "{landed}");
+    let at = |n: u64| format!("{}.0.1.{n}", a.edition);
+    assert_eq!(gaps[0]["spots"], json!([{"side": 0, "after": at(4), "before": at(5)}, {"side": 1, "after": at(7), "before": null}]), "{landed}");
+    // A choice the draft does not hold, refused with nothing sent.
+    let before = g.position();
+    for bad in [json!({"1": {"order": [1]}}), json!({"1": {"keep_only": 1}}), json!({"1": "keep_both"}), json!({"1": "omit"}), json!({"1": {"order": [0, 1]}})] {
+        let refused = g.call("merge.land", json!({"session": g.session, "resolutions": bad})).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "{bad}: {refused}");
+    }
+    assert_eq!(g.position(), before, "nothing sent");
+    // The word after the head's quote deleted: its place left open, the gap
+    // stands, then the word put back by its identity, E.2's "f".
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "10"}, "width": "1", "as_of": g.position()}));
+    assert_eq!(g.text(&l, 12), "the quoteox!");
+    let open = compose();
+    assert_eq!((open["outcome"].as_str(), open["gaps"][0]["settled"].as_bool(), open["gaps"].as_array().map(Vec::len)), (Some("reopened"), Some(false), Some(1)), "nothing moved: {open}");
+    g.op(json!({"op": "copy", "doc": l, "at": {"subspace": "1", "ordinal": "10"}, "specs": [{"source": a.e2, "span": {"start": "1.10", "width": "0.1"}}], "as_of": g.position()}));
+    assert_eq!(g.text(&l, 13), "the quotefox!");
+    // The quote moved to the side's place, after the head's "!".
+    g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "5"}, "width": "5", "as_of": g.position()}));
+    quote(&g, &a.z1, &l, 9);
+    assert_eq!(g.text(&l, 13), "the fox!quote");
+    let reopened = compose();
+    assert_eq!(reopened["outcome"].as_str(), Some("reopened"), "{reopened}");
+    let gaps = reopened["gaps"].as_array().unwrap();
+    assert_eq!((gaps[0]["settled"].as_bool(), gaps[0]["resolved_by"].as_str(), gaps[0]["placed"].clone()), (Some(true), Some("person"), json!([1])), "the side's place taken: {reopened}");
+    assert_eq!(
+        (gaps.len(), gaps[1]["id"].as_u64(), gaps[1]["kind"].as_str(), gaps[1]["placed"].clone(), gaps[1]["settled"].as_bool()),
+        (2, Some(2), Some("order"), json!([0, 1]), Some(false)),
+        "the \"!\" and the quote at the side's place: {reopened}"
+    );
+    // The side's place, confirmed: the landing, its record verified.
+    let published = g.call("merge.land", json!({"session": g.session, "resolutions": {"1": {"order": [1]}}})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("MergeLanded", &published);
+    let e3 = format!("{}.3", a.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str()), (Some("landed"), Some(e3.as_str())), "{published}");
+    assert_eq!(published["defaults"], json!([{"id": 2, "kind": "order", "after": at(7), "before": null, "placed": [0, 1]}]), "{published}");
+    assert_eq!(g.text(&e3, 13), "the fox!quote");
+    let key = Record::from_value(&reopened["record"]).expect("the report's record").key();
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = current(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &key).expect("the lookup").expect("E.3's record");
+    let body = record.to_value();
+    assert_eq!((body["gaps"][0]["placed"].clone(), body["gaps"][0]["resolved_by"].as_str(), body["gaps"][1]["kind"].as_str()), (json!([1]), Some("person"), Some("order")), "{body}");
+    assert_eq!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::Equal), "the record names what E.3 holds");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the re-open's read of a `moves` gap with spots off a draft's
+/// image, with no daemon behind it (CM-I33).
+///
+/// The head placed Z's "quote" after `E·4`, before `E·5`, and the side
+/// after `E·7`, at the end. The quote whole at the end is the side's
+/// placement, by the merger the call names; whole at the head's place it is
+/// none, and so it stays with the word after it deleted, an anchor the
+/// draft no longer holds bounding nothing; with `E·7` deleted the side's
+/// place runs open to the end, and the quote there is the side's; with
+/// both deleted both places hold it, and it is none; at a third place, or
+/// not whole, it is none, and a settled gap is not read (the mutants that
+/// need both anchors of a place, or take another holder's place the
+/// default's holds too, answer none for the deleted `E·7` or the side's
+/// with both deleted).
+#[test]
+fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_its_words() {
+    use skep_client::merge::{Choice, Gap, GapId, GapKind, Placement, ResolvedBy, Resolution, Run, SideIx, Spot};
+    use skep_client::publication::Run as Held;
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"));
+    let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
+    let gap = Gap {
+        id: GapId(1),
+        kind: GapKind::Moves,
+        after: None,
+        before: None,
+        runs: vec![(SideIx(0), Run::new(z.clone(), 1, 5)), (SideIx(1), Run::new(z.clone(), 1, 5))],
+        placed: Placement::Order(vec![SideIx(0)]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(7)), before: None }],
+    };
+    let read = |gap: &Gap, image: &[(&Address, u64, u64)]| {
+        let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
+        super::super::merge::holders_moved(std::slice::from_ref(gap), &image, &ResolvedBy::Agent)
+    };
+    let sides = vec![Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Agent }];
+    assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 5)]), sides, "the quote at the end");
+    assert_eq!(read(&gap, &[(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)]), vec![], "the quote at the head's place");
+    assert_eq!(read(&gap, &[(&e, 1, 4), (&z, 1, 5), (&e, 6, 3)]), vec![], "the word after it deleted: the head's place open");
+    assert_eq!(read(&gap, &[(&e, 1, 6), (&e, 8, 1), (&z, 1, 5)]), sides, "E·7 deleted: the side's place open to the end");
+    assert_eq!(read(&gap, &[(&e, 1, 4), (&z, 1, 5), (&e, 6, 1), (&e, 8, 1)]), vec![], "E·5 and E·7 deleted: both places hold it");
+    assert_eq!(read(&gap, &[(&e, 1, 1), (&z, 1, 5), (&e, 2, 7)]), vec![], "at a third place");
+    assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 3)]), vec![], "not whole");
+    let settled = Gap { settled: true, resolved_by: Some(ResolvedBy::Person), ..gap.clone() };
+    assert_eq!(read(&settled, &[(&e, 1, 8), (&z, 1, 5)]), vec![], "a settled gap");
+}
+
+/// Checks that a quote two sides placed apart lands at its default naming
+/// both places, against the daemon (CM-I33).
+///
+/// S also writes "so " at its start, so M at the default is no head's
+/// text. Composed into L and published as it landed, the landing's one
+/// default is gap 1 with its spots, as the report named them, E.3 holding
+/// the head's place, and its record verifies `Equal`.
+#[test]
+fn a_quote_two_sides_place_apart_lands_at_its_default_naming_both_places() {
+    use skep_client::merge::{current, verify, Record, Verdict};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let a = quoted_apart(&g);
+    g.op(json!({"op": "insert", "doc": a.s, "at": {"subspace": "1", "ordinal": "1"}, "values": ["so "], "as_of": g.position()}));
+    let l = g.addr(frames::stage(&a.e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": a.edition, "draft": a.s, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(g.text(&l, 16), "so the quotefox!", "M at the default, the head's place");
+    let published = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e3 = format!("{}.3", a.edition);
+    assert_eq!((published["outcome"].as_str(), published["member"].as_str()), (Some("landed"), Some(e3.as_str())), "{published}");
+    let defaults = published["defaults"].as_array().unwrap();
+    assert_eq!(defaults.len(), 1, "{published}");
+    crate::shapes::assert_declared("MergeDefault", &defaults[0]);
+    for spot in defaults[0]["spots"].as_array().unwrap_or_else(|| panic!("the spots: {published}")) {
+        crate::shapes::assert_declared("GapSpot", spot);
+    }
+    assert_eq!((defaults[0]["kind"].as_str(), &defaults[0]["spots"]), (Some("moves"), &landed["gaps"][0]["spots"]), "{published}");
+    assert_eq!(g.text(&e3, 16), "so the quotefox!");
+    let key = Record::from_value(&landed["record"]).expect("the report's record").key();
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = current(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &key).expect("the lookup").expect("E.3's record");
+    assert_eq!(verify(&entry.board, Some(&entry.token), &record), Ok(Verdict::Equal), "the record names what E.3 holds");
     g.shell.shutdown();
     sd.shutdown();
 }

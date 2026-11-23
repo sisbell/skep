@@ -381,7 +381,7 @@ const SHAPES: &[Shape] = &[
         fields: &[req("flag", "'window' | 'leave_out' | 'keep_private'"), opt("second", "'window' | 'leave_out' | 'keep_private'"), req("key", "string"), req("published_in", "string[]")],
     },
     Shape { name: "LeftPrivate", open: false, doc: "a private set the landing left out, as `merge.land`'s acknowledgment and refusal name it (`stayed private: ⟨links⟩ links in ⟨set⟩ — your next version offers them again`)", fields: &[req("set", "string"), req("links", "number")] },
-    Shape { name: "MergeDefault", open: false, doc: "one of the merge's places left at its default, as the reveal lists them: `id` its gap, `kind`, `after` and `before` its anchors, `placed` as placed", fields: &[req("id", "number"), req("kind", "'order' | 'anchor' | 'corner' | 'cut' | 'collision' | 'moves'"), req("after", "string | null"), req("before", "string | null"), req("placed", "number[] | 'after' | 'before' | 'omitted'")] },
+    Shape { name: "MergeDefault", open: false, doc: "one of the merge's places left at its default, as the reveal lists them: `id` its gap, `kind`, `after` and `before` its anchors, `placed` as placed, `spots` each side's place at a `moves` gap of one set of words two sides placed at two places", fields: &[req("id", "number"), req("kind", "'order' | 'anchor' | 'corner' | 'cut' | 'collision' | 'moves'"), req("after", "string | null"), req("before", "string | null"), req("placed", "number[] | 'after' | 'before' | 'omitted'"), opt("spots", "GapSpot[]")] },
     Shape {
         name: "PartCounts",
         open: false,
@@ -494,10 +494,11 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "MergeGap",
         open: false,
-        doc: "one gap of the report: `id` the key `merge.land`'s `resolutions` take, `kind`, `after` and `before` the surviving base anchors on either side (null at an edge), `runs` the runs the gap places with the side each came from, `placed` the placement as it stands — the sides' order, `after` or `before` the anchor, or `omitted` — `settled` whether the rules settled it (an `anchor` gap) or the merger did (`resolved_by` `person` at the editor, `agent` where no person is present), `resolved_by` who settled it, or null while it stands unsettled at its default",
-        fields: &[req("id", "number"), req("kind", "GapKind"), req("after", "string | null"), req("before", "string | null"), req("runs", "GapRun[]"), req("placed", "GapPlacement"), req("settled", "boolean"), req("resolved_by", "string | null")],
+        doc: "one gap of the report: `id` the key `merge.land`'s `resolutions` take, `kind`, `after` and `before` the surviving base anchors on either side (null at an edge), `runs` the runs the gap places with the side each came from, `placed` the placement as it stands — the sides' order, `after` or `before` the anchor, or `omitted` — `settled` whether the rules settled it (an `anchor` gap) or the merger did (`resolved_by` `person` at the editor, `agent` where no person is present), `resolved_by` who settled it, or null while it stands unsettled at its default; `spots`, present on a `moves` gap of one set of words two sides placed at two places, each side's place, the default the first side's",
+        fields: &[req("id", "number"), req("kind", "GapKind"), req("after", "string | null"), req("before", "string | null"), req("runs", "GapRun[]"), req("placed", "GapPlacement"), req("settled", "boolean"), req("resolved_by", "string | null"), opt("spots", "GapSpot[]")],
     },
     Shape { name: "GapRun", open: false, doc: "one run a gap places: `side` the side it came from, `i_start` its first I-address, `width` its positions", fields: &[req("side", "number"), req("i_start", "string"), req("width", "number")] },
+    Shape { name: "GapSpot", open: false, doc: "one side's place for the words a `moves` gap with spots contests — one set of words two sides placed at two places, the default the first side's: `side` the side, `after` and `before` the base positions every side holding the words keeps either side of its place (null at an edge); move the words to another side's place in the draft and compose again to take it", fields: &[req("side", "number"), req("after", "string | null"), req("before", "string | null")] },
     Shape { name: "RunCounts", open: false, doc: "the run counts the record keeps (the merge record's decision 17): `a` the head's, `b` the sides', `m` the merged list's, checked against the cap", fields: &[req("a", "number"), req("b", "number"), req("m", "number")] },
     Shape {
         name: "MergeLanded",

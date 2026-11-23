@@ -570,6 +570,7 @@ fn the_record_round_trips_and_names_its_type() {
             placed: Placement::Order(vec![SideIx(1), SideIx(0)]),
             settled: true,
             resolved_by: Some(ResolvedBy::Agent),
+            spots: vec![],
         },
         Gap {
             id: GapId(2),
@@ -580,6 +581,7 @@ fn the_record_round_trips_and_names_its_type() {
             placed: Placement::Omitted,
             settled: true,
             resolved_by: Some(ResolvedBy::Answer(a(&format!("{DOC1}.0.1.7")))),
+            spots: vec![],
         },
         Gap {
             id: GapId(3),
@@ -590,13 +592,14 @@ fn the_record_round_trips_and_names_its_type() {
             placed: Placement::Before,
             settled: true,
             resolved_by: Some(ResolvedBy::Rule),
+            spots: vec![],
         },
     ];
     merged.record.values.applied = vec![GapId(1)];
     let v = merged.record.to_value();
     assert_eq!(
         (v["type"].as_str(), v["v"].as_u64(), v["rules"].as_str()),
-        (Some("merge"), Some(1), Some("merge-rules-1"))
+        (Some("merge"), Some(1), Some("merge-rules-2"))
     );
     assert_eq!(
         v["gaps"][0]["runs"][0],

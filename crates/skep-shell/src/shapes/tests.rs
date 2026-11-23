@@ -154,6 +154,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MergeRun", json!({"origin": "1.0.1.0.64", "i_start": 1, "width": 19, "side": 1, "family": "draft_native"})),
         ("MergeGap", json!({"id": 1, "kind": "order", "after": "1.0.1.0.64.0.1.4", "before": null, "runs": [{"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6}], "placed": [0, 1], "settled": false, "resolved_by": null})),
         ("GapRun", json!({"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6})),
+        ("GapSpot", json!({"side": 1, "after": "1.0.1.0.64.0.1.8", "before": null})),
         ("RunCounts", json!({"a": 1, "b": 2, "m": 3})),
         ("MergeLanded", json!({"outcome": "landed", "member": "1.0.1.0.64.2", "at": 412, "via": "answer", "claim": false, "supersede": ["1.0.1.0.64.1.1"], "daughter": false, "record": "1.0.1.0.1.0.2.3", "claims": ["1.0.1.0.64.0.2.1"], "retries": 0, "answers": [], "left_private": [{"set": "1.0.1.0.68", "links": 2}], "defaults": []})),
         ("WindowPart", json!({"run": 2, "part": 0, "words": "the words", "after": "and", "ordinal": 9, "origin": "1.0.1.0.69", "owner": null, "span": {"chain": "1.0.1.0.69.0.1", "first": 1, "width": 9}, "record": null, "counterpart": null, "version": null, "sides": ["1.0.1.0.64.1"], "admits": ["publish_first", "drop", "keep_private"], "answer": null, "named_since": false})),

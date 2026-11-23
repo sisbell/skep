@@ -73,8 +73,9 @@
 //! **The one rule** (merge record §2): a case is safe when the two sides
 //! touched different material; a conflict when they touched the same
 //! material or the same spot — "same material" known exactly by run
-//! identity, so a move is not a touch and an identical addition is not a
-//! difference. Six kinds of gap carry it, and the rules settle one:
+//! identity, so a move is not a touch and an identical addition at one spot
+//! is not a difference, while one identity two sides placed at two spots
+//! is (CM-I33). Six kinds of gap carry it, and the rules settle one:
 //!
 //! * `order` — two or more sides added at one spot: unsettled, the commit
 //!   order shown as the default, each side's runs together.
@@ -93,7 +94,10 @@
 //! * `moves` — a side's move the spine did not take: unsettled, the default
 //!   the earliest moving side's order where the sides' moves do not compose
 //!   — as where two sides moved overlapping material — or the hinted side's
-//!   under a `spine_hint`.
+//!   under a `spine_hint`; and one fresh identity two or more sides placed
+//!   at different spots, each spot read by the base positions every holder
+//!   keeps: unsettled, its `spots` naming each placement, the default the
+//!   earliest holder's, numbered before every other gap (CM-I33).
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
@@ -119,7 +123,7 @@ mod tests;
 
 pub use compose::{
     base_of, compose_runs, script, Choice, Composed, Gap, GapId, GapKind, InPlaceOp, Item, Options,
-    PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, ValueLog,
+    PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, Spot, ValueLog,
 };
 pub use land::{
     land, record_published, replaced, resume, Landed, Landing, Merger, Replaced, SHOT_BODY_BUDGET,

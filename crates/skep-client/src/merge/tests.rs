@@ -3,13 +3,17 @@
 //! runs, the gap kinds, the `settled` flags and the value log as the table
 //! stands after the rulings, beside a base of no positions, the base a side
 //! begun before the first version was begun from and the document's chain
-//! the order rule reads whatever the base holds; the resolutions, one per
-//! unsettled kind; the
+//! the order rule reads whatever the base holds; one fresh identity two
+//! sides placed at two spots, a `moves` gap with spots (CM-I33) — a
+//! neighbour one holder removed moving nothing, an overlapping quote
+//! contested where it overlaps, a holder's choice, and the numbers the
+//! other gaps keep under it and across the spine's re-walk; the
+//! resolutions, one per unsettled kind; the
 //! record's re-statement of them as a law over every place a gap is moved
-//! to; the fences the module promises; the one rule as a property over
-//! generated inputs; `base_of` over §1.2's address forms; `script` over
-//! three pairs. No board: every value read is a closure over a table the
-//! test writes.
+//! to, and of a holder's choice; the fences the module promises; the one
+//! rule as a property over generated inputs, a run both sides place among
+//! them; `base_of` over §1.2's address forms; `script` over three pairs.
+//! No board: every value read is a closure over a table the test writes.
 //!
 //! The notation is the record's: `(D,s,w)` is the run of `w` positions of
 //! `D` from `D·s`; the base `D.2` is `[(D,1,11)]` "the cat sat" — `D·1–4`
@@ -556,6 +560,195 @@ fn a_fresh_identity_two_sides_hold_is_placed_once() {
     assert_eq!(kinds(&c), vec![]);
 }
 
+// ── one identity at two spots (CM-I33) ───────────────────────────────────
+
+/// The sides of the first case: both hold "big" (`D·20–22`), the head after
+/// `D·4`, the side after `D·8`.
+fn apart() -> Vec<(SideIx, Vec<Run>)> {
+    two(vec![rd(1, 4), rd(20, 3), rd(5, 7)], vec![rd(1, 8), rd(20, 3), rd(9, 3)])
+}
+
+/// One identity two sides placed at two spots is a `moves` gap, unsettled:
+/// the head's placement the default, the side's copy left out, its spots
+/// naming `D·4|D·5` and `D·8|D·9`, nothing logged (the mutants that keep
+/// the earliest copy with no gap, or read both spots off one holder,
+/// answer no gap or one spot twice).
+#[test]
+fn a_fresh_identity_two_sides_place_apart_is_a_moves_gap_naming_both_spots() {
+    let c = compose(&base(), &apart());
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(20, 3), rd(5, 7)], "the head's placement");
+    assert_eq!(kinds(&c), vec![(GapKind::Moves, false)]);
+    assert_eq!((c.gaps[0].id, anchors(&c)), (GapId(1), vec![(None, None)]));
+    assert_eq!((c.gaps[0].placed.clone(), c.gaps[0].resolved_by.clone()), (Placement::Order(vec![SideIx(0)]), None));
+    assert_eq!(gap_runs(&c), vec![vec![(0, rd(20, 3)), (1, rd(20, 3))]], "each holder's placement of the one identity");
+    assert_eq!(
+        c.gaps[0].spots,
+        vec![
+            Spot { side: SideIx(0), after: Some(d_at(4)), before: Some(d_at(5)) },
+            Spot { side: SideIx(1), after: Some(d_at(8)), before: Some(d_at(9)) },
+        ]
+    );
+    assert_eq!(c.values, ValueLog { dedup: true, retype: false, applied: vec![] });
+}
+
+/// A neighbour one holder removed moves nothing: the side removed `D·5`,
+/// right after both sides' "big", and a spot is read by the base positions
+/// every holder keeps — `D·4|D·6` on each — so the one gap is the head's
+/// "big" beside the removal, an `anchor`, settled (the mutant that reads
+/// each holder's own anchors raises a `moves` gap).
+#[test]
+fn a_neighbour_one_holder_removed_moves_no_identity() {
+    let c = compose(&base(), &two(vec![rd(1, 4), rd(20, 3), rd(5, 7)], vec![rd(1, 4), rd(20, 3), rd(6, 6)]));
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(20, 3), rd(6, 6)]);
+    assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
+}
+
+/// A quote two sides window overlapping is contested only where it
+/// overlaps: the head windows `Z·20–29` after `D·2`, the side `Z·25–39`
+/// after `D·9` — one `moves` gap over `Z·25–29`, the head's quote whole at
+/// the default and the rest of the side's at its own place (the mutant that
+/// contests or drops the later run whole answers another M).
+#[test]
+fn an_overlapping_quote_is_contested_only_where_it_overlaps() {
+    let zr = |s, w| Run::new(z(), s, w);
+    let c = compose(&base(), &two(vec![rd(1, 2), zr(20, 10), rd(3, 9)], vec![rd(1, 9), zr(25, 15), rd(10, 2)]));
+    assert_eq!(runs(&c), vec![rd(1, 2), zr(20, 10), rd(3, 7), zr(30, 10), rd(10, 2)]);
+    assert_eq!(kinds(&c), vec![(GapKind::Moves, false)]);
+    assert_eq!(gap_runs(&c), vec![vec![(0, zr(25, 5)), (1, zr(25, 5))]]);
+}
+
+/// The merger's choice at a gap with spots keeps one holder's placement:
+/// `Order` or `KeepOnly` of the side puts "big" after `D·8`, settled by the
+/// person, nothing ignored; every other choice — `Omit`, `KeepBoth`, a side
+/// that holds nothing there, two sides, a place — leaves the default and
+/// stands in `ignored`; of two naming the gap the later stands (the mutants
+/// that route the choice into the spine's re-walk, or apply it and list it
+/// ignored too, answer another M or a non-empty `ignored`).
+#[test]
+fn a_gap_with_spots_takes_one_holders_placement_and_no_other_choice() {
+    let sides = apart();
+    for choice in [Choice::Order(vec![SideIx(1)]), Choice::KeepOnly(SideIx(1))] {
+        let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, choice.clone()), &unread);
+        assert_eq!(runs(&c), vec![rd(1, 8), rd(20, 3), rd(9, 3)], "{choice:?}: the words after D·8");
+        assert_eq!(kinds(&c), vec![(GapKind::Moves, true)], "{choice:?}");
+        assert_eq!(
+            (c.gaps[0].placed.clone(), c.gaps[0].resolved_by.clone()),
+            (Placement::Order(vec![SideIx(1)]), Some(ResolvedBy::Person)),
+            "{choice:?}"
+        );
+        assert!(c.ignored.is_empty(), "{choice:?}: {:?}", c.ignored);
+    }
+    for choice in [
+        Choice::Omit,
+        Choice::KeepBoth,
+        Choice::Order(vec![SideIx(2)]),
+        Choice::KeepOnly(SideIx(2)),
+        Choice::Order(vec![SideIx(1), SideIx(0)]),
+        Choice::After(d_at(8)),
+    ] {
+        let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, choice.clone()), &unread);
+        assert_eq!(runs(&c), vec![rd(1, 4), rd(20, 3), rd(5, 7)], "{choice:?}: the default stands");
+        assert_eq!(kinds(&c), vec![(GapKind::Moves, false)], "{choice:?}");
+        assert_eq!(c.ignored, vec![Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person }]);
+    }
+    let resolutions = vec![
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(0)]), by: ResolvedBy::Agent },
+    ];
+    let c = compose_runs(&base(), &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(20, 3), rd(5, 7)], "the later choice, the head's");
+    assert_eq!((c.gaps[0].settled, c.gaps[0].resolved_by.clone()), (true, Some(ResolvedBy::Agent)));
+    assert!(c.ignored.is_empty());
+}
+
+/// A gap with spots is numbered before the spine's: both sides hold "xy"
+/// (`D·20–21`), the head after `Z` at the end, the side at the start, and
+/// their reorders of `X Y Z` do not compose. Resolving the spine's gap 2
+/// re-walks under the side's order and leaves gap 1 as it was; resolving
+/// gap 1 moves the words and re-walks nothing, the spine the head's, a
+/// `cut` the words open there numbered after the defaults' last (the
+/// mutants that number the spine's gaps first, or re-walk at gap 1,
+/// answer another gap 1 or another spine).
+#[test]
+fn the_gaps_with_spots_keep_their_numbers_across_a_spine_re_walk() {
+    let sides = two(vec![rd(2, 1), rd(1, 1), rd(3, 1), rd(20, 2)], vec![rd(20, 2), rd(1, 1), rd(3, 1), rd(2, 1)]);
+    let c = compose(&[rd(1, 3)], &sides);
+    assert_eq!(runs(&c), vec![rd(2, 1), rd(1, 1), rd(3, 1), rd(20, 2)], "the head's order, its words");
+    assert_eq!(kinds(&c), vec![(GapKind::Moves, false), (GapKind::Moves, false)]);
+    assert!(!c.gaps[0].spots.is_empty() && c.gaps[1].spots.is_empty(), "the gap with spots first: {:?}", c.gaps);
+    let by_spine = compose_runs(&[rd(1, 3)], &d(), &sides, None, &resolve(2, Choice::Order(vec![SideIx(1)])), &unread);
+    assert_eq!(by_spine.gaps[0], c.gaps[0], "gap 1 as it was");
+    assert_eq!((by_spine.gaps[1].id, by_spine.gaps[1].settled), (GapId(2), true));
+    assert_eq!(runs(&by_spine), vec![rd(1, 1), rd(3, 1), rd(20, 2), rd(2, 1)], "the side's order");
+    let by_claim = compose_runs(&[rd(1, 3)], &d(), &sides, None, &resolve(1, Choice::Order(vec![SideIx(1)])), &unread);
+    assert_eq!(runs(&by_claim), vec![rd(20, 2), rd(2, 1), rd(1, 1), rd(3, 1)], "the head's order, the side's place");
+    assert_eq!(kinds(&by_claim), vec![(GapKind::Moves, true), (GapKind::Moves, false), (GapKind::Cut, false)]);
+    assert_eq!((by_claim.gaps[1].placed.clone(), by_claim.gaps[2].id), (Placement::Order(vec![SideIx(0)]), GapId(3)));
+    assert!(by_claim.ignored.is_empty());
+}
+
+/// A holder's choice numbers every other gap as at its default: sides 0 and
+/// 1 place "big" apart, side 2 adds "xx" at side 1's spot and a rewrite
+/// colliding with the head's removal at the end. At the defaults the
+/// `collision` is gap 2; with side 1's placement chosen an `order` gap
+/// arises at its spot and is numbered after the defaults' last, the
+/// `collision` keeping 2, and a resolution naming 2 omits the rewrite in
+/// both (the mutant that numbers from the chosen walk gives the `order`
+/// gap 2 and the omission to it).
+#[test]
+fn a_holders_choice_numbers_the_other_gaps_as_at_its_default() {
+    let sides = vec![
+        (SideIx(0), vec![rd(1, 4), rd(20, 3), rd(5, 6)]),
+        (SideIx(1), vec![rd(1, 8), rd(20, 3), rd(9, 3)]),
+        (SideIx(2), vec![rd(1, 8), rd(30, 2), rd(9, 1), rd(40, 2)]),
+    ];
+    let at_default = compose(&base(), &sides);
+    assert_eq!(kinds(&at_default), vec![(GapKind::Moves, false), (GapKind::Collision, false)]);
+    assert_eq!(runs(&at_default), vec![rd(1, 4), rd(20, 3), rd(5, 4), rd(30, 2), rd(9, 1), rd(40, 2)]);
+    let chosen = Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person };
+    let c = compose_runs(&base(), &d(), &sides, None, &Options { resolutions: vec![chosen.clone()], ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 8), rd(20, 3), rd(30, 2), rd(9, 1), rd(40, 2)], "big, then xx, at D·8|D·9");
+    assert_eq!(
+        c.gaps.iter().map(|g| (g.id.0, g.kind)).collect::<Vec<_>>(),
+        vec![(1, GapKind::Moves), (2, GapKind::Collision), (3, GapKind::Order)]
+    );
+    assert_eq!(gap_runs(&c)[2], vec![(1, rd(20, 3)), (2, rd(30, 2))]);
+    let omit = Resolution { gap: GapId(2), choice: Choice::Omit, by: ResolvedBy::Person };
+    let c = compose_runs(&base(), &d(), &sides, None, &Options { resolutions: vec![omit.clone()], ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(20, 3), rd(5, 4), rd(30, 2), rd(9, 1)], "the rewrite omitted at the defaults");
+    let both = Options { resolutions: vec![chosen, omit], ..Options::default() };
+    let c = compose_runs(&base(), &d(), &sides, None, &both, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 8), rd(20, 3), rd(30, 2), rd(9, 1)], "and with side 1's placement");
+    assert_eq!((c.gaps[1].kind, c.gaps[1].placed.clone()), (GapKind::Collision, Placement::Omitted));
+    assert!(c.ignored.is_empty());
+}
+
+/// A gap holding other words beside the moved ones keeps its number: the
+/// head adds "ab" and "big" at `D·4|D·5`, the side "cd" there and "big"
+/// after `D·8`. At the defaults the `order` gap 2 holds "ab", "big" and
+/// "cd"; with side 1's placement chosen it holds "ab" and "cd", still gap
+/// 2, so an order naming 2 given with that choice applies there, and the
+/// record's options compose the same M (the mutant that matches the gaps
+/// by their whole runs numbers it 3 and ignores the order).
+#[test]
+fn a_gap_that_keeps_other_words_beside_the_moved_ones_keeps_its_number() {
+    let sides = two(vec![rd(1, 4), rd(12, 2), rd(20, 3), rd(5, 7)], vec![rd(1, 4), rd(16, 2), rd(5, 4), rd(20, 3), rd(9, 3)]);
+    let at_default = compose(&base(), &sides);
+    assert_eq!(kinds(&at_default), vec![(GapKind::Moves, false), (GapKind::Order, false)]);
+    assert_eq!(gap_runs(&at_default)[1], vec![(0, rd(12, 2)), (0, rd(20, 3)), (1, rd(16, 2))]);
+    let resolutions = vec![
+        Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Person },
+        Resolution { gap: GapId(2), choice: Choice::Order(vec![SideIx(1), SideIx(0)]), by: ResolvedBy::Person },
+    ];
+    let c = compose_runs(&base(), &d(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(16, 2), rd(12, 2), rd(5, 4), rd(20, 3), rd(9, 3)]);
+    assert_eq!(c.gaps.iter().map(|g| g.id.0).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(kinds(&c), vec![(GapKind::Moves, true), (GapKind::Order, true)]);
+    assert!(c.ignored.is_empty(), "{:?}", c.ignored);
+    let again = compose_runs(&base(), &d(), &sides, None, &recorded(&c).options(), &unread);
+    assert_eq!((runs(&again), &again.gaps), (runs(&c), &c.gaps));
+}
+
 // ── the resolutions ──────────────────────────────────────────────────────
 
 /// An `order` gap resolved `Order([B,A])`: the groups swapped, the gap
@@ -767,6 +960,35 @@ fn a_record_recomposes_every_place_and_choice_its_merger_made() {
     }
 }
 
+/// A record re-states the holder a gap with spots took (CM-I33).
+///
+/// A gap with spots takes no place: its record keeps its spots and its
+/// holder, which the options re-state by the order alone, so a composition
+/// with the side's placement chosen, by either choice, or the head's
+/// confirmed, round-trips through the record's JSON with its spots and
+/// composes again to the same M and gaps. A gap carries `spots` only where
+/// it has them, and one spelled with none reads with none, as a record
+/// written before a gap carried them (the mutants that drop the spots on
+/// the write or refuse a gap without them fail the round trip or the read).
+#[test]
+fn a_record_re_states_the_holder_a_gap_with_spots_took() {
+    let sides = apart();
+    for choice in [Choice::Order(vec![SideIx(1)]), Choice::KeepOnly(SideIx(1)), Choice::Order(vec![SideIx(0)])] {
+        let first = compose_runs(&base(), &d(), &sides, None, &resolve(1, choice.clone()), &unread);
+        let record = recorded(&first);
+        assert_eq!(record.gaps, first.gaps, "{choice:?}: the gaps read back, spots and all");
+        let again = compose_runs(&base(), &d(), &sides, None, &record.options(), &unread);
+        assert_eq!((runs(&again), &again.gaps), (runs(&first), &first.gaps), "{choice:?}");
+    }
+    let mut v = recorded(&compose(&base(), &apart())).to_value();
+    assert_eq!(v["gaps"][0]["spots"][1]["after"], d_at(8).to_string(), "{v}");
+    let order = recorded(&compose(&base(), &two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]))).to_value();
+    assert!(order["gaps"][0].get("spots").is_none(), "an order gap carries none: {order}");
+    v["gaps"][0].as_object_mut().expect("a gap object").remove("spots");
+    let read = Record::from_value(&v).expect("a gap with no spots reads");
+    assert!(read.gaps[0].spots.is_empty() && read.gaps[0].kind == GapKind::Moves, "{:?}", read.gaps);
+}
+
 // ── the fences ───────────────────────────────────────────────────────────
 
 /// Every vector of §9 and the record's additions, named, as composed by
@@ -805,6 +1027,7 @@ fn vectors() -> Vec<(&'static str, Composed)> {
         ("corner, a left survivor", compose(&base(), &two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)]))),
         ("the agent case", compose(&base(), &two(edit(), vec![rd(1, 4), rd(16, 6), rd(8, 4)]))),
         ("moves", compose(&[rd(1, 3)], &two(vec![rd(2, 1), rd(1, 1), rd(3, 1)], vec![rd(1, 1), rd(3, 1), rd(2, 1)]))),
+        ("one identity at two spots", compose(&base(), &apart())),
     ]
 }
 
@@ -967,32 +1190,52 @@ fn touched_the_same(a: &Side, b: &Side, n: u64) -> bool {
 /// material every gap is settled and M holds every run of both sides;
 /// where they touched the same material or the same spot, at least one gap
 /// is unsettled. And in either case M holds the base less both removals
-/// and every addition, each once. Four thousand cases, both arms reached.
+/// and every addition, each once. Half the cases give both sides one fresh
+/// run S, the same identity, each after a base position of its own: S is
+/// the first side's insert alone, as the composition keeps it, and its two
+/// spots, read by the base positions both sides keep, differing is a touch
+/// of the same material too (CM-I33). Four thousand cases, both arms
+/// reached, S at one spot and at two among them.
 #[test]
 fn the_one_rule_holds_over_generated_inputs() {
     let mut rng = Rng(0x5EED_2026_10_15);
-    let (mut safe, mut conflicts) = (0, 0);
+    let (mut safe, mut conflicts, mut together, mut apart) = (0, 0, 0, 0);
     for _ in 0..4000 {
         let n = 4 + rng.below(7);
-        let (a, b) = (Side::draw(&mut rng, n, 100), Side::draw(&mut rng, n, 200));
-        let c = compose(&[rd(1, n)], &two(a.runs(n), b.runs(n)));
+        let (mut a, b) = (Side::draw(&mut rng, n, 100), Side::draw(&mut rng, n, 200));
+        let shared = (rng.below(2) == 0).then(|| (rng.below(n + 1), rng.below(n + 1), 1 + rng.below(3)));
+        // B as it places S; `b` without it is the side the oracle reads.
+        let mut b_placing = Side { removed: b.removed.clone(), inserts: b.inserts.clone() };
+        if let Some((after_a, after_b, width)) = shared {
+            a.inserts.push((after_a, 300, width));
+            b_placing.inserts.push((after_b, 300, width));
+        }
+        let c = compose(&[rd(1, n)], &two(a.runs(n), b_placing.runs(n)));
         let unsettled = c.gaps.iter().any(|g| !g.settled);
-        let same = touched_the_same(&a, &b, n);
-        assert_eq!(unsettled, same, "A {:?} {:?}; B {:?} {:?}; gaps {:?}", a.removed, a.inserts, b.removed, b.inserts, c.gaps);
+        let kept = |p: &u64| !a.removed.contains(p) && !b.removed.contains(p);
+        let spot = |after: u64| ((1..=after).rev().find(kept).unwrap_or(0), (after + 1..=n).find(kept).unwrap_or(n + 1));
+        let moved = shared.is_some_and(|(after_a, after_b, _)| spot(after_a) != spot(after_b));
+        match shared {
+            Some(_) if moved => apart += 1,
+            Some(_) => together += 1,
+            None => {}
+        }
+        let same = touched_the_same(&a, &b, n) || moved;
+        assert_eq!(unsettled, same, "A {:?} {:?}; B {:?} {:?}; S {shared:?}; gaps {:?}", a.removed, a.inserts, b.removed, b.inserts, c.gaps);
         if same {
             conflicts += 1;
         } else {
             safe += 1;
         }
-        let mut expected: Vec<u64> =
-            (1..=n).filter(|p| !a.removed.contains(p) && !b.removed.contains(p)).chain(a.fresh()).chain(b.fresh()).collect();
+        let mut expected: Vec<u64> = (1..=n).filter(kept).chain(a.fresh()).chain(b.fresh()).collect();
         expected.sort_unstable();
         let mut got: Vec<u64> = c.runs.iter().flat_map(|p| p.run.i_start..p.run.reach()).collect();
         got.sort_unstable();
-        assert_eq!(got, expected, "A {:?} {:?}; B {:?} {:?}", a.removed, a.inserts, b.removed, b.inserts);
+        assert_eq!(got, expected, "A {:?} {:?}; B {:?} {:?}; S {shared:?}", a.removed, a.inserts, b.removed, b.inserts);
         assert_eq!(c.counts.m, c.runs.len());
     }
     assert!(safe > 500 && conflicts > 500, "{safe} safe, {conflicts} conflicts");
+    assert!(together > 100 && apart > 500, "S at one spot {together} times, at two {apart}");
 }
 
 // ── base_of ──────────────────────────────────────────────────────────────

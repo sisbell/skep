@@ -83,8 +83,14 @@
 //! and each unsettled gap's state read off the draft as it stands, settled
 //! by the merger where the draft no longer arranges the gap's default as M
 //! placed it: its runs removed whole, or reordered; an edit inside a run's
-//! words settles nothing. The landing the marker names is recorded first
-//! where no record of the person's names it and `into` still holds M, by
+//! words settles nothing. At a `moves` gap with spots — one identity two
+//! sides placed apart (CM-I33) — words the draft holds at exactly one other
+//! holding side's spot and not at the default's, each spot read by the
+//! anchors the draft still holds, are that side's placement chosen: the
+//! merge is composed again with it, settled by the merger, and the other
+//! gaps are read off the draft over that composition, a gap the words raise
+//! at their new spot among them. The landing the marker names is recorded
+//! first where no record of the person's names it and `into` still holds M, by
 //! the library's `resume` naming `into` — a record-only completion, no
 //! write of the landing's sent again — so a landing cut off before its
 //! record is recorded once when its draft is named; a fork landed in
@@ -212,7 +218,9 @@
 //! composition gone, to be made again on the head it names (skep #806).
 //! `resolutions`, `{⟨gap⟩: ⟨choice⟩}`, are UNTRUSTED: each gap id and
 //! choice checked against the composition the shell holds — a gap of the
-//! report, a side among the gap's runs, an anchor the gap names — anything
+//! report, a side among the gap's runs, an anchor the gap names, and at a
+//! `moves` gap with spots only the side whose placement the composition
+//! took, since the draft holds the words where it holds them — anything
 //! else refused `malformed_args`, nothing landed; a checked one settles the
 //! gap in the record as the merger's, `resolved_by` `person` at the editor
 //! and `agent` with no person present ([`Surface`]).
@@ -1541,11 +1549,23 @@ impl Shell {
     /// Answers the re-open: the report with nothing landed, each unsettled
     /// gap's state read off `into` as it stands (the module doc).
     ///
+    /// Where `into` holds a gap with spots' words at another holding side's
+    /// spot (`holders_moved`), the merge is composed again over `merged`'s
+    /// own inputs with that side's placement chosen, settled by the merger,
+    /// and every other gap is read off the one image over that composition.
+    ///
     /// # Errors
     ///
-    /// The draft's image read's (`whole_draft`).
+    /// The draft's image read's (`whole_draft`); the composition's again,
+    /// through `merge_refusal`, where a holder's placement was moved.
     fn reopened(&self, session: &SessionEntry, key: (String, u64), form: Form, mut merged: lib::Merged, into: &Address, at: Option<u64>) -> Result<Value, Refusal> {
         let image = self.whole_draft(session, into)?;
+        let moved = holders_moved(&merged.record.gaps, &image, &self.surface().settler());
+        if !moved.is_empty() {
+            let mut inputs = merged.inputs.clone();
+            inputs.options.resolutions.extend(moved);
+            merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
+        }
         settle_by_edit(&mut merged, &image, self.surface());
         let position = at.unwrap_or(merged.as_of);
         let composition = Composition { session: session.reference.clone(), form, merged, into: into.clone() };
@@ -1955,11 +1975,16 @@ impl Shell {
 /// `{keep_only: side}`, `{after: anchor}` or `{before: anchor}` (the gap's
 /// own anchor) — settling the gap in the record as the merger's who acts
 /// through `surface`: `person` at the editor, `agent` with no person
-/// present.
+/// present. At a `moves` gap with spots (CM-I33) the one choice is
+/// `{order: [side]}` or `{keep_only: side}` naming the side whose placement
+/// the composition took, a confirmation: the words are where the draft
+/// holds them, and another holder's placement is reached by moving them to
+/// its spot and composing again (`holders_moved`).
 ///
 /// # Errors
 ///
-/// `malformed_args` naming `resolutions` at the first that fails its check;
+/// `malformed_args` naming `resolutions` at the first that fails its check,
+/// at a gap with spots every choice but its confirmation among them;
 /// nothing is applied past it.
 fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>, surface: Surface) -> Result<(), Refusal> {
     let malformed = || Refusal::malformed("resolutions");
@@ -1994,6 +2019,9 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>,
             }
             _ => return Err(malformed()),
         };
+        if !gap.spots.is_empty() && placed.as_ref() != Some(&gap.placed) {
+            return Err(malformed());
+        }
         for gaps in [&mut merged.record.gaps, &mut merged.composed.gaps] {
             if let Some(g) = gaps.get_mut(ix) {
                 if let Some(placed) = &placed {
@@ -2007,6 +2035,68 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>,
     Ok(())
 }
 
+/// Returns the holder's placement the draft's image now holds at each
+/// unsettled `moves` gap with spots among `gaps`, where it is another
+/// side's than the default's, as the resolution of the merger `by` names
+/// (CM-I33; the module doc, THE RE-OPEN).
+///
+/// The gap's words are one identity whoever holds them, so they are found
+/// by the default holder's runs, and they stand at a holder's spot where
+/// they lie whole after its `after` anchor and before its `before` in the
+/// image. A spot is read by the anchors the draft still holds: one it no
+/// longer holds bounds nothing, as an end of the document does. The words
+/// are a holder's placement only where its spot is the one other holder's
+/// that holds them and the default's does not: a deleted neighbour leaves
+/// the default's spot open, and the gap stands unsettled.
+pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedBy) -> Vec<lib::Resolution> {
+    let in_image = |origin: &Address, i: u64| -> Option<u64> {
+        let mut at = 1u64;
+        for r in image {
+            if r.origin == *origin && i >= r.i_start && i < r.reach() {
+                return Some(at + (i - r.i_start));
+            }
+            at = at.saturating_add(r.width);
+        }
+        None
+    };
+    // The image position of the content position an anchor names.
+    let anchored = |anchor: &Address| -> Option<u64> {
+        let doc = skep_address::document_of(anchor)?;
+        let field = anchor.element_field()?;
+        if field.len() != 2 || field[0] != skep_address::content_subspace() {
+            return None;
+        }
+        in_image(&doc, u64::try_from(&field[1]).ok()?)
+    };
+    let mut moved = Vec::new();
+    for gap in gaps.iter().filter(|g| !g.settled && !g.spots.is_empty()) {
+        let Placement::Order(placed) = &gap.placed else { continue };
+        let [default] = placed.as_slice() else { continue };
+        let mut words: Option<(u64, u64)> = None;
+        let mut whole = true;
+        for (_, run) in gap.runs.iter().filter(|(side, _)| side == default) {
+            match (in_image(&run.origin, run.i_start), in_image(&run.origin, run.reach().saturating_sub(1))) {
+                (Some(first), Some(last)) => {
+                    words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
+                }
+                _ => whole = false,
+            }
+        }
+        let (Some((lo, hi)), true) = (words, whole) else { continue };
+        let holds = |spot: &lib::Spot| {
+            spot.after.as_ref().and_then(anchored).is_none_or(|p| p < lo) && spot.before.as_ref().and_then(anchored).is_none_or(|p| p > hi)
+        };
+        if gap.spots.iter().any(|s| s.side == *default && holds(s)) {
+            continue;
+        }
+        let others: Vec<SideIx> = gap.spots.iter().filter(|s| s.side != *default && holds(s)).map(|s| s.side).collect();
+        if let [side] = others.as_slice() {
+            moved.push(lib::Resolution { gap: gap.id, choice: lib::Choice::Order(vec![*side]), by: by.clone() });
+        }
+    }
+    moved
+}
+
 /// Reads each unsettled gap's state off the draft's image as it stands (the
 /// module doc, THE RE-OPEN).
 ///
@@ -2015,7 +2105,9 @@ fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>,
 /// through `surface`, `person` or `agent`: the re-open reads the draft, not
 /// the hand that edited it, so the merger composing is the one recorded. An
 /// edit inside a run's words, which keeps every position in its order,
-/// settles nothing.
+/// settles nothing. A gap with spots' words moved to another holder's spot
+/// are read before this, by `holders_moved`, and composed again as that
+/// holder's placement.
 fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Surface) {
     let ordinal_of = |origin: &Address, i: u64| -> Option<u64> {
         let mut at = 1u64;
@@ -2109,9 +2201,15 @@ fn owed_detail(parts: &[WindowPart], given: &[WindowPart], misfits: &[Misfit], l
 }
 
 /// Returns one gap left at its default (`shapes`' `MergeDefault`).
+///
+/// A gap with spots names them, as the report's gap does.
 fn default_json(g: &Gap) -> Value {
     let v = gap_json(g);
-    json!({"id": v["id"], "kind": v["kind"], "after": v["after"], "before": v["before"], "placed": v["placed"]})
+    let mut default = json!({"id": v["id"], "kind": v["kind"], "after": v["after"], "before": v["before"], "placed": v["placed"]});
+    if let Some(spots) = v.get("spots") {
+        default["spots"] = spots.clone();
+    }
+    default
 }
 
 /// Returns the report as `merge.compose` answers it (`shapes`' `MergeReport`).
@@ -2170,6 +2268,10 @@ fn run_json(run: &Run, side: Option<SideIx>, family: Family) -> Value {
     json!({"origin": run.origin.to_string(), "i_start": run.i_start, "width": run.width, "side": side.map(|s| s.0), "family": family})
 }
 
+/// Returns one gap of the report (`shapes`' `MergeGap`).
+///
+/// A `moves` gap with spots carries `spots`, each holder's `GapSpot`
+/// (CM-I33); every other gap carries none.
 fn gap_json(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
@@ -2192,7 +2294,7 @@ fn gap_json(g: &Gap) -> Value {
         Some(ResolvedBy::Agent) => Value::from("agent"),
         Some(ResolvedBy::Answer(a)) => Value::from(format!("answer:{a}")),
     };
-    json!({
+    let mut gap = json!({
         "id": g.id.0,
         "kind": kind,
         "after": g.after.as_ref().map(ToString::to_string),
@@ -2201,5 +2303,9 @@ fn gap_json(g: &Gap) -> Value {
         "placed": placed,
         "settled": g.settled,
         "resolved_by": resolved_by,
-    })
+    });
+    if !g.spots.is_empty() {
+        gap["spots"] = g.spots.iter().map(|s| json!({"side": s.side.0, "after": s.after.as_ref().map(ToString::to_string), "before": s.before.as_ref().map(ToString::to_string)})).collect();
+    }
+    gap
 }

@@ -1240,7 +1240,10 @@ fn the_publication_references_state_the_shells_shapes() {
 /// the shell's `GapKind` spells;
 /// `merge_land`'s schema takes `resolutions` as the shell's `MergeChoice`
 /// and `answers` as its `OriginAnswer` (SP-24). MERGING says what a merge
-/// takes, that a gap is settled by editing the draft, that the landing
+/// takes, that a gap is settled by editing the draft — a `moves` gap with
+/// spots by moving its words to another side's spot, which the compose
+/// reference says beside the gap's `spots` and `merge_land`'s reference and
+/// card beside the one choice such a gap takes (CM-I33) — that the landing
 /// answers no window part, that the composition lives with the session and
 /// that a merge's undo lands only over no change since, the agent's own
 /// included (R6 with P3, the undo's `as_of` per surface); PUBLISHING, the
@@ -1367,9 +1370,20 @@ fn the_merge_references_state_the_shells_shapes() {
         "is refused merge_refused {arm: \"side_moved\", side, at, before, after}, isError, nothing landed",
         "before and after the side's arranged_at at the two reads, equal where its recorded base moved and its text did not; call again, which reads it as it stands",
         "as_of the one position the composition stands at, where every side that can change held the state it was read in",
+        "spots, only on a moves gap of one set of words both sides placed at two places, each side's place {side, after, before}, the default the head's",
+        "or, at a moves gap with spots, move the words to another side's spot, then compose again",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }
+    // One set of words two sides placed apart: settled by moving them in
+    // the draft, the one choice at it the side the composition took.
+    let spots = "A moves gap with spots is one set of words both sides placed, each at a spot of its own, the default the head's";
+    assert!(merging.contains(spots), "MERGING says {spots:?}: {merging}");
+    let land = reference(&catalog, "merge_land");
+    let choice = "at a moves gap with spots the one choice is {order: [side]} or {keep_only: side} naming the side its placed names";
+    assert!(land.contains(choice), "merge_land's reference says {choice:?}: {land}");
+    let card = properties["resolutions"]["description"].as_str().expect("the resolutions member's description");
+    assert!(card.contains("At a moves gap with spots only {order: [side]} or {keep_only: side} naming the side its placed names is taken"), "{card}");
 }
 
 /// The catalog tells an agent the edits' figures as the shell holds them.

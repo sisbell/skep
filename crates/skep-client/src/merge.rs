@@ -45,8 +45,10 @@
 //! publication of the merger's own landed — the editor's shot from the
 //! draft the merge was landed in — written once and never a second shot;
 //! [`replaced`], the stretches of a draft a landing there would replace;
-//! [`landed_draft`], the person's own draft landing of a merge found with
-//! its sides' states ignored;
+//! [`landed_draft`], the person's own latest draft landing of a merge found
+//! with its sides' states ignored; [`landing_record`], their own record of
+//! the landing a draft's merge marker marks, found through the draft
+//! whatever the merge landed in since;
 //! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
@@ -129,7 +131,7 @@ pub use reads::{
 };
 pub use crate::publication::SupersedeCause;
 pub use record::{
-    current, landed_draft, verify, PartAnswer, Record, RecordKey, RecordLanding, RecordedAnswer,
-    SideAt, SideState, Verdict,
+    current, landed_draft, landing_record, verify, PartAnswer, Record, RecordKey, RecordLanding,
+    RecordedAnswer, SideAt, SideState, Verdict,
 };
 pub use undo::{undo, unwithdraw, withdraw, Undone, Unwithdrawn, Withdrawn};

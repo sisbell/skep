@@ -3,10 +3,14 @@
 //! The suite checks that a record this library writes is an atom no
 //! publication publishes; `current` — the trunk owner's home first, then
 //! the newest, the record whose link was minted last, and the owner's over
-//! a sub-account's; `verify`'s verdicts, a withheld input withholding the
-//! verdict and an unregistered one refused, a withheld run in a readable
-//! side refused naming its origin, a moved gap of two groups landing and
-//! verifying equal; and the `Record`'s JSON round trip, its `type` fixed.
+//! a sub-account's; `landing_record`, a draft's own landing record read
+//! through the draft once the merge landed in another, another account's
+//! records, another merge's, a landing past the marker's and a record a
+//! take-back replaced passed over; `verify`'s verdicts, a withheld input
+//! withholding the verdict and an unregistered one refused, a withheld run
+//! in a readable side refused naming its origin, a moved gap of two groups
+//! landing and verifying equal; and the `Record`'s JSON round trip, its
+//! `type` fixed.
 
 use super::*;
 
@@ -205,6 +209,88 @@ fn the_trunk_owners_record_is_current_over_a_sub_accounts() {
         Some(subs),
         "the owner's journal unreadable"
     );
+}
+
+/// THE RECORD A DRAFT'S LANDING STANDS ON IS READ THROUGH THE DRAFT (skep
+/// #1140): case (j)'s fork `F` lands in a fresh draft `L`; edited by the
+/// forker, the merge composed again lands in a fresh draft `L2`, whose
+/// record is the merger's newest of the merge (`landed_draft`). By each
+/// draft's marker, `landing_record` answers that draft's own record, and
+/// it goes on answering `L`'s as records stand beside it, one at a time:
+/// a sub-account's record of the merge naming `L` at the marker's position,
+/// newer (the mutant that keeps every account's records answers it); that
+/// sub-account's take-back replacing `L`'s record (the mutant that lets
+/// another account's records replace the merger's answers none); the
+/// merger's record of another merge in `L` (the mutant that tests no head
+/// and sides answers it); the merger's record of this merge naming `L` past
+/// the marker's position (the mutant that bounds no position answers it);
+/// and a newer record of the merger's naming `L` at that position, replaced
+/// by a take-back of theirs (the mutant that reads no replacement answers
+/// it).
+#[test]
+fn a_drafts_landing_record_is_read_through_the_draft_whatever_landed_since() {
+    let mut w = World::race();
+    w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let inputs = Inputs { sides: vec![Side::Fork(a(F))], ..race_inputs() };
+    let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+    let first = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+    let Landed::Draft { into: l, record: own, .. } = first else { panic!("{first:?}") };
+    dialer.world().change(F, vec![run(D, 5, 3)]);
+    let again = compose(&board, Some(session.token()), &inputs).expect("composed again");
+    let second = land(&board, &again, draft_landing(&session, &signer, None)).expect("landed");
+    let Landed::Draft { into: l2, record: elsewhere, .. } = second else { panic!("{second:?}") };
+    assert_ne!(l2, l, "the premise: a fresh draft of its own");
+    assert_eq!(
+        landed_draft(&board, Some(session.token()), &a(K), &merged.key, ACCOUNT)
+            .expect("the lookup")
+            .and_then(|r| r.link),
+        Some(elsewhere.clone()),
+        "the premise: the merger's newest record of the merge names L2"
+    );
+    let marker = |draft: &Address| {
+        let frame = frames::doc_metadata(&draft.to_string());
+        let Answer::Document(v) = board.op(Some(session.token()), &frame).expect("the read") else {
+            panic!("closed")
+        };
+        crate::board::answers::merge_marker(&v).flatten().expect("the draft's marker")
+    };
+    let (marked, marked_elsewhere) = (marker(&l), marker(&l2));
+    let at = marked.at.expect("the marker's position");
+    let standing = |draft: &Address, marker: &crate::board::answers::MergeMarker| {
+        landing_record(&board, Some(session.token()), &a(K), draft, marker, ACCOUNT)
+            .expect("the lookup")
+            .and_then(|r| r.link)
+    };
+    assert_eq!(standing(&l2, &marked_elsewhere), Some(elsewhere.clone()), "L2's own");
+    assert_eq!(standing(&l, &marked), Some(own.clone()), "L's own, the merge landed in L2 since");
+    // Each record stands beside L's in turn, its link minted after every
+    // other, as a later write's is.
+    let to = [l.to_string(), F.to_string()];
+    let plant = |journal: &str, record: &Record| {
+        let mut w = dialer.world();
+        w.position += 1;
+        let minted = w.position;
+        a(&file(&mut w, journal, record, &[&to[0], &to[1]], Some(minted)))
+    };
+    let landed_in_l = |record: &Record, position: u64| Record {
+        landed: Some(RecordLanding::Draft { draft: l.clone(), position }),
+        ..record.clone()
+    };
+    let (sub, theirs) = ("1.0.1.2.0.65", "1.0.1.0.90");
+    plant(sub, &landed_in_l(&merged.record, at));
+    assert_eq!(standing(&l, &marked), Some(own.clone()), "a sub-account's record, newer");
+    plant(sub, &Record { landed: None, replaces: Some(own.clone()), ..merged.record.clone() });
+    assert_eq!(standing(&l, &marked), Some(own.clone()), "a sub-account's take-back of L's");
+    let another = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    plant(theirs, &landed_in_l(&another.record, at));
+    assert_eq!(standing(&l, &marked), Some(own.clone()), "the merger's record of another merge");
+    plant(theirs, &landed_in_l(&merged.record, at + 1));
+    assert_eq!(standing(&l, &marked), Some(own.clone()), "a landing past the marker's");
+    let newer = plant(theirs, &landed_in_l(&merged.record, at));
+    plant(theirs, &Record { landed: None, replaces: Some(newer), ..merged.record.clone() });
+    assert_eq!(standing(&l, &marked), Some(own), "a newer record of the merger's, taken back");
 }
 
 /// `verify`'s three verdicts: Equal where the member holds M over its

@@ -257,9 +257,11 @@ use crate::halt::{Halt, Refused};
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
 use super::reads::{
     feed_rows, mapped_image, owners_records, runs_of, stretches, NoUndo, OnEnd, Reader, Refusal,
-    Role, SHOT_RUN_CAP,
+    SHOT_RUN_CAP,
 };
-use super::record::{self, newest, read_record, Found, Record, RecordLanding};
+use super::record::{
+    self, lands_the_marker, linked_to, newest, read_record, standing_for, Record, RecordLanding,
+};
 use crate::board::answers::MergeMarker;
 
 /// What an undo answered.
@@ -1461,7 +1463,7 @@ struct Markers<'a> {
 ///
 /// # Errors
 ///
-/// The record's read's refusals (`Writer::records_to`), then its writes'
+/// The record's read's refusals ([`linked_to`]), then its writes'
 /// (`Writer::write_record`).
 #[allow(clippy::too_many_arguments)]
 fn replace_record(
@@ -1477,7 +1479,7 @@ fn replace_record(
     let earlier = markers.and_then(|m| m.earlier);
     let on_end = if earlier.is_some() { OnEnd::EarlierBack } else { OnEnd::TakenOut };
     let writer = Writer::new(board, merger, on_end);
-    let linked = writer.records_to(kind, draft)?;
+    let linked = linked_to(&writer.reader, kind, draft)?;
     let current = match markers {
         None => newest(linked.into_iter().filter(|f| matches!(&f.record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft))),
         Some(Markers { taken, landing, earlier }) => {
@@ -1516,34 +1518,10 @@ fn replace_record(
     writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
 }
 
-/// Returns the record standing for `marker`'s landing in `draft`.
-///
-/// It is the newest among `linked`, the records of the kind linked to the
-/// draft, that names the draft as landed in at or before `at`, the
-/// marker's position, with the marker's head and sides, and that no record
-/// linked to the draft replaces: the record of that landing, or of the
-/// same landing made earlier (skep #790), never one a take-back replaced
-/// or one of a landing made since. `None` where none stands.
-fn standing_for(linked: &[Found], draft: &Address, marker: &MergeMarker, at: u64) -> Option<Found> {
-    let replaced = |f: &Found| linked.iter().any(|g| g.record.replaces.as_ref() == Some(&f.link));
-    newest(
-        linked
-            .iter()
-            .filter(|f| landed_by(f, draft, at) && lands_the_marker(&f.record, draft, marker))
-            .filter(|f| !replaced(f))
-            .cloned(),
-    )
-}
-
-/// Returns whether `found` names `draft` as landed in at or before `at`.
-fn landed_by(found: &Found, draft: &Address, at: u64) -> bool {
-    matches!(&found.record.landed, Some(RecordLanding::Draft { draft: d, position }) if d == draft && *position <= at)
-}
-
 /// Writes the record of a withdrawal's undo (skep #870; the module's doc).
 ///
 /// It answers the record's link where one is written.
-/// The newest record of the kind on the draft (`Writer::records_to`) must be
+/// The newest record of the kind on the draft ([`linked_to`]) must be
 /// a take-back — `landed` none — replacing a landing's record that names
 /// the draft as landed in, its head the `cleared` marker's and its sides,
 /// the draft's own excepted, the marker's; the record written is that
@@ -1566,7 +1544,7 @@ fn restore_record(
     journal: Option<&Address>,
 ) -> Result<Option<Address>, Refusal> {
     let writer = Writer::new(board, merger, OnEnd::PutBack);
-    let Some(newest) = newest(writer.records_to(kind, draft)?) else { return Ok(None) };
+    let Some(newest) = newest(linked_to(&writer.reader, kind, draft)?) else { return Ok(None) };
     let (None, Some(replaced)) = (&newest.record.landed, &newest.record.replaces) else { return Ok(None) };
     let Some(landing) = read_record(&writer.reader, replaced)? else { return Ok(None) };
     if !lands_the_marker(&landing.record, draft, cleared) {
@@ -1581,23 +1559,4 @@ fn restore_record(
         )
     };
     writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
-}
-
-/// Returns whether `record` is a landing in `draft` of `marker`'s merge.
-///
-/// It is landed in the draft, its head the marker's, and its sides, the
-/// draft's own excepted, the marker's sides.
-fn lands_the_marker(record: &Record, draft: &Address, marker: &MergeMarker) -> bool {
-    let landed_here = matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
-    let head = record.head().map(|h| h.address().to_string());
-    let mut sides: Vec<String> = record
-        .sides
-        .iter()
-        .filter(|s| s.role() != Role::Head && s.address() != draft)
-        .map(|s| s.address().to_string())
-        .collect();
-    let mut marked = marker.sides.clone();
-    sides.sort();
-    marked.sort();
-    landed_here && head.as_deref() == Some(marker.head.as_str()) && sides == marked
 }

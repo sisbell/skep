@@ -47,7 +47,8 @@
 //! record names where it was written between the composition and the
 //! landing, and at the marker's where no record names the landing, which
 //! the re-open records once, a landing cut off over an earlier recorded one
-//! re-opening as itself (skep #1127); the owner's draft
+//! re-opening as itself (skep #1127), and by the landing's own record once
+//! the merge landed in another draft (skep #1140); the owner's draft
 //! staged before the first version refused `base_unknown` with `reason`
 //! `bare_source` naming the document while no version stands, and composed
 //! over the document as it stood before that version once one does, a
@@ -64,7 +65,8 @@
 //! its record found from it, and composed again over the member with no
 //! gap; a fork written between its composition and its landing landed over
 //! the draft, its state tested against the one the person's record keeps
-//! (skep #770); a fork with no source, or one in another chain, refused
+//! (skep #770), that landing's own record once the merge landed in another
+//! draft (skep #1140); a fork with no source, or one in another chain, refused
 //! `base_unknown`, and one of the bare document `bare_source` whatever its
 //! account while no version stands, composed over the document once one
 //! does; the person's own draft named as the fork side refused
@@ -2574,6 +2576,64 @@ fn a_landing_cut_off_before_its_record_over_an_earlier_recorded_one_re_opens_as_
     sd.shutdown();
 }
 
+/// Returns the draft the person's newest record of `merged`'s merge names.
+///
+/// The record is found with its states ignored (`landed_draft`), `None`
+/// where it names no draft landing.
+fn newest_landing(g: &Ground, merged: &Merged) -> Option<String> {
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let record = skep_client::merge::landed_draft(&entry.board, Some(&entry.token), &parse_address(KIND).unwrap(), &merged.key, "1.0.1").expect("the lookup")?;
+    match record.landed? {
+        RecordLanding::Draft { draft, .. } => Some(draft.to_string()),
+        RecordLanding::Member { .. } => None,
+    }
+}
+
+/// Checks that a draft side's landing re-opens by its own record once the
+/// merge has landed in another draft.
+///
+/// Against the daemon (skep #1140): the draft side B is composed as the
+/// merge's side at P, then written, and that composition lands in L by hand
+/// with the person's own record of it, as skep #1127's case. The merge
+/// composed with B as it stands lands in L2, staged from E.2, through
+/// `merge.compose`, its record the person's newest of the merge. Composed
+/// again into L, the merge re-opens as it landed there: `position` the
+/// marker's, the draft side's `position` P, the runs the first
+/// composition's, B's later words nowhere, nothing written (the mutant that
+/// reads the person's newest record of the merge finds L2's, and answers
+/// the side as it stands, B's later words in it).
+#[test]
+fn a_draft_sides_landing_re_opens_by_its_own_record_once_the_merge_lands_in_another_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (b, l) = draft_side(&g, &f);
+    let merged = composed_with(&g, &f, &b);
+    // The write inside the gap, then the landing in L and its record.
+    g.op(json!({"op": "insert", "doc": b, "at": {"subspace": "1", "ordinal": "16"}, "values": [" again"], "as_of": g.position()}));
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &b);
+    own_record(&g, &merged, &l, at, &b);
+    // The merge, B as it stands, lands in L2.
+    let l2 = g.addr(frames::stage(&f.e2, None));
+    let compose = |into: &str| g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "draft": b, "into": into})).unwrap_or_else(|r| panic!("{r}"));
+    let elsewhere = compose(&l2);
+    assert_eq!((elsewhere["outcome"].as_str(), elsewhere["into"].as_str()), (Some("landed"), Some(l2.as_str())), "{elsewhere}");
+    assert_eq!(newest_landing(&g, &merged), Some(l2.clone()), "the premise: the person's newest record of the merge names L2");
+    let before = g.position();
+    let reopened = compose(&l);
+    assert_report_declared(&reopened);
+    assert_eq!(
+        (reopened["outcome"].as_str(), reopened["position"].as_u64(), reopened["sides"][1]["position"].as_u64()),
+        (Some("reopened"), Some(at), Some(merged.as_of)),
+        "the side at the position L's own record names: {reopened}"
+    );
+    assert_eq!(report_runs(&reopened), merged_runs(&merged), "the list that landed in L, B's later words nowhere: {reopened}");
+    assert_eq!(g.position(), before, "nothing written");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks that a draft side staged from the bare document waits for its
 /// first version, then composes over the document as it stood before it
 /// (skep #1113), and that a draft lying in no member is refused.
@@ -3372,6 +3432,50 @@ fn a_fork_written_between_its_composition_and_its_landing_lands_over_the_draft()
     assert!(moved < at, "the premise: the fork's last write lies before the landing");
     assert_eq!(g.text(&l, 25), "the fox jumps quietly", "L holds the merge as composed");
     let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": fork, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&landed);
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str(), landed["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "landed over L, never re-opened: {landed}");
+    assert_eq!((landed["sides"][1]["arranged"].clone(), landed["replaced"].clone()), (json!(moved), json!([])), "the fork's new state, nothing taken out of L: {landed}");
+    assert_eq!(g.text(&l, 25), "the fox jumps quietly now", "the fork's later words");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a fork's landing lands over its draft by its own record once
+/// the merge has landed in another draft.
+///
+/// Against the daemon (skep #1140): another account's fork is composed as
+/// the merge's side, then written by its owner, and that composition lands
+/// in L by hand with the person's own record of it, as skep #770's case.
+/// The merge composed with the fork as it stands lands in L2, staged from
+/// E.2, through `merge.compose`, its record the person's newest of the
+/// merge. Composed again into L, the fork's state is another than the one
+/// L's own record keeps: the merge lands over L, never re-opened, its fork
+/// side's `arranged` the fork's new state, nothing taken out of L and L
+/// holding the fork's later words (the mutant that reads the person's
+/// newest record of the merge finds L2's, tests the marker's position alone
+/// and re-opens).
+#[test]
+fn a_forks_landing_lands_over_its_draft_by_its_own_record_once_the_merge_lands_in_another_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let other = other_account(&g);
+    let fork = forked(&g, &other, &f.e1, " quietly");
+    let l = g.addr(frames::stage(&f.e2, None));
+    let merged = composed_over(&g, &f, Side::Fork(parse_address(&fork).unwrap()));
+    // The write inside the gap, then the landing in L and its record.
+    let moved = edit_fork(&g, &other, &fork, 16, " now");
+    let at = mark(&g, &bare(&g, 1), &l, &merged, &fork);
+    own_record(&g, &merged, &l, at, &fork);
+    // The merge, the fork as it stands, lands in L2.
+    let l2 = g.addr(frames::stage(&f.e2, None));
+    let compose = |into: &str| g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "fork": fork, "into": into})).unwrap_or_else(|r| panic!("{r}"));
+    let elsewhere = compose(&l2);
+    assert_eq!((elsewhere["outcome"].as_str(), elsewhere["into"].as_str()), (Some("landed"), Some(l2.as_str())), "{elsewhere}");
+    assert_eq!(newest_landing(&g, &merged), Some(l2.clone()), "the premise: the person's newest record of the merge names L2");
+    assert_eq!(g.text(&l, 25), "the fox jumps quietly", "L holds the merge as composed");
+    let landed = compose(&l);
     assert_report_declared(&landed);
     assert_eq!((landed["outcome"].as_str(), landed["into"].as_str(), landed["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "landed over L, never re-opened: {landed}");
     assert_eq!((landed["sides"][1]["arranged"].clone(), landed["replaced"].clone()), (json!(moved), json!([])), "the fork's new state, nothing taken out of L: {landed}");

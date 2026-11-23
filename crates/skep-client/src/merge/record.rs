@@ -6,8 +6,12 @@
 //! records over another account's, decision 8), how a reader finds a record
 //! (the link of the kind homed in the journal beside the record, from its
 //! atom to the landed member or draft and every side besides the head, the
-//! atom read through the journal's arrangement and never by identity), and
-//! [`verify`], the record's testimony recomputed.
+//! atom read through the journal's arrangement and never by identity), the
+//! record standing for the landing a draft's merge marker marks, found
+//! through the links of the kind to the draft whatever the merge landed in
+//! since ([`landing_record`]; an undo by the marker finds the record it
+//! replaces by the same rule), and [`verify`], the record's testimony
+//! recomputed.
 //!
 //! **Kept private.** A merge record is kept only in a private document: its
 //! journal is a private draft of the merger's own, the record's link homed
@@ -63,7 +67,7 @@ use serde_json::{json, Value};
 use skep_address::{Address, Nat};
 
 use crate::address::{document_of, parse_address};
-use crate::board::answers;
+use crate::board::answers::{self, MergeMarker};
 use crate::board::{frames, Board, Token};
 use crate::halt::Halt;
 use crate::publication::owned_by;
@@ -926,8 +930,11 @@ pub(super) fn current_among(
 /// newest by the order their links were minted is answered where it names a
 /// draft landing, else none: a take-back recorded since leaves the merge landed
 /// in no draft, as [`resume`](super::resume) reads it. An embedder reads it
-/// where a composition finds no record of its own key and a draft holding the
-/// person's earlier landing of the merge is still the one to land in.
+/// where a composition finds no record of its own key, to find the draft
+/// holding the person's latest landing of the merge, still the one to land
+/// in. It answers the newest record alone, so it names no earlier draft once
+/// the merge landed in another since: the record a draft's own landing
+/// stands on is [`landing_record`]'s, read by that draft's marker.
 ///
 /// # Errors
 ///
@@ -947,6 +954,136 @@ pub fn landed_draft(
     Ok(newest(own)
         .map(|f| f.record)
         .filter(|r| matches!(r.landed, Some(RecordLanding::Draft { .. }))))
+}
+
+/// Returns `account`'s own record of the landing `marker` marks in `draft`.
+///
+/// It is the record a re-open of the draft goes by, whatever the merge
+/// landed in since: a landing of the same merge in another draft writes a
+/// record of its own, newest of the merge, which [`landed_draft`] answers.
+/// The records are those of `kind` linked to the draft (`linked_to`), each
+/// record's atom read through its journal, kept where the link lies in
+/// `account` exactly, before anything else is judged: another account's
+/// record is never answered, and never replaces one of the account's own
+/// (P20, a record replacing one of its own home). Of those it is the one
+/// standing for the marker (`standing_for`): the newest naming the draft as
+/// landed in at or before the marker's `at`, with the marker's head and
+/// sides, that no record of the account's linked to the draft replaces —
+/// the record of that landing, or of the same landing made earlier (skep
+/// #790), never one a take-back replaced, one of a landing made since or
+/// one of another merge. A marker whose `at` the board serves none bounds
+/// no position. `None` where none stands: a landing cut off before its
+/// record among them.
+///
+/// # Errors
+///
+/// The read of the links to the draft refused `withheld`, as
+/// [`Refusal::Unreadable`], or `doc_not_registered`, as
+/// [`Refusal::NoSuchDocument`], naming it; then each record's read as
+/// [`current`] reads it, a refusal but the absences it reads as none
+/// answered as itself (SP-14): a transport halt, the board's other
+/// refusals and an answer of a shape this client does not know,
+/// [`Refusal::Halt`]; the death signal under the token,
+/// [`Refusal::SessionEnded`], the lookup made again on a new session.
+pub fn landing_record(
+    board: &Board,
+    token: Option<&Token>,
+    kind: &Address,
+    draft: &Address,
+    marker: &MergeMarker,
+    account: &str,
+) -> Result<Option<Record>, Refusal> {
+    let reader = Reader::new(board, token, OnEnd::Rerun);
+    let own: Vec<Found> =
+        linked_to(&reader, kind, draft)?.into_iter().filter(|f| f.lies_in(account)).collect();
+    let at = marker.at.unwrap_or(u64::MAX);
+    Ok(standing_for(&own, draft, marker, at).map(|f| f.record))
+}
+
+/// Returns every merge record of `kind` linked to `draft`.
+///
+/// They are found through the links of the kind to the draft, each
+/// record's atom read through its journal ([`read_record`]), whatever its
+/// `landed` names — a landing's record, or a take-back's, which names none
+/// (skep #870) — and whatever account's journal holds it, each with the link
+/// it was found through; a record whose journal the reader may not read is
+/// no candidate. A record's link runs to the draft it landed in, or the one
+/// a take-back took the merge out of, and to each of its sides besides the
+/// head (§4, "Its home"), so these hold the records of every landing in the
+/// draft and of their take-backs, beside those of merges the draft is a
+/// side of: [`landing_record`] reads an account's own among them, and the
+/// undo and the withdrawal the one their act replaces (the `undo` module's
+/// doc).
+///
+/// # Errors
+///
+/// The link read's refusal at the draft, `withheld` and `doc_not_registered`
+/// naming it; then [`read_record`]'s.
+pub(super) fn linked_to(
+    reader: &Reader<'_>,
+    kind: &Address,
+    draft: &Address,
+) -> Result<Vec<Found>, Refusal> {
+    let v = reader.answered(
+        draft,
+        &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
+        None,
+    )?;
+    let mut found = Vec::new();
+    for link in answers::addrs(&v) {
+        let Some(link) = parse_address(link) else { continue };
+        found.extend(read_record(reader, &link)?);
+    }
+    Ok(found)
+}
+
+/// Returns the record standing for `marker`'s landing in `draft`.
+///
+/// It is the newest among `linked`, the records of the kind linked to the
+/// draft, that names the draft as landed in at or before `at`, the
+/// marker's position, with the marker's head and sides, and that no record
+/// linked to the draft replaces: the record of that landing, or of the
+/// same landing made earlier (skep #790), never one a take-back replaced
+/// or one of a landing made since. `None` where none stands.
+pub(super) fn standing_for(
+    linked: &[Found],
+    draft: &Address,
+    marker: &MergeMarker,
+    at: u64,
+) -> Option<Found> {
+    let replaced = |f: &Found| linked.iter().any(|g| g.record.replaces.as_ref() == Some(&f.link));
+    newest(
+        linked
+            .iter()
+            .filter(|f| landed_by(f, draft, at) && lands_the_marker(&f.record, draft, marker))
+            .filter(|f| !replaced(f))
+            .cloned(),
+    )
+}
+
+/// Returns whether `found` names `draft` as landed in at or before `at`.
+fn landed_by(found: &Found, draft: &Address, at: u64) -> bool {
+    matches!(&found.record.landed, Some(RecordLanding::Draft { draft: d, position }) if d == draft && *position <= at)
+}
+
+/// Returns whether `record` is a landing in `draft` of `marker`'s merge.
+///
+/// It is landed in the draft, its head the marker's, and its sides, the
+/// draft's own excepted, the marker's sides.
+pub(super) fn lands_the_marker(record: &Record, draft: &Address, marker: &MergeMarker) -> bool {
+    let landed_here =
+        matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
+    let head = record.head().map(|h| h.address().to_string());
+    let mut sides: Vec<String> = record
+        .sides
+        .iter()
+        .filter(|s| s.role() != Role::Head && s.address() != draft)
+        .map(|s| s.address().to_string())
+        .collect();
+    let mut marked = marker.sides.clone();
+    sides.sort();
+    marked.sort();
+    landed_here && head.as_deref() == Some(marker.head.as_str()) && sides == marked
 }
 
 /// A record as a reader found it: the record, the link it was found

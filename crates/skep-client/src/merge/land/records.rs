@@ -9,13 +9,11 @@ use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::parse_address;
-use crate::board::{acked_addr, answers, frames, Rejection};
+use crate::board::{acked_addr, frames, Rejection};
 use crate::halt::Halt;
 use crate::merge::journal::{self, Unfound};
 use crate::merge::reads::{feed_rows, Merged, Refusal, Role};
-use crate::merge::record::{
-    newest, read_record, records_of, Found, PartAnswer, Record, RecordLanding,
-};
+use crate::merge::record::{newest, records_of, Found, PartAnswer, Record, RecordLanding};
 use crate::publication::{owned_by, SCAN_BUSY_REISSUES};
 
 use super::draft::{marked_sides, row_marks};
@@ -465,37 +463,5 @@ impl Writer<'_> {
             "signed_session_required" => Refusal::NeedsSignedSession,
             _ => Refusal::Halt(r.refused(&v)),
         })
-    }
-
-    /// Returns every merge record of `kind` linked to `draft`.
-    ///
-    /// They are found through the links of the kind to the draft, each
-    /// record's atom read through its journal, whatever its `landed` names —
-    /// a landing's record, or a take-back's, which names none (skep #870) —
-    /// each with the link it was found through; a record whose journal the
-    /// merger may not read is no candidate. The undo and the withdrawal
-    /// replace the one their act takes back among them, a withdrawal's undo
-    /// writes the landing's again past the newest, and each writes none
-    /// where none stands (the `undo` module's doc).
-    ///
-    /// # Errors
-    ///
-    /// The link read's refusal at the draft; a halt reading a record.
-    pub(in crate::merge) fn records_to(
-        &self,
-        kind: &Address,
-        draft: &Address,
-    ) -> Result<Vec<Found>, Refusal> {
-        let v = self.reader.answered(
-            draft,
-            &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
-            None,
-        )?;
-        let mut found = Vec::new();
-        for link in answers::addrs(&v) {
-            let Some(link) = parse_address(link) else { continue };
-            found.extend(read_record(&self.reader, &link)?);
-        }
-        Ok(found)
     }
 }

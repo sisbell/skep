@@ -81,17 +81,25 @@
 //! staying as read at the marker's position — and a
 //! fork as it stands, in the state the draft's landing composed it from —
 //! and each unsettled gap's state read off the draft as it stands, settled
-//! by the merger where the draft no longer arranges the gap's default as M
-//! placed it: its runs removed whole, or reordered; an edit inside a run's
-//! words settles nothing. At a `moves` gap with spots — one identity two
-//! sides placed apart (CM-I33) — words the draft holds at exactly one other
-//! holding side's spot and not at the default's, each spot read by the
-//! anchors the draft still holds, are that side's placement chosen: the
-//! merge is composed again with it, settled by the merger, and the other
-//! gaps are read off the draft over that composition, a gap the words raise
-//! at their new spot among them. The landing the marker names is recorded
-//! first where no record of the person's names it and `into` still holds M, by
-//! the library's `resume` naming `into` — a record-only completion, no
+//! by the merger where the draft holds another of the gap's choices than
+//! its default — every run removed whole, a side's runs removed whole, or
+//! the sides' runs reordered whole — `placed` that choice (`edit_choice`);
+//! an edit that holds none of them — inside a run's words, a side's runs
+//! split or interleaved with another's — settles nothing, nor does any
+//! edit at a spine's `moves` gap, whose runs tell no side's order of the
+//! spine from another's. The report carries that reading and the
+//! composition stands as composed, each gap read again off the words a
+//! landing publishes (**`merge.land`**). At a `moves` gap with spots — one
+//! identity two sides placed apart (CM-I33) — words the draft holds at
+//! exactly one other holding side's spot and not at the default's, each
+//! spot read by the anchors the draft still holds, are that side's
+//! placement chosen: the merge is composed again with it, settled by the
+//! merger, and the other gaps are read off the draft over that
+//! composition, a gap the words raise at their new spot among them; words
+//! at no holder's spot, or gone, settle nothing. The landing the marker
+//! names is recorded first where no record of the person's names it and
+//! `into` still holds M, by the library's `resume` naming `into` — a
+//! record-only completion, no
 //! write of the landing's sent again — so a landing cut off before its
 //! record is recorded once when its draft is named; a fork landed in
 //! itself, composed as it stands on the base its landing moved to the head,
@@ -243,9 +251,21 @@
 //! re-statement, or a refusal of the shot the composition outlives,
 //! answered in its place — and is read off the draft again at each, a
 //! choice a call names at its gap taking its place; a re-open and a new
-//! compose stand a composition that carries none. The shot's record settles
-//! each gap a choice names as the merger's, `resolved_by` `person` at the
-//! editor and `agent` with no person present ([`Surface`]).
+//! compose stand a composition that carries none. Every other gap the rules
+//! left unsettled is read off the same words as THE RE-OPEN reads the draft
+//! (`settle_by_edit`), whether or not the draft was composed again since
+//! its edits: settled where they hold another of its choices, at that
+//! choice, else left at its default. A `moves` gap with spots no choice
+//! names is read over the whole draft as the re-open reads it
+//! (`spots_edited`): where its words stand at one other holder's spot alone
+//! while the composition places them at the default's, or no longer stand
+//! within the spot of the holder whose placement the merger's edit took,
+//! the row is refused `merge_refused` with `gap_edited` naming the `gap`,
+//! nothing keyed or sent, the composition as it stood and the panel the row
+//! opened dropped — only a composition places those words, and composing
+//! again reads them. The shot's record settles each gap a choice names, or
+//! the words settle, as the merger's, `resolved_by` `person` at the editor
+//! and `agent` with no person present ([`Surface`]).
 //!
 //! **Kept once** (the merge record's §5, case (g)): words two sides added
 //! alike at one spot are kept once, the earlier side's copy, the value
@@ -363,6 +383,7 @@
 //! (`Shell::fault`), `busy` and `shape` among them; every other halt
 //! crosses as itself.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -371,7 +392,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_client::address::{account_of, doc_1_of, document_of};
 use skep_client::board::{frames, merge_marker, ChangesAnswer, ChangesQuery, MergeMarker, Rejection};
 use skep_client::halt::Halt;
-use skep_client::merge::{self as lib, Family, Gap, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, SideState, WindowPart};
+use skep_client::merge::{self as lib, Family, Gap, GapId, GapKind, Misfit, NoUndo, Placement, ResolvedBy, Role, Run, SideAt, SideIx, SideState, WindowPart};
 use skep_client::publication::{Run as SelectionRun, Standing};
 use skep_client::sheet::render_inert;
 
@@ -523,7 +544,8 @@ struct Composition {
     /// off the draft again at every landing call while it stands
     /// (`draft_holds`). The gaps keep their placements as composed, and the
     /// shot's record is settled from them under these choices
-    /// (`settle_resolutions`). Empty at a compose and at a re-open.
+    /// (`settle_resolutions`), then by the words the shot publishes
+    /// (`settle_by_edit`). Empty at a compose and at a re-open.
     chosen: BTreeMap<usize, Placement>,
 }
 
@@ -1592,7 +1614,10 @@ impl Shell {
     /// Where `into` holds a gap with spots' words at another holding side's
     /// spot (`holders_moved`), the merge is composed again over `merged`'s
     /// own inputs with that side's placement chosen, settled by the merger,
-    /// and every other gap is read off the one image over that composition.
+    /// and every other gap is read off the one image over that composition
+    /// (`settle_by_edit`). The report carries that reading; the composition
+    /// stands as composed, so `merge.land` reads each gap again off the
+    /// words its shot publishes and `keep_both` asks a gap's default.
     ///
     /// # Errors
     ///
@@ -1606,11 +1631,11 @@ impl Shell {
             inputs.options.resolutions.extend(moved);
             merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
         }
-        settle_by_edit(&mut merged, &image, self.surface());
+        let mut read = merged.clone();
+        settle_by_edit(&mut read, &image, self.surface());
         let position = at.unwrap_or(merged.as_of);
-        let composition = Composition { session: session.reference.clone(), form, merged, into: into.clone(), chosen: BTreeMap::new() };
-        let answer = report_json(&composition.merged, &composition.form, "reopened", json!({"into": into.to_string(), "position": position, "fresh": false, "head_moved": Value::Null}));
-        self.merges.stand(key, composition);
+        let answer = report_json(&read, &form, "reopened", json!({"into": into.to_string(), "position": position, "fresh": false, "head_moved": Value::Null}));
+        self.merges.stand(key, Composition { session: session.reference.clone(), form, merged, into: into.clone(), chosen: BTreeMap::new() });
         Ok(answer)
     }
 
@@ -1698,13 +1723,19 @@ impl Shell {
     /// composition's or the draft carries none, the composition dropped and
     /// nothing keyed (skep #992); or, where the shell opens one, the panel's
     /// open's (`publication.open`'s steps 4 to 6), then `no_merge` naming the
-    /// draft as above, the panel opened dropped; then, where choices stand —
-    /// the call's or an earlier call's — the draft's image read's where a
-    /// panel stands or is held (`Shell::whole_draft`), and `malformed_args`
-    /// naming `resolutions` where the words the shot would publish do not
-    /// hold one (`draft_holds`), nothing keyed, the composition as it stood
-    /// and the panel opened dropped; then the standing panel's keying's on
-    /// the draft as it stands (`Shell::landing_panel`);
+    /// draft as above, the panel opened dropped; then, where a gap stands
+    /// that the rules did not settle, the draft's image read's where a panel
+    /// stands or is held (`Shell::whole_draft`) — `unreadable` or
+    /// `no_such_document` naming the draft, the board's verdicts verbatim,
+    /// `unreachable`, `session_died`, `shape` — then `malformed_args` naming
+    /// `resolutions` where the words the shot would publish do not hold a
+    /// choice standing, the call's or an earlier call's (`draft_holds`),
+    /// then `merge_refused` with `gap_edited` naming the `gap` where the
+    /// draft holds a `moves` gap with spots' words elsewhere than the
+    /// composition placed them (`spots_edited`), each nothing keyed, the
+    /// composition as it stood and the panel opened dropped; then the
+    /// standing panel's keying's on the draft as it stands
+    /// (`Shell::landing_panel`);
     /// `malformed_args` naming `answers` where one is no `⟨run⟩.⟨part⟩` of a
     /// part the panel holds or one the part does not admit; the words' reads
     /// of the window parts' refusal
@@ -1774,29 +1805,36 @@ impl Shell {
                 (state, None)
             }
         };
-        // The choices read off the words the shot publishes (the module
-        // doc): the draft's image where the panel takes the whole draft as
-        // it stands — the one the row opened, whose open read it, or the
-        // page's keyed below on another marker — else the panel's selection
-        // as the draft arranges it. They stand with the composition once the
-        // draft holds them, so a re-statement carries them to the next call,
-        // which reads them again.
-        if !chosen.is_empty() {
-            let gaps = &composition.merged.record.gaps;
-            let holds = |image: &[SelectionRun]| chosen.iter().all(|(ix, placed)| gaps.get(*ix).is_some_and(|gap| draft_holds(gap, placed, image)));
-            let held = match &keyed {
+        // The words the shot publishes (the module doc), read where a choice
+        // stands or a gap the rules did not settle: the draft's image where
+        // the panel takes the whole draft as it stands — the one the row
+        // opened, whose open read it, or the page's keyed below on another
+        // marker — else the panel's selection as the draft arranges it;
+        // beside them the whole draft, which a gap with spots is read over.
+        // The choices are read off them first, and stand with the
+        // composition once the draft holds them, so a re-statement carries
+        // them to the next call, which reads them again; every other gap is
+        // read off them as the re-open reads the draft.
+        let rules_alone = composition.merged.record.gaps.iter().all(|g| g.resolved_by == Some(ResolvedBy::Rule));
+        let words = if chosen.is_empty() && rules_alone {
+            None
+        } else {
+            Some(match &keyed {
                 Some(marker) => {
                     let draft = self.whole_draft(&session, &into)?;
-                    if state.whole() && state.marker() != Some(marker) {
-                        holds(&draft)
-                    } else {
-                        holds(&selected_image(&draft, &state.inputs.selection))
-                    }
+                    let selected = (!state.whole() || state.marker() == Some(marker)).then(|| selected_image(&draft, &state.inputs.selection));
+                    Words { whole: Cow::Owned(draft), selected }
                 }
-                None => holds(&state.inputs.selection),
-            };
-            if !held {
+                None => Words { whole: Cow::Borrowed(state.inputs.selection.as_slice()), selected: None },
+            })
+        };
+        if let Some(words) = &words {
+            let gaps = &composition.merged.record.gaps;
+            if !chosen.iter().all(|(ix, placed)| gaps.get(*ix).is_some_and(|gap| draft_holds(gap, placed, words.published()))) {
                 return Err(Refusal::malformed("resolutions"));
+            }
+            if let Some(gap) = spots_edited(gaps, &chosen, &words.whole) {
+                return Err(Refusal::shell(Name::MERGE_REFUSED, json!({"arm": "gap_edited", "gap": gap.0})));
             }
         }
         if named.is_some() {
@@ -1804,6 +1842,9 @@ impl Shell {
             self.merges.stand(key.clone(), composition.clone());
         }
         settle_resolutions(&mut composition.merged, &composition.chosen, self.surface());
+        if let Some(words) = words {
+            settle_by_edit(&mut composition.merged, words.published(), self.surface());
+        }
         match &keyed {
             Some(marker) => {
                 if let Some(restated) = self.landing_panel(&session, &signed, &key, &mut state, &doc, side.as_ref(), marker)? {
@@ -2054,6 +2095,26 @@ impl Shell {
 
 // ── the resolutions, and the gaps' state at a re-open ─────────────────────
 
+/// The draft's words a landing reads its gaps off (the module doc,
+/// **`merge.land`**): the draft as it stands and the words its shot
+/// publishes from it.
+struct Words<'a> {
+    /// The draft's whole image, which a gap with spots is read over
+    /// (`spots_edited`).
+    whole: Cow<'a, [SelectionRun]>,
+    /// The panel's selection cut from `whole` in the draft's order
+    /// (`selected_image`), `None` where the shot publishes the whole draft.
+    selected: Option<Vec<SelectionRun>>,
+}
+
+impl Words<'_> {
+    /// Returns the words the shot publishes, which the choices and every
+    /// other gap are read off (`draft_holds`, `settle_by_edit`).
+    fn published(&self) -> &[SelectionRun] {
+        self.selected.as_deref().unwrap_or(&self.whole)
+    }
+}
+
 /// Returns the caller's `resolutions` checked as UNTRUSTED input against the
 /// composition's `gaps` (the module doc; SP-18): the placement each asks, by
 /// the index of the gap it names.
@@ -2130,8 +2191,9 @@ pub(super) fn checked_resolutions(gaps: &[Gap], resolutions: &Map<String, Value>
 }
 
 /// Settles each gap `chosen` names at the placement it asks (the module
-/// doc), in the record as the merger's who acts through `surface`: `person`
-/// at the editor, `agent` with no person present.
+/// doc) — the merger's resolutions, or the choices the draft's words hold
+/// (`settle_by_edit`) — in the record as the merger's who acts through
+/// `surface`: `person` at the editor, `agent` with no person present.
 fn settle_resolutions(merged: &mut lib::Merged, chosen: &BTreeMap<usize, Placement>, surface: Surface) {
     for (ix, placed) in chosen {
         for gaps in [&mut merged.record.gaps, &mut merged.composed.gaps] {
@@ -2145,8 +2207,8 @@ fn settle_resolutions(merged: &mut lib::Merged, chosen: &BTreeMap<usize, Placeme
 }
 
 /// Returns whether `image` holds `placed` at `gap` (the module doc,
-/// **`merge.land`**): the words a landing's shot publishes, as the draft
-/// arranges them, read for a choice the merger names.
+/// **`merge.land`**): the words a landing's shot publishes, or the draft as
+/// it stands, read for a choice the merger names or an edit made.
 ///
 /// A run stands where the image holds any of its words, an edit inside them
 /// included, and is gone where it holds none; standing runs are ordered by
@@ -2197,9 +2259,10 @@ pub(super) fn draft_holds(gap: &Gap, placed: &Placement, image: &[SelectionRun])
 /// Returns the first ordinal at which `image` holds any of `run`'s words,
 /// `None` where it holds none (`held_ordinals`).
 ///
-/// It is the landing's reading of a run (`draft_holds`): the run stands
-/// where this is some, an edit inside its words included, and the standing
-/// runs are ordered by it.
+/// It is the one reading of a run, a choice's at the landing and an edit's
+/// at the re-open and the landing alike (`draft_holds`, `edit_choice`): the
+/// run stands where this is some, an edit inside its words included, and
+/// the standing runs are ordered by it.
 fn first_ordinal(image: &[SelectionRun], run: &Run) -> Option<u64> {
     held_ordinals(image, run).map(|(first, _)| first)
 }
@@ -2246,8 +2309,8 @@ fn ordinal_in(image: &[SelectionRun], origin: &Address, i: u64) -> Option<u64> {
 ///
 /// Each anchor is read where the image holds the content position it
 /// names; one the image no longer holds bounds nothing, as an end of the
-/// document does. It is the one reading of a spot, the re-open's
-/// (`holders_moved`) and the landing's (`draft_holds`).
+/// document does. It is the one reading of a spot, of the words' holder
+/// (`moved_to`) and of a holder's placement (`draft_holds`).
 fn spot_holds(image: &[SelectionRun], spot: &lib::Spot, (first, last): (u64, u64)) -> bool {
     // The image position of the content position an anchor names.
     let anchored = |anchor: &Address| -> Option<u64> {
@@ -2288,84 +2351,119 @@ pub(super) fn selected_image(draft: &[SelectionRun], selection: &[SelectionRun])
 
 /// Returns the holder's placement the draft's image now holds at each
 /// unsettled `moves` gap with spots among `gaps`, where it is another
-/// side's than the default's, as the resolution of the merger `by` names
-/// (CM-I33; the module doc, THE RE-OPEN).
+/// side's than the default's (`moved_to`), as the resolution of the merger
+/// `by` names (CM-I33; the module doc, THE RE-OPEN).
+pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedBy) -> Vec<lib::Resolution> {
+    gaps.iter()
+        .filter(|g| !g.settled)
+        .filter_map(|gap| moved_to(gap, image).map(|side| lib::Resolution { gap: gap.id, choice: lib::Choice::Order(vec![side]), by: by.clone() }))
+        .collect()
+}
+
+/// Returns the other holder at whose spot a `moves` gap with spots' words
+/// stand in `image` (CM-I33), `None` where they stand at the default's, at
+/// no holder's or at more than one other's, and at every other gap.
 ///
 /// The gap's words are one identity whoever holds them, so they are found
 /// by the default holder's runs, and they stand at a holder's spot where
 /// they lie whole after its `after` anchor and before its `before` in the
-/// image (`spot_holds`). A spot is read by the anchors the draft still
-/// holds: one it no longer holds bounds nothing, as an end of the document
-/// does. The words are a holder's placement only where its spot is the one
-/// other holder's that holds them and the default's does not: a deleted
-/// neighbour leaves the default's spot open, and the gap stands unsettled.
-pub(super) fn holders_moved(gaps: &[Gap], image: &[SelectionRun], by: &ResolvedBy) -> Vec<lib::Resolution> {
-    let mut moved = Vec::new();
-    for gap in gaps.iter().filter(|g| !g.settled && !g.spots.is_empty()) {
-        let Placement::Order(placed) = &gap.placed else { continue };
-        let [default] = placed.as_slice() else { continue };
-        let mut words: Option<(u64, u64)> = None;
-        let mut whole = true;
-        for (_, run) in gap.runs.iter().filter(|(side, _)| side == default) {
-            match (ordinal_in(image, &run.origin, run.i_start), ordinal_in(image, &run.origin, run.reach().saturating_sub(1))) {
-                (Some(first), Some(last)) => {
-                    words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
-                }
-                _ => whole = false,
-            }
-        }
-        let (Some(words), true) = (words, whole) else { continue };
-        let holds = |spot: &lib::Spot| spot_holds(image, spot, words);
-        if gap.spots.iter().any(|s| s.side == *default && holds(s)) {
-            continue;
-        }
-        let others: Vec<SideIx> = gap.spots.iter().filter(|s| s.side != *default && holds(s)).map(|s| s.side).collect();
-        if let [side] = others.as_slice() {
-            moved.push(lib::Resolution { gap: gap.id, choice: lib::Choice::Order(vec![*side]), by: by.clone() });
-        }
+/// image (`spot_holds`); words not whole there, gone or cut, stand at no
+/// spot. A spot is read by the anchors the draft still holds: one it no
+/// longer holds bounds nothing, as an end of the document does. The words
+/// are a holder's placement only where its spot is the one other holder's
+/// that holds them and the default's does not: a deleted neighbour leaves
+/// the default's spot open, and the words stand at the default.
+fn moved_to(gap: &Gap, image: &[SelectionRun]) -> Option<SideIx> {
+    if gap.spots.is_empty() {
+        return None;
     }
-    moved
+    let Placement::Order(placed) = &gap.placed else { return None };
+    let [default] = placed.as_slice() else { return None };
+    let mut words: Option<(u64, u64)> = None;
+    for (_, run) in gap.runs.iter().filter(|(side, _)| side == default) {
+        let first = ordinal_in(image, &run.origin, run.i_start)?;
+        let last = ordinal_in(image, &run.origin, run.reach().saturating_sub(1))?;
+        words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
+    }
+    let words = words?;
+    let holds = |spot: &lib::Spot| spot_holds(image, spot, words);
+    if gap.spots.iter().any(|s| s.side == *default && holds(s)) {
+        return None;
+    }
+    match gap.spots.iter().filter(|s| s.side != *default && holds(s)).map(|s| s.side).collect::<Vec<SideIx>>().as_slice() {
+        [side] => Some(*side),
+        _ => None,
+    }
 }
 
-/// Reads each unsettled gap's state off the draft's image as it stands (the
-/// module doc, THE RE-OPEN).
+/// Returns the first `moves` gap with spots among `gaps` whose words the
+/// whole draft's image holds elsewhere than the composition placed them, a
+/// gap no choice in `chosen` names (the module doc, **`merge.land`**).
 ///
-/// A gap whose default the draft no longer arranges as M placed it — its
-/// runs removed whole, or reordered — is settled by the merger who acts
-/// through `surface`, `person` or `agent`: the re-open reads the draft, not
-/// the hand that edited it, so the merger composing is the one recorded. An
-/// edit inside a run's words, which keeps every position in its order,
-/// settles nothing. A gap with spots' words moved to another holder's spot
-/// are read before this, by `holders_moved`, and composed again as that
-/// holder's placement.
-fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Surface) {
-    for ix in 0..merged.record.gaps.len() {
-        let gap = &merged.record.gaps[ix];
-        if gap.settled {
-            continue;
-        }
-        let default: Vec<&Run> = match &gap.placed {
-            Placement::Omitted => continue,
-            Placement::Order(order) => order.iter().flat_map(|s| gap.runs.iter().filter(move |(side, _)| side == s).map(|(_, r)| r)).collect(),
-            Placement::After | Placement::Before => gap.runs.iter().map(|(_, r)| r).collect(),
-        };
-        if default.is_empty() {
-            continue;
-        }
-        let firsts: Vec<Option<u64>> = default.iter().map(|r| ordinal_in(image, &r.origin, r.i_start)).collect();
-        let lasts: Vec<Option<u64>> = default.iter().map(|r| ordinal_in(image, &r.origin, r.i_start + r.width.saturating_sub(1))).collect();
-        let removed_whole = firsts.iter().chain(&lasts).all(Option::is_none);
-        let placed: Vec<u64> = firsts.iter().flatten().copied().collect();
-        let in_order = placed.windows(2).all(|w| w[0] < w[1]);
-        if removed_whole || !in_order {
-            for gaps in [&mut merged.record.gaps, &mut merged.composed.gaps] {
-                if let Some(g) = gaps.get_mut(ix) {
-                    g.settled = true;
-                    g.resolved_by = Some(surface.settler());
-                }
-            }
+/// The words are read over the whole draft as THE RE-OPEN reads them: at an
+/// unsettled gap they stand elsewhere where they lie at one other holder's
+/// spot alone (`moved_to`), and at a gap the merger settled where the
+/// holder's placement it took no longer holds them (`draft_holds`). Only a
+/// composition places the words at another holder's spot, so a landing
+/// over either would record a placement the draft no longer holds, and
+/// composing again reads the gap as the draft holds it. A gap a choice
+/// names is read by that choice (`draft_holds`); words gone, or at no
+/// holder's spot, leave an unsettled gap at its default.
+pub(super) fn spots_edited(gaps: &[Gap], chosen: &BTreeMap<usize, Placement>, whole: &[SelectionRun]) -> Option<GapId> {
+    gaps.iter()
+        .enumerate()
+        .filter(|(ix, g)| !g.spots.is_empty() && !chosen.contains_key(ix))
+        .find(|(_, g)| if g.settled { g.resolved_by != Some(ResolvedBy::Rule) && !draft_holds(g, &g.placed, whole) } else { moved_to(g, whole).is_some() })
+        .map(|(_, g)| g.id)
+}
+
+/// Returns the choice `image` holds at `gap` in place of its default,
+/// `None` where the default still holds or the image holds none of the
+/// gap's choices (the module doc, THE RE-OPEN).
+///
+/// The one candidate is read off the runs as a landing's choice is
+/// (`first_ordinal`): the omission where every run of the gap is gone, else
+/// the order of the sides with a run standing, each side placed by the
+/// lowest first ordinal among its runs. It is the gap's choice only where
+/// the image holds it (`draft_holds`) — every run of a listed side
+/// standing, the listed sides' runs rising side after side, and every run
+/// of a side left out gone — so an edit that interleaves two sides' runs,
+/// reorders one side's own, or leaves some of a side's runs and not others
+/// holds none. At a gap of one side placed `after` or `before`, its runs
+/// standing in order hold the default, so the one choice read there is the
+/// omission. A `moves` gap is read by none: one with spots by where its
+/// words stand (`moved_to`), which the re-open composes again, and a
+/// spine's by nothing the draft holds (`draft_holds`).
+pub(super) fn edit_choice(gap: &Gap, image: &[SelectionRun]) -> Option<Placement> {
+    if gap.kind == GapKind::Moves || draft_holds(gap, &gap.placed, image) {
+        return None;
+    }
+    let mut standing: Vec<(SideIx, u64)> = Vec::new();
+    for (side, run) in &gap.runs {
+        let Some(first) = first_ordinal(image, run) else { continue };
+        match standing.iter_mut().find(|(s, _)| s == side) {
+            Some((_, lowest)) => *lowest = (*lowest).min(first),
+            None => standing.push((*side, first)),
         }
     }
+    standing.sort_by_key(|&(_, first)| first);
+    let candidate = if standing.is_empty() { Placement::Omitted } else { Placement::Order(standing.into_iter().map(|(side, _)| side).collect()) };
+    draft_holds(gap, &candidate, image).then_some(candidate)
+}
+
+/// Settles each gap the rules left unsettled where `image` holds another
+/// of its choices than its default (`edit_choice`), `placed` that choice
+/// (the module doc, THE RE-OPEN and **`merge.land`**).
+///
+/// The reading is of the words, not of the hand that edited them, so the
+/// merger reading them — composing at the re-open, publishing at the
+/// landing — is the one recorded, who acts through `surface`: `person` or
+/// `agent` (`settle_resolutions`). A gap whose default still holds, one the
+/// image holds none of the choices of, and a `moves` gap stand as
+/// composed, unsettled at the default.
+fn settle_by_edit(merged: &mut lib::Merged, image: &[SelectionRun], surface: Surface) {
+    let read: BTreeMap<usize, Placement> = merged.record.gaps.iter().enumerate().filter(|(_, g)| !g.settled).filter_map(|(ix, g)| Some((ix, edit_choice(g, image)?))).collect();
+    settle_resolutions(merged, &read, surface);
 }
 
 // ── The shapes, as the page reads them ───────────────────────────────────

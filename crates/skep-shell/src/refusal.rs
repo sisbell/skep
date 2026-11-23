@@ -498,7 +498,11 @@ impl Name {
     /// shot sent again met the twin fence again; nothing published),
     /// `landing_begun {draft, position}` (`merge.compose` with no `into`
     /// found the merge landed in a draft of the person's that no record of
-    /// theirs names; nothing staged or written).
+    /// theirs names; nothing staged or written). `merge.land`'s own
+    /// `gap_edited {gap}` crosses under it too (the draft holds a `moves`
+    /// gap with spots' words elsewhere than the composition placed them —
+    /// at another side's spot, or away from the one the merger's edit took;
+    /// nothing sent: compose again, which reads them).
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

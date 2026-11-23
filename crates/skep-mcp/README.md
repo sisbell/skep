@@ -173,7 +173,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `window_parts_owed`. A `resolutions` choice records only what the
   draft holds: one it does not hold, read off the draft at every call
   while the choice stands, is refused `malformed_args`, nothing sent, and
-  a `moves` gap without spots takes none.
+  a `moves` gap without spots takes none. Every other gap the rules left
+  unsettled is read off the words published as a re-open reads the
+  draft, recorded at another of its choices they hold, and a `moves` gap
+  with spots whose words the draft holds elsewhere than the composition
+  placed them is refused `merge_refused` `gap_edited`, nothing sent:
+  compose again.
   `merge_undo {}` takes a landing back, `merge_withdraw {draft}` takes a
   merge out of a draft and keeps its words, and `merge_undo {draft,
   withdrawal}` puts it back, each by one write. The composition lives with

@@ -76,9 +76,14 @@
 //! READ-THROUGH's first hop: the twins, then the counterpart records whose
 //! `to` lies in the publishable words — a named part's own record among
 //! them — one four-set read `{home: "any", ty: [the subtype], to: [their
-//! I-spans]}` in chunks of the wire list cap, each record read once, kept
-//! by the exact type and where its home's account is the person's (a
-//! record of a draft the person reads but does not own is dropped); (9)
+//! I-spans]}` in chunks of the wire list cap, each record read once and
+//! kept by the exact type, held to the account its home lies in: the class
+//! has one writer, the publish shot, which homes a record only in a draft
+//! its owner's shot re-minted (wire.md §Credential refusals,
+//! `correspondence_not_standalone`), so a record of a draft the person
+//! reads and does not own — a sub-account's, a granted draft's — is that
+//! draft's owner's publication's and is kept as the person's own are, and
+//! the board answers none homed where the person may not read; (9)
 //! `read_through` — the second hop, the links on every record's `from` by
 //! TWO batched four-set reads over all of them, `{from: […]}` and `{to:
 //! […]}`, up to the cap a read, each answered link kept where its home is
@@ -345,8 +350,9 @@ impl Placement {
 }
 
 /// One counterpart record the read-through holds: a correspondence record
-/// homed in a draft of the person's, `from` the draft-native span an earlier
-/// shot re-inserted and `to` the member's span it became, of one width.
+/// homed in a draft — the person's, or another account's the person reads —
+/// `from` the draft-native span an earlier shot of the draft's owner
+/// re-inserted and `to` the member's span it became, of one width.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     /// The record link's address.
@@ -406,7 +412,9 @@ pub(crate) fn read_record(door: &Door<'_>, p: &Publisher<'_>, hit: &str) -> Resu
 
 /// Reads one record by address, held to `account` as [`read_record`] holds
 /// one to the person's: the record of a window onto another account's origin
-/// is read in that account's own name (the [`parts`] module's doc).
+/// is read in that account's own name (the [`parts`] module's doc), as is
+/// the read-through's counterpart record homed in another account's draft
+/// (the module's doc, step (8)).
 pub(crate) fn read_record_as(door: &Door<'_>, account: &str, hit: &str) -> Result<Option<Record>, Fault> {
     if !home_of_link(hit).is_some_and(|home| owned_by(home, account)) {
         return Ok(None);
@@ -1526,13 +1534,12 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
             if !record_seen.insert(hit.clone()) {
                 continue;
             }
-            // The home judged off the address before the read, so a record
-            // of another's draft costs no `read_link`.
-            if !home_of_link(&hit).is_some_and(|home| owned_by(home, p.account)) {
-                continue;
-            }
-            let Some(value) = door.link(&hit)? else { continue };
-            if let Some(record) = Record::of(&hit, &value, p.account) {
+            // Each record read in the account its home lies in: the class
+            // has one writer, the publish shot, which homes a record only in
+            // a draft its owner's shot re-minted, so a record homed in
+            // another account's draft is that account's own publication's.
+            let Some(owner) = home_of_link(&hit).and_then(account_of) else { continue };
+            if let Some(record) = read_record_as(door, &owner, &hit)? {
                 records.push(record);
             }
         }

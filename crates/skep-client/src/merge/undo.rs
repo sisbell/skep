@@ -85,11 +85,11 @@
 //!   draft the feed tells an undo's row from a restore's or any plain
 //!   re-arrangement's by none of its terms, so where `set_arrangement` rows
 //!   naming no merge stand past the landing's, the draft is read at the
-//!   latest of them through `/op-at`: that state, mapped through the same
-//!   records as C (**The mapping**), equal to C mapped is the merge taken
-//!   back there ([`NoUndo::TakenBack`]), nothing sent and the draft's edits
-//!   since standing; any other state leaves the write to the board's
-//!   verdict.
+//!   latest of them through `/op-at`, before the records: that state and C,
+//!   mapped through one read of the records over both (**The mapping**),
+//!   equal is the merge taken back there ([`NoUndo::TakenBack`]), nothing
+//!   sent and the draft's edits since standing; any other state leaves the
+//!   write to the board's verdict.
 //!
 //! **The pre-landing read.** The state before a commit at position `at` is
 //! read through `/op-at` at the answer for `at − 1`: a landing with a base
@@ -110,24 +110,31 @@
 //! and is never the trunk's word of the same ordinal, `D.0.1.k`. What the
 //! acts compare and what they send is that image mapped at its own spelling
 //! (the merge reader's `mapped_image`), so two states are one only where
-//! every word of one is the other's by identity. C is sent mapped through the
-//! correspondence records of the merger's own origins among its runs, read
-//! at the head after the pre-landing read — the restore's read and its
-//! mapping (the merge reader's `records_of`; the `history` module's doc) —
-//! so words a publication made public since the landing come back as the
-//! published words they became, on the trunk's chain, and the links on them
-//! return with them (B3-S11; B3-S7). A run no record covers is sent as
-//! read. The records' read takes the image's runs as the core's, each
-//! origin its trunk — exact for every run a record can name, records being
-//! homed only in private drafts, whose chains carry no member's component.
-//! A withdrawal reads no record and maps nothing: the words it keeps go
-//! back as read. Each run is written as [`written_runs`] spells it — its
-//! own first I-address, its `origin` the document that minted it, a
-//! member's version component kept (wire.md §Arrangement, `publish`). A
-//! baseless landing already taken back is answered after the mapping (the
-//! dispatch, above); then, at each of the three acts, a state in more runs
-//! than one write may name, counted on the runs the write sends, is
-//! [`Refusal::OverCap`], nothing sent.
+//! every word of one is the other's by identity. C is sent mapped through
+//! the correspondence records of every origin among its runs, each read in
+//! its owner's account — a draft of the merger's and another account's
+//! draft C holds words of alike, only that draft's owner's shot homing a
+//! record in it — at the head after the pre-landing read: the restore's
+//! read and its mapping (the merge reader's `owners_records`; the `history`
+//! module's doc). So words a publication made public since the landing —
+//! the merger's, or those of another account's draft its owner published —
+//! come back as the published words they became, on the trunk's chain, and
+//! the links on them return with them (B3-S11; B3-S7). The withdrawal's
+//! undo maps the draft's words as they stand by the same read. A run no
+//! record covers is sent as read, as is every run of an origin the merger
+//! may not read, which yields no record. The records' read takes the
+//! image's runs as the core's, each origin its trunk — exact for every run
+//! a record can name, records being homed only in private drafts, whose
+//! chains carry no member's component — and asks each span once, however
+//! many of the states it maps hold it. A withdrawal reads no record and
+//! maps nothing: the words it keeps go back as read.
+//! Each run is written as [`written_runs`] spells it — its own first
+//! I-address, its `origin` the document that minted it, a member's version
+//! component kept (wire.md §Arrangement, `publish`). A baseless landing
+//! already taken back is answered after the mapping (the dispatch, above);
+//! then, at each of the three acts, a state in more runs than one write may
+//! name, counted on the runs the write sends, is [`Refusal::OverCap`],
+//! nothing sent.
 //!
 //! **The typed position (P3).** The undo's one write is typed against the
 //! landing's position — the command's and an agent's rule, `own_ack` none —
@@ -148,10 +155,12 @@
 //! `set_arrangement` row whose `merge` names the marker's `at` beside its
 //! head and its sides, which a landing's row never names (wire.md §The
 //! change feed) — and the draft is read through `/op-at` at the landing
-//! and at that write. Where the two states, mapped through the records of
-//! the merger's own origins among them as C is (**The mapping**), are
-//! equal, the take-back and its undo moved the words and nothing else
-//! did, and the write is typed past them; where they differ, a change made
+//! and at that write. Where the two states, mapped through one read of the
+//! records over both as C is (**The mapping**), are equal, the take-back
+//! and its undo moved the words and nothing else did, and the write is
+//! typed past them: a word read at the landing as a draft's own and at the
+//! put-back as the published word a shot made of it is one word, whichever
+//! account's draft it was minted in. Where they differ, a change made
 //! between the landing and the take-back stands in the words, and the
 //! write is typed against the landing, which the board refuses, the change
 //! standing. No position below the landing's lands, the landing having
@@ -247,7 +256,7 @@ use crate::halt::{Halt, Refused};
 
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
 use super::reads::{
-    feed_rows, mapped_image, records_of, runs_of, NoUndo, OnEnd, Reader, Refusal, Role,
+    feed_rows, mapped_image, owners_records, runs_of, NoUndo, OnEnd, Reader, Refusal, Role,
     SHOT_RUN_CAP,
 };
 use super::record::{self, newest, read_record, Found, Record, RecordLanding};
@@ -352,15 +361,16 @@ pub struct Unwithdrawn {
 ///   the pre-landing read is, and the records' reads over the two states,
 ///   a run of either that is no content I-address and a record mapping
 ///   either past the largest ordinal the board's faults, faced;
-/// - a run of C that is no content I-address, the board's fault, faced;
-///   the records' reads' refusals at the head; a record mapping C past the
-///   largest ordinal, the board's fault, faced (SP-19); on a baseless
-///   draft, the read of it at its latest re-arrangement past the landing's,
-///   refused as the pre-landing read is, and [`NoUndo::TakenBack`] where
-///   the state there, mapped, is C mapped, nothing sent; then
-///   [`Refusal::OverCap`] where C mapped is in more runs than one write may
-///   name, counted on the runs the write sends, nothing sent, and a run a
-///   record mapped that is no content I-address, the board's fault, faced;
+/// - on a baseless draft, the read of it at its latest re-arrangement past
+///   the landing's, refused as the pre-landing read is; a run of C, or of
+///   the state there, that is no content I-address, the board's fault,
+///   faced; the records' reads' refusals at the head; a record mapping C,
+///   or the state there, past the largest ordinal, the board's fault, faced
+///   (SP-19); on a baseless draft, [`NoUndo::TakenBack`] where the state
+///   there, mapped, is C mapped, nothing sent; then [`Refusal::OverCap`]
+///   where C mapped is in more runs than one write may name, counted on the
+///   runs the write sends, nothing sent, and a run a record mapped that is
+///   no content I-address, the board's fault, faced;
 /// - a journal named that cannot take the record, nothing sent (P13): one
 ///   this merger may not read, one this board does not register or another
 ///   account's, as [`Refusal::Halt`] naming the journal and the check it
@@ -425,7 +435,7 @@ pub fn undo(
     // THE DISPATCH (P4): the base record first, then the marker.
     let taken = meta.merge.as_ref().filter(|_| meta.base.is_some());
     let taking = match (meta.base.as_deref(), meta.merge.as_ref()) {
-        (Some(_), Some(marker)) => by_marker(reader, merger.account, draft, marker)?,
+        (Some(_), Some(marker)) => by_marker(reader, draft, marker)?,
         (Some(_), None) => {
             // Nothing to undo, never the feed (N4): the words alone are the
             // feed's, the version the member the row names first (wire.md
@@ -463,16 +473,23 @@ pub fn undo(
         }
     };
     let Taking { landing, restored, image, rearranged, earlier, put_back } = taking;
-    // THE MAPPING: C's image through the records of the merger's own
-    // origins, each run at its own spelling.
-    let records = records_of(reader, merger.account, &runs_of(image.runs())?)?;
+    // A baseless draft's latest re-arrangement past its landing, read
+    // before the records, so one read of them maps it and C alike (P4).
+    let what = "the position of the draft's latest re-arrangement";
+    let left = rearranged.map(|later| arranged_at(reader, draft, later, what)).transpose()?;
+    // THE MAPPING: C's image, and the state the draft was left in, through
+    // the records of every origin among their runs, each in its owner's
+    // account, each run at its own spelling.
+    let mut state = runs_of(image.runs())?;
+    if let Some(left) = &left {
+        state.extend(runs_of(left.runs())?);
+    }
+    let records = owners_records(reader, &state)?;
     let sent = mapped_image(&image, &records)?;
     // A baseless landing taken back (P4): the latest re-arrangement past it
     // left the draft where this write would put it.
-    if let Some(later) = rearranged {
-        let what = "the position of the draft's latest re-arrangement";
-        let left = arranged_at(reader, draft, later, what)?;
-        if mapped_image(&left, &records)? == sent {
+    if let Some(left) = &left {
+        if mapped_image(left, &records)? == sent {
             return Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack });
         }
     }
@@ -583,7 +600,8 @@ pub(crate) struct PutBack {
 /// pre-landing read, with the marker that state carried (**The dispatch**),
 /// and the latest write that put `marker` back since the landing, judged by
 /// the draft's words at the landing and at it, mapped through the records
-/// of `account`'s own origins among them (**The put-back**).
+/// of every origin among them, each in its owner's account (**The
+/// put-back**).
 ///
 /// # Errors
 ///
@@ -596,12 +614,7 @@ pub(crate) struct PutBack {
 /// [`position_fault`]; a run of either state that is no content I-address,
 /// the board's fault, faced; the records' reads' over the two states; a
 /// record mapping either past the largest ordinal, the board's fault, faced.
-fn by_marker(
-    reader: &Reader<'_>,
-    account: &str,
-    draft: &Address,
-    marker: &MergeMarker,
-) -> Result<Taking, Refusal> {
+fn by_marker(reader: &Reader<'_>, draft: &Address, marker: &MergeMarker) -> Result<Taking, Refusal> {
     let at = marker.at.ok_or_else(|| {
         own_fault_face(
             "the marker names no position",
@@ -633,7 +646,7 @@ fn by_marker(
             let landed = arranged_at(reader, draft, at, "the landing's position")?;
             let put = arranged_at(reader, draft, back, "the position the merge was put back at")?;
             let state = [runs_of(landed.runs())?, runs_of(put.runs())?].concat();
-            let records = records_of(reader, account, &state)?;
+            let records = owners_records(reader, &state)?;
             let kept = mapped_image(&landed, &records)? == mapped_image(&put, &records)?;
             Some(PutBack { at: back, kept })
         }
@@ -869,7 +882,7 @@ pub fn unwithdraw(
     let cleared = Restorable::of(draft, cleared, "before the withdrawal")?;
     // THE MAPPING: the draft's words as they stand, through the records.
     let image = reader.imaged(draft, Some(read_at))?.into_image()?;
-    let records = records_of(reader, merger.account, &runs_of(image.runs())?)?;
+    let records = owners_records(reader, &runs_of(image.runs())?)?;
     let runs = capped_runs(&mapped_image(&image, &records)?)?;
     // THE TYPED POSITION (P3): the withdrawal's, or the caller's own last
     // ack where it is later.

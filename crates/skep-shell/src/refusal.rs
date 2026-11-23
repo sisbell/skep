@@ -260,9 +260,9 @@ impl Name {
     pub const NO_ADDRESS: Name = Name("no_address");
     /// A row that acts as the session's account, under a session that has none.
     ///
-    /// The board answered the session no account: an attest signs as it, the
-    /// publication and merge families and the restore take their hand from
-    /// it, and `history.past` reads the correspondence records it owns.
+    /// The board answered the session no account: an attest signs as it, and
+    /// the publication and merge families and the restore take their hand
+    /// from it.
     pub const NO_ACCOUNT: Name = Name("no_account");
     /// The held-burst store's file was written by a newer skep, or is damaged.
     ///

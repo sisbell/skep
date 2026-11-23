@@ -3274,6 +3274,70 @@ fn an_end_reached_through_another_drafts_record_is_spelled_on_the_words_it_publi
     assert_eq!((keys_of(c), c.offered()), ((true, true, false), false), "E's 5..8 are the base's words");
 }
 
+/// `SUB`'s owner's published document, `SUB`'s words published into it;
+/// `OTHER`'s owner's likewise.
+const SUB_EDITION: &str = "1.0.1.2.0.2";
+const OTHER_EDITION: &str = "1.0.2.0.2";
+
+/// Checks that a record homed in another account's draft is read in that
+/// account's name.
+///
+/// `SUB`, a draft of the sub-account `1.0.1.2` the person reads, had its
+/// words published by its owner as `SUB_EDITION`'s, the record homed in
+/// `SUB`; a note of the person's stands on `SUB`'s words, and the draft
+/// quotes the edition's. The read-through reaches the note through `SUB`'s
+/// record, held to `SUB`'s own account, and spells its end through that
+/// record on the edition's words, which the base never held, so it is
+/// offered and the board takes it (the mutant that keeps the person's own
+/// records alone drops `SUB`'s and never reaches the note).
+#[test]
+fn a_record_homed_in_another_accounts_draft_is_read_in_its_owners_name() {
+    let (mut world, _) = World::base();
+    world.text(SUB_EDITION, 1, "sub");
+    world.doc(SUB_EDITION, true, "1.0.1.2", vec![run(SUB_EDITION, 1, 3)]);
+    world.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(SUB_EDITION, 1, 3)];
+    let record = world.typed(SUB, vec![ispan(SUB, 1, 3)], vec![ispan(SUB_EDITION, 1, 3)], T_CORRESPONDENCE);
+    let note = world.typed(N, vec![ispan(SUB, 1, 3)], vec![ispan(N, 6, 2)], T_CITATION);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let quoting = Inputs { selection: vec![run(E, 1, 19), run(D, 1, 10), run(SUB_EDITION, 1, 3)], ..inputs() };
+    let e = enumerate(&p, &quoting).unwrap();
+    let c = candidate_at(&e, &note);
+    assert_eq!(c.via, Via::ReadThrough(vec![a(&record)]), "reached through SUB's record");
+    assert!(c.offered(), "the base holds none of the edition's words");
+    let pn = panel(&p, &quoting, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &quoting, &e, &pn, &switched(None)).unwrap() else { panic!("inert") };
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == note).expect("the note's entry");
+    assert_eq!(entry.from, End::Spans(vec![ISpan { chain: format!("{SUB_EDITION}.0.1"), first: 1, width: 3 }]), "spelled through SUB's record");
+    let sent = send(&p, &quoting, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
+}
+
+/// Checks that a record of a draft the person may not read reaches nothing.
+///
+/// `OTHER`, a draft of the account `1.0.2` the person may not read, had its
+/// words published by its owner as `OTHER_EDITION`'s, the record homed in
+/// `OTHER`; the draft quotes the edition's words, and a note of the
+/// person's stands on `OTHER`'s. The board answers the person no link homed
+/// in `OTHER`: no record is read, the enumeration is refused nothing, and
+/// the note is no candidate.
+#[test]
+fn a_record_of_a_draft_the_person_may_not_read_reaches_nothing() {
+    let (mut world, _) = World::base();
+    world.text(OTHER_EDITION, 1, "other");
+    world.doc(OTHER_EDITION, true, "1.0.2", vec![run(OTHER_EDITION, 1, 5)]);
+    world.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(OTHER_EDITION, 1, 5)];
+    let record = world.typed(OTHER, vec![ispan(OTHER, 1, 5)], vec![ispan(OTHER_EDITION, 1, 5)], T_CORRESPONDENCE);
+    let note = world.typed(N, vec![ispan(OTHER, 1, 5)], vec![ispan(N, 6, 2)], T_CITATION);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &Inputs { selection: vec![run(E, 1, 19), run(D, 1, 10), run(OTHER_EDITION, 1, 5)], ..inputs() }).expect("enumerated");
+    assert!(dialer.frames("read_link").iter().all(|f| f["a"] != record), "the record is never read");
+    assert!(e.candidates.iter().all(|c| c.link.to_string() != note), "the note is no candidate");
+}
+
 // ── THE SEND AND THE LANDED TEST ─────────────────────────────────────────
 
 /// THE ACKNOWLEDGMENT: the frame under the token with its `id` and an

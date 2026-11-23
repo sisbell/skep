@@ -4,7 +4,8 @@
 //! `client.md` §4b.1's `history.restore` row, the library's two calls under
 //! it: `past`, the reads, and `restore`, the one write. The board, the
 //! draft and a position are named; the command reads the draft's state as
-//! of that position and the correspondence records at the head, says what
+//! of that position and, at the head, the correspondence records of every
+//! draft the state holds words of, each in its owner's account, says what
 //! the draft will hold — the runs and positions, how many of its words come
 //! back as the published words they became, and the merge marker where the
 //! draft carries one — then sends ONE `set_arrangement` typed against the
@@ -25,10 +26,12 @@
 //!
 //! The session is the command's own, as `merge`'s: the selected signing
 //! key, a content-scoped signed session opened as `skep session` opens its
-//! and closed on every exit. The write signs nothing, but the owned-home
-//! test the records' read makes needs the session's account, which no token
-//! in `SKEP_SESSION` carries, so `SKEP_SESSION` is never read here. No
-//! person door: the command runs without a terminal.
+//! and closed on every exit, its token the one the reads and the write go
+//! under. The write signs nothing, and the records' read holds each record
+//! to the account its home lies in, never to the session's, so the account
+//! is named in the talk alone; `SKEP_SESSION` is `skep session --close`'s
+//! alone, never read here. No person door: the command runs without a
+//! terminal.
 //!
 //! The report's members: `act` (`restore`), `draft`, `at`, `as_of`,
 //! `position` (the write's), `runs` (what the write sent, each `origin`,
@@ -136,8 +139,7 @@ pub fn restore(c: &CommandLine) -> Result<(), Stop> {
 fn run(board: &Board, session: &Session<'_>, asked: &Asked) -> Result<(), Stop> {
     let Asked { draft, at } = asked;
     talk(format!("restoring {draft} to how it stood at position {at}, at {}", board.dialed()));
-    let p = past(board, session.token(), session.account(), draft, *at)
-        .map_err(|r| refused(r, Step::Restore))?;
+    let p = past(board, session.token(), draft, *at).map_err(|r| refused(r, Step::Restore))?;
     say_past(&p);
     let restored = make_current(board, session.token(), &p).map_err(|r| refused(r, Step::Restore))?;
     say_restored(&p, &restored);

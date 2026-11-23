@@ -7,9 +7,11 @@
 //! the runs the write sends, a record mapping past the range faced, and the
 //! session's end at each of them typed. Beside them, the one records' read
 //! over several images, the diff's: each origin's records held to its own
-//! account, another account's mapped through its owner's record, a record
-//! homed in a third account never read, and the restore's own records the
-//! person's alone.
+//! account, another account's mapped through its owner's record, and a
+//! record homed in a third account never read; and the restore's read of
+//! the same records: another account's words written as the words its owner
+//! published, and as read where no record of them is answered, the board's
+//! `withheld` at the write naming that account's draft.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -303,29 +305,70 @@ fn a_record_not_homed_in_its_origins_account_is_not_kept() {
     assert_eq!(mapped_image(&mark, &found), Ok(image(&[(&e, 20, 11), (&z, 1, 4)])), "Z's run as read");
 }
 
-/// The restore maps through the person's own records alone.
+/// Returns the fake board of a restore of `S` whose state as of 12 holds
+/// `S`'s first eleven words and `Z`'s first four.
 ///
-/// A state holding `Z`'s words while `Z`'s record stands reads the records
-/// with one query, homed in the person's `S`, and writes `Z`'s run as the
-/// state held it, never as the words `Z`'s owner published (the mutant that
-/// reads the restore's records at every origin queries `Z` too and writes
-/// `F`'s words).
-#[test]
-fn the_restore_maps_through_the_persons_own_records_alone() {
-    let (s, z, e) = (format!("{S}.0.1"), format!("{Z}.0.1"), format!("{E}.0.1"));
-    let state = runs_at(&[(&s, 1, 11), (&z, 1, 4)]);
-    let hits = vec![format!("{Z}.0.2.1")];
-    let fake = Fake::new(move |req: &Request| {
-        by_home(req, &hits).unwrap_or_else(|| match (req.path.as_str(), fake::frame(req)["op"].as_str().unwrap_or("?")) {
+/// The records' reads are [`by_home`]'s, `Z`'s query answered `z_hits`,
+/// and the write is answered `write`.
+fn holding_z(z_hits: Vec<String>, write: Value) -> Arc<Fake> {
+    let state = runs_at(&[(&format!("{S}.0.1"), 1, 11), (&format!("{Z}.0.1"), 1, 4)]);
+    Fake::new(move |req: &Request| {
+        by_home(req, &z_hits).unwrap_or_else(|| match (req.path.as_str(), fake::frame(req)["op"].as_str().unwrap_or("?")) {
             ("/op", "doc_metadata") => fake::json(200, metadata(false)),
             ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": "0.15"}]})),
             ("/op-at", "image") => fake::json(200, state.clone()),
-            other => panic!("the past read sent a frame the fake does not answer: {other:?}"),
+            ("/op", "set_arrangement") => fake::json(200, write.clone()),
+            other => panic!("the restore sent a frame the fake does not answer: {other:?}"),
         })
-    });
-    let p = past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12).expect("the past read");
-    assert_eq!(p.written, image(&[(&e, 20, 11), (&z, 1, 4)]), "Z's words written as the state held them");
-    assert_eq!(asked(&fake), (vec![frames::unit_span(S)], vec![json!(format!("{S}.0.2.1"))]), "one query, homed in the person's S");
+    })
+}
+
+/// The restore maps another account's words through its owner's record.
+///
+/// A state holding the words of the person's draft `S` and of `Z`, a draft
+/// of the account `1.0.2` the person reads, while each draft's record
+/// stands — `S`'s words published into `E`, and `Z`'s into `F` by `Z`'s
+/// owner — reads the records with one query per origin, in run order, `Z`'s
+/// hit read in `Z`'s account, and writes both as the published words they
+/// became, fifteen positions covered (the mutant that reads the person's
+/// origins alone queries `S` alone and writes `Z`'s words as the state held
+/// them, where the board's fence takes them for words `Z` already
+/// published).
+#[test]
+fn the_restore_maps_another_accounts_words_through_its_owners_record() {
+    let (e, f) = (format!("{E}.0.1"), format!("{F}.0.1"));
+    let fake = holding_z(vec![format!("{Z}.0.2.1")], json!({"resp": "ack", "at": 21}));
+    let board = fake::board(&fake);
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
+    assert_eq!(p.written, image(&[(&e, 20, 11), (&f, 30, 4)]), "Z's words written as the words its owner published");
+    assert_eq!((p.covered(), p.extent()), (15, 15));
+    let links = vec![json!(format!("{S}.0.2.1")), json!(format!("{Z}.0.2.1"))];
+    assert_eq!(asked(&fake), (vec![frames::unit_span(S), frames::unit_span(Z)], links), "one query per origin in run order, Z's hit read in Z's account");
+    restore(&board, &token(), &p).expect("restored");
+    let (_, _, write) = served(&fake).pop().expect("the write");
+    assert_eq!(write["runs"], json!([frames::shot_run(E, &format!("{e}.20"), 11), frames::shot_run(F, &format!("{f}.30"), 4)]));
+}
+
+/// Another account's words no record is answered for are written as read.
+///
+/// `Z`'s query answers no hit, as the board answers a reader for a draft it
+/// may not read, every link homed there withheld from it: `Z`'s run is
+/// written as the state held it and no link of `Z`'s is read, nothing
+/// refused at the reads. The board's `withheld` at the write, naming `Z`,
+/// is [`Refusal::WindowWithheld`] naming `Z` (the mutant that answers the
+/// restored draft in place of the board's site names `S`).
+#[test]
+fn another_accounts_words_with_no_record_answered_are_written_as_read() {
+    let (z, e) = (format!("{Z}.0.1"), format!("{E}.0.1"));
+    let withheld = json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": "set_arrangement", "site": {"addr": Z}});
+    let fake = holding_z(Vec::new(), withheld);
+    let board = fake::board(&fake);
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
+    assert_eq!(p.state, vec![run(S, 1, 11), run(Z, 1, 4)]);
+    assert_eq!(p.written, image(&[(&e, 20, 11), (&z, 1, 4)]), "Z's words as the state held them");
+    assert_eq!(asked(&fake), (vec![frames::unit_span(S), frames::unit_span(Z)], vec![json!(format!("{S}.0.2.1"))]), "Z queried, no link of Z's read");
+    assert_eq!(restore(&board, &token(), &p), Err(Refusal::WindowWithheld(a(Z))));
+    assert_eq!(served(&fake).pop().map(|(_, _, f)| f["runs"][1].clone()), Some(frames::shot_run(Z, &format!("{z}.1"), 4)), "the write sent Z's run as read");
 }
 
 // ── the reads and the one write ──────────────────────────────────────────
@@ -410,7 +453,7 @@ fn served(fake: &Fake) -> Vec<(String, Option<u64>, Value)> {
 fn the_reads_run_in_order_and_the_one_write_sends_the_mapped_state() {
     let fake = scripted();
     let board = fake::board(&fake);
-    let p = past(&board, &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
     assert_eq!(p.state, vec![run(S, 1, 11), run(S, 20, 3)]);
     assert_eq!(p.written, image(&[(&format!("{E}.0.1"), 20, 11), (&format!("{S}.0.1"), 20, 3)]), "the image the write sends, mapped");
     assert_eq!(p.sent, vec![run(E, 20, 11), run(S, 20, 3)], "the first eleven come back as E's words, the trunk their origin");
@@ -446,7 +489,7 @@ fn a_members_own_words_are_written_under_the_members_chain() {
     let held = runs_at(&[(&e, 1, 2), (&m, 3, 1)]);
     let fake = holding(3, move |_, _| held.clone(), Vec::new(), Value::Null);
     let board = fake::board(&fake);
-    let p = past(&board, &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
     assert_eq!((p.state.clone(), p.sent.clone()), (vec![run(E, 1, 3)], vec![run(E, 1, 3)]), "the premise: the core's runs spell the member's word as the trunk's");
     assert_eq!(p.written, image(&[(&e, 1, 2), (&m, 3, 1)]), "each run on the chain that minted it");
     restore(&board, &token(), &p).expect("restored");
@@ -471,7 +514,7 @@ fn a_state_whose_written_runs_pass_the_cap_is_refused_however_few_its_core_runs(
         runs_at(&runs)
     };
     let fake = holding(SHOT_RUN_CAP as u64 + 1, region, Vec::new(), Value::Null);
-    assert_eq!(past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
+    assert_eq!(past(&fake::board(&fake), &token(), &a(S), 12), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
     let reads = ["POST /op doc_metadata", "POST /op-at retrieve_doc_v_span_set", "POST /op-at image", "POST /op-at image", "POST /op-at image", "POST /op find_links_ftt"];
     assert_eq!(fake.log(), reads, "the image read in halves past the budget; nothing sent");
 }
@@ -488,7 +531,7 @@ fn a_record_mapping_the_state_past_the_range_is_faced_at_the_read() {
     let to = frames::i_span(&format!("{E}.0.1.{}", u64::MAX - 2), 11);
     let link = json!({"resp": "link_value", "as_of": 20, "at": 15, "link": {"slots": [[frames::i_span(&format!("{s}.1"), 11)], [to], frames::unit_span(T_CORRESPONDENCE)]}});
     let fake = holding(3, move |_, _| held.clone(), vec![format!("{S}.0.2.1")], link);
-    let answer = past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12);
+    let answer = past(&fake::board(&fake), &token(), &a(S), 12);
     assert!(
         matches!(&answer, Err(Refusal::Halt(Halt::Halt(face))) if face.state.contains("past the largest ordinal") && face.act.contains("board fault") && face.act.contains("written")),
         "{answer:?}"
@@ -508,7 +551,7 @@ fn a_position_at_or_past_the_drafts_own_is_refused_before_any_read_at_a_position
     });
     let board = fake::board(&fake);
     for at in [20, 21, 1_000] {
-        assert_eq!(past(&board, &token(), ACCOUNT, &a(S), at), Err(Refusal::NotPast { draft: a(S), at, current: 20 }));
+        assert_eq!(past(&board, &token(), &a(S), at), Err(Refusal::NotPast { draft: a(S), at, current: 20 }));
     }
     assert_eq!(fake.log().len(), 3, "one read each");
     let said = Refusal::NotPast { draft: a(S), at: 20, current: 20 }.to_string();
@@ -520,7 +563,7 @@ fn a_position_at_or_past_the_drafts_own_is_refused_before_any_read_at_a_position
 fn a_published_document_is_refused_at_the_one_read() {
     let fake = Fake::new(|_: &Request| fake::json(200, metadata(true)));
     let board = fake::board(&fake);
-    assert_eq!(past(&board, &token(), ACCOUNT, &a(S), 3), Err(Refusal::Published { doc: a(S) }));
+    assert_eq!(past(&board, &token(), &a(S), 3), Err(Refusal::Published { doc: a(S) }));
     assert_eq!(fake.log(), ["POST /op doc_metadata"]);
 }
 
@@ -533,17 +576,17 @@ fn a_published_document_is_refused_at_the_one_read() {
 fn a_death_at_any_read_or_at_the_write_is_the_typed_session_end() {
     let ended = |answer: &Result<(), Refusal>| matches!(answer, Err(Refusal::SessionEnded(Halt::Halt(face))) if face.state.starts_with("the session ended while") && face.act == OnEnd::Rerun.act());
     let reads = scripted();
-    past(&fake::board(&reads), &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    past(&fake::board(&reads), &token(), &a(S), 12).expect("the past read");
     assert_eq!(reads.log().len(), 6, "the premise: six reads");
     for n in 1..=6 {
         let fake = dying_at(n);
-        let answer = past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12).map(drop);
+        let answer = past(&fake::board(&fake), &token(), &a(S), 12).map(drop);
         assert!(ended(&answer), "the death at read {n}, {}: {answer:?}", fake.log()[n - 1]);
         assert_eq!(fake.log().len(), n, "nothing asked past it");
     }
     let fake = dying_at(7);
     let board = fake::board(&fake);
-    let p = past(&board, &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
     let answer = restore(&board, &token(), &p).map(drop);
     assert!(ended(&answer), "the death at the write: {answer:?}");
     assert_eq!(fake.log().last().map(String::as_str), Some("POST /op set_arrangement"));

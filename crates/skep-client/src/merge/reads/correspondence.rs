@@ -1,16 +1,18 @@
 //! The publication's correspondence records, read and mapped through.
 //!
-//! [`records_of`] reads the records of the person's own origins among a
-//! state's runs, and [`owners_records`] every origin's in its owner's
-//! account. [`mapped_image`] maps an image through them at its own
-//! spelling, each run keyed by its I-address prefix: the words a
-//! publication made public come back as the published span they became on
-//! the trunk's chain, and a run minted under a member's chain stays under
-//! that chain. It is the mapping of every write of a state the board held —
-//! the restore's (the `history` module) and the take-backs' (the `undo`
-//! module) — and of a comparison by identity, the diff's. [`mapped`] is
-//! the same walk over the core's runs, each origin the trunk, which no
-//! write sends.
+//! [`owners_records`] reads every origin's records among a state's runs,
+//! each in its owner's account, and [`records_of`] the records of the
+//! person's own origins alone, the twin fence's read. [`mapped_image`] maps
+//! an image through them at its own spelling, each run keyed by its
+//! I-address prefix: the words a publication made public come back as the
+//! published span they became on the trunk's chain, and a run minted under
+//! a member's chain stays under that chain. It is the mapping of every
+//! write of a state the board held — the restore's (the `history` module)
+//! and the take-backs' (the `undo` module) — and of a comparison by
+//! identity, the diff's. [`mapped`] is the same walk over the core's runs,
+//! each origin the trunk, which no write sends.
+
+use std::collections::HashSet;
 
 use serde_json::Value;
 use skep_address::Address;
@@ -30,12 +32,13 @@ use super::refusal::Refusal;
 
 /// Reads the correspondence records of `account`'s own origins, at the head.
 ///
-/// The origins are those among `state`'s runs. It is the read a write of a
-/// past state makes before it is sent — the restore's (the `history`
-/// module) and the undo's (the `undo` module) — and the shot's read of its
-/// twins (the `windows` module): [`records_held_to`] over each distinct
-/// origin `account` owns exactly, every record held to `account`. An origin
-/// of another account's is not read, and its words stay as read.
+/// The origins are those among `state`'s runs. It is the shot's read of its
+/// twins (the `windows` module), the twin fence's own: the fence reads the
+/// records of each draft the shot names, every one the merger's own, and
+/// those alone (wire.md §The publish shot and head-float). So
+/// [`records_held_to`] reads each distinct origin `account` owns exactly,
+/// every record held to `account`; an origin of another account's is not
+/// read, and its words stay as read.
 ///
 /// # Errors
 ///
@@ -53,19 +56,22 @@ pub(crate) fn records_of(
 /// Reads every origin's correspondence records, each in its owner's account.
 ///
 /// The origins are those among `state`'s runs, and the reads are made at
-/// the head. It is the read a comparison by identity maps its texts
-/// through — the diff's (`history::records`). A text can hold another
-/// account's draft's words by identity, a mark of the draft or a copy from
-/// it, and only that draft's owner's own shot re-mints them and homes a
-/// record for them in the draft (wire.md §The publish shot and head-float:
-/// every named draft the caller's own; the correspondence records), so each
-/// origin's records are read in its owner's account, as a publication reads
-/// a window's (the link-sets design §5.5; `publication::parts`'s
-/// `window_records`): [`records_held_to`] over every distinct origin, each
-/// held to the account it lies in. The board answers a reader only the
-/// links homed where it may read (wire.md §The read predicate), so an
-/// origin the reader may not read yields no record, and its words stay as
-/// read.
+/// the head. It is the read every write of a state the board held maps the
+/// state through before it is sent — the restore's (the `history` module),
+/// the undo's and the withdrawal's undo's (the `undo` module) — and the read
+/// a comparison by identity maps its texts through, the diff's
+/// (`history::records`). A state or a text can hold another account's
+/// draft's words by identity — a window onto the draft, a mark of it or a
+/// copy from it — and only that draft's owner's own shot re-mints them and
+/// homes a record for them in the draft (wire.md §The publish shot and
+/// head-float: every named draft the caller's own; the correspondence
+/// records), so each origin's records are read in its owner's account, as a
+/// publication reads a window's (the link-sets design §5.5;
+/// `publication::parts`'s `window_records`): [`records_held_to`] over every
+/// distinct origin, each held to the account it lies in. The board answers
+/// a reader only the links homed where it may read (wire.md §The read
+/// predicate), so an origin the reader may not read yields no record, and
+/// its words stay as read.
 ///
 /// # Errors
 ///
@@ -83,13 +89,13 @@ pub(crate) fn owners_records(
 /// origins among `state`'s runs, at the head. Each distinct origin is taken
 /// in run order, and `held_to` names the account its records are held to,
 /// or none, which leaves it unread. One four-set read per chunk of each
-/// taken origin's spans — `{home: [the origin], from: [the spans], ty: [the
-/// correspondence class]}`, the twin fence's own read — each hit judged off
-/// its address (the owned-home test: a hit homed in no document of that
-/// account's exactly is never read), read once, and kept by `Record::of` as
-/// a record of that account's. The reads are made at the head and never at
-/// the state's position, since a record minted after the state must be
-/// seen.
+/// taken origin's spans, each span once however many runs of `state` hold
+/// it — `{home: [the origin], from: [the spans], ty: [the correspondence
+/// class]}`, the twin fence's own read — each hit judged off its address
+/// (the owned-home test: a hit homed in no document of that account's
+/// exactly is never read), read once, and kept by `Record::of` as a record
+/// of that account's. The reads are made at the head and never at the
+/// state's position, since a record minted after the state must be seen.
 ///
 /// # Errors
 ///
@@ -113,9 +119,10 @@ fn records_held_to(
     for (origin, account) in distinct.into_iter().filter_map(|o| Some((o, held_to(o)?))) {
         let text = origin.to_string();
         let home = frames::unit_span(&text).as_array().cloned().unwrap_or_default();
+        let mut asked = HashSet::new();
         let spans: Vec<Value> = state
             .iter()
-            .filter(|r| r.origin == *origin)
+            .filter(|r| r.origin == *origin && asked.insert((r.i_start, r.width)))
             .map(|r| frames::i_span(&format!("{text}.0.1.{}", r.i_start), r.width))
             .collect();
         for chunk in spans.chunks(MAX_WIRE_LIST) {

@@ -10,8 +10,9 @@
 //! landing into `S` and the record it appends, a landing into `S` made by
 //! hand, the member whose chain a deposit's words are minted under and a
 //! state of its words and the trunk's by turns, a correspondence record
-//! planted in `S`, and a record filed in a journal. Each area's own helpers
-//! stand in its file.
+//! planted in `S`, another account's draft published with the record its
+//! owner's shot homed in it, and a record filed in a journal. Each area's
+//! own helpers stand in its file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,10 @@ const OTHER_DOC1: &str = "1.0.2.0.1";
 /// document of theirs, in which a record may name `O`'s words.
 const O: &str = "1.0.1.0.67";
 const E: &str = "1.0.1.0.68";
+/// `THEIR_DRAFT`, a draft of another account's, `1.0.2`; `THEIR_EDITION`
+/// the published document its owner published the draft's words into.
+const THEIR_DRAFT: &str = "1.0.2.0.80";
+const THEIR_EDITION: &str = "1.0.2.0.81";
 
 fn a(text: &str) -> Address {
     parse_address(text).expect("an address")
@@ -1828,6 +1833,30 @@ fn plant_record(w: &mut World, from: u64, to: u64, width: u64) -> String {
         to: vec![i_addr(&a(D), to)],
         ty: frames::T_CORRESPONDENCE.into(),
         width,
+        at: None,
+    });
+    addr
+}
+
+/// Plants another account's publication of its draft's words.
+///
+/// `THEIR_DRAFT` holds "abc", `THEIR_EDITION` the same words as published,
+/// and the correspondence record its owner's shot homed in the draft names
+/// the draft's three words as the edition's first three. Answers the
+/// record's link.
+fn their_publication(w: &mut World) -> String {
+    w.text(THEIR_DRAFT, 1, "abc");
+    w.doc(THEIR_DRAFT, false, "1.0.2", vec![run(THEIR_DRAFT, 1, 3)]);
+    w.text(THEIR_EDITION, 1, "abc");
+    w.doc(THEIR_EDITION, true, "1.0.2", vec![run(THEIR_EDITION, 1, 3)]);
+    let addr = format!("{THEIR_DRAFT}.0.2.1");
+    w.links.push(LinkRow {
+        addr: addr.clone(),
+        home: THEIR_DRAFT.into(),
+        from: vec![i_addr(&a(THEIR_DRAFT), 1)],
+        to: vec![i_addr(&a(THEIR_EDITION), 1)],
+        ty: frames::T_CORRESPONDENCE.into(),
+        width: 3,
         at: None,
     });
     addr

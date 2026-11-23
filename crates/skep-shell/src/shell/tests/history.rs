@@ -4,9 +4,9 @@
 //! `history.restore` row. The suite checks the rules the shell alone keeps,
 //! with no daemon behind it —
 //! each row's members read before the session, a bare session refused naming
-//! the restore and reading the past state, a session with no account refused
-//! the read before any dial, and a hold standing at the board refusing the
-//! write before any read and stopping no read — and, against the real daemon,
+//! the restore and reading the past state, as a session with no account
+//! reads it, and a hold standing at the board refusing the write before any
+//! read and stopping no read — and, against the real daemon,
 //! the read answering the state as read and as mapped, the runs a restore
 //! would send — a member's own words under the member, as the restore then
 //! writes them (skep #1122) — the board's position and the marker with
@@ -70,12 +70,13 @@ fn the_row_reads_its_members_first_and_refuses_a_bare_session() {
 /// `history.past` reads its members before the session — `draft` missing
 /// or no address, `at` missing or no non-negative integer — each
 /// `malformed_args` naming the member; in their form, with no `as_of`, the
-/// call goes on to the session, which is gone; a session the board answered
-/// no account for is refused `no_account` before any dial, where the
-/// board's silence would answer `unreachable`; and a bare session's read
-/// dials, never refused `write_in_bare_session`, and meets that silence (the
-/// mutants that look the session up first, ask the read for a typed state,
-/// dial with no account, or ask the write door of a read).
+/// call goes on to the session, which is gone; and a bare session's read
+/// dials, never refused `write_in_bare_session`, as does that of a session
+/// the board answered no account for, never refused `no_account` — the
+/// records' read holds each record to the account its home lies in — and
+/// each meets the board's silence, `unreachable` (the mutants that look the
+/// session up first, ask the read for a typed state, ask it for the
+/// session's account, or ask the write door of a read).
 #[test]
 fn the_past_states_read_takes_its_members_first_and_a_bare_session_reads_it() {
     let dir = TempDir::new().unwrap();
@@ -95,10 +96,10 @@ fn the_past_states_read_takes_its_members_first_and_a_bare_session_reads_it() {
     assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": -1})), "at", "no non-negative integer");
     let in_form = json!({"session": "s-gone", "draft": "1.0.2.0.66", "at": 3});
     assert_eq!(shell.call("history.past", &in_form).unwrap_err().name(), "session_ended", "in their form, the members pass to the session");
-    let no_account = shell.call("history.past", &json!({"session": accountless, "draft": "1.0.2.0.66", "at": 3})).unwrap_err();
-    assert_eq!(no_account.name(), "no_account", "refused before any dial: {no_account}");
     let read = shell.call("history.past", &json!({"session": bare, "draft": "1.0.1.0.66", "at": 3})).unwrap_err();
     assert_eq!(read.name(), "unreachable", "the bare session's read dials: {read}");
+    let read = shell.call("history.past", &json!({"session": accountless, "draft": "1.0.2.0.66", "at": 3})).unwrap_err();
+    assert_eq!(read.name(), "unreachable", "the accountless session's read dials: {read}");
 }
 
 /// Checks that a hold standing at the board refuses the restore before any

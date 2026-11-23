@@ -5,15 +5,15 @@
 //! writes nothing; the conversion of an `image` answer's runs to the core's,
 //! each origin the bare document ([`origin_of`]); [`head_of`], the
 //! feed-walk fallback for a bare document's head member; the read of the
-//! correspondence records of the person's own origins among a past state's
-//! runs, and [`mapped_image`], a state's image mapped through them at its
-//! own spelling — what the restore and the take-backs send, so words a
-//! publication made public since come back as the published words they
-//! became and a member's own words as themselves — with [`mapped`], the
-//! same mapping over the core's runs; the read of every origin's records in
-//! its owner's own account, which a comparison by identity maps both its
-//! texts through (`history::records`); and [`Refusal`], every refusal a
-//! read or a landing can meet.
+//! correspondence records of every origin among a past state's runs, each
+//! in its owner's own account, which a comparison by identity maps both its
+//! texts through too (`history::records`), and [`mapped_image`], a state's
+//! image mapped through them at its own spelling — what the restore and the
+//! take-backs send, so words a publication made public since come back as
+//! the published words they became and a member's own words as themselves
+//! — with [`mapped`], the same mapping over the core's runs; the read of
+//! the person's own origins' records alone, the twin fence's; and
+//! [`Refusal`], every refusal a read or a landing can meet.
 //!
 //! The reads, in the record's order (§1.3): the document's metadata; each
 //! side's line of recorded bases, walked to the trunk; the head's extent;

@@ -9,7 +9,8 @@
 //! refused where another hand edited after it, and nothing to undo past a
 //! landing or a publication. And it checks the words a withdrawal and its
 //! undo keep: a member's own word sent under the member's chain, no
-//! correspondence record read by the withdrawal, a write that changed a
+//! correspondence record read by the withdrawal, another account's words
+//! sent by its undo as their owner published them, a write that changed a
 //! member's word for the trunk's naming no withdrawal and leaving the next
 //! undo typed at the landing, and both refused at the cap counted on the
 //! runs they would write.
@@ -523,6 +524,40 @@ fn the_withdrawal_reads_no_correspondence_record_and_sends_the_words_as_read() {
     assert!(dialer.frames("read_link").iter().all(|f| f["a"] != record), "the record is never read: {:?}", dialer.ops());
     assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_m()), "M as read, S's own words its own");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "the words stay");
+}
+
+/// A withdrawal's undo sends another account's words as their owner
+/// published them.
+///
+/// M holds "abc", words of `THEIR_DRAFT`, a draft of the account `1.0.2`
+/// whose owner published them into `THEIR_EDITION`, the record homed in
+/// the draft. The withdrawal sends the draft's words back as read, the
+/// draft's among them; its undo reads the records of the draft's origins at
+/// the head, the draft's in its own account, and sends the words mapped —
+/// the edition's where the draft's stood — the marker put back (the mutant
+/// that reads the merger's own origins alone sends the draft's words again).
+#[test]
+fn a_withdrawals_undo_sends_another_accounts_words_as_their_owner_published_them() {
+    let mut w = draft_landing_world();
+    let record = their_publication(&mut w);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let held = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_DRAFT, 1, 3)];
+    landed_by_hand(&board, &session, &dialer, &held);
+    dialer.clear();
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&held), "the premise: the withdrawal sends the words as read");
+    dialer.clear();
+    unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+    assert_eq!(dialer.frames("read_link").iter().filter(|f| f["a"] == record).count(), 1, "the draft's record read once: {:?}", dialer.ops());
+    let mapped = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_EDITION, 1, 3)];
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["runs"], frame_runs(&mapped), "the edition's words where the draft's stood");
+    let w = dialer.world();
+    assert_eq!(w.docs.get(S).unwrap().runs, mapped);
+    assert!(w.standing(S).1.is_some(), "the marker back");
 }
 
 /// A write that changed a member's word for the trunk's is no withdrawal.

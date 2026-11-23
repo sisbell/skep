@@ -23,16 +23,21 @@
 //!   head instead; an empty state is admitted, and sets an empty
 //!   arrangement. Then THE RECORDS, at the head and never at `at`, since a
 //!   record minted after the state must be seen: for each distinct origin
-//!   among the state's runs, in run order, whose account is the person's
-//!   exactly (the owned-home test), one four-set read per chunk of that
-//!   origin's spans — `{home: [the origin], from: [the spans], ty: [the
-//!   correspondence class]}`, the twin fence's own read — each hit judged
-//!   off its address and read once, kept by `Record::of`. Then THE MAPPING
-//!   ([`mapped_image`], the mapping of images below): the state's image
-//!   mapped at its own spelling, the words a record covers coming back as
-//!   the published span they became on the trunk's chain, the rest kept as
-//!   read, a run minted under a member's chain kept under that chain — the
-//!   runs the write sends, [`Past::written`]; [`Past::sent`] is the same
+//!   among the state's runs, in run order — a draft of the person's and
+//!   another account's draft the state holds words of alike — one four-set
+//!   read per chunk of that origin's spans, `{home: [the origin], from: [the
+//!   spans], ty: [the correspondence class]}`, each hit judged off its
+//!   address against the account the origin lies in (the owned-home test:
+//!   only that account's own shot homes a record in the origin), read once,
+//!   and kept by `Record::of` as a record of that account's — the read
+//!   [`records`] makes, below, at the cost stated there. An origin the
+//!   reader may not read yields no record, the board answering no link
+//!   homed where it may not read, and its words are kept as read. Then THE
+//!   MAPPING ([`mapped_image`], the mapping of images below): the state's
+//!   image mapped at its own spelling, the words a record covers coming back
+//!   as the published span they became on the trunk's chain, the rest kept
+//!   as read, a run minted under a member's chain kept under that chain —
+//!   the runs the write sends, [`Past::written`]; [`Past::sent`] is the same
 //!   runs as the core's, each origin the trunk its words were minted under,
 //!   for drawing. A state in more runs than one write may name, counted on
 //!   the runs the write sends, is [`Refusal::OverCap`], nothing sent.
@@ -58,7 +63,7 @@
 //!   from the draft, no longer shares the draft's identity; the diff maps
 //!   both images through one read of the records, made after both are read.
 //!   [`records`] is THE RECORDS' read above over every image handed it at
-//!   once, at *every* distinct origin among their runs — the person's, and
+//!   once, at every distinct origin among their runs — the person's, and
 //!   another account's draft a mark or a copy holds words of — each hit held
 //!   to the account that owns the origin: only that account's own
 //!   publication re-mints the draft's words, and it homes their records in
@@ -75,10 +80,10 @@
 //!   compared as itself, the piece a record covers becomes the span the
 //!   record's `to` names at the same offset, every sum checked (SP-19), and
 //!   the ordinals are tiled again from 1, the extent unchanged. Their cost
-//!   (SP-23): one four-set read per distinct origin for each
-//!   `MAX_WIRE_LIST` of its spans, one `read_link` per hit homed in a
-//!   document of that origin's own account, then a walk of each run against
-//!   the records.
+//!   (SP-23), the restore's records and the diff's alike: one four-set read
+//!   per distinct origin for each `MAX_WIRE_LIST` of its spans, one
+//!   `read_link` per hit homed in a document of that origin's own account,
+//!   then a walk of each run against the records.
 //!
 //! **Why the mapping.** The board's twin fence refuses a draft-native run a
 //! record already names `already_published` (wire.md §The publish shot and
@@ -87,9 +92,15 @@
 //! leave the draft holding words the board no longer lets it publish as its
 //! own, and the design's rule is that the restored words come back as they
 //! stand now, marked public, the links on them returning with them (B3-S7).
-//! The records are read at every origin the person owns, not the restored
-//! draft's alone: a state of one draft can hold another draft of the
-//! family's identity, whose record is homed in that draft.
+//! The records are read at every origin the state holds, not the restored
+//! draft's alone, each in its owner's account: a state of one draft can
+//! hold another draft's identity — another draft of the person's family,
+//! or another account's draft the person may read, whose words the state
+//! windows — whose record its owner's publication homed in that draft, and
+//! the board re-windows a draft through a record of either (wire.md §The
+//! publish shot and head-float, the stray places). Every word of the state
+//! a record names is mapped, those the draft still shows as they were read
+//! among them: the write sends each as the published word it became.
 //!
 //! **The marker.** A restore to a state before a merge landed leaves the
 //! draft's marker standing, so the next publication would claim its sides
@@ -105,9 +116,7 @@ use skep_address::Address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
-use crate::merge::shared::{
-    judge, owners_records, records_of, runs_of, session_ended, Act, OnEnd, Reader,
-};
+use crate::merge::shared::{judge, owners_records, runs_of, session_ended, Act, OnEnd, Reader};
 use crate::merge::{Refusal, Run, SHOT_RUN_CAP};
 use crate::publication::Record;
 
@@ -172,8 +181,8 @@ pub struct Restored {
     pub position: u64,
 }
 
-/// Reads `draft`'s state as of `at`, mapped through the records, as
-/// `account`'s reader under `token`.
+/// Reads `draft`'s state as of `at`, mapped through the records, under
+/// `token`.
 ///
 /// It is the module's doc's reads, in order, writing nothing.
 ///
@@ -199,7 +208,7 @@ pub struct Restored {
 /// - the death signal under the token at any read,
 ///   [`Refusal::SessionEnded`], its face saying to run this again; the
 ///   dialer's halts.
-pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u64) -> Result<Past, Refusal> {
+pub fn past(board: &Board, token: &Token, draft: &Address, at: u64) -> Result<Past, Refusal> {
     let reader = Reader::new(board, Some(token), OnEnd::Rerun);
     let (meta, as_of) = reader.metadata_read(draft, None)?;
     if meta.published {
@@ -218,7 +227,7 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
     let imaged = reader.imaged(draft, Some(at))?;
     let state = runs_of(&imaged.runs)?;
     let read = imaged.into_image()?;
-    let records = records_of(&reader, account, &state)?;
+    let records = owners_records(&reader, &state)?;
     // Every sum of a record's numbers is made here, checked (SP-19): the
     // core's runs below are the mapped image's, never mapped again.
     let written = mapped_image(&read, &records)?;

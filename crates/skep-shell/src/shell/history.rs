@@ -8,23 +8,26 @@
 //!
 //! **The read.** `history.past(session, {draft, at})` makes the reads alone
 //! (`skep_client::history::past`): the draft's state as of the position
-//! `at` and the person's correspondence records at the head, the state's
-//! runs mapped through them so words published since come back as the
-//! published words they became. It is the page's read while the person
-//! rests on a past state, before "make this state current": what the
-//! state brings back, and the links the change would orphan, which the
-//! page reads over the runs the write would send (B3-S7's orphan line). It
-//! sends no write, so it asks no write door (SP-31 binds the rows that
-//! write): a bare session reads it, a second window reads it, a hold
-//! standing at the board stops none of its reads, and nothing of the hold,
-//! the panels or the compositions is touched. Its answer is `{draft, at,
-//! as_of, state, sent, written, covered, marker}`: `state` the runs as read
-//! at `at` and `sent` the same positions mapped, both the core's runs, for
-//! drawing; `written` the mapped runs as a restore made now would send them
-//! (**The runs**); `covered` the positions a record covers; `marker` as the
-//! restore answers it; and `as_of` the position the reads were made at,
-//! which is no typed state (**The typed state is the page's**). The restore
-//! reads again for itself, so nothing this answer carries reaches its write.
+//! `at`, and at the head the correspondence records of every draft the
+//! state holds words of, each read in its owner's account, the state's runs
+//! mapped through them so words published since — the person's, or those
+//! of another account's draft the state holds — come back as the published
+//! words they became. It is the page's read while the person rests on a
+//! past state, before "make this state current": what the state brings
+//! back, and the links the change would orphan, which the page reads over
+//! the runs the write would send (B3-S7's orphan line). It sends no write,
+//! so it asks no write door (SP-31 binds the rows that write), and it asks
+//! nothing of the session's account: a bare session reads it, a second
+//! window reads it, a hold standing at the board stops none of its reads,
+//! and nothing of the hold, the panels or the compositions is touched. Its
+//! answer is `{draft, at, as_of, state, sent, written, covered, marker}`:
+//! `state` the runs as read at `at` and `sent` the same positions mapped,
+//! both the core's runs, for drawing; `written` the mapped runs as a
+//! restore made now would send them (**The runs**); `covered` the positions
+//! a record covers; `marker` as the restore answers it; and `as_of` the
+//! position the reads were made at, which is no typed state (**The typed
+//! state is the page's**). The restore reads again for itself, so nothing
+//! this answer carries reaches its write.
 //!
 //! **The runs.** A word's identity is its I-address on the chain that
 //! minted it, and a declared deposit naming a member of a published chain
@@ -68,11 +71,10 @@
 //!
 //! **The order.** The read's members are read before the session — `draft`
 //! an address in its one spelling, `at` a non-negative integer — then the
-//! session, then the account it acts as, whose records the reads ask for;
-//! then the reads. The restore's members are read before the session —
-//! `draft`, then `at` and `as_of`, non-negative integers — then the
-//! session; then the shell's one write door and the session's hand, as the
-//! publication and merge families take them (`Shell::signed`,
+//! session; then the reads. The restore's members are read before the
+//! session — `draft`, then `at` and `as_of`, non-negative integers — then
+//! the session; then the shell's one write door and the session's hand, as
+//! the publication and merge families take them (`Shell::signed`,
 //! `Shell::write_door`): the bare session, another window, the hold
 //! standing at the board, which refuses the `set_arrangement` at once under
 //! its cause (§3c.4; `Holds::unholdable_refusal`), and THE HELD-LINES GATE —
@@ -126,7 +128,7 @@ use skep_client::merge::Run;
 
 use super::publication::address_arg;
 use super::{Shell, Write};
-use crate::refusal::{Name, Refusal};
+use crate::refusal::Refusal;
 
 impl Shell {
     /// Answers `history.past`: the draft's state at `at`, read and mapped.
@@ -145,18 +147,16 @@ impl Shell {
     ///    spelling, then naming `at` where it is no non-negative integer;
     /// 2. `malformed_args` naming `session`, then `session_died` or
     ///    `session_ended` ([`Shell::session`]);
-    /// 3. `no_account` where the board answered the session no account;
-    /// 4. the reads', as [`Shell::history_restore`]'s step 4 names them;
-    /// 5. the reads made, a halt's face where a run the restore would send
+    /// 3. the reads', as [`Shell::history_restore`]'s step 4 names them;
+    /// 4. the reads made, a halt's face where a run the restore would send
     ///    is no content I-address, the board's fault (`written_json`);
-    /// 6. `session_died` where a read met the death signal, and
+    /// 5. `session_died` where a read met the death signal, and
     ///    `unreachable` where a dial failed.
     pub(super) fn history_past(&self, args: &Value) -> Result<Value, Refusal> {
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
         let at = args["at"].as_u64().ok_or_else(|| Refusal::malformed("at"))?;
         let session = self.session(&args["session"])?;
-        let account = session.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        let past = history::past(&session.board, &session.token, account, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
+        let past = history::past(&session.board, &session.token, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
         let written = written_json(&past.written)?;
         Ok(json!({
             "draft": past.draft.to_string(),
@@ -215,8 +215,8 @@ impl Shell {
         let as_of = args["as_of"].as_u64().ok_or_else(|| Refusal::malformed("as_of"))?;
         let session = self.session(&args["session"])?;
         // The one write door, over the draft the restore sets whole.
-        let account = self.signed(&session, Write::call("history.restore", "set_arrangement").over([draft.to_string()]))?.account;
-        let mut past = history::past(&session.board, &session.token, &account, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
+        self.signed(&session, Write::call("history.restore", "set_arrangement").over([draft.to_string()]))?;
+        let mut past = history::past(&session.board, &session.token, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
         // The write typed against the page's state; the read's position
         // kept for the answer's way back.
         let read_at = std::mem::replace(&mut past.as_of, as_of);

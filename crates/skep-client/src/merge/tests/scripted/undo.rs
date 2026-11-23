@@ -4,15 +4,21 @@
 //! the marker cleared in one frame; refused past another hand's edit; typed
 //! at the editor's own last ack, or at the landing where that ack is
 //! earlier, advising a take-back, and refused past the head or past another
-//! hand's change; C mapped through the records of the merger's own origins,
-//! refused past the cap, and faced where a record maps it past the largest
-//! ordinal; a member's own word in C sent under the member's
-//! chain, told from the trunk's word of its ordinal where a baseless landing
-//! is judged taken back, and counted as a run of its own at the cap; nothing
-//! to undo after a publication, or after a merge's shot, its words naming
-//! the merge's version; an inherited marker; a baseless landing undone by
-//! its feed row, and run again; and the state before the landing read at
-//! `nearest`, refused where reclaimed.
+//! hand's change; C mapped through the records of its origins, each read in
+//! its owner's account — another account's words sent as the words its
+//! owner published — refused past the cap, and faced where a record maps it
+//! past the largest ordinal; the put-back judged on the states at the
+//! landing and at it mapped through one read of the records, another
+//! account's word re-windowed onto its published word one word; a member's
+//! own word in C sent under the member's chain, told from the trunk's word
+//! of its ordinal where a baseless landing is judged taken back, and
+//! counted as a run of its own at the cap; nothing to undo after a
+//! publication, or after a merge's shot, its words naming the merge's
+//! version; an inherited marker; a baseless landing undone by its feed row,
+//! and run again — another account's words sent mapped among them — and
+//! taken back where its re-arrangement holds words a record maps onto C's;
+//! and the state before the landing read at `nearest`, refused where
+//! reclaimed.
 
 use super::*;
 
@@ -305,6 +311,75 @@ fn the_undo_sends_c_mapped_through_the_records_of_the_mergers_own_origins() {
     assert_eq!((frame["as_of"].as_u64(), frame["base"].clone()), (Some(at), json!({"at": format!("{D}.1"), "extent": "11"})), "{frame}");
     let w = dialer.world();
     assert_eq!(w.docs.get(S).unwrap().runs, sent, "the draft holds C mapped");
+    assert_eq!(w.standing(S), (Some((format!("{D}.1"), 11)), None), "the base restored, the marker cleared");
+}
+
+/// Another account's words in C go back as the words its owner published.
+///
+/// C holds the base's text and "abc", words of `THEIR_DRAFT`, a draft of
+/// the account `1.0.2` whose owner published them into `THEIR_EDITION`
+/// since, the record homed in the draft. The undo reads the records of C's
+/// origins at the head, `D` then the draft in run order, the draft's hit
+/// read in the draft's own account, and sends C mapped: the edition's words
+/// where the draft's stood (the mutant that reads the merger's own origins
+/// alone queries `D` alone and sends the draft's words, which the draft
+/// would then hold as words their owner already published).
+#[test]
+fn the_undo_sends_another_accounts_words_in_c_as_the_words_its_owner_published() {
+    let mut w = draft_landing_world();
+    let record = their_publication(&mut w);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    dialer.world().change(S, vec![run(D, 1, 11), run(THEIR_DRAFT, 1, 3)]);
+    let at = landed_by_hand(&board, &session, &dialer, &draft_m());
+    dialer.clear();
+    let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+    assert_eq!(undone.restored, Some((a(&format!("{D}.1")), 11)));
+    let correspondence = frames::unit_span(frames::T_CORRESPONDENCE);
+    let homes: Vec<String> = dialer.frames("find_links_ftt").iter().filter(|f| f["q"]["ty"] == correspondence).filter_map(|f| f["q"]["home"][0]["start"].as_str().map(str::to_string)).collect();
+    assert_eq!(homes, [D, THEIR_DRAFT], "one records' read per origin of C, in run order: {:?}", dialer.ops());
+    assert_eq!(dialer.frames("read_link").iter().filter(|f| f["a"] == record).count(), 1, "the draft's record read once");
+    let sent = vec![run(D, 1, 11), run(THEIR_EDITION, 1, 3)];
+    let frame = &dialer.frames("set_arrangement")[0];
+    assert_eq!(frame["runs"], frame_runs(&sent), "C mapped: the edition's words where the draft's stood");
+    assert_eq!(frame["as_of"].as_u64(), Some(at), "typed against the landing's position: {frame}");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, sent, "the draft holds C mapped");
+}
+
+/// A word another account published is one word at the landing and the
+/// put-back.
+///
+/// M holds "abc", words of `THEIR_DRAFT`, a draft of the account `1.0.2`.
+/// After the landing a shot re-windows `S` onto `THEIR_EDITION`, the words
+/// the draft's owner published them as, through the record homed in the
+/// draft — one commit moving the arrangement and keeping the base and the
+/// marker, as a merge's shot naming the draft does. The merge is withdrawn
+/// and the withdrawal taken back. The undo reads `S` at the landing and at
+/// the put-back and maps both through one read of the records over the two,
+/// the draft's read in its own account: the states are one, so the undo is
+/// typed at the put-back and lands C (the mutant that reads the merger's
+/// own origins alone finds the two states apart, types the undo at the
+/// landing, and the board refuses it `arrangement_moved`).
+#[test]
+fn an_undo_after_a_put_back_is_typed_at_it_where_another_accounts_words_were_re_windowed() {
+    let mut w = draft_landing_world();
+    their_publication(&mut w);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let at = landed_by_hand(&board, &session, &dialer, &[run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_DRAFT, 1, 3)]);
+    let rewindowed = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_EDITION, 1, 3)];
+    dialer.world().change(S, rewindowed.clone());
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    let back = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("put back");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, rewindowed, "the premise: the edition's words stand");
+    dialer.clear();
+    undo(&board, m, &a(S), &a(K), None, None).expect("the undo lands");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
+    assert_eq!(sent[0]["as_of"].as_u64(), Some(back.position), "typed at the put-back, past the landing at {at}: {}", sent[0]);
+    let w = dialer.world();
+    assert_eq!(w.docs.get(S).unwrap().runs, draft_c(), "C again");
     assert_eq!(w.standing(S), (Some((format!("{D}.1"), 11)), None), "the base restored, the marker cleared");
 }
 
@@ -901,6 +976,83 @@ fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
         .expect("the lookup")
         .expect("a record");
     assert_eq!(found.link, Some(link), "(g): the landing's record current");
+}
+
+/// Lands `draft_m()` in the baseless draft `plain` by hand, its row
+/// carrying the request's merge, answering the landing's position.
+fn baseless_landing(dialer: &Scripted, plain: &str) -> u64 {
+    let head = format!("{D}.2");
+    let typed = dialer.world().position;
+    let landing = frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
+    dialer.world().apply(&landing)["at"].as_u64().expect("the landing's ack")
+}
+
+/// A baseless undo that sent another account's words mapped is taken back.
+///
+/// The baseless draft's C holds "abc", words of `THEIR_DRAFT`, which the
+/// draft's owner published as `THEIR_EDITION`'s: the undo sends them as the
+/// edition's. Run again, it reads the draft at its own row, the edition's
+/// words where C held the draft's, and maps both through one read of the
+/// records over the two: one state, the merge already taken back, nothing
+/// sent.
+#[test]
+fn a_baseless_undo_that_sent_another_accounts_words_mapped_is_taken_back_when_run_again() {
+    let plain = "1.0.1.0.67";
+    let mut w = draft_landing_world();
+    their_publication(&mut w);
+    w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11), run(THEIR_DRAFT, 1, 3)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    baseless_landing(&dialer, plain);
+    undo(&board, m, &a(plain), &a(K), None, None).expect("undone");
+    let mapped = vec![run(D, 1, 11), run(THEIR_EDITION, 1, 3)];
+    assert_eq!(dialer.world().docs.get(plain).unwrap().runs, mapped, "the premise: C sent mapped");
+    dialer.world().memo.clear();
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(undo(&board, m, &a(plain), &a(K), None, None), Err(Refusal::NothingToUndo { draft: a(plain), why: NoUndo::TakenBack }));
+    assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert_eq!(dialer.world().docs.get(plain).unwrap().runs, mapped, "the draft as it stands");
+}
+
+/// A baseless landing's re-arrangement holding words a record maps onto C's
+/// is the merge taken back.
+///
+/// C holds the base's text and `D`'s "!!!", the words a publication of `S`
+/// made of `S`'s own "!!!", its record homed in `S`. After the landing a
+/// re-arrangement leaves the base's text and `S`'s own words in their place.
+/// The undo reads the draft there before the records, then one read of the
+/// records over C and that state finds `S`'s record: the state maps onto
+/// C, the merge already taken back, nothing sent and the re-arrangement
+/// standing (the mutant that reads the records over C alone never reads
+/// `S`'s, finds the states apart and sends the write, which the board
+/// refuses `arrangement_moved`).
+#[test]
+fn a_baseless_landing_is_taken_back_where_its_re_arrangement_holds_words_a_record_maps_onto_c() {
+    let plain = "1.0.1.0.67";
+    let mut w = draft_landing_world();
+    w.text(D, 19, "!!!");
+    let record = plant_record(&mut w, 1, 19, 3);
+    w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11), run(D, 19, 3)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let before = dialer.world().position;
+    let at = baseless_landing(&dialer, plain);
+    let stray = vec![run(D, 1, 11), run(S, 1, 3)];
+    let r = dialer.world().apply(&frames::set_arrangement(plain, &shot_runs(&stray), at, None, None, None, None))["at"].as_u64().expect("the re-arrangement's ack");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None), Err(Refusal::NothingToUndo { draft: a(plain), why: NoUndo::TakenBack }));
+    assert_eq!(dialer.positions("image"), [before, r], "C before the landing, then the draft at its re-arrangement: {:?}", dialer.ops());
+    let names = dialer.names();
+    let first_find = names.iter().position(|n| n == "find_links_ftt").expect("the records' read");
+    assert!(names.iter().rposition(|n| n == "image").is_some_and(|last| last < first_find), "both states read before the records: {names:?}");
+    assert!(dialer.frames("read_link").iter().any(|f| f["a"] == record), "S's record read over the re-arrangement's words: {:?}", dialer.ops());
+    assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert_eq!(dialer.world().docs.get(plain).unwrap().runs, stray, "the re-arrangement stands");
 }
 
 /// THE PRE-LANDING POSITION RECLAIMED: the journal's floor stands at the

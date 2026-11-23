@@ -1591,7 +1591,7 @@ pub(crate) struct Rig {
     pub(crate) device: HybridSigner,
     pub(crate) bare: Token,
     /// The claim's two anchor files, under `a` and `b`.
-    anchors: std::path::PathBuf,
+    pub(crate) anchors: std::path::PathBuf,
 }
 
 impl Rig {
@@ -1774,13 +1774,19 @@ fn a_window_a_record_names_is_refused_naming_its_pair_and_lands_on_its_counterpa
 /// `d` beside it, so the commit re-windows `d` through the record it homes
 /// there (wire.md §The publish shot and head-float, the kept places).
 pub(crate) fn publish_with_place(rig: &Rig, session: &Session<'_>, e: &Address, d: &Address, text: &str) -> Address {
+    publish_with_place_as(&rig.board, session, &rig.device, &addr(ACCOUNT), e, d, text)
+}
+
+/// [`publish_with_place`] under `signer`'s hand, attested as `account`'s:
+/// another account's publication of a draft of its own.
+pub(crate) fn publish_with_place_as(board: &Board, session: &Session<'_>, signer: &HybridSigner, account: &Address, e: &Address, d: &Address, text: &str) -> Address {
     let (e_s, d_s) = (e.to_string(), d.to_string());
     let runs = [frames::shot_run(&d_s, &format!("{d}.0.1.1"), text.len() as u64)];
     let places = [frames::place(1)];
     let pieces: Vec<[u8; 1]> = text.bytes().map(|b| [b]).collect();
     let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), None);
     let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&e_s), draft: Some(&d_s), runs: &runs, places: &places, ..frames::PublishFrame::default() });
-    frame["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), e, &body);
+    frame["attest"] = attest(board, signer, account, e, &body);
     addr(acked_addr(&acked(session.op(&frame))).expect("the member"))
 }
 

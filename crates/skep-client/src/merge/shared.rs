@@ -6,7 +6,7 @@
 //! of their one write; this module names each, so the edge between
 //! `history` and `merge` is this list. It holds re-exports alone.
 
-pub(crate) use super::reads::{owners_records, records_of, runs_of, session_ended, OnEnd, Reader};
+pub(crate) use super::reads::{owners_records, runs_of, session_ended, OnEnd, Reader};
 pub(crate) use super::undo::{judge, Act};
 pub use super::reads::{mapped, mapped_image};
 pub use super::undo::written_runs;

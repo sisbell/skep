@@ -125,7 +125,11 @@
 //! The report's members take the record's §4 names where they coincide
 //! (`doc`, `base`, `sides`, `gaps`, `values`, `record`); the report adds
 //! `head`, `runs` (M as `origin`, `i_start`, `width`, `side`, `family`),
-//! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `as_of` — the one
+//! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `deduped` (each place
+//! the merge kept once, words both sides added alike at one spot, the merge
+//! record's §5 case (g): `{gap, kept, dropped}`, the sides whose copy M
+//! holds and every other side's runs, which stay in that side with any link
+//! on them, the talk naming each), `as_of` — the one
 //! position the composition stands at, where every side that can change
 //! held the state it was read in — `landed`, and to
 //! each gap a `default` — its placement as this run composed it, in
@@ -723,9 +727,10 @@ fn withdrawn_value(withdrawn: &Withdrawn) -> Value {
 
 /// Says the talk after the composition.
 ///
-/// It names the base and the counts, each unsettled gap in the copy's
-/// register ("⟨n⟩ places need a choice"), the resolutions not applied, and
-/// the cap where the list passes it.
+/// It names the base and the counts, each place the merge kept once
+/// ([`dedup_lines`]), each unsettled gap in the copy's register ("⟨n⟩
+/// places need a choice"), the resolutions not applied, and the cap where
+/// the list passes it.
 fn say_composed(merged: &Merged) {
     let counts = merged.composed.counts;
     let gaps = &merged.composed.gaps;
@@ -739,6 +744,9 @@ fn say_composed(merged: &Merged) {
         gaps.len(),
         if gaps.len() == 1 { "" } else { "s" }
     ));
+    for line in dedup_lines(&merged.record) {
+        talk(line);
+    }
     if !unsettled.is_empty() {
         let named: Vec<String> = unsettled
             .iter()
@@ -770,8 +778,8 @@ fn say_composed(merged: &Merged) {
 /// Says the talk after a landing.
 ///
 /// It says what landed, or the daughter and the re-run; at the shot, each
-/// window part's answer and every default taken (the merge record's §1.5,
-/// the lines of §6); at a draft landing,
+/// window part's answer, every default taken and every place kept once (the
+/// merge record's §1.5, the lines of §6); at a draft landing,
 /// the draft — the fresh one staged where the library answers it `staged` —
 /// and, where the board told a newer head, that a newer version was
 /// published since the merge was composed and the merge landed against the
@@ -786,7 +794,7 @@ fn say_landed(merged: &Merged, landed: &Landed, stretches: Option<&[Replaced]>, 
             for part in answers {
                 talk(answered_line(part));
             }
-            for line in default_lines(merged) {
+            for line in default_lines(merged).into_iter().chain(dedup_lines(&merged.record)) {
                 talk(line);
             }
             talk("no links were published with this version — the links on its words stay where they were made".to_string());
@@ -853,8 +861,9 @@ fn replaced_line(draft: &Address, as_of: u64, stretches: &[Replaced], kind: &Add
 ///
 /// Its members are as the module's doc lists them: the record's own JSON
 /// where the names coincide, M with each run's side and family, every gap
-/// with its `default`, the counts against the cap, the prior record, the
-/// unlanded record; `landed` null until a landing fills it.
+/// with its `default`, each place kept once, the counts against the cap,
+/// the prior record, the unlanded record; `landed` null until a landing
+/// fills it.
 fn report_of(merged: &Merged) -> Value {
     let record = merged.record.to_value();
     let runs: Vec<Value> = merged
@@ -895,6 +904,7 @@ fn report_of(merged: &Merged) -> Value {
         "cap": merged.cap,
         "over_cap": counts.m > merged.cap,
         "values": record["values"].clone(),
+        "deduped": deduped_value(&merged.record),
         "ignored": merged.composed.ignored.iter().map(|r| r.gap.0).collect::<Vec<_>>(),
         "prior": merged.prior.as_ref().map_or(Value::Null, prior_of),
         "record": record,
@@ -1126,6 +1136,63 @@ fn default_line(g: &Gap) -> String {
     format!("left at its default: gap {} ({}) {place}, placed {}", g.id.0, kind_name(g.kind), default_of(g))
 }
 
+/// Returns the lines naming each place the merge kept once (the merge
+/// record's §5, case (g); `Record::deduped`).
+///
+/// Words both sides added alike at one spot are kept as one side has them,
+/// and the other side's copy stays in that side with any link on it. A
+/// side is named by its place, side 0 the head, and its copy by the address
+/// the record's `sides` holds for it, or by its number where they hold
+/// none.
+fn dedup_lines(record: &Record) -> Vec<String> {
+    let named = |side: &SideIx| if side.0 == 0 { "the head" } else { "the side" };
+    let address = |side: &SideIx| {
+        record
+            .sides
+            .get(usize::from(side.0))
+            .map_or_else(|| format!("side {}", side.0), |s| s.address().to_string())
+    };
+    record
+        .deduped()
+        .iter()
+        .map(|d| {
+            let kept: Vec<&str> = d.kept.iter().map(named).collect();
+            let mut dropped: Vec<&SideIx> = Vec::new();
+            for (side, _) in &d.dropped {
+                if !dropped.contains(&side) {
+                    dropped.push(side);
+                }
+            }
+            let stays: Vec<String> = dropped.iter().map(|side| format!("{}'s copy stays in {}", named(side), address(side))).collect();
+            format!(
+                "gap {}: matching words were added on both sides — kept once, as {} {} them; {}, and any links on it stay there, not carried into the merge",
+                d.gap.0,
+                kept.join(" and "),
+                if kept.len() == 1 { "has" } else { "have" },
+                stays.join("; ")
+            )
+        })
+        .collect()
+}
+
+/// Returns each place the merge kept once as the report carries it,
+/// `deduped`: `{gap, kept, dropped}`, each dropped run spelled as the
+/// record spells a gap's runs.
+fn deduped_value(record: &Record) -> Value {
+    record
+        .deduped()
+        .iter()
+        .map(|d| {
+            let dropped: Vec<Value> = d
+                .dropped
+                .iter()
+                .map(|(side, run)| json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width.to_string()}))
+                .collect();
+            json!({"gap": d.gap.0, "kept": d.kept.iter().map(|s| s.0).collect::<Vec<u8>>(), "dropped": dropped})
+        })
+        .collect()
+}
+
 /// Returns the sides' placeholder clause of a part's line: where one or
 /// two published sides of the merge show the part as a placeholder.
 fn sides_clause(merged: &Merged, part: &WindowPart) -> String {
@@ -1313,6 +1380,64 @@ mod tests {
         assert_eq!(
             default_line(&gap(GapKind::Corner, None, Placement::After, Vec::new())),
             "left at its default: gap 2 (corner) at the document's start, placed order:0"
+        );
+    }
+
+    /// A place the merge kept once is said and reported (§5, case (g)): the
+    /// gap, the head whose copy M holds, and the side's address, where its
+    /// copy and any link on it stay; `deduped` spells the dropped run as the
+    /// record spells a gap's; a record whose dedup kept nothing once says
+    /// and reports nothing (the mutants that name the wrong side or leave
+    /// the place unsaid).
+    #[test]
+    fn a_place_kept_once_names_the_copy_kept_and_where_the_other_stays() {
+        use skep_client::merge::{Role, Run, RunCounts, SideAt, ValueLog};
+        let a = |s: &str| parse_address(s).expect("an address");
+        let doc = a("1.0.1.0.1");
+        let gap = Gap {
+            id: GapId(2),
+            kind: GapKind::Order,
+            after: Some(a("1.0.1.0.1.0.1.7")),
+            before: None,
+            runs: vec![
+                (SideIx(0), Run::new(doc.clone(), 8, 6)),
+                (SideIx(1), Run::new(doc.clone(), 17, 6)),
+            ],
+            placed: Placement::Order(vec![SideIx(0)]),
+            settled: true,
+            resolved_by: Some(ResolvedBy::Rule),
+            spots: Vec::new(),
+        };
+        let mut record = Record {
+            doc: doc.clone(),
+            base: a("1.0.1.0.1.1"),
+            sides: vec![
+                SideAt::Member { at: a("1.0.1.0.1.2"), role: Role::Head },
+                SideAt::Member { at: a("1.0.1.0.1.1.1"), role: Role::Alternative },
+            ],
+            landed: None,
+            claims: Vec::new(),
+            runs: RunCounts { a: 2, b: 3, m: 3 },
+            retries: 0,
+            gaps: vec![gap],
+            values: ValueLog { dedup: true, retype: false, applied: vec![GapId(2)] },
+            answers: Vec::new(),
+            replaces: None,
+            by: "skep-client".into(),
+            link: None,
+        };
+        assert_eq!(
+            dedup_lines(&record),
+            ["gap 2: matching words were added on both sides — kept once, as the head has them; the side's copy stays in 1.0.1.0.1.1.1, and any links on it stay there, not carried into the merge"]
+        );
+        assert_eq!(
+            deduped_value(&record),
+            json!([{"gap": 2, "kept": [0], "dropped": [{"side": 1, "i_start": "1.0.1.0.1.0.1.17", "width": "6"}]}])
+        );
+        record.values.applied.clear();
+        assert_eq!(
+            (dedup_lines(&record), deduped_value(&record)),
+            (Vec::<String>::new(), json!([]))
         );
     }
 

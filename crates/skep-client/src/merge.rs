@@ -101,7 +101,10 @@
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
-//! identity, and a gap left with one side's material is settled by it; a
+//! identity, and a gap left with one side's material is settled by it; the
+//! record lists each place kept once under `values.applied`, and
+//! [`Record::deduped`] reads each with the sides kept and the runs dropped,
+//! which stay in their side with any link on them; a
 //! retype beside an edit keeps the retyping side's identity unless the
 //! caller asks the base's back. The rule reads the values of the runs it
 //! compares, a run a side windows from another document among them; where
@@ -135,7 +138,7 @@ pub use reads::{
 };
 pub use crate::publication::SupersedeCause;
 pub use record::{
-    current, landed_draft, landing_record, verify, PartAnswer, Record, RecordKey, RecordLanding,
-    RecordedAnswer, SideAt, SideState, Verdict,
+    current, landed_draft, landing_record, verify, Deduped, PartAnswer, Record, RecordKey,
+    RecordLanding, RecordedAnswer, SideAt, SideState, Verdict,
 };
 pub use undo::{undo, unwithdraw, withdraw, Undone, Unwithdrawn, Withdrawn};

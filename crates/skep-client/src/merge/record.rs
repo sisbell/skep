@@ -758,6 +758,54 @@ impl Record {
             retries: self.retries,
         }
     }
+
+    /// Returns each place the value rule's dedup kept once, by gap number.
+    ///
+    /// They are the gaps `values.applied` names (§4, `values`; §5, case
+    /// (g)), each read off the gap alone: `kept` its `placed` order and
+    /// `dropped` its runs of every other side, in the gap's order. A gap is
+    /// read only where the dedup's placement stands — an `order` gap placed
+    /// by sides and settled by the rule, or left unsettled where the dedup
+    /// kept two or more sides' copies of three or more — so an id naming no
+    /// gap, a gap of another kind or placement, one a person, an agent or an
+    /// answer resolved, and one with no side left out name no place.
+    pub fn deduped(&self) -> Vec<Deduped> {
+        let mut ids = self.values.applied.clone();
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+            .filter_map(|id| {
+                let gap = self.gaps.iter().find(|g| g.id == id && g.kind == GapKind::Order)?;
+                let Placement::Order(kept) = &gap.placed else { return None };
+                let by_the_dedup = match gap.resolved_by {
+                    Some(ResolvedBy::Rule) => true,
+                    None => kept.len() >= 2,
+                    Some(_) => false,
+                };
+                let dropped: Vec<(SideIx, Run)> =
+                    gap.runs.iter().filter(|(side, _)| !kept.contains(side)).cloned().collect();
+                if !by_the_dedup || dropped.is_empty() {
+                    return None;
+                }
+                Some(Deduped { gap: id, kept: kept.clone(), dropped })
+            })
+            .collect()
+    }
+}
+
+/// One place the value rule's dedup kept once (§5, case (g)).
+///
+/// Two or more sides added the same bytes at one spot, an `order` gap: M
+/// holds the copy of each side `kept` names, and each run `dropped` names
+/// stays in its side, with any link on it, carried into no merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deduped {
+    /// The gap, by its number in the report.
+    pub gap: GapId,
+    /// The sides whose copy M holds, in M's order: the gap's `placed`.
+    pub kept: Vec<SideIx>,
+    /// Every other side's runs at the gap, in the gap's order.
+    pub dropped: Vec<(SideIx, Run)>,
 }
 
 /// Returns one gap as the record spells it (§4, `gaps`).

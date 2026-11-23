@@ -423,17 +423,18 @@ fn a_withheld_input_withholds_the_verdict_and_an_unregistered_one_is_refused() {
 /// A run a readable side windows from a document the reader may not
 /// read refuses where the value rule reads it, naming that document.
 ///
-/// The race shape with a second daughter `D.1.2` adding "big " at
-/// `D·4|D·5` as a window onto `W`, another account's draft, beside the
-/// head's own fresh "big ": the dedup reads both groups, keeps the
-/// head's and drops the daughter's copy, and a record of it landed on the
+/// The race shape with a second daughter `D.1.2` adding "big " at `D·4|D·5`
+/// as a window onto `W`, another account's draft, beside the head's own
+/// fresh "big ": the dedup reads both groups, keeps the head's and drops
+/// the daughter's copy, the record naming that place and the window
+/// dropped, read back from its JSON too, and a record of it landed on the
 /// head verifies Equal. With `W` withheld the daughter stays readable and
-/// is imaged whole, and its delivery masks the window as a `withheld`
-/// item at its own position (wire.md §Value encodings): `compose` refuses
+/// is imaged whole, and its delivery masks the window as a `withheld` item
+/// at its own position (wire.md §Value encodings): `compose` refuses
 /// `Unreadable(W)` at the value read through the daughter, and `verify`
-/// answers `Unreadable(W)`, the verdict withheld (merge record §4; D14).
-/// A reference in the window's place is no withheld run: it is faced as
-/// a board fault.
+/// answers `Unreadable(W)`, the verdict withheld (merge record §4; D14). A
+/// reference in the window's place is no withheld run: it is faced as a
+/// board fault.
 #[test]
 fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
     const W: &str = "1.0.2.0.70";
@@ -452,6 +453,11 @@ fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
         "the head's 'big ' kept, the daughter's copy dropped"
     );
     assert_eq!(merged.composed.values.applied, vec![GapId(1)]);
+    let dropped = vec![(SideIx(1), run(W, 1, 4))];
+    let once = vec![Deduped { gap: GapId(1), kept: vec![SideIx(0)], dropped }];
+    assert_eq!(merged.record.deduped(), once, "the place kept once, the daughter's window dropped");
+    let back = Record::from_value(&merged.record.to_value()).expect("the record reads back");
+    assert_eq!(back.deduped(), once, "named by a record read back from its JSON");
     let mut record = merged.record.clone();
     record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.2")), position: 0 });
     dialer.clear();

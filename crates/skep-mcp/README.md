@@ -160,7 +160,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   call cut off before its record — is refused `merge_refused`
   `landing_begun` naming the draft, nothing staged: naming that draft as
   `into` re-opens it with its record. A gap is settled by editing the
-  draft.
+  draft. Words both sides added alike at one spot are kept once, the
+  other side's copy staying in that side with any links on it: both
+  answers name each such place in `deduped`, and a `resolutions` choice
+  there, or at an `anchor` gap, is refused `malformed_args`, the rules
+  having placed it.
   `merge_land {resolutions?, answers?}` is the shell's `merge.land`: the
   draft published through the publication family's one signed write with
   the supersession claim on the daughter — none at the draft or fork

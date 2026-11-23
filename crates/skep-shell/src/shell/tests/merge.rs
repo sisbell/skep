@@ -39,9 +39,12 @@
 //! apart, a `moves` gap with spots (CM-I33) — a choice the draft does not
 //! hold refused, the words moved to the side's place read as its placement
 //! taken and composed again with the gap they meet there, and the default
-//! landed naming both places, each record verifying `Equal`; `resolutions`
-//! refused where
-//! they name no gap or no choice the gap admits, nothing landed; the
+//! landed naming both places, each record verifying `Equal`; words both
+//! sides added alike at one spot kept once, named in the report's and the
+//! landing's `deduped`, the record keeping the rule's placement;
+//! `resolutions` refused where they name no gap, a gap the rules settled —
+//! an `anchor` gap or one kept once — or no choice the gap admits, nothing
+//! landed; the
 //! landing on the trunk through the publication family's shot with the
 //! claim, then the record; with no person present, the landing's undo and
 //! the withdrawal's typed at that write's own position and refused past the
@@ -137,6 +140,15 @@ pub(super) struct Family {
 }
 
 pub(super) fn family(g: &Ground) -> Family {
+    let at_the_end = |doc: &str, words: &str| {
+        g.op(json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "8"}, "values": [words], "as_of": g.position()}));
+    };
+    family_with(g, |d| at_the_end(d, " jumps"), |s| at_the_end(s, " today"))
+}
+
+/// Stages the family as [`family`] does, E.2's words written into D by
+/// `head` and E.1.1's into S by `side`, S's first.
+fn family_with(g: &Ground, head: impl Fn(&str), side: impl Fn(&str)) -> Family {
     let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let open = |draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     let confirm = || g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -146,8 +158,8 @@ pub(super) fn family(g: &Ground) -> Family {
     let first = confirm();
     assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
     let s = g.addr(skep_client::board::frames::stage(&e1, None));
-    g.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" today"], "as_of": g.position()}));
-    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "8"}, "values": [" jumps"], "as_of": g.position()}));
+    side(&s);
+    head(&d);
     open(&d);
     let e2 = format!("{edition}.2");
     let second = confirm();
@@ -175,6 +187,12 @@ fn assert_report_declared(report: &Value) {
         }
         for spot in gap["spots"].as_array().into_iter().flatten() {
             crate::shapes::assert_declared("GapSpot", spot);
+        }
+    }
+    for place in report["deduped"].as_array().unwrap() {
+        crate::shapes::assert_declared("MergeDedup", place);
+        for run in place["dropped"].as_array().unwrap() {
+            crate::shapes::assert_declared("GapRun", run);
         }
     }
     crate::shapes::assert_declared("RunCounts", &report["counts"]);
@@ -686,6 +704,7 @@ fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes
     let gaps = report["gaps"].as_array().unwrap();
     assert_eq!(gaps.len(), 1, "both sides added at one spot: {report}");
     assert_eq!((gaps[0]["kind"].as_str(), gaps[0]["settled"].as_bool(), gaps[0]["resolved_by"].is_null()), (Some("order"), Some(false), true), "{report}");
+    assert_eq!(report["deduped"], json!([]), "words that differ, kept both: {report}");
     let meta = g.op(doc_metadata(&fresh));
     assert_eq!((meta["base"].as_str(), meta["merge"]["sides"].clone(), meta["merge"]["head"].as_str(), meta["merge"]["at"].as_u64()), (Some(f.e2.as_str()), json!([f.e11]), Some(f.e2.as_str()), Some(position)), "staged from the head, marked: {meta}");
     let text = g.text(&fresh, 19);
@@ -1530,6 +1549,94 @@ fn the_re_open_lands_nothing_and_a_checked_resolution_lands_on_the_trunk_with_th
     assert_eq!((record_gap["resolved_by"].as_str(), record_gap["placed"].as_str()), (Some("person"), Some("omitted")), "the person's resolution in the record: {merged}");
     assert_eq!(g.position(), before, "nothing landed, nothing written");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "a merged daughter composes nothing to land");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Stages the family with words both sides add alike: D deletes "the "
+/// and adds " jumps", E.2 "fox jumps", and S writes "so " at its start and
+/// " jumps" at its end, E.1.1 "so the fox jumps". The merge of E.2 with
+/// E.1.1 over E.1 meets S's "so " beside the head's removal, gap 1, an
+/// `anchor` gap, and the two " jumps" at one spot, gap 2, an `order` gap the
+/// value rule's dedup keeps once — E.2's copy, minted first — so M, "so fox
+/// jumps", is no head's text and its shot is no inert one.
+fn kept_once(g: &Ground) -> Family {
+    let write = |doc: &str, ordinal: u64, words: &str| {
+        g.op(json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [words], "as_of": g.position()}));
+    };
+    let head = |d: &str| {
+        g.op(json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "1"}, "width": "4", "as_of": g.position()}));
+        write(d, 4, " jumps");
+    };
+    let side = |s: &str| {
+        write(s, 1, "so ");
+        write(s, 11, " jumps");
+    };
+    family_with(g, head, side)
+}
+
+/// Checks that words both sides added at one spot are kept once, named in
+/// both answers, and take no resolution, against the daemon (the merge
+/// record's §5, case (g); skep #1145).
+///
+/// Composed into a fresh draft, the merge of E.2 with E.1.1 lands "so fox
+/// jumps": gap 1 the `anchor` gap and gap 2 the `order` gap, both settled
+/// `rule`, gap 2 placed `[0]`, and `deduped` names gap 2 alone, the head's
+/// copy kept and E.1.1's " jumps" dropped, as gap 2's runs name it. The
+/// re-open names the same. A resolution at either gap — the anchor's
+/// `omit` or `keep_both`, the kept-once gap's `keep_both`, both sides'
+/// order or the side's copy alone — is refused `malformed_args` naming
+/// `resolutions`, nothing sent; with none, `merge.land` lands E.3 "so fox
+/// jumps" with no default and the same `deduped`, and the merged arm's
+/// record keeps gap 2 `rule` and `values.applied` naming it (the mutants
+/// that drop `deduped` from either answer, apply an unchecked resolution,
+/// or refuse only at a kept-once `order` gap, letting the anchor's through).
+#[test]
+fn words_both_sides_added_alike_are_kept_once_named_in_both_answers_and_take_no_resolution() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = kept_once(&g);
+    assert_eq!((g.text(&f.e2, 9), g.text(&f.e11, 16)), ("fox jumps".to_string(), "so the fox jumps".to_string()), "the premise: the sides' texts");
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&report);
+    assert_eq!(report["outcome"].as_str(), Some("landed"), "{report}");
+    let fresh = report["into"].as_str().expect("the fresh draft").to_string();
+    assert_eq!(g.text(&fresh, 12), "so fox jumps", "the words added alike, once");
+    let gaps = report["gaps"].as_array().unwrap();
+    let settled: Vec<Value> = gaps.iter().map(|gp| json!([gp["id"], gp["kind"], gp["settled"], gp["resolved_by"]])).collect();
+    assert_eq!(settled, [json!([1, "anchor", true, "rule"]), json!([2, "order", true, "rule"])], "{report}");
+    assert_eq!(gaps[1]["placed"], json!([0]), "the head's copy, minted first: {report}");
+    let dropped: Vec<&Value> = gaps[1]["runs"].as_array().unwrap().iter().filter(|r| r["side"] == 1).collect();
+    assert_eq!(report["deduped"], json!([{"gap": 2, "kept": gaps[1]["placed"], "dropped": dropped}]), "{report}");
+    assert_eq!(report["record"]["values"]["applied"], json!([2]), "{report}");
+    // The re-open names the same place.
+    let reopened = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": fresh})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&reopened);
+    assert_eq!((reopened["outcome"].as_str(), &reopened["deduped"]), (Some("reopened"), &report["deduped"]), "{reopened}");
+    // No resolution at a gap the rules settled.
+    let before = g.position();
+    for bad in [json!({"1": "omit"}), json!({"1": "keep_both"}), json!({"2": "keep_both"}), json!({"2": {"order": [0, 1]}}), json!({"2": {"keep_only": 1}})] {
+        let refused = g.call("merge.land", json!({"session": g.session, "resolutions": bad})).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("resolutions")), "{bad}: {refused}");
+    }
+    assert_eq!(g.position(), before, "nothing sent");
+    // The landing names the place too, and leaves nothing at a default.
+    let landed = g.call("merge.land", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("MergeLanded", &landed);
+    for place in landed["deduped"].as_array().unwrap() {
+        crate::shapes::assert_declared("MergeDedup", place);
+    }
+    let e3 = format!("{}.3", f.edition);
+    assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), &landed["defaults"], &landed["deduped"]), (Some("landed"), Some(e3.as_str()), &json!([]), &report["deduped"]), "{landed}");
+    assert_eq!(g.text(&e3, 12), "so fox jumps");
+    // The record keeps the rule's placement.
+    let merged = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&merged);
+    assert_eq!((merged["outcome"].as_str(), merged["record_link"].as_str()), (Some("merged"), landed["record"].as_str()), "{merged}");
+    let record = &merged["record"];
+    assert_eq!((record["gaps"][1]["resolved_by"].as_str(), &record["gaps"][1]["placed"], &record["values"]["applied"]), (Some("rule"), &json!([0]), &json!([2])), "{record}");
+    assert_eq!(merged["deduped"], report["deduped"], "the merged arm's own composition: {merged}");
     g.shell.shutdown();
     sd.shutdown();
 }

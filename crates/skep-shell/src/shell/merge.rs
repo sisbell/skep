@@ -212,18 +212,31 @@
 //! account's merge journal with its link beside it, or the standing one
 //! answered — never a second shot. The answer is the landing with the
 //! acknowledgment's data, the answers as given, each private row OFF named
-//! with its count, each gap left at its default, the panel's
+//! with its count, each gap left at its default, each place the merge kept
+//! once (**Kept once**), the panel's
 //! re-statement, or its typed refusal: the race, `supersede_refused` with
 //! `head_moved`, crosses as the board answered it, nothing re-sent, the
 //! composition gone, to be made again on the head it names (skep #806).
 //! `resolutions`, `{⟨gap⟩: ⟨choice⟩}`, are UNTRUSTED: each gap id and
 //! choice checked against the composition the shell holds — a gap of the
-//! report, a side among the gap's runs, an anchor the gap names, and at a
+//! report the rules left unsettled (never one they settled, `resolved_by`
+//! `rule`: an `anchor` gap, or an `order` gap kept once, whose placement is
+//! no merger's to record), a side among the gap's runs, an anchor the gap
+//! names, and at a
 //! `moves` gap with spots only the side whose placement the composition
 //! took, since the draft holds the words where it holds them — anything
 //! else refused `malformed_args`, nothing landed; a checked one settles the
 //! gap in the record as the merger's, `resolved_by` `person` at the editor
 //! and `agent` with no person present ([`Surface`]).
+//!
+//! **Kept once** (the merge record's §5, case (g)): words two sides added
+//! alike at one spot are kept once, the earlier side's copy, the value
+//! rule's dedup settling the `order` gap where one copy is left. Both
+//! answers name each such place in `deduped`, the library's
+//! `Record::deduped` of the composition — `merge.compose`'s report at every
+//! outcome and `merge.land`'s acknowledgment: the gap, the sides whose copy
+//! M holds, and every other side's runs, which stay in their side with any
+//! link on them and are carried into no merge.
 //!
 //! **`merge.undo`** takes the standing composition's landing back out of
 //! the draft by the library's `undo`, one `set_arrangement` typed per
@@ -1635,8 +1648,9 @@ impl Shell {
     /// object of strings; `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
     /// stands under its board and principal; `malformed_args` naming
-    /// `resolutions` where a gap id names no gap of the composition or a
-    /// choice is none the gap admits; the write door's, in its order —
+    /// `resolutions` where a gap id names no gap of the composition or one
+    /// the rules settled (`resolved_by` `rule`), or a choice is none the gap
+    /// admits; the write door's, in its order —
     /// `write_in_bare_session`, `another_window`, `stopped`, `poisoned` or
     /// `halted` naming `publish`, `held_lines` naming the draft the
     /// composition landed in or the draft side and the lines of the
@@ -1737,6 +1751,7 @@ impl Shell {
         let part_answers = lib::part_answers(&state.enumeration.windows, &answers);
         let left_private = left_private_json(&state, &answers, &switches);
         let defaults: Vec<Value> = composition.merged.record.gaps.iter().filter(|g| !g.settled).map(default_json).collect();
+        let deduped = deduped_json(&composition.merged.record);
         match self.confirm_standing(&session, &key, &state, switches, answers, "merge.land")? {
             Confirmation::Acknowledged { session: current, ack } => {
                 let signed = self.signed_within_call(&current, "merge.land")?;
@@ -1759,6 +1774,7 @@ impl Shell {
                     "answers": given.iter().map(window_part_json).collect::<Vec<_>>(),
                     "left_private": left_private,
                     "defaults": defaults,
+                    "deduped": deduped,
                 });
                 match recorded {
                     Ok(lib::Landed::Member { record, claims, retries, .. }) => {
@@ -1968,14 +1984,20 @@ impl Shell {
 // ── the resolutions, and the gaps' state at a re-open ─────────────────────
 
 /// Applies the caller's `resolutions` to the composition's gaps, each
-/// checked as UNTRUSTED input against the composition (the module doc).
+/// checked as UNTRUSTED input against the composition (the module doc;
+/// SP-18).
 ///
 /// Each is `⟨gap id⟩: ⟨choice⟩` — `keep_both` (the default kept), `omit`,
 /// `{order: [sides]}` (each a side among the gap's runs, none twice),
 /// `{keep_only: side}`, `{after: anchor}` or `{before: anchor}` (the gap's
-/// own anchor) — settling the gap in the record as the merger's who acts
-/// through `surface`: `person` at the editor, `agent` with no person
-/// present. At a `moves` gap with spots (CM-I33) the one choice is
+/// own anchor) — at a gap the rules left unsettled, settling it in the
+/// record as the merger's who acts through `surface`: `person` at the
+/// editor, `agent` with no person present. A gap the rules settled,
+/// `resolved_by` `rule` — an `anchor` gap, or an `order` gap the value
+/// rule's dedup kept once — takes none: its placement is the rules', which
+/// the library's own composition never lets a resolution move, and a
+/// record naming a merger there would say the merger placed it. At a
+/// `moves` gap with spots (CM-I33) the one choice is
 /// `{order: [side]}` or `{keep_only: side}` naming the side whose placement
 /// the composition took, a confirmation: the words are where the draft
 /// holds them, and another holder's placement is reached by moving them to
@@ -1983,15 +2005,18 @@ impl Shell {
 ///
 /// # Errors
 ///
-/// `malformed_args` naming `resolutions` at the first that fails its check,
-/// at a gap with spots every choice but its confirmation among them;
-/// nothing is applied past it.
+/// `malformed_args` naming `resolutions` at the first that fails its check
+/// — a gap the rules settled, and at a gap with spots every choice but its
+/// confirmation, among them; nothing is applied past it.
 fn apply_resolutions(merged: &mut lib::Merged, resolutions: &Map<String, Value>, surface: Surface) -> Result<(), Refusal> {
     let malformed = || Refusal::malformed("resolutions");
     for (gap, choice) in resolutions {
         let id: u32 = gap.parse().map_err(|_| malformed())?;
         let ix = merged.record.gaps.iter().position(|g| g.id.0 == id).ok_or_else(malformed)?;
         let gap = &merged.record.gaps[ix];
+        if gap.resolved_by == Some(ResolvedBy::Rule) {
+            return Err(malformed());
+        }
         let sides: Vec<u8> = gap.runs.iter().map(|(s, _)| s.0).collect();
         let side_of = |v: &Value| v.as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| sides.contains(n)).map(SideIx);
         let anchor_of = |v: &Value, anchor: &Option<Address>| v.as_str().and_then(bounded_address).filter(|a| anchor.as_ref() == Some(a)).map(|_| ());
@@ -2213,6 +2238,10 @@ fn default_json(g: &Gap) -> Value {
 }
 
 /// Returns the report as `merge.compose` answers it (`shapes`' `MergeReport`).
+///
+/// Its `gaps` and `deduped` are `merged`'s, so at the merged arm, whose
+/// `extra` carries the standing record's body as `record`, they name the
+/// composition made now.
 fn report_json(merged: &lib::Merged, form: &Form, outcome: &str, extra: Value) -> Value {
     let mut v = json!({
         "outcome": outcome,
@@ -2229,6 +2258,7 @@ fn report_json(merged: &lib::Merged, form: &Form, outcome: &str, extra: Value) -
         "over_cap": merged.composed.counts.m > merged.cap,
         "record": merged.record.to_value(),
         "as_of": merged.as_of,
+        "deduped": deduped_json(&merged.record),
     });
     if let Value::Object(members) = extra {
         for (k, value) in members {
@@ -2299,7 +2329,7 @@ fn gap_json(g: &Gap) -> Value {
         "kind": kind,
         "after": g.after.as_ref().map(ToString::to_string),
         "before": g.before.as_ref().map(ToString::to_string),
-        "runs": g.runs.iter().map(|(side, run)| json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width})).collect::<Vec<_>>(),
+        "runs": g.runs.iter().map(gap_run_json).collect::<Vec<_>>(),
         "placed": placed,
         "settled": g.settled,
         "resolved_by": resolved_by,
@@ -2308,4 +2338,19 @@ fn gap_json(g: &Gap) -> Value {
         gap["spots"] = g.spots.iter().map(|s| json!({"side": s.side.0, "after": s.after.as_ref().map(ToString::to_string), "before": s.before.as_ref().map(ToString::to_string)})).collect();
     }
     gap
+}
+
+/// Returns one run at a gap with its side (`shapes`' `GapRun`).
+fn gap_run_json((side, run): &(SideIx, Run)) -> Value {
+    json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width})
+}
+
+/// Returns each place the merge kept once, as both answers carry it
+/// (`shapes`' `MergeDedup`; the module doc, **Kept once**).
+///
+/// It is the record's `Record::deduped`, each place's dropped runs spelled
+/// as a gap's.
+fn deduped_json(record: &lib::Record) -> Value {
+    let kept = |d: &lib::Deduped| d.kept.iter().map(|s| s.0).collect::<Vec<u8>>();
+    record.deduped().iter().map(|d| json!({"gap": d.gap.0, "kept": kept(d), "dropped": d.dropped.iter().map(gap_run_json).collect::<Vec<_>>()})).collect()
 }

@@ -1212,9 +1212,10 @@ fn the_publication_references_state_the_shells_shapes() {
 ///
 /// Each `merge` tool's reference spells every arm of the answer the shell
 /// declares for its row (`shapes::declarations`) as `{a, b, c?}`, as the
-/// publication tools' do — `merge_compose`'s report, a gap of it and a
-/// stretch a landing replaced,
-/// `merge_land`'s landing, re-statement and refusal, `merge_undo`'s answer and
+/// publication tools' do — `merge_compose`'s report, a gap of it, a
+/// stretch a landing replaced and a place the merge kept once,
+/// `merge_land`'s landing, re-statement and refusal and a place kept once
+/// as its landing names it, `merge_undo`'s answer and
 /// the marker in it, `merge_withdraw`'s answer — and names each refusal of
 /// the shell's own an agent acts on by its name with its members, as
 /// REJECTIONS ARE DATA names `held_lines {doc, held}`: every tool's
@@ -1256,8 +1257,8 @@ fn the_merge_references_state_the_shells_shapes() {
     let declarations = skep_shell::shapes::declarations();
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     for (name, row, nested, refusals) in [
-        ("merge_compose", "merge.compose", &["MergeGap", "ReplacedStretch"][..], &["HeldLinesRefusal"][..]),
-        ("merge_land", "merge.land", &["WindowPart"][..], &["WindowPartsOwedRefusal", "OtherPanelRefusal", "HeldLinesRefusal"][..]),
+        ("merge_compose", "merge.compose", &["MergeGap", "ReplacedStretch", "MergeDedup"][..], &["HeldLinesRefusal"][..]),
+        ("merge_land", "merge.land", &["WindowPart", "MergeDedup"][..], &["WindowPartsOwedRefusal", "OtherPanelRefusal", "HeldLinesRefusal"][..]),
         ("merge_undo", "merge.undo", &["MergeMarker"][..], &["HeldLinesRefusal"][..]),
         ("merge_withdraw", "merge.withdraw", &[][..], &["HeldLinesRefusal"][..]),
     ] {

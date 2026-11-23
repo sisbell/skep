@@ -14,8 +14,10 @@
 //! twice with the prior named, a gap both sides added at reported
 //! unsettled with its default and then `--resolve`d the other way round as
 //! the AGENT's choice (the runner has no terminal), a resolution naming no
-//! gap reported as not applied, `--into` landing the merged list in a
-//! draft in one write with the newer version told, and `--new` staging a
+//! gap reported as not applied, the same words added by both kept once,
+//! the place said and reported under `deduped`, `--into` landing the
+//! merged list in a draft in one write with the newer version told, and
+//! `--new` staging a
 //! fresh draft from the head and landing there, the base and the merge
 //! recorded, a re-run reporting the standing landing and staging nothing;
 //! A MOVED HEAD — the head moved before `--publish`, the shot claiming the
@@ -536,7 +538,8 @@ fn the_usage_forms_are_refused_before_any_socket() {
 /// THE WHOLE WALK: composed and printed, published once with its record,
 /// published again without landing twice, a gap both sides added at
 /// resolved as the agent's choice, a resolution naming no gap not applied,
-/// and the merged list landed in a draft.
+/// the same words added by both kept once, said and reported, and the
+/// merged list landed in a draft.
 #[test]
 fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent() {
     let dir = tempfile::tempdir().unwrap();
@@ -561,6 +564,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["runs"][1]["side"], json!(0), "the head's fresh run carries its side");
     assert_eq!(v["runs"][1]["family"], json!("own"));
     assert_eq!(v["gaps"], json!([]), "different material on each side: no gap");
+    assert_eq!(v["deduped"], json!([]), "nothing added alike: nothing kept once");
     assert_eq!(v["counts"], json!({"a": 3, "b": 1, "m": 3}));
     assert_eq!((v["over_cap"].as_bool(), v["cap"].as_u64()), (Some(false), Some(4096)));
     assert!(v["prior"].is_null() && v["landed"].is_null(), "{v}");
@@ -677,6 +681,24 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["ignored"], json!([9]));
     assert!(r.err.contains("not applied: the resolution of gap 9"), "{}", r.err);
     assert_eq!(v["prior"]["landed"]["member"].as_str(), Some(member2), "the prior for the key stands");
+
+    // THE SAME WORDS ADDED BY BOTH (§9's case (g)): the head and the
+    // daughter each "big " at `D·4|D·5` — kept once, the head's, the gap
+    // settled by the rule, the place said and reported with the daughter's
+    // copy staying in it.
+    let d3 = rig.document(&session);
+    let base3 = rig.shot(&session, &d3, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let big = [Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }];
+    rig.shot(&session, &d3, Some((&base3, 11)), &big);
+    let daughter3 = rig.shot(&session, &d3, Some((&base3, 11)), &big);
+    let r = rig.merge(&["--doc", &d3.to_string(), "--alternative", &daughter3.to_string(), "--kind", &kind_s]);
+    let v = report(&r);
+    assert_eq!(runs_of(&v), vec![(format!("{d3}.0.1.1"), "4".into()), (format!("{d3}.0.1.12"), "4".into()), (format!("{d3}.0.1.5"), "7".into())], "the big cat sat: the words once");
+    assert_eq!((v["gaps"][0]["settled"].as_bool(), v["gaps"][0]["resolved_by"].as_str()), (Some(true), Some("rule")), "{}", v["gaps"]);
+    assert_eq!(v["deduped"], json!([{"gap": 1, "kept": [0], "dropped": [{"side": 1, "i_start": format!("{d3}.0.1.16"), "width": "4"}]}]));
+    let kept = "gap 1: matching words were added on both sides — kept once, as the head has them;";
+    assert!(r.err.contains(&format!("{kept} the side's copy stays in {daughter3}, and any links on it stay there, not carried into the merge")), "{}", r.err);
+    assert!(!r.err.contains("need a choice") && !r.err.contains("needs a choice"), "{}", r.err);
 
     // --NEW: a fresh draft staged from the head the merge composed on and
     // the merged list landed in it in one write — the base re-recorded on

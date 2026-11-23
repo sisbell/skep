@@ -299,6 +299,43 @@ fn case_g_with_dedup_off_keeps_both_and_never_coalesces_on_value() {
     assert_eq!(c.counts.m, 4);
 }
 
+/// (g) as its record names it: the place kept once, A's copy kept and B's
+/// run dropped, read back from the record's JSON; none with the dedup off;
+/// at three sides, C's copy of A's words dropped beside A's and B's, the
+/// gap unsettled; and none where `values.applied` names no gap, nor where
+/// the gap was resolved by a person since, as a build that let a
+/// resolution rewrite it wrote it (the mutants that keep B's run in
+/// `dropped`, read `kept` off the runs, panic on a missing gap, or name the
+/// person's choice as the dedup's). `recorded`'s two sides stand for the
+/// three: `deduped` reads the gaps alone.
+#[test]
+fn case_g_the_record_names_the_place_kept_once_and_the_run_it_dropped() {
+    let values = text(&[(1, "the cat sat"), (12, "big "), (16, "big "), (20, "fat ")]);
+    let a = || vec![rd(1, 4), rd(12, 4), rd(5, 7)];
+    let b = || vec![rd(1, 4), rd(16, 4), rd(5, 7)];
+    let c = compose_runs(&base(), &d(), &two(a(), b()), None, &Options::default(), &values);
+    let record = recorded(&c);
+    let dropped = vec![(SideIx(1), rd(16, 4))];
+    assert_eq!(record.deduped(), vec![Deduped { gap: GapId(1), kept: vec![SideIx(0)], dropped }]);
+    let off = Options { dedup: false, ..Options::default() };
+    let both = compose_runs(&base(), &d(), &two(a(), b()), None, &off, &values);
+    assert_eq!(recorded(&both).deduped(), vec![]);
+    let fat = vec![rd(1, 4), rd(20, 4), rd(5, 7)];
+    let three = [(SideIx(0), a()), (SideIx(1), fat), (SideIx(2), b())];
+    let c3 = compose_runs(&base(), &d(), &three, None, &Options::default(), &values);
+    assert_eq!(kinds(&c3), vec![(GapKind::Order, false)], "two copies kept: unsettled");
+    assert_eq!(c3.gaps[0].resolved_by, None);
+    let (kept, dropped) = (vec![SideIx(0), SideIx(1)], vec![(SideIx(2), rd(16, 4))]);
+    assert_eq!(recorded(&c3).deduped(), vec![Deduped { gap: GapId(1), kept, dropped }]);
+    let mut no_gap = record.clone();
+    no_gap.values.applied = vec![GapId(9)];
+    assert_eq!(no_gap.deduped(), vec![], "an id naming no gap");
+    let mut resolved = record.clone();
+    resolved.gaps[0].placed = Placement::Order(vec![SideIx(1)]);
+    resolved.gaps[0].resolved_by = Some(ResolvedBy::Person);
+    assert_eq!(resolved.deduped(), vec![], "a person's choice is no dedup's");
+}
+
 /// (h) a window deleted under: A's "hello" from `Z` at `D·4|D·5`, B
 /// removed `5–7` — an `anchor`, settled, the window kept after `D·4`.
 #[test]

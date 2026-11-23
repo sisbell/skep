@@ -180,9 +180,9 @@ impl RecordKey {
 
 /// A mutable side's state, as the record keeps it (§4; skep #770).
 ///
-/// It is the position the side's text last changed at as of the
-/// composition's one position P, `doc_metadata`'s `arranged_at` read off
-/// the side's own metadata (wire.md §The response envelope): the fork's and
+/// It is the position the side's text last changed at as of the position P
+/// the composition stands at, `doc_metadata`'s `arranged_at` read off the
+/// side's own metadata (wire.md §The response envelope): the fork's and
 /// the draft's, whose texts change after a merge. A member is immutable, so
 /// its address is its state and it carries none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,10 +286,11 @@ pub enum SideAt {
         at: Address,
         /// The position the draft was read at (§4: "for a draft read at N").
         ///
-        /// Every record `compose` builds names one — the one position P
-        /// every read of the composition was made at: the input's, else the
-        /// one the composition's first read answered — and [`verify`] reads
-        /// the draft and its recorded base as of it, whatever the landing
+        /// Every record `compose` builds names one — the position P the
+        /// composition stands at: the input's, else the one its fences stand
+        /// at, the draft unchanged across them (the `reads` module's doc) —
+        /// and [`verify`] reads the draft and its recorded base as of it,
+        /// whatever the landing
         /// that rendered the draft has made of either since. A record naming
         /// none reads them at the position its own first read answers.
         position: Option<u64>,
@@ -304,8 +305,9 @@ pub enum SideAt {
 impl SideAt {
     /// Returns the record's side for a composed [`Side`].
     ///
-    /// The side was read at the composition's one position `at`, and
-    /// `arranged_at` is the `doc_metadata` term its anchor was read with. A
+    /// The side stood at `at` as it was read, the position P the composition
+    /// stands at, and `arranged_at` is the `doc_metadata` term its anchor was
+    /// read with. A
     /// draft names `at` as the position it was read at, and a fork and a
     /// draft carry their state, `arranged_at` or `Unarranged` where the
     /// board served none; a member carries neither.
@@ -1291,7 +1293,11 @@ pub enum Verdict {
 /// kept, names no state for, derives another base than the record names,
 /// and the record is faced, never verified. The daemon's `compare` is asked
 /// once as the oracle of the client's join (§1.3 step 4), in parts past its
-/// budgets.
+/// budgets. Every metadata and image the recomputation reads is read as of
+/// one position — the record's draft side's, else the `as_of` of its first
+/// read, made at the head — and its values at the head, as a composition
+/// reads them: a member's by its V-ordinals, a draft's or a fork's words by
+/// the I-addresses its image served there (the `reads` module's doc).
 ///
 /// A document the recomputation reads — the trunk, the head, the base, a
 /// side — that the reader may not read withholds the verdict (§4,
@@ -1370,8 +1376,9 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     let (RecordLanding::Member { position: landed_at, .. }
     | RecordLanding::Draft { position: landed_at, .. }) = *landed;
     let options = record.options();
-    // The position the record names for its draft side: every read of the
-    // recomputation, the join's oracle included, is made at it.
+    // The position the record names for its draft side: every metadata and
+    // image read of the recomputation, the join's oracle included, is made
+    // at it, its values at the head.
     let composed_at = record.sides.iter().find_map(|s| match s {
         SideAt::Draft { at, position: Some(p), .. } => Some((at, *p)),
         SideAt::Draft { .. } | SideAt::Member { .. } | SideAt::Fork { .. } => None,
@@ -1381,7 +1388,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     for side in &named {
         let SideAt::Fork { at: fork, arranged } = side else { continue };
         let now = match reader.metadata(fork, composed_at.map(|(_, p)| p)) {
-            Ok(meta) => meta.arranged_at,
+            Ok(meta) => meta.arranged_at.position(),
             Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
             Err(e) => return at_record(e, composed_at),
         };
@@ -1391,6 +1398,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     }
     let readings = match reads::read_shape(
         &reader,
+        reads::Reading::Verifying,
         &record.doc,
         head.address(),
         Some(record.base.clone()),

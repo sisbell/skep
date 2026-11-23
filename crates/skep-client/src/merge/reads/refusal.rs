@@ -172,14 +172,18 @@ pub enum Refusal {
         runs_seen: usize,
     },
     /// `history_busy` on a read at a position, past the bounded retries.
-    HistoryBusy,
-    /// `history_reclaimed` on a read at the one position P: the board no
-    /// longer answers P, and nothing is read at another position in its
-    /// place (skep #762).
     ///
-    /// Where P is a position a merge record names, [`record::verify`]
-    /// answers [`Verdict::Unreadable`] instead: the verdict withheld
-    /// (skep #761).
+    /// A read at a position is a verification's, a take-back's, a
+    /// restore's, or a composition's whose draft side names a position; a
+    /// composition that names none, and a landing, read at the head and
+    /// never meet it (the `reads` module's doc).
+    HistoryBusy,
+    /// `history_reclaimed` at a position the board no longer answers.
+    ///
+    /// Nothing is read at another position in its place (skep #762). A read
+    /// at a position is one [`Refusal::HistoryBusy`] names. Where the
+    /// position is one a merge record names, [`record::verify`] answers
+    /// [`Verdict::Unreadable`] instead: the verdict withheld (skep #761).
     ///
     /// [`record::verify`]: super::record::verify
     /// [`Verdict::Unreadable`]: super::record::Verdict::Unreadable
@@ -203,7 +207,7 @@ pub enum Refusal {
         /// It is the record's draft side, or the draft it landed in, where
         /// [`record::verify`] read a position the record names (skep #761);
         /// `None` where the position is the caller's — a draft side's named
-        /// position, or the one a composition or a landing read at.
+        /// position, a take-back's or a restore's.
         ///
         /// [`record::verify`]: super::record::verify
         recorded: Option<Address>,
@@ -222,6 +226,44 @@ pub enum Refusal {
         /// As [`Refusal::BeyondHead`]'s: `None` where the position is the
         /// caller's.
         recorded: Option<Address>,
+    },
+    /// A side that can change changed while the merge read it, or since.
+    ///
+    /// It changed after the position the reads stand at: nothing was merged,
+    /// and the way on is to compose again. A composition reads every side
+    /// that can change at the head — the
+    /// head, a side that is a trunk member, the draft, a fork — and holds
+    /// each to one state by its `doc_metadata`, read before its image and
+    /// again after the images and the values (the `reads` module's doc): a
+    /// side the two reads answer otherwise — its `arranged_at`, its recorded
+    /// base, its source — is refused here, naming it. [`replaced`] holds the
+    /// draft it reads to the composition's position the same way, and
+    /// refuses one whose text changed past that position.
+    ///
+    /// It is no verdict. [`Verdict::SideMoved`] is [`record::verify`]'s
+    /// answer about a stored record — a fork arranged since the record named
+    /// its state, a record nobody need compose again; this refusal is raised
+    /// while composing, or before a landing, of a side that changed after
+    /// the position the reads stand at, and nothing is answered of it.
+    ///
+    /// [`replaced`]: crate::merge::replaced
+    /// [`Verdict::SideMoved`]: super::record::Verdict::SideMoved
+    /// [`record::verify`]: super::record::verify
+    SideMoved {
+        /// The side that changed.
+        side: Address,
+        /// The position the reads stand at: the composition's `as_of`.
+        at: u64,
+        /// Its `arranged_at` at the first of the two reads.
+        ///
+        /// It is `None` for `null`.
+        before: Option<u64>,
+        /// Its `arranged_at` at the second; `None` for `null`.
+        ///
+        /// It equals `before` where the side's recorded base moved and its
+        /// text did not, and where its text changed after `at` and before
+        /// the first read.
+        after: Option<u64>,
     },
     /// `fork_base_moved` on the draft landing: `into` is a FORK — a document
     /// the board records no base for, born sharing a published version, its
@@ -560,7 +602,20 @@ impl fmt::Display for Refusal {
                 if let Some(floor) = floor {
                     write!(f, "; the oldest it answers is {floor}")?;
                 }
-                f.write_str("): every read of this merge is made at that one position, and nothing was read at another — compose the merge again, which reads at the board's current position")
+                f.write_str("): a read at a position is made there or not at all, and nothing was read at another — name a position the board still answers, or read at the head")
+            }
+            Refusal::SideMoved { side, at, before, after } => {
+                match (*before, *after) {
+                    (before, after) if before != after => {
+                        write!(f, "{side} changed while this merge was reading it")?;
+                        if let Some(after) = after {
+                            write!(f, " (its text changed at position {after})")?;
+                        }
+                    }
+                    (_, Some(after)) if after > *at => write!(f, "{side} changed at position {after}, after this merge was composed at position {at}")?,
+                    _ => write!(f, "the base the board records for {side} moved while this merge was reading it, its text unchanged")?,
+                }
+                f.write_str(" — nothing was merged; compose the merge again, which reads it as it stands")
             }
             Refusal::BeyondHead { at, head, recorded } => {
                 match recorded {

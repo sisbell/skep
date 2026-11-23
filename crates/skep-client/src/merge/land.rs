@@ -151,11 +151,11 @@
 //!
 //! **The draft landing is one write.** M is sent whole as one
 //! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
-//! one position the merge was composed at — `Merged::as_of`, the position
-//! every read of the composition was made at (skep #762) — so an edit made
-//! to the draft after the merge was composed is refused `arrangement_moved`
-//! with nothing changed, and the draft holds M or what it held, never a
-//! state between. The refusal is said off the draft as it stands, read
+//! one position the merge was composed at — `Merged::as_of`, P, where every
+//! side the composition fenced held the state it read (skep #762) — so an
+//! edit made to the draft after the merge was composed is refused
+//! `arrangement_moved` with nothing changed, and the draft holds M or what
+//! it held, never a state between. The refusal is said off the draft as it stands, read
 //! after it: where the change is this merge's own landing, made after the
 //! composition — a composition landed again in a session holding no memo
 //! of its write, the landing found by the draft's marker or, on a draft
@@ -166,10 +166,11 @@
 //! nothing was merged. The frame carries the head the merge composed on with
 //! its extent AS READ (`head`), the same pair as the base to record where
 //! the board records a base for the draft — read off the draft's
-//! `doc_metadata` at that position; a baseless draft and a fork get none,
-//! so the library never sends a `base` the board refuses `no_base_to_record`
-//! (N4) — and the merge the draft is to carry (`merge`, every side but the
-//! draft itself). The board re-records the base on the head and sets the
+//! `doc_metadata` as it stands, a recorded base never cleared; a baseless
+//! draft and a fork get none, so the library never sends a `base` the board
+//! refuses `no_base_to_record` (N4) — and the merge the draft is to carry
+//! (`merge`, every side but the draft itself). The board re-records the
+//! base on the head and sets the
 //! marker in the same commit (R4); a newer version published since the
 //! compose is not refused: the write lands against the head it composed on
 //! and the ack names the trunk's current head as `head_moved`, which the
@@ -279,7 +280,7 @@ use skep_address::Address;
 use crate::board::{Board, Token};
 
 use super::compose::Run;
-use super::reads::{runs_of, version_components, Merged, OnEnd, Reader, Refusal};
+use super::reads::{fence, runs_of, version_components, Merged, OnEnd, Reader, Refusal};
 use super::record::{PartAnswer, RecordLanding};
 
 use standing::walk;
@@ -370,8 +371,8 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 ///   [`Refusal::Halt`] naming the journal and the check it fails; a
 ///   published one of the merger's own, as [`Refusal::PublishedJournal`];
 ///   the journal's `doc_metadata` read's other refusals and halts;
-/// - the reads' refusals for the draft's `doc_metadata` at the position the
-///   write is typed against;
+/// - the reads' refusals for the draft's `doc_metadata`, read as it stands,
+///   and a draft minted after the composition's position, faced;
 /// - at the shot, [`Refusal::OverCap`] over the list cut at a draft side's
 ///   kept places, nothing sent;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
@@ -413,8 +414,8 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 ///   the draft; `source_not_registered`, `no_base_to_record` and
 ///   `base_extent_too_large` as the library's own faults, since it names
 ///   the head and the extent the merge read, and a base only where the
-///   draft records one at the position the write is typed against — and a
-///   lost acknowledgment as the dialer's halt, with no re-ask;
+///   draft records one — and a lost acknowledgment as the dialer's halt,
+///   with no re-ask;
 /// - the claim's and the record's reads' refusals; the account's journal
 ///   not found for a board too busy to answer the find, past its bounded
 ///   reissues, a journal whose extent read answers `withheld` or
@@ -579,24 +580,29 @@ pub struct Replaced {
 
 /// Returns each stretch of `into` that landing `merged` there replaces.
 ///
-/// It reads `into`'s whole image as of `merged`'s position — the state the
+/// It reads `into`'s whole image at the head, held to the composition's
+/// position as a composition holds a side that can change (the `reads`
+/// module's doc): the draft's `doc_metadata` is read before the image and
+/// again after it, and the image is answered only where the draft's text
+/// changed neither between the two nor after `merged.as_of` — the state the
 /// draft landing's one write is typed against, so exactly what the write
-/// replaces; a draft changed since is refused `arrangement_moved` by the
-/// landing, nothing written — and answers each maximal stretch of it whose
-/// content M's runs carry none of, in order ([`replaced_stretches`]). Words
-/// M carries at another place are not replaced, and an image M carries
-/// whole answers none. An embedder reads it before a landing over an
-/// earlier landing of the merge, to say what the landing takes out and
-/// that an undo puts back.
+/// replaces. It answers each maximal stretch of that image whose content
+/// M's runs carry none of, in order (`replaced_stretches`). Words M
+/// carries at another place are not replaced, and an image M carries whole
+/// answers none. An embedder reads it before a landing over an earlier
+/// landing of the merge, to say what the landing takes out and that an undo
+/// puts back.
 ///
 /// # Errors
 ///
 /// The reader's: `withheld` on the draft, [`Refusal::Unreadable`]; a draft
-/// not registered at that position, [`Refusal::NoSuchDocument`]; the
-/// position's own faults ([`Refusal::HistoryReclaimed`],
-/// [`Refusal::BeyondHead`], [`Refusal::NotAPosition`],
-/// [`Refusal::HistoryBusy`]); a draft in more pieces than `image` answers,
-/// [`Refusal::TooFragmented`]; the death signal under the token,
+/// the board does not register, or one minted after the composition's
+/// position, [`Refusal::NoSuchDocument`]; a draft whose text changed after
+/// that position or between the two reads, [`Refusal::SideMoved`] naming it,
+/// `at` the composition's position — a landing typed against it would be
+/// refused `arrangement_moved`, and the way on is to compose again; a board
+/// serving no `arranged_at`, faced; a draft in more pieces than `image`
+/// answers, [`Refusal::TooFragmented`]; the death signal under the token,
 /// [`Refusal::SessionEnded`]; an `image` run that is no content I-address,
 /// a transport halt and the board's other refusals, [`Refusal::Halt`].
 pub fn replaced(
@@ -606,7 +612,16 @@ pub fn replaced(
     merged: &Merged,
 ) -> Result<Vec<Replaced>, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
-    let image = reader.imaged(into, Some(merged.as_of))?;
+    let (before, _) = fence(&reader, into)?;
+    if before.at.is_some_and(|minted| minted > merged.as_of) {
+        return Err(Refusal::NoSuchDocument(into.clone()));
+    }
+    let image = reader.imaged(into, None)?;
+    let (after, _) = fence(&reader, into)?;
+    let (before, after) = (before.arranged_at.position(), after.arranged_at.position());
+    if before != after || after.is_some_and(|changed| changed > merged.as_of) {
+        return Err(Refusal::SideMoved { side: into.clone(), at: merged.as_of, before, after });
+    }
     let held = runs_of(&image.runs)?;
     let m: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
     Ok(replaced_stretches(&held, &m))

@@ -244,7 +244,18 @@ pub fn line_numbers(doc: &str, positions: &[u64], lines: &[u64]) -> Value {
 ///
 /// It reads `width` of them.
 pub fn retrieve_v(doc: &str, from: u64, width: u64) -> Value {
-    json!({"op": "retrieve_v", "specs": [{"doc": doc, "span": {"start": format!("1.{from}"), "width": format!("0.{width}")}}]})
+    retrieve_v_of(doc, &[(from, width)])
+}
+
+/// Builds `retrieve_v` over SEVERAL V-spans of `doc`, each `(from, width)`.
+///
+/// wire.md §Content & provenance reads: one spec a span, in the order given,
+/// the delivery's items in that order. The list is one wire list
+/// ([`MAX_WIRE_LIST`](crate::publication::MAX_WIRE_LIST)), refused past it,
+/// and the read is refused past the delivery budget's items.
+pub fn retrieve_v_of(doc: &str, spans: &[(u64, u64)]) -> Value {
+    let specs: Vec<Value> = spans.iter().map(|&(from, width)| json!({"doc": doc, "span": v_span(from, width)})).collect();
+    json!({"op": "retrieve_v", "specs": specs})
 }
 
 /// Builds `image` over content ordinals `from ..` of `doc`.
@@ -277,6 +288,15 @@ pub fn image_own(doc: &str, from: u64, width: u64) -> Value {
 /// bounds.
 pub const I_ITEM_ROOM: usize = 39;
 
+/// The room an `i_delivery` answer takes beside its items.
+///
+/// It is the answer's `as_of`, at its widest, its `items` member and its
+/// `resp`, as the board marshals them. A reader sizes a read by identity
+/// so its items at [`I_ITEM_ROOM`] each, their addresses and this room
+/// stay within its dialer's cap
+/// ([`MAX_ANSWER_BYTES`](crate::dial::MAX_ANSWER_BYTES)).
+pub const I_DELIVERY_ENVELOPE: usize = 64;
+
 /// Builds `{"op":"retrieve_i","spans":[{"start":…,"width":…},…]}`.
 ///
 /// wire.md §Content & provenance reads: the read by identity (AUTH-6.38 to
@@ -289,11 +309,13 @@ pub const I_ITEM_ROOM: usize = 39;
 /// ([`MAX_WIRE_LIST`](crate::publication::MAX_WIRE_LIST)), refused past it,
 /// and the read is refused past the delivery budget's positions.
 ///
-/// No code of this crate sends the frame: it stands for an embedder that
-/// reads values no arrangement holds any longer. This crate's own readers
-/// of a credential record reach its bytes through the arrangement, since
-/// an atom a later edit un-arranged must fail their read-back (AUTH-2.114,
-/// AUTH-2.115).
+/// The merge reads by it the values of words a draft or a fork held, at the
+/// addresses that side's image served: a value at an I-address is written
+/// once, so the read needs no past position, whatever the side has become
+/// since (the `merge::reads` module's doc). This crate's own readers of a
+/// credential record never read by it: they reach its bytes through the
+/// arrangement, since an atom a later edit un-arranged must fail their
+/// read-back (AUTH-2.114, AUTH-2.115).
 pub fn retrieve_i(spans: &[(&str, u64)]) -> Value {
     let spans: Vec<Value> = spans.iter().map(|&(start, width)| end_span(start, width)).collect();
     json!({"op": "retrieve_i", "spans": spans})

@@ -8,7 +8,8 @@
 //! records, another merge's, a landing past the marker's and a record a
 //! take-back replaced passed over; `verify`'s verdicts, a withheld input
 //! withholding the verdict and an unregistered one refused, a withheld run
-//! in a readable side refused naming its origin, a moved gap of two groups
+//! in a readable side refused naming its origin, its images read as of one
+//! position and its values at the head, a moved gap of two groups
 //! landing and verifying equal; and the `Record`'s JSON round trip, its
 //! `type` fixed.
 
@@ -453,7 +454,18 @@ fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
     assert_eq!(merged.composed.values.applied, vec![GapId(1)]);
     let mut record = merged.record.clone();
     record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.2")), position: 0 });
+    dialer.clear();
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+    // The recomputation's metadata and images as of one position, its
+    // values at the head (skep #1144).
+    let p = dialer.world().position;
+    let imaged = dialer.positions("image");
+    assert!(!imaged.is_empty() && imaged.iter().all(|at| *at == p), "the images as of one position: {:?}", dialer.ops());
+    assert!(
+        !dialer.frames("retrieve_v").is_empty() && dialer.positions("retrieve_v").is_empty(),
+        "the values at the head: {:?}",
+        dialer.ops()
+    );
     // `W` withheld: the daughter readable, its window masked.
     dialer.world().withheld.insert(W.to_string());
     dialer.clear();
@@ -465,14 +477,14 @@ fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
     );
     assert_eq!(
         ops.last().map(String::as_str),
-        Some("at:retrieve_v"),
-        "the masked value read is the last: {ops:?}"
+        Some("retrieve_v"),
+        "the masked value read is the last, at the head: {ops:?}"
     );
     let masked = dialer.frames("retrieve_v").pop().expect("a value read");
     assert_eq!(
         masked["specs"][0]["doc"].as_str(),
         Some(daughter.as_str()),
-        "read through the daughter, which the board answered"
+        "read through the daughter by its V-ordinals, which the board answered"
     );
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
     // A reference in the window's place: no withheld run, a board fault.

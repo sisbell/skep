@@ -1,16 +1,20 @@
 //! The shape's reads in order (the merge record's §1.3), then the core's walk.
 //!
-//! [`read_shape`] makes them at the one position P — each side's line of
-//! recorded bases, the base derived from where the lines end, the head and
-//! the sides imaged — and composes the lists through the core, the values
-//! read through the sides that hold them ([`values_for`]). The rules they
-//! keep are the `reads` module's doc.
+//! [`read_shape`] makes them as the act it serves reads them ([`Reading`]) —
+//! each side's line of recorded bases, the base derived from where the lines
+//! end, the head and the sides imaged, each side that can change fenced
+//! where a composition reads it at the head — and composes the lists through
+//! the core, the values read at the head through the sides that hold them
+//! ([`values_for`], [`values_of`]). The rules they keep are the `reads`
+//! module's doc.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 
 use skep_address::Address;
 
 use crate::address::parse_address;
+use crate::board::answers::{ArrangedAt, Metadata};
 use crate::halt::Halt;
 use crate::merge::compose::{compose_runs, Composed, Item, Options, Run, SideIx};
 
@@ -25,23 +29,33 @@ use super::MAX_SIDES;
 
 // ── the value mapping (the fragment model) ────────────────────────────────
 
+/// One stretch of a run's positions, where an image holds it.
+struct Stretch<'m> {
+    /// The image's index among the sides' images.
+    image: usize,
+    /// The V-ordinal it begins at in that image.
+    ordinal: u64,
+    /// The I-address prefix the image served it under.
+    prefix: &'m str,
+    /// Its first position's last component.
+    first: u64,
+    /// The positions it holds.
+    width: u64,
+}
+
 /// Returns where the positions of `run` stand among the sides' images.
 ///
-/// Each stretch is `(the image's index, the V-ordinal it begins at, its
-/// width)` — the image at `prefer` asked first, then the others in order —
-/// so a sub-run of a run a side holds is read at that side's own V-ordinals
-/// (`ordinal_of`'s mapping), and a shared identity at whichever side holds
-/// it.
+/// Each stretch is a run of positions one image holds, with the V-ordinal it
+/// begins at there and the I-address the image served it at — the image at
+/// `prefer` asked first, then the others in order — so a sub-run of a run a
+/// side holds is read at that side's own V-ordinals (`ordinal_of`'s
+/// mapping), and a shared identity at whichever side holds it.
 ///
 /// # Errors
 ///
 /// A position no image holds is the library's own fault: the core places
 /// only positions some side gave it.
-pub(in crate::merge) fn locate(
-    maps: &[Imaged],
-    prefer: Option<usize>,
-    run: &Run,
-) -> Result<Vec<(usize, u64, u64)>, Halt> {
+fn locate<'m>(maps: &'m [Imaged], prefer: Option<usize>, run: &Run) -> Result<Vec<Stretch<'m>>, Halt> {
     let prefix = content_prefix(&run.origin);
     let order: Vec<usize> =
         prefer.into_iter().chain((0..maps.len()).filter(|i| Some(*i) != prefer)).collect();
@@ -63,49 +77,228 @@ pub(in crate::merge) fn locate(
                 "this is this client's fault; nothing was written",
             ));
         };
-        let stretch = (end - pos).min(r.first + r.width - pos);
-        out.push((i, r.ordinal + (pos - r.first), stretch));
-        pos += stretch;
+        let width = (end - pos).min(r.first + r.width - pos);
+        out.push(Stretch {
+            image: i,
+            ordinal: r.ordinal + (pos - r.first),
+            prefix: &r.prefix,
+            first: pos,
+            width,
+        });
+        pos += width;
     }
     Ok(out)
 }
 
 /// Reads the values of `run`'s positions through the sides that hold them.
 ///
-/// The sides are found by [`locate`], `prefer` asked first.
+/// It is [`values_of`] of the one run.
 ///
 /// # Errors
 ///
-/// [`locate`]'s fault; [`Reader::values`]'s errors.
+/// As [`values_of`]'s.
 pub(in crate::merge) fn values_for(
     reader: &Reader<'_>,
+    doc: &Address,
     maps: &[Imaged],
     prefer: Option<usize>,
     run: &Run,
 ) -> Result<Vec<Item>, Refusal> {
-    let mut out = Vec::with_capacity(run.width as usize);
-    for (i, ordinal, width) in locate(maps, prefer, run)? {
-        out.extend(reader.values(&maps[i].doc, maps[i].at, ordinal, width)?);
+    Ok(values_of(reader, doc, maps, &[(prefer, run)])?.pop().unwrap_or_default())
+}
+
+/// Reads the values of several runs at the head, one list a run.
+///
+/// Each `(prefer, run)` is found among the images by [`locate`], the image at
+/// `prefer` asked first, and every stretch is read by the image that holds
+/// it, each holder's stretches in as few reads as the budgets allow: a
+/// member of `doc`'s chain — the head, a member side — by its V-ordinals
+/// ([`Reader::values_by_ordinal`]), which hold the same words at every
+/// position, a version never changing and the head only gaining deposits
+/// past its extent; a draft or a fork by the I-addresses its image served
+/// ([`Reader::values_by_identity`]), since either can change once read and a
+/// value at an I-address is written once. No value is read as of a past
+/// position, whatever position the image was read at.
+///
+/// # Errors
+///
+/// [`locate`]'s fault; the holders' reads' errors.
+pub(in crate::merge) fn values_of(
+    reader: &Reader<'_>,
+    doc: &Address,
+    maps: &[Imaged],
+    runs: &[(Option<usize>, &Run)],
+) -> Result<Vec<Vec<Item>>, Refusal> {
+    let located: Vec<Vec<Stretch<'_>>> =
+        runs.iter().map(|(prefer, run)| locate(maps, *prefer, run)).collect::<Result<_, _>>()?;
+    // Each holder's stretches, as (the run's place, the stretch's place).
+    let mut holders: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+    for (k, stretches) in located.iter().enumerate() {
+        for (j, s) in stretches.iter().enumerate() {
+            holders.entry(s.image).or_default().push((k, j));
+        }
     }
-    Ok(out)
+    let mut values: Vec<Vec<Vec<Item>>> =
+        located.iter().map(|stretches| vec![Vec::new(); stretches.len()]).collect();
+    for (image, held) in &holders {
+        let holder = &maps[*image].doc;
+        let read = if in_chain(doc, holder) {
+            let spans: Vec<(u64, u64)> =
+                held.iter().map(|&(k, j)| (located[k][j].ordinal, located[k][j].width)).collect();
+            reader.values_by_ordinal(holder, &spans)?
+        } else {
+            let spans: Vec<(&str, u64, u64)> = held
+                .iter()
+                .map(|&(k, j)| (located[k][j].prefix, located[k][j].first, located[k][j].width))
+                .collect();
+            reader.values_by_identity(holder, &spans)?
+        };
+        for (&(k, j), items) in held.iter().zip(read) {
+            values[k][j] = items;
+        }
+    }
+    Ok(values.into_iter().map(|stretches| stretches.concat()).collect())
 }
 
 // ── the shape's reads ─────────────────────────────────────────────────────
+
+/// Which act a shape's reads serve, and so how they are made.
+///
+/// Where each read is made is the `reads` module's doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::merge) enum Reading {
+    /// A composition's: at the head, each side that can change fenced.
+    ///
+    /// Where its draft side names a position, every side that can change is
+    /// read as of it instead, and every member that cannot at the head.
+    Composing,
+    /// A verification's: every image and metadata read as of one position.
+    ///
+    /// It is the record's draft side's, else the position its first read
+    /// answered.
+    Verifying,
+}
+
+/// Where a shape's reads are made, once its first read has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Positions {
+    /// At the head, each side that can change fenced.
+    Live,
+    /// Each side that can change as of the position, the members that
+    /// cannot at the head.
+    Named(u64),
+    /// Every image and metadata as of the position.
+    Recorded(u64),
+}
+
+impl Positions {
+    /// Returns where a side that can change is read.
+    ///
+    /// It is the head, a trunk member, a draft or a fork, and the trunk's
+    /// own arrangement read beside them.
+    fn changing(self) -> Option<u64> {
+        match self {
+            Positions::Live => None,
+            Positions::Named(at) | Positions::Recorded(at) => Some(at),
+        }
+    }
+
+    /// Returns where a member that cannot change is read.
+    ///
+    /// It is a hop below the trunk, a daughter, or a base below the head.
+    fn fixed(self) -> Option<u64> {
+        match self {
+            Positions::Live | Positions::Named(_) => None,
+            Positions::Recorded(at) => Some(at),
+        }
+    }
+}
+
+/// What a fence reads of a side that can change.
+///
+/// It is the position the side's text last changed at, and where the board
+/// records it standing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Standing {
+    /// Its `arranged_at`.
+    arranged_at: Option<u64>,
+    /// Its recorded base.
+    base: Option<String>,
+    /// Its source.
+    source: Option<String>,
+}
+
+impl Standing {
+    /// Returns what a fence's `doc_metadata` answer `meta` says.
+    fn of(meta: &Metadata) -> Standing {
+        Standing {
+            arranged_at: meta.arranged_at.position(),
+            base: meta.base.clone(),
+            source: meta.source.clone(),
+        }
+    }
+}
+
+/// A side that can change, as its opening fence read it.
+struct Fence {
+    /// The side's address.
+    doc: Address,
+    /// What the fence read of it.
+    standing: Standing,
+    /// The answer's `as_of`.
+    as_of: u64,
+}
+
+/// Reads `doc`'s `doc_metadata` at the head as a fence.
+///
+/// It answers the metadata and its `as_of` (the `reads` module's doc, the
+/// fences). The answer carries an `arranged_at`, a position or `null`: the
+/// fence holds a document unchanged by it.
+///
+/// # Errors
+///
+/// [`Reader::metadata_read`]'s; an answer naming no `as_of`, and one that
+/// carries no `arranged_at` — an older board, whose answer cannot tell a side
+/// unchanged — faced, nothing written.
+pub(in crate::merge) fn fence(reader: &Reader<'_>, doc: &Address) -> Result<(Metadata, u64), Refusal> {
+    let (meta, as_of) = reader.metadata_read(doc, None)?;
+    let Some(as_of) = as_of else { return Err(no_as_of(doc).into()) };
+    if meta.arranged_at == ArrangedAt::Unserved {
+        return Err(Halt::face(
+            format!("the board serves no `arranged_at` for {doc}"),
+            "a merge reads each side that can change at the head and holds it to one state by the position its text last changed at, `doc_metadata`'s `arranged_at`, read before its image and again after it (wire.md §The response envelope), and this board's answer carries no such member — an older board",
+            "this board cannot hold the merge to one state, so nothing was merged and nothing was written",
+        )
+        .into());
+    }
+    Ok((meta, as_of))
+}
+
+/// Faces a read of `doc` whose answer named no position.
+fn no_as_of(doc: &Address) -> Halt {
+    Halt::face(
+        "`doc_metadata` answered no `as_of`",
+        format!("the read of {doc} named no position (wire.md §The response envelope: every response names where it sits)"),
+        "this board is not speaking the wire this client expects; nothing was written",
+    )
+}
 
 /// Everything the reads of one shape yield.
 ///
 /// `compose` and `verify` both build on it.
 pub(in crate::merge) struct Readings {
-    /// The one position P every read but the first was made at (the
-    /// `reads` module's doc): the draft side's named position, else the first
-    /// read's `as_of`.
+    /// The position P the shape stands at (the `reads` module's doc).
+    ///
+    /// For a composition at the head, it is the highest `as_of` its opening
+    /// fences answered; else the draft side's named position, or a
+    /// verification's first read's `as_of`.
     pub(in crate::merge) at: u64,
     /// The base: a member, or the document itself where a side was begun
     /// before its first version — derived from the sides' lines of recorded
     /// bases, a named one checked against it (the `reads` module's doc).
     pub(in crate::merge) base: Address,
     /// The base's image: the document's own arrangement where the base is
-    /// the document itself.
+    /// the document itself, the head's own image where the base is the head.
     pub(in crate::merge) base_image: Imaged,
     /// The head's and each side's image, in side order.
     pub(in crate::merge) maps: Vec<Imaged>,
@@ -120,27 +313,43 @@ pub(in crate::merge) struct Readings {
     /// Each side's `arranged_at` at P, in side order.
     ///
     /// A fork's and a draft's come off the one `doc_metadata` its anchor was
-    /// read from, `None` where the board keeps none; a member's is `None`,
-    /// its address its state.
+    /// read from — at a composition at the head, its opening fence — `None`
+    /// where the board keeps none; a member's is `None`, its address its
+    /// state.
     pub(in crate::merge) arranged: Vec<Option<u64>>,
 }
 
 /// Makes the reads of §1.3 in order, then the core's walk.
 ///
-/// The reads are the document's metadata; for each side in order, a fork's or a
-/// draft's own metadata for its anchor and its state — a fork's anchor the base
-/// the board records for it, else the source it was born sharing
-/// ([`fork_anchor`]); a draft's the base the board records for it; each one's
-/// state its `arranged_at`, carried in side order beside the readings
-/// (`Readings::arranged`) — then the metadata of each hop of its line of
-/// recorded bases below the trunk ([`recorded_line`]); the head's extent; the
-/// base imaged — the document's own arrangement where the base is the document,
-/// read only where its `own_count` is above 0; the head and each side imaged;
-/// the composition with the values read through the sides. The first read is
-/// made at the position the draft side names, else at the head, and every later
-/// read at the one position P that read answered (the `reads` module's doc): a
-/// draft at a position names P; else P is the first read's `as_of`, and an edit
-/// landing on any side between two reads changes nothing the reads answer.
+/// The reads are the document's metadata; for each side in order, a fork's
+/// or a draft's own metadata for its anchor and its state — a fork's anchor
+/// the base the board records for it, else the source it was born sharing
+/// ([`fork_anchor`]); a draft's the base the board records for it
+/// ([`draft_base`]); each one's state its `arranged_at`, carried in side
+/// order beside the readings (`Readings::arranged`) — then the metadata of
+/// each hop of its line of recorded bases below the trunk
+/// ([`recorded_line`]); the head's extent; the head imaged; the base imaged
+/// — the head's own image where the base is the head, the document's own
+/// arrangement where the base is the document, read only where its
+/// `own_count` is above 0; each side imaged; the composition with the
+/// values read through the sides ([`values_of`]).
+///
+/// Where they are made is `reading`'s (the `reads` module's doc). A
+/// composition whose sides name no position reads at the head and FENCES
+/// each side that can change — the head, a side that is a trunk member, the
+/// draft, a fork — with its `doc_metadata` read before any image and again
+/// after the images and the values: a fork's and a draft's opening fence is
+/// the read its anchor and its state come off, a member's and the head's
+/// follow the sides', and P is the highest `as_of` they answered. Each side
+/// fenced must answer its closing fence as it answered its opening one — its
+/// `arranged_at`, its recorded base and its source — so it held, at P, the
+/// state its image was read in. A composition whose draft side names a
+/// position reads the trunk, every side that can change and its anchor as of
+/// it, every member that cannot change — a hop, a daughter, a base below the
+/// head — at the head, and fences nothing: P is the position named. A
+/// verification reads every metadata and image as of P, the record's draft
+/// side's position, else the `as_of` of the trunk's metadata, read at the
+/// head. Every value is read at the head.
 ///
 /// The base is derived from where the lines end ([`derived_base`]). A base
 /// handed in is checked against it beside every side: beside a fork side it
@@ -165,7 +374,7 @@ pub(in crate::merge) struct Readings {
 ///   bare document itself, an address within a member — and a fork in
 ///   `doc`'s own tree — `doc` itself, a member of its chain or an address
 ///   within either — [`Refusal::BaseUnknown`];
-/// - the metadata read's refusals — at the named position,
+/// - the trunk's metadata read's refusals — as of a position,
 ///   [`Reader::read`]'s faults of a position included — and an answer
 ///   naming no `as_of`, faced;
 /// - the first side, in side order, that is a draft of an account other
@@ -173,15 +382,20 @@ pub(in crate::merge) struct Readings {
 ///   trunk owner's own account, [`Refusal::ForkOfOwner`] — every side
 ///   judged so before any side's own read;
 /// - for each side in order: at a fork or a draft its metadata read's
-///   refusals at P — [`Reader::read`]'s faults of a position included,
-///   [`Refusal::HistoryReclaimed`] among them — the side unreadable,
-///   [`Refusal::Unreadable`]; a fork the board records neither a base nor
-///   a source for or a draft it records no base for, or one whose anchor —
-///   a fork's recorded base, else its source; a draft's recorded base —
-///   lies in another document, [`Refusal::BaseUnknown`]; then its line's —
-///   each hop's metadata read's refusals at P, a hop the board records no
-///   parent for, [`Refusal::HopUnrecorded`], a parent that contradicts the
-///   hop's address, faced;
+///   refusals — as of a position, [`Reader::read`]'s faults of a position
+///   included, [`Refusal::HistoryReclaimed`] among them; at the head, a
+///   fence's faults — the side unreadable, [`Refusal::Unreadable`]; a fork
+///   the board records neither a base nor a source for or a draft it
+///   records no base for, or one whose anchor — a fork's recorded base,
+///   else its source; a draft's recorded base — lies in another document,
+///   [`Refusal::BaseUnknown`]; at a trunk member read at the head its
+///   fence's refusals; then its line's — each hop's metadata read's
+///   refusals, a hop the board records no parent for,
+///   [`Refusal::HopUnrecorded`], a parent that contradicts the hop's
+///   address, faced;
+/// - at the head, the head's fence's refusals — a fence answer naming no
+///   `as_of`, or carrying no `arranged_at`, faced as a board this client
+///   cannot hold to one state;
 /// - the head's extent read's refusals;
 /// - a named base the lines do not derive: beside a fork side — the
 ///   record's, at `verify` — faced, naming both bases, beside a draft side
@@ -193,11 +407,15 @@ pub(in crate::merge) struct Readings {
 /// - then each image and value read's own refusals — a run a readable side
 ///   windows from a document the reader may not read,
 ///   [`Refusal::Unreadable`] naming that document where the value rule
-///   reads its values — and an `image` run that is no content I-address.
+///   reads its values — and an `image` run that is no content I-address;
+/// - at the head, a side whose closing fence answers otherwise than its
+///   opening one, [`Refusal::SideMoved`] naming it, the first in fence
+///   order, and the closing fences' own refusals.
 ///
 /// [`compose`]: super::compose
 pub(in crate::merge) fn read_shape(
     reader: &Reader<'_>,
+    reading: Reading,
     doc: &Address,
     head: &Address,
     base: Option<Address>,
@@ -205,20 +423,18 @@ pub(in crate::merge) fn read_shape(
     options: &Options,
 ) -> Result<Readings, Refusal> {
     let last = check_shape(doc, head, sides)?;
-    // Step 1: the document and the head. THE ONE POSITION P (skep #762): the
-    // draft side's named position, else the `as_of` of this first read,
-    // made at the head; every read after it is made at P.
+    // Step 1: the document, at the position a draft side names, else at
+    // the head (skep #762).
     let named = sides.iter().find_map(Side::position);
     let (meta, meta_as_of) = reader.metadata_read(doc, named)?;
-    let at = match named.or(meta_as_of) {
-        Some(at) => at,
-        None => {
-            return Err(Halt::face(
-                "`doc_metadata` answered no `as_of`",
-                format!("the read of {doc} named no position (wire.md §The response envelope: every response names where it sits)"),
-                "this board is not speaking the wire this client expects; nothing was written",
-            )
-            .into())
+    let positions = match (reading, named) {
+        (Reading::Composing, None) => {
+            meta_as_of.ok_or_else(|| no_as_of(doc))?;
+            Positions::Live
+        }
+        (Reading::Composing, Some(at)) => Positions::Named(at),
+        (Reading::Verifying, _) => {
+            Positions::Recorded(named.or(meta_as_of).ok_or_else(|| no_as_of(doc))?)
         }
     };
     // The owner, in side order: a draft side is the trunk owner's account's,
@@ -238,20 +454,51 @@ pub(in crate::merge) fn read_shape(
     // Each side's line, in side order: its anchor — a fork's the base the
     // board records for it, else its source; a draft's the base the board
     // records for it; a member's itself — then the bases recorded up from it
-    // to the trunk, every read at P. A fork's and a draft's state comes off
-    // the one `doc_metadata` its anchor is read from.
+    // to the trunk. A fork's and a draft's state comes off the one
+    // `doc_metadata` its anchor is read from: at the head, its opening
+    // fence. A side that is a trunk member can take a deposit, so at the
+    // head it is fenced too.
+    let live = positions == Positions::Live;
+    let mut fences: Vec<Fence> = Vec::new();
+    let mut opened = |reader: &Reader<'_>, side: &Address| -> Result<Metadata, Refusal> {
+        if !live {
+            return reader.metadata(side, positions.changing());
+        }
+        let (meta, as_of) = fence(reader, side)?;
+        fences.push(Fence { doc: side.clone(), standing: Standing::of(&meta), as_of });
+        Ok(meta)
+    };
     let mut ends: Vec<LineEnd> = Vec::with_capacity(sides.len());
     let mut arranged: Vec<Option<u64>> = Vec::with_capacity(sides.len());
     for side in sides {
         let (anchor, state) = match side {
-            Side::Fork(fork) => fork_anchor(reader, doc, side, fork, at)?,
-            Side::Draft { at: draft, .. } => draft_base(reader, doc, side, draft, at)?,
-            Side::Member(m) => (m.clone(), None),
+            Side::Fork(fork) => {
+                let meta = opened(reader, fork)?;
+                (fork_anchor(doc, side, &meta)?, meta.arranged_at.position())
+            }
+            Side::Draft { at: draft, .. } => {
+                let meta = opened(reader, draft)?;
+                (draft_base(doc, side, &meta)?, meta.arranged_at.position())
+            }
+            Side::Member(m) => {
+                if live && is_trunk_member(doc, m) {
+                    opened(reader, m)?;
+                }
+                (m.clone(), None)
+            }
         };
-        ends.push(recorded_line(reader, doc, side, &anchor, at)?);
+        ends.push(recorded_line(reader, doc, side, &anchor, positions.fixed())?);
         arranged.push(state);
     }
-    let (head_extent, head_as_of) = reader.span_set(head, Some(at))?;
+    // The head's fence, the last of them: P is where they stand.
+    if live {
+        opened(reader, head)?;
+    }
+    let at = match positions {
+        Positions::Live => fences.iter().map(|f| f.as_of).max().unwrap_or_default(),
+        Positions::Named(at) | Positions::Recorded(at) => at,
+    };
+    let (head_extent, head_as_of) = reader.span_set(head, positions.changing())?;
     // Step 2: the base, derived from where the lines end; a named one
     // checked against it beside every side — beside a draft never against
     // the draft's recorded base itself, which a daughter's staging makes a
@@ -282,37 +529,50 @@ pub(in crate::merge) fn read_shape(
             });
         }
     }
-    // The base's image: at the document itself, its own arrangement from
-    // before its first version, counted by the trunk's `own_count` read at P
-    // and read at P only where that count is above 0.
-    let base_image = match derived {
-        Derived::Member(member) => reader.imaged(&member, Some(at))?,
-        Derived::Document { side, hop } => {
-            let Some(count) = meta.own_count else {
+    // The document's own arrangement from before its first version is
+    // counted by the trunk's `own_count`, read with the trunk.
+    let own_count = match &derived {
+        Derived::Member(_) => None,
+        Derived::Document { side, hop } => match meta.own_count {
+            Some(count) => Some(count),
+            None => {
                 return Err(Refusal::BareSource {
-                    side: side.clone(),
+                    side: (*side).clone(),
                     source: doc.clone(),
                     hop: hop.cloned(),
-                });
-            };
-            reader.imaged_own(doc, at, count)?
-        }
+                })
+            }
+        },
     };
-    let base = served;
-    // Step 3: the head, then each side — every image at P, the head's
-    // included, so the values read through the images are read at P too.
+    // Step 3: the head, the base, then each side.
     let (head_runs, head_imaged_as_of) =
-        reader.image_read(head, Some(at), 1, head_extent, false)?;
-    let mut maps = vec![Imaged {
+        reader.image_read(head, positions.changing(), 1, head_extent, false)?;
+    let head_image = Imaged {
         doc: head.clone(),
         own: false,
-        at: Some(at),
+        at: positions.changing(),
         extent: head_extent,
         runs: head_runs,
         as_of: head_as_of.max(head_imaged_as_of),
-    }];
+    };
+    // The base's image: the head's own where the base is the head; at the
+    // document itself its own arrangement, read only where its count is
+    // above 0.
+    let base_image = match (derived, own_count) {
+        (Derived::Member(member), _) if member == *head => head_image.clone(),
+        (Derived::Member(member), _) => reader.imaged(&member, positions.fixed())?,
+        (Derived::Document { .. }, count) => {
+            reader.imaged_own(doc, positions.changing(), count.unwrap_or_default())?
+        }
+    };
+    let base = served;
+    let mut maps = vec![head_image];
     for side in sides {
-        maps.push(reader.imaged(side.address(), Some(at))?);
+        let read_at = match side {
+            Side::Member(m) if !is_trunk_member(doc, m) => positions.fixed(),
+            Side::Member(_) | Side::Draft { .. } | Side::Fork(_) => positions.changing(),
+        };
+        maps.push(reader.imaged(side.address(), read_at)?);
     }
     // Steps 4 and 5: the join and the walk, the values through the sides.
     let base_runs = runs_of(&base_image.runs)?;
@@ -322,7 +582,7 @@ pub(in crate::merge) fn read_shape(
     }
     let fault: RefCell<Option<Refusal>> = RefCell::new(None);
     let values = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
-        match values_for(reader, &maps, Some(side.0 as usize), run) {
+        match values_for(reader, doc, &maps, Some(side.0 as usize), run) {
             Ok(items) => Some(items),
             Err(e) => {
                 fault.borrow_mut().get_or_insert(e);
@@ -333,6 +593,19 @@ pub(in crate::merge) fn read_shape(
     let composed = compose_runs(&base_runs, doc, &side_runs, None, options, &values);
     if let Some(e) = fault.into_inner() {
         return Err(e);
+    }
+    // The closing fences: each side that can change, read again after its
+    // image and its values, must stand as it stood before them.
+    for fenced in &fences {
+        let standing = Standing::of(&fence(reader, &fenced.doc)?.0);
+        if standing != fenced.standing {
+            return Err(Refusal::SideMoved {
+                side: fenced.doc.clone(),
+                at,
+                before: fenced.standing.arranged_at,
+                after: standing.arranged_at,
+            });
+        }
     }
     let families = composed.runs.iter().map(|p| family_of(&p.run.origin, doc, sides)).collect();
     Ok(Readings {
@@ -407,86 +680,73 @@ pub(in crate::merge) fn check_shape(doc: &Address, head: &Address, sides: &[Side
     Ok(last)
 }
 
-/// Reads where the board records a fork side standing: the fork's anchor.
+/// Returns where the board records a fork side standing: the fork's anchor.
 ///
-/// It is the fork's `doc_metadata` `base` where the board records one — a
-/// document another account's `stage` minted: the member or the bare
-/// document it was staged from, or the base it inherited as an alternative,
-/// moved to the head by each landing into it (wire.md §Namespace, `stage`)
-/// — else its `source`, the member or the bare document a `version` minted
-/// it sharing (the fork-source design record, arm A). A recorded base is
-/// where the draft now stands, so it is never passed over for the source
-/// (the owner's ruling of 2026-11-19; skep #1106). Both are read off the
-/// one `doc_metadata` at the one position `at`, and the one taken is the
-/// anchor where it is `doc` itself or a member of its chain (the merge
+/// It is read off the fork's `doc_metadata`, `meta`: the fork's `base`
+/// where the board records one — a document another
+/// account's `stage` minted: the member or the bare document it was staged
+/// from, or the base it inherited as an alternative, moved to the head by
+/// each landing into it (wire.md §Namespace, `stage`) — else its `source`,
+/// the member or the bare document a `version` minted it sharing (the
+/// fork-source design record, arm A). A recorded base is where the draft now
+/// stands, so it is never passed over for the source (the owner's ruling of
+/// 2026-11-19; skep #1106). Both are read off the one `doc_metadata` — at a
+/// composition at the head, the fork's opening fence — and the one taken is
+/// the anchor where it is `doc` itself or a member of its chain (the merge
 /// record's case (j)): the two checks in order — present, of this
 /// document's chain. An anchor that is `doc` itself is a fork taken before
 /// its first version, whose line ends there at once ([`recorded_line`]).
-/// Beside it is the fork's state, the same answer's `arranged_at`, which
-/// the record keeps for the fork side ([`SideAt::Fork`]).
+/// Beside it is the fork's state, the same answer's `arranged_at`, which the
+/// record keeps for the fork side ([`SideAt::Fork`]).
 ///
 /// # Errors
 ///
-/// [`Reader::metadata`]'s errors on the fork — the fork unreadable,
-/// [`Refusal::Unreadable`]; a fork the board records neither a base nor a
-/// source for — one `fork` or `create_new_document` minted — or one whose
-/// recorded base, else source, lies in another document — a staged fork
-/// published as an edition of its own among them, its base moved to that
-/// edition's member — [`Refusal::BaseUnknown`].
+/// A fork the board records neither a base nor a source for — one `fork` or
+/// `create_new_document` minted — or one whose recorded base, else source,
+/// lies in another document — a staged fork published as an edition of its
+/// own among them, its base moved to that edition's member —
+/// [`Refusal::BaseUnknown`].
 ///
 /// [`SideAt::Fork`]: super::record::SideAt::Fork
-fn fork_anchor(
-    reader: &Reader<'_>,
-    doc: &Address,
-    side: &Side,
-    fork: &Address,
-    at: u64,
-) -> Result<(Address, Option<u64>), Refusal> {
-    let meta = reader.metadata(fork, Some(at))?;
-    match meta.base.or(meta.source).as_deref().and_then(parse_address) {
-        Some(anchor) if in_chain(doc, &anchor) => Ok((anchor, meta.arranged_at)),
+fn fork_anchor(doc: &Address, side: &Side, meta: &Metadata) -> Result<Address, Refusal> {
+    match meta.base.as_deref().or(meta.source.as_deref()).and_then(parse_address) {
+        Some(anchor) if in_chain(doc, &anchor) => Ok(anchor),
         _ => Err(Refusal::BaseUnknown(side.clone())),
     }
 }
 
-/// Reads the base the board records for a draft side: the draft's anchor.
+/// Returns the base the board records for a draft side: the draft's anchor.
 ///
-/// It is the draft's `doc_metadata` `base` (wire.md §Namespace, `stage`;
-/// §The response envelope): the member or the bare document the draft was
-/// staged from, moved to the member each publication of the draft itself
-/// minted and never by a merge's shot that names the draft, which keeps it
-/// (`keep_base`; skep #944) — read as [`fork_anchor`] reads a fork's, never
-/// the caller's to know — and it is the draft's anchor where it is `doc`
-/// itself or a member of its chain: the two checks in order — recorded, of
-/// this document's chain. The read is at the one position `at`, as the
-/// draft's image is (wire.md §Reading history): the base that stood when
-/// the draft was read, which a publication of the draft may have moved
-/// since, so a record's side composes against the base its merge composed
-/// against. The merge's base is then derived up the bases recorded from it
-/// ([`recorded_line`]), so a draft staged from a daughter `D.k.m` merges
-/// with the head over `D.k`, the base that daughter was published against,
-/// and one staged from `D` itself, or whose publication landed as version
-/// 1's daughter, over `D`'s own arrangement. Beside it is the draft's
-/// state, the same answer's `arranged_at` ([`SideAt::Draft`]).
+/// It is read off the draft's `doc_metadata`, `meta`: the draft's `base`
+/// (wire.md §Namespace, `stage`; §The response
+/// envelope): the member or the bare document the draft was staged from,
+/// moved to the member each publication of the draft itself minted and never
+/// by a merge's shot that names the draft, which keeps it (`keep_base`; skep
+/// #944) — read as [`fork_anchor`] reads a fork's, never the caller's to
+/// know — and it is the draft's anchor where it is `doc` itself or a member
+/// of its chain: the two checks in order — recorded, of this document's
+/// chain. It is read where the draft's image is (wire.md §Reading history):
+/// at a composition at the head, the draft's opening fence, which its
+/// closing fence holds the draft to; as of a position, the base that stood
+/// there, which a publication of the draft may have moved since, so a
+/// record's side composes against the base its merge composed against. The
+/// merge's base is then derived up the bases recorded from it
+/// ([`recorded_line`]), so a draft staged from a daughter `D.k.m` merges with
+/// the head over `D.k`, the base that daughter was published against, and
+/// one staged from `D` itself, or whose publication landed as version 1's
+/// daughter, over `D`'s own arrangement. Beside it is the draft's state, the
+/// same answer's `arranged_at` ([`SideAt::Draft`]).
 ///
 /// # Errors
 ///
-/// [`Reader::metadata`]'s errors on the draft — the draft unreadable,
-/// [`Refusal::Unreadable`]; a draft the board records no base for — never
-/// staged, or minted by `fork` or `create_new_document` — or one whose
-/// recorded base lies in another document, [`Refusal::BaseUnknown`].
+/// A draft the board records no base for — never staged, or minted by
+/// `fork` or `create_new_document` — or one whose recorded base lies in
+/// another document, [`Refusal::BaseUnknown`].
 ///
 /// [`SideAt::Draft`]: super::record::SideAt::Draft
-fn draft_base(
-    reader: &Reader<'_>,
-    doc: &Address,
-    side: &Side,
-    draft: &Address,
-    at: u64,
-) -> Result<(Address, Option<u64>), Refusal> {
-    let meta = reader.metadata(draft, Some(at))?;
+fn draft_base(doc: &Address, side: &Side, meta: &Metadata) -> Result<Address, Refusal> {
     match meta.base.as_deref().and_then(parse_address) {
-        Some(base) if in_chain(doc, &base) => Ok((base, meta.arranged_at)),
+        Some(base) if in_chain(doc, &base) => Ok(base),
         _ => Err(Refusal::BaseUnknown(side.clone())),
     }
 }
@@ -509,13 +769,14 @@ enum LineEnd {
 ///
 /// `anchor` is the side's own address for a member; a fork's recorded base,
 /// else its source; a draft's recorded base. Each hop below the trunk is
-/// read at the one position `at`, its recorded parent the hop's
-/// `doc_metadata` `shot_base` — the base its shot was made against (wire.md
-/// §The response envelope, the shot terms) — else its `source`, the member
-/// an owned `version` snapshotted into it. The line ends at `doc` itself,
-/// or at a trunk member with nothing read: a trunk member `D.k+1` was
-/// minted against `D.k`, a shot naming the head landing on the trunk and
-/// one naming another base landing as that base's daughter
+/// read at the head, or as of `at` where a verification reads, its recorded
+/// parent the hop's `doc_metadata` `shot_base` — the base its shot was made
+/// against (wire.md §The response envelope, the shot terms) — else its
+/// `source`, the member an owned `version` snapshotted into it: a hop is a
+/// published member, whose recorded parent never changes. The line ends at
+/// `doc` itself, or at a trunk member with nothing read: a trunk member
+/// `D.k+1` was minted against `D.k`, a shot naming the head landing on the
+/// trunk and one naming another base landing as that base's daughter
 /// (`skep-arrangement`'s `shot_admission`), so on the trunk the address is
 /// the record. A recorded parent is the hop's address parent, or `doc`
 /// itself for a hop under `doc`'s first member — a shot naming the bare
@@ -535,7 +796,7 @@ fn recorded_line(
     doc: &Address,
     side: &Side,
     anchor: &Address,
-    at: u64,
+    at: Option<u64>,
 ) -> Result<LineEnd, Refusal> {
     let mut hop = anchor.clone();
     let mut bare_hop = None;
@@ -546,7 +807,7 @@ fn recorded_line(
         if is_trunk_member(doc, &hop) {
             return Ok(LineEnd::Trunk(hop));
         }
-        let meta = reader.metadata(&hop, Some(at))?;
+        let meta = reader.metadata(&hop, at)?;
         let Some(recorded) = meta.shot_base.or(meta.source) else {
             return Err(Refusal::HopUnrecorded { side: side.clone(), hop });
         };

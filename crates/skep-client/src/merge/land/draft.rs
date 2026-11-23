@@ -78,8 +78,8 @@ impl Writer<'_> {
     /// typed against `as_of` — the merge's one position for a draft named, the
     /// stage's position for a fresh one — with the head the merge composed on
     /// and its extent as read, the same pair as the base to record where the
-    /// draft's `doc_metadata`, read at `as_of`, records a base, and the merge's
-    /// sides but the draft itself; its id `<stem>.draft`, `stem` the [`Stem`]
+    /// draft's `doc_metadata`, read as it stands, records a base, and the
+    /// merge's sides but the draft itself; its id `<stem>.draft`, `stem` the [`Stem`]
     /// over the key, the draft, `as_of` and, for a draft named, the record the
     /// landing follows, which the board answers again in the same session for
     /// the same landing. It is sent where the draft already holds M too, so the
@@ -96,9 +96,11 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
-    /// The draft's reads' refusals — the feed walk's, with `shoot` off, on a
-    /// draft with no recorded base ([`Writer::marked_landing`]), and a draft
-    /// that did not exist at `as_of`, faced, naming the way out; the
+    /// The draft's reads' refusals — its `doc_metadata`, read as it stands,
+    /// [`Refusal::NoSuchDocument`] naming the draft where the board does not
+    /// register it, the feed walk's, with `shoot` off, on a draft with no
+    /// recorded base ([`Writer::marked_landing`]) — and a draft minted after
+    /// `as_of`, faced, naming the way out; the
     /// board's `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
     /// `Refused` re-said in [`Writer::moved_words`]'s words — this merge's
     /// own landing named where it moved the draft after `as_of`, else the
@@ -113,7 +115,7 @@ impl Writer<'_> {
     /// [`Refusal::NeedsSignedSession`];
     /// [`Refusal::NoSuchDocument`] naming the draft; a run with no address
     /// and the board's refusal of the frame's substance — the head and the
-    /// extent the merge read and the base the draft records at `as_of`
+    /// extent the merge read and the base the draft records as it stands
     /// (`source_not_registered`, `no_base_to_record`,
     /// `base_extent_too_large`), a run's origin (`source_not_registered`,
     /// `bad_run`, `dangling_source`, `too_many_runs`), the draft's standing
@@ -142,20 +144,19 @@ impl Writer<'_> {
         }
         let target: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
         // The base to record: the head's pair, only where the board records
-        // a base for the draft at the position the write is typed against
-        // (N4) — a baseless draft and a fork get none.
-        let meta = match self.reader.metadata(into, Some(as_of)) {
-            Ok(meta) => meta,
-            Err(Refusal::NoSuchDocument(_)) => {
-                return Err(Halt::face(
-                    format!("{into} did not exist at position {as_of}, the position this merge was composed at"),
-                    "the merge reads every draft it uses at one board position and types its landing against it, so the draft it lands into must stand there: a draft minted after the composition changed after it",
-                    "run the merge again naming the draft, or land it in a fresh draft (`into` none; the command's --new)",
-                )
-                .into())
-            }
-            Err(e) => return Err(e),
-        };
+        // a base for the draft as it stands (N4) — a baseless draft and a
+        // fork get none. The board judges the base at the commit after
+        // `arrangement_moved`, so a draft changed since `as_of` is refused
+        // for its change.
+        let meta = self.reader.metadata(into, None)?;
+        if meta.at.is_some_and(|minted| minted > as_of) {
+            return Err(Halt::face(
+                format!("{into} did not exist at position {as_of}, the position this merge was composed at"),
+                "the merge stands at one board position and types its landing against it, so the draft it lands into must stand there: a draft minted after the composition changed after it",
+                "run the merge again naming the draft, or land it in a fresh draft (`into` none; the command's --new)",
+            )
+            .into());
+        }
         let head_text = head.to_string();
         let pair = Some((head_text.as_str(), merged.head_extent));
         let base = if meta.base.is_some() { pair } else { None };
@@ -240,8 +241,8 @@ impl Writer<'_> {
             "base_not_in_chain" => Refusal::BaseNotInChain { into: into.clone(), head: head.clone() },
             // The head and its extent are the merge's own reads — a member
             // registered for good, whose count never falls (PUB-2.43) — the
-            // base is sent only where the draft records one at the position
-            // the write is typed against, and every run was composed from
+            // base is sent only where the draft records one as it stands, a
+            // recorded base never cleared, and every run was composed from
             // the merge's images: a refusal of them is its own fault.
             "no_base_to_record"
             | "base_extent_too_large"

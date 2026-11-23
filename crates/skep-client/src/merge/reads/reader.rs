@@ -1,10 +1,15 @@
 //! The door of the merge's reads: the [`Reader`] and a session's end.
 //!
 //! A [`Reader`] reads at the head or as of one position, under the caller's
-//! token or as a guest, and keeps the highest `as_of` its answers carry; a
-//! death signal met under the token is answered by [`session_ended`], faced
-//! for the act's [`OnEnd`]. Which reads a merge makes, in which order and
-//! at which position, is the `reads` module's doc.
+//! token or as a guest, and keeps the highest `as_of` its answers carry. It
+//! reads values at the head alone, many stretches a read: a member's by its
+//! V-ordinals ([`Reader::values_by_ordinal`]), and words a draft or a fork
+//! held by the I-addresses its image served ([`Reader::values_by_identity`]),
+//! each read sized to the board's budgets and the dialer's answer cap and
+//! halved where the board or the dialer refuses its size. A death signal met
+//! under the token is answered by [`session_ended`], faced for the act's
+//! [`OnEnd`]. Which reads a merge makes, in which order and at which
+//! position, is the `reads` module's doc.
 
 use std::cell::Cell;
 use std::thread;
@@ -16,8 +21,10 @@ use skep_address::Address;
 use crate::address::parse_address;
 use crate::board::answers::{self, IRun, Metadata};
 use crate::board::{frames, guest_closed, Answer, AtAnswer, Board, Image, Rejection, Token};
+use crate::dial::{DialError, MAX_ANSWER_BYTES};
 use crate::halt::Halt;
 use crate::merge::compose::Item;
+use crate::publication::MAX_WIRE_LIST;
 
 use super::refusal::Refusal;
 use super::{HISTORY_BUSY_RETRIES, MAX_DELIVERY_ITEMS};
@@ -45,9 +52,12 @@ pub(crate) struct Imaged {
     pub(in crate::merge) own: bool,
     /// The position the document was read at; `None` the head.
     ///
-    /// Every image a shape's reads make carries the one position P (the `reads`
-    /// module's doc), the head's included, so the values read through it are
-    /// read at P too; `None` is a landing's own read of a draft as it stands.
+    /// A composition images at the head, but for a draft side named at a
+    /// position, which it reads with every side that can change as of that
+    /// position; a verification images as of the position its record names
+    /// (the `reads` module's doc). No value is read at it: values are read at
+    /// the head, a member's by the V-ordinals the image holds them at and a
+    /// draft's or a fork's by the I-addresses the image served.
     pub(in crate::merge) at: Option<u64>,
     /// The content extent.
     pub(crate) extent: u64,
@@ -235,8 +245,10 @@ impl<'a> Reader<'a> {
     /// Reads `doc_metadata(doc)` as [`Reader::metadata`] does, with the
     /// answer's `as_of` beside it.
     ///
-    /// It is the shape's first read, whose `as_of` is the one position every
-    /// later read is made at where no side names one.
+    /// It is a read whose `as_of` fixes a position for the reads after it: a
+    /// verification's first, where its record names no position (the `reads`
+    /// module's doc), and a draft's own at the head, which a restore or a
+    /// take-back types its write against.
     ///
     /// # Errors
     ///
@@ -374,26 +386,47 @@ impl<'a> Reader<'a> {
         })
     }
 
-    /// Reads `doc`'s own arrangement as of `at`, its `count` positions
-    /// whole: the arrangement a published document held before its first
-    /// version, which `image` with `own` answers (PUB-2.66).
+    /// Reads `doc`'s own arrangement whole, at the head or as of `at`.
     ///
-    /// `count` is the `own_count` the trunk's `doc_metadata` served at `at`;
-    /// at 0 nothing is read and the image is empty. The image is whole or
-    /// in parts as [`Reader::image`] reads one.
+    /// It is the arrangement a published document held before its first
+    /// version, which `image` with `own` answers (PUB-2.66), its `count`
+    /// positions. `count` is the `own_count` the trunk's `doc_metadata` served where
+    /// this read is made; at 0 nothing is read and the image is empty. The
+    /// image is whole or in parts as [`Reader::image`] reads one.
     ///
     /// # Errors
     ///
     /// [`Reader::image_read`]'s errors.
-    pub(super) fn imaged_own(&self, doc: &Address, at: u64, count: u64) -> Result<Imaged, Refusal> {
-        let (runs, as_of) = self.image_read(doc, Some(at), 1, count, true)?;
-        Ok(Imaged { doc: doc.clone(), own: true, at: Some(at), extent: count, runs, as_of })
+    pub(super) fn imaged_own(&self, doc: &Address, at: Option<u64>, count: u64) -> Result<Imaged, Refusal> {
+        let (runs, as_of) = self.image_read(doc, at, 1, count, true)?;
+        Ok(Imaged { doc: doc.clone(), own: true, at, extent: count, runs, as_of })
     }
 
-    /// Reads the values at content ordinals `from ..` of `doc`.
+    /// Reads the values at content ordinals `from ..` of `doc`, at the head.
     ///
-    /// The values are `width` of them, one item a position — `retrieve_v` in
-    /// parts past the delivery budget and on `too_many_items`.
+    /// They are `width` of them, one item a position, read as
+    /// [`Reader::values_by_ordinal`] reads one span.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reader::values_by_ordinal`]'s.
+    pub(in crate::merge) fn values(&self, doc: &Address, from: u64, width: u64) -> Result<Vec<Item>, Refusal> {
+        Ok(self.values_by_ordinal(doc, &[(from, width)])?.pop().unwrap_or_default())
+    }
+
+    /// Reads the values of `doc`'s V-spans at the head, one list a span.
+    ///
+    /// Each span is `(from, width)`, its list one item a position. The
+    /// spans go out in as few `retrieve_v` reads as the budgets allow,
+    /// one spec a span (wire.md §Content & provenance reads): a read holds
+    /// at most [`MAX_DELIVERY_ITEMS`] positions and `MAX_WIRE_LIST` specs, a
+    /// span past what one has room for going on in the next. A read refused
+    /// `too_many_items`, or whose answer passes the dialer's cap — a
+    /// composite value's item is as long as the value — is asked again in
+    /// halves, its specs split, then one spec's width (§8). A member's
+    /// V-ordinals hold the same I-addresses at every position the merge
+    /// reads it at — a version never changes, and the head only gains
+    /// deposits past its extent — so the read needs no past position.
     ///
     /// # Errors
     ///
@@ -404,73 +437,266 @@ impl<'a> Reader<'a> {
     /// reads a side's own. A delivery holding another item no value can be
     /// spelled from — a reference, a hex that does not decode, a kind this
     /// client does not know — is faced, as is one short of, or past, the
-    /// span asked; another refusal is mapped by [`Reader::refuse`];
+    /// positions asked; one position still refused `too_many_items` is the
+    /// board's refusal verbatim, and one whose answer still passes the cap
+    /// the dialer's halt; another refusal is mapped by [`Reader::refuse`];
     /// otherwise [`Reader::read`]'s errors.
-    pub(in crate::merge) fn values(
-        &self,
-        doc: &Address,
-        at: Option<u64>,
-        from: u64,
-        width: u64,
-    ) -> Result<Vec<Item>, Refusal> {
-        let mut out = Vec::new();
-        let mut cursor = from;
-        let end = from.saturating_add(width);
-        while cursor < end {
-            let part = MAX_DELIVERY_ITEMS.min(end - cursor);
-            cursor += self.values_part(doc, at, cursor, part, &mut out)?;
-        }
-        Ok(out)
+    pub(in crate::merge) fn values_by_ordinal(&self, doc: &Address, spans: &[(u64, u64)]) -> Result<Vec<Vec<Item>>, Refusal> {
+        let text = doc.to_string();
+        let widths: Vec<u64> = spans.iter().map(|s| s.1).collect();
+        self.read_values(&widths, |_| 0, |part| {
+            let specs: Vec<(u64, u64)> = part.iter().map(|a| (spans[a.span].0 + a.into, a.width)).collect();
+            let from = specs.first().map_or(0, |s| s.0);
+            let v = match self.read(&frames::retrieve_v_of(&text, &specs), None) {
+                Err(e @ Refusal::Halt(Halt::Dial(DialError::TooLarge { .. }))) => return Ok(Delivered::TooLarge(e)),
+                other => other?,
+            };
+            if let Some(r) = Rejection::of(&v) {
+                let refusal = self.refuse(doc, &r, &v);
+                return if r.key() == "too_many_items" { Ok(Delivered::TooLarge(refusal)) } else { Err(refusal) };
+            }
+            let Some(items) = answers::delivery_values(&v) else {
+                // A run of `doc` whose origin the reader may not read, masked
+                // at its own position: `doc` stays readable, its origin does
+                // not.
+                if let Some(origin) = answers::withheld_origin(&v).and_then(parse_address) {
+                    return Err(Refusal::Unreadable(origin));
+                }
+                return Err(Halt::face(
+                    format!("a position of {doc} cannot be read as a value"),
+                    format!("the delivery from {from} holds an item no value is spelled from — a reference, a hex that does not decode, or a kind this client does not know: {}", crate::halt::clipped(&v.to_string(), 200)),
+                    "this is a board fault, or an item kind newer than this client — update the client where the kind is new; nothing was written",
+                )
+                .into());
+            };
+            Ok(Delivered::Values(items))
+        })
+        .map_err(|fault| fault.faced(doc))
     }
 
-    /// Reads one part of [`Reader::values`], answering the positions delivered.
+    /// Reads the values at the I-addresses spans name, at the head.
     ///
-    /// A `too_many_items` halves the part.
+    /// Each span `(prefix, first, width)` is `width` positions from
+    /// `<prefix>.<first>`, words `holder`'s image served, and its list is
+    /// one item a position. It is the read by identity, `retrieve_i` (wire.md §Content &
+    /// provenance reads): a value at an I-address is written once, so what a
+    /// draft or a fork held is read as it was minted, whatever the side has
+    /// become since. The spans go out in as few reads as the budgets allow —
+    /// each at most [`MAX_DELIVERY_ITEMS`] positions and `MAX_WIRE_LIST`
+    /// spans, and no more positions than the dialer's answer cap holds at the
+    /// room one takes beside its address ([`frames::I_ITEM_ROOM`]) — and a
+    /// read refused `too_many_items`, or whose answer still passes the cap,
+    /// is asked again in halves as [`Reader::values_by_ordinal`] asks one.
     ///
     /// # Errors
     ///
-    /// As [`Reader::values`]'s.
-    fn values_part(
-        &self,
-        doc: &Address,
-        at: Option<u64>,
-        from: u64,
-        width: u64,
-        out: &mut Vec<Item>,
-    ) -> Result<u64, Refusal> {
-        let v = self.read(&frames::retrieve_v(&doc.to_string(), from, width), at)?;
-        if let Some(r) = Rejection::of(&v) {
-            if r.key() == "too_many_items" && width > 1 {
-                let left = width / 2;
-                let read = self.values_part(doc, at, from, left, out)?;
-                return Ok(read + self.values_part(doc, at, from + left, width - left, out)?);
-            }
-            return Err(self.refuse(doc, &r, &v));
-        }
-        let Some(items) = answers::delivery_values(&v) else {
-            // A run of `doc` whose origin the reader may not read, masked at
-            // its own position: `doc` stays readable, its origin does not.
-            if let Some(origin) = answers::withheld_origin(&v).and_then(parse_address) {
-                return Err(Refusal::Unreadable(origin));
-            }
-            return Err(Halt::face(
-                format!("a position of {doc} cannot be read as a value"),
-                format!("the delivery at {from} holds an item no value is spelled from — a reference, a hex that does not decode, or a kind this client does not know: {}", crate::halt::clipped(&v.to_string(), 200)),
-                "this is a board fault, or an item kind newer than this client — update the client where the kind is new; nothing was written",
-            )
-            .into());
+    /// `withheld` naming the document a span lies in, [`Refusal::Unreadable`]
+    /// naming it, and another refusal, mapped by [`Reader::refuse`] with
+    /// `holder` where the board names none; an item `null` — no value at an
+    /// address an image served — or one no value is spelled from, and an
+    /// answer short of, or past, the positions asked, faced; one position
+    /// still refused as [`Reader::values_by_ordinal`]'s is; otherwise
+    /// [`Reader::read`]'s errors.
+    pub(in crate::merge) fn values_by_identity(&self, holder: &Address, spans: &[(&str, u64, u64)]) -> Result<Vec<Vec<Item>>, Refusal> {
+        let widths: Vec<u64> = spans.iter().map(|s| s.2).collect();
+        let room = |span: usize| {
+            let (prefix, first, width) = spans[span];
+            (frames::I_ITEM_ROOM + prefix.len() + ".".len() + first.saturating_add(width).to_string().len()) as u64
         };
-        if items.len() as u64 != width {
-            return Err(Halt::face(
-                format!("{doc} delivered {} positions where {width} were asked", items.len()),
-                format!("the delivery at {from} is short of, or past, the span asked"),
+        self.read_values(&widths, room, |part| {
+            let starts: Vec<String> = part.iter().map(|a| format!("{}.{}", spans[a.span].0, spans[a.span].1 + a.into)).collect();
+            let list: Vec<(&str, u64)> = starts.iter().zip(part).map(|(start, a)| (start.as_str(), a.width)).collect();
+            let v = match self.read(&frames::retrieve_i(&list), None) {
+                Err(e @ Refusal::Halt(Halt::Dial(DialError::TooLarge { .. }))) => return Ok(Delivered::TooLarge(e)),
+                other => other?,
+            };
+            if let Some(r) = Rejection::of(&v) {
+                let refusal = self.refuse(holder, &r, &v);
+                return if r.key() == "too_many_items" { Ok(Delivered::TooLarge(refusal)) } else { Err(refusal) };
+            }
+            let Some(items) = answers::i_delivery_values(&v) else {
+                return Err(Halt::face(
+                    format!("a word {holder} held cannot be read as a value"),
+                    format!("the read by identity from {} holds an item no value is spelled from — a hex that does not decode, a per-byte item of another length than one byte, or a kind this client does not know: {}", starts.first().map_or("", String::as_str), crate::halt::clipped(&v.to_string(), 200)),
+                    "this is a board fault, or an item kind newer than this client — update the client where the kind is new; nothing was written",
+                )
+                .into());
+            };
+            // An address the image served names a minted word: the board
+            // holds a value at every one.
+            if let Some(k) = items.iter().position(Option::is_none) {
+                let at = address_at(spans, part, k);
+                return Err(Halt::face(
+                    format!("the board holds no value at {at}"),
+                    format!("{at} is a word {holder}'s image arranged, and the read by identity answered `null` there — a position never minted"),
+                    "this is a board fault; nothing was written",
+                )
+                .into());
+            }
+            Ok(Delivered::Values(items.into_iter().flatten().collect()))
+        })
+        .map_err(|fault| fault.faced(holder))
+    }
+
+    /// Reads the values of spans of `widths`, one list a span.
+    ///
+    /// They are read in the parts [`parts`] plans at `room` bytes a position
+    /// of each span, each part read by `read`, which answers its values in
+    /// order or that the part is too large — asked again in halves, its
+    /// stretches split, then one stretch's width, down to one position,
+    /// whose refusal is the read's.
+    ///
+    /// # Errors
+    ///
+    /// `read`'s; a part whose values are not as many as its positions, as
+    /// [`ValueFault::Count`].
+    fn read_values(
+        &self,
+        widths: &[u64],
+        room: impl Fn(usize) -> u64,
+        read: impl Fn(&[Asking]) -> Result<Delivered, Refusal>,
+    ) -> Result<Vec<Vec<Item>>, ValueFault> {
+        let mut out: Vec<Vec<Item>> = widths.iter().map(|w| Vec::with_capacity(*w as usize)).collect();
+        for part in parts(widths, room) {
+            ask(&part, &read, &mut out)?;
+        }
+        Ok(out)
+    }
+}
+
+/// What one value read answered.
+///
+/// It is its values in order, or a part too large to be read whole, with
+/// the refusal a part of one position answers.
+enum Delivered {
+    /// One value a position, in the order asked.
+    Values(Vec<Item>),
+    /// `too_many_items`, or an answer past the dialer's cap.
+    TooLarge(Refusal),
+}
+
+/// A value read's fault: the read's refusal, or the answer's count.
+enum ValueFault {
+    /// The read's own refusal.
+    Refused(Refusal),
+    /// A delivery of `got` values where `asked` positions were asked.
+    Count {
+        /// The positions asked.
+        asked: u64,
+        /// The values delivered.
+        got: usize,
+    },
+}
+
+impl From<Refusal> for ValueFault {
+    fn from(r: Refusal) -> ValueFault {
+        ValueFault::Refused(r)
+    }
+}
+
+impl ValueFault {
+    /// Returns the refusal a read of `doc`'s values answers for this fault.
+    fn faced(self, doc: &Address) -> Refusal {
+        match self {
+            ValueFault::Refused(r) => r,
+            ValueFault::Count { asked, got } => Halt::face(
+                format!("{doc} delivered {got} positions where {asked} were asked"),
+                "a value read delivers one value a position asked, in the order asked",
                 "this is a board fault; nothing was written",
             )
-            .into());
+            .into(),
         }
-        out.extend(items);
-        Ok(width)
     }
+}
+
+/// One stretch a value read asks.
+///
+/// It is `width` positions of the span `span`, from `into` positions into
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Asking {
+    span: usize,
+    into: u64,
+    width: u64,
+}
+
+/// Returns the parts spans of `widths` are read in, in order.
+///
+/// A part holds at most [`MAX_DELIVERY_ITEMS`] positions and
+/// `MAX_WIRE_LIST` stretches, and its answer at most the dialer's cap
+/// ([`MAX_ANSWER_BYTES`]) at `room(k)` bytes a position of span `k`, beside
+/// an `i_delivery`'s envelope ([`frames::I_DELIVERY_ENVELOPE`]) — a room of
+/// 0 bounds nothing; a span past what a part has room for goes on in the
+/// next. A part holds one position at least, whatever its room.
+fn parts(widths: &[u64], room: impl Fn(usize) -> u64) -> Vec<Vec<Asking>> {
+    let budget = MAX_ANSWER_BYTES.saturating_sub(frames::I_DELIVERY_ENVELOPE) as u64;
+    let (mut out, mut part, mut positions, mut bytes) = (Vec::new(), Vec::new(), 0u64, 0u64);
+    for (span, &width) in widths.iter().enumerate() {
+        let room = room(span);
+        let mut into = 0u64;
+        while into < width {
+            let by_bytes = budget.saturating_sub(bytes).checked_div(room).unwrap_or(u64::MAX);
+            let fits = (MAX_DELIVERY_ITEMS - positions).min(by_bytes);
+            if part.len() == MAX_WIRE_LIST || (fits == 0 && !part.is_empty()) {
+                out.push(std::mem::take(&mut part));
+                (positions, bytes) = (0, 0);
+                continue;
+            }
+            let width = fits.max(1).min(width - into);
+            part.push(Asking { span, into, width });
+            (positions, bytes, into) = (positions + width, bytes.saturating_add(width.saturating_mul(room)), into + width);
+        }
+    }
+    if !part.is_empty() {
+        out.push(part);
+    }
+    out
+}
+
+/// Reads one part, halving it where it is too large.
+///
+/// Each stretch's values are appended to its span's list in `out`.
+fn ask(part: &[Asking], read: &impl Fn(&[Asking]) -> Result<Delivered, Refusal>, out: &mut [Vec<Item>]) -> Result<(), ValueFault> {
+    match read(part)? {
+        Delivered::Values(items) => {
+            let asked: u64 = part.iter().map(|a| a.width).sum();
+            if items.len() as u64 != asked {
+                return Err(ValueFault::Count { asked, got: items.len() });
+            }
+            let mut items = items.into_iter();
+            for a in part {
+                out[a.span].extend(items.by_ref().take(a.width as usize));
+            }
+            Ok(())
+        }
+        Delivered::TooLarge(refusal) => match part {
+            [] => Ok(()),
+            [one] if one.width <= 1 => Err(refusal.into()),
+            [one] => {
+                let left = one.width / 2;
+                ask(&[Asking { width: left, ..*one }], read, out)?;
+                ask(&[Asking { into: one.into + left, width: one.width - left, ..*one }], read, out)
+            }
+            _ => {
+                let (left, right) = part.split_at(part.len() / 2);
+                ask(left, read, out)?;
+                ask(right, read, out)
+            }
+        },
+    }
+}
+
+/// Returns the I-address of the `k`-th position `part` asks of `spans`.
+fn address_at(spans: &[(&str, u64, u64)], part: &[Asking], k: usize) -> String {
+    let mut k = k as u64;
+    for a in part {
+        let (prefix, first, _) = spans[a.span];
+        if k < a.width {
+            return format!("{prefix}.{}", first + a.into + k);
+        }
+        k -= a.width;
+    }
+    String::new()
 }
 
 /// What a session's end leaves of the act it stopped: the way on the face
@@ -556,4 +782,57 @@ pub(crate) fn shape(op: &str, v: &Value) -> Halt {
         crate::halt::clipped(&v.to_string(), 200).to_string(),
         "this board is not speaking the wire this client expects; nothing was written",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asserts `parts` ask every position of each span of `widths` once, in
+    /// order.
+    fn asks_each_position_once(parts: &[Vec<Asking>], widths: &[u64]) {
+        let mut next = vec![0u64; widths.len()];
+        for asking in parts.iter().flatten() {
+            assert_eq!(asking.into, next[asking.span], "{asking:?}");
+            next[asking.span] += asking.width;
+        }
+        assert_eq!(next, widths);
+    }
+
+    /// The positions each part asks.
+    fn positions(parts: &[Vec<Asking>]) -> Vec<u64> {
+        parts.iter().map(|part| part.iter().map(|a| a.width).sum()).collect()
+    }
+
+    /// A value read's parts keep every budget, and ask every position once.
+    ///
+    /// A part holds at most the delivery budget's positions and a wire
+    /// list's stretches, and no more positions than the dialer's answer cap
+    /// holds at their room beside the envelope; a span past what a part has
+    /// room for goes on in the next, in order; a room of 0 bounds nothing
+    /// but the two counts, and a part holds one position whatever its room
+    /// (the mutant that sizes a read by its positions alone asks answers
+    /// past the dialer's cap; the one that drops the floor of one position
+    /// loops on a room past the cap).
+    #[test]
+    fn a_value_reads_parts_keep_every_budget_and_ask_every_position_once() {
+        let widths = [MAX_DELIVERY_ITEMS + 1];
+        let planned = parts(&widths, |_| 0);
+        assert_eq!(positions(&planned), [MAX_DELIVERY_ITEMS, 1], "the delivery budget's positions, then the rest");
+        asks_each_position_once(&planned, &widths);
+        let widths = vec![1u64; MAX_WIRE_LIST + 1];
+        let planned = parts(&widths, |_| 0);
+        assert_eq!(planned.iter().map(Vec::len).collect::<Vec<_>>(), [MAX_WIRE_LIST, 1], "a wire list's stretches, then the rest");
+        asks_each_position_once(&planned, &widths);
+        let budget = (MAX_ANSWER_BYTES - frames::I_DELIVERY_ENVELOPE) as u64;
+        let widths = [budget / 100 + 1, 3];
+        let planned = parts(&widths, |_| 100);
+        assert_eq!(positions(&planned), [budget / 100, 4], "as many positions of 100 bytes as the cap holds, then the rest with the next span");
+        asks_each_position_once(&planned, &widths);
+        let widths = [2u64];
+        let planned = parts(&widths, |_| budget + 1);
+        assert_eq!(positions(&planned), [1, 1], "one position a part, whatever its room");
+        asks_each_position_once(&planned, &widths);
+        assert!(parts(&[], |_| 0).is_empty() && parts(&[0, 0], |_| 0).is_empty(), "nothing to read, no part");
+    }
 }

@@ -99,8 +99,8 @@ use skep_identity::{
 use skep_signature::HybridSigner;
 
 use crate::common::{
-    bare, board, claim, insert_text, keyed_sub_account, keygen, mint, spawn, typed_at,
-    wire_delegate, wire_session,
+    bare, board, claim, insert_text, keyed_sub_account, keygen, mint, recording_board, spawn,
+    typed_at, wire_delegate, wire_session,
 };
 
 /// The claimant's account and principal on a notebook.
@@ -1438,7 +1438,7 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     };
     let arranged = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()))["arranged_at"].as_u64().expect("the draft's last arrangement");
     let merged = compose(&board, Some(&token), &inputs).expect("composed");
-    assert_eq!(merged.as_of, before, "the one position every read was made at");
+    assert_eq!(merged.as_of, before, "the one position the composition stands at: its fences', on a quiet board");
     assert_eq!(merged.record.sides[1], SideAt::Draft { at: draft.clone(), position: Some(before), arranged: SideState::At(arranged) }, "the draft's state as composed");
     assert_eq!(merged.head_extent, 15);
     // ANOTHER HAND's edit after the composition: the landing is refused
@@ -2767,5 +2767,47 @@ fn a_documents_own_arrangement_is_read_with_own_and_merged_over() {
     assert_eq!(read(&board, Some(&token), &frames::retrieve_v(&member.to_string(), 1, 4))["items"][0]["content"], "abcw", "the head's removal of `z` stands");
     let record = current(&board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
     assert_eq!(verify(&board, Some(&token), &record).expect("verified"), Verdict::Equal);
+    session.close().expect("close");
+}
+
+/// A COMPOSITION AND ITS LANDINGS DIAL NO `/op-at` (skep #1144; the
+/// owner's ruling of 2026-11-22): against the board itself, a draft side
+/// composed and landed by a shot — the draft's words read by the addresses
+/// its image served (`retrieve_i`), the head's by its V-ordinals — then a
+/// second draft staged from the version that shot minted, composed and
+/// landed in that draft, dial nothing through `/op-at` from the first read
+/// to the last record: every read at the head, the sides that can change
+/// fenced, and no past state rebuilt.
+#[test]
+fn a_composition_and_its_landings_dial_no_op_at() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let w = draft_shot(
+        dir.path(),
+        "the cat sat",
+        &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+    );
+    insert_text(&w.board, &w.bare_token, &w.draft.to_string(), 12, "!!!");
+    let (rb, log) = recording_board(w.board.dialed().clone());
+    let session = handshake(&rb, Scope::Content, &w.device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let merger = Merger { token: session.token(), account: session.account(), signer: &w.device };
+    log.lock().expect("log").clear();
+    let merged = compose(&rb, Some(&token), &w.inputs()).expect("composed");
+    let landed = land(&rb, &merged, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None })
+        .expect("landed by a shot");
+    let Landed::Member { address: v3, .. } = &landed else { panic!("{landed:?}") };
+    assert_eq!(v3.to_string(), format!("{}.3", w.d), "the trunk's next version");
+    // A second draft, staged from the new head, a word typed at its start.
+    let staged = acked(rb.op(Some(&w.bare_token), &frames::stage(&v3.to_string(), None)));
+    let second = addr(acked_addr(&staged).expect("the staged draft's address"));
+    insert_text(&rb, &w.bare_token, &second.to_string(), 1, "?");
+    let inputs = Inputs { head: v3.clone(), sides: vec![Side::Draft { at: second.clone(), position: None }], ..w.inputs() };
+    let again = compose(&rb, Some(&token), &inputs).expect("composed over the new head");
+    land(&rb, &again, Landing::Draft { merger, into: Some(second), journal: None }).expect("landed in the draft");
+    let dialed = log.lock().expect("log").clone();
+    assert!(dialed.iter().all(|line| !line.starts_with("POST /op-at")), "nothing dialed at a position: {dialed:?}");
+    for read in ["POST /op retrieve_v", "POST /op retrieve_i"] {
+        assert!(dialed.iter().any(|line| line == read), "the shot's values, {read}: {dialed:?}");
+    }
     session.close().expect("close");
 }

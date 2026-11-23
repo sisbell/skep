@@ -55,17 +55,19 @@
 //! holds as a window ([`AnsweredRun::takes_a_place`]); the trunk's words, a
 //! plain window and a part kept private take none, as the board refuses a
 //! place beside them (`stray_place_unrecorded`). The places are read off the
-//! draft's own image at the composition's one position, never another
-//! side's, so M's coalescing is undone where the draft cuts a run: one run of
+//! draft's own image as the composition read it — at the head inside its
+//! fences, or as of the draft's named position — never another side's, so
+//! M's coalescing is undone where the draft cuts a run: one run of
 //! M the draft holds at two places goes out as two, each at its own place,
 //! and no place is named twice. What the draft does not arrange takes none.
 //!
 //! **What the base carries** ([`carried`]; PUB-6.24). The board's source
 //! gate consults no origin for a run the shot's base already arranges, so
 //! the words a `withheld` at the shot refuses ([`Refusal::WindowWithheld`])
-//! are never such a run's: the head's image, read at the composition's one
-//! position, is judged as the board judges the base, its runs on one chain
-//! joined where they overlap or abut.
+//! are never such a run's: the head's image, as the composition read it —
+//! at the head inside its fences, or as of the draft's named position — is
+//! judged as the board judges the base, its runs on one chain joined where
+//! they overlap or abut.
 //!
 //! **The twins** (PUB-3.9, the twin fence; wire.md §The publish shot and
 //! head-float; the link-sets design §5.5, §5.7). A draft side's word a
@@ -830,8 +832,8 @@ fn sides_showing(merged: &Merged, span: &ISpan) -> Vec<Address> {
 /// The read's refusals but `withheld`, which answers `None`.
 fn first_words(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, reading: &Run, ordinal: u64) -> Result<Option<String>, Refusal> {
     let items = match source {
-        Source::Merged => values_for(&writer.reader, &merged.maps, None, reading),
-        Source::Draft(into) => writer.reader.values(into, None, ordinal, reading.width),
+        Source::Merged => values_for(&writer.reader, &merged.inputs.doc, &merged.maps, None, reading),
+        Source::Draft(into) => writer.reader.values(into, ordinal, reading.width),
     };
     match items {
         Ok(items) => Ok(Some(spell_first(&items))),
@@ -855,7 +857,7 @@ fn words_before(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, ordin
     let from = ordinal.saturating_sub(WORDS_READ).max(1);
     let mut items: Vec<Item> = Vec::new();
     match source {
-        Source::Draft(into) => match writer.reader.values(into, None, from, ordinal - from) {
+        Source::Draft(into) => match writer.reader.values(into, from, ordinal - from) {
             Ok(read) => items = read,
             Err(Refusal::Unreadable(_)) => {}
             Err(e) => return Err(e),
@@ -867,7 +869,7 @@ fn words_before(writer: &Writer<'_>, merged: &Merged, source: &Source<'_>, ordin
                 let (lo, hi) = (at.max(from), (at + run.width).min(ordinal));
                 if lo < hi {
                     let piece = Run::new(run.origin.clone(), run.i_start + (lo - at), hi - lo);
-                    match values_for(&writer.reader, &merged.maps, placed.side.map(|s| s.0 as usize), &piece) {
+                    match values_for(&writer.reader, &merged.inputs.doc, &merged.maps, placed.side.map(|s| s.0 as usize), &piece) {
                         Ok(read) => items.extend(read),
                         Err(Refusal::Unreadable(_)) => items.clear(),
                         Err(e) => return Err(e),

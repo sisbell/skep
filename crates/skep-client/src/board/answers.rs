@@ -635,6 +635,43 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
     Some(out)
 }
 
+/// Returns an `i_delivery`'s items as the value at each position, in order.
+///
+/// The answer is `retrieve_i`'s, the read by identity: one item a position,
+/// never coalesced (wire.md §The response envelope, `i_delivery`), each
+/// value spelled as [`delivery_values`] spells one — a `content` or `hex`
+/// item one byte, an `atom` or `atom_hex` item the one composite value —
+/// and `None` in its place where the item's value is `null`, a position the
+/// document never minted or a link position. `None` for a document that is
+/// no `i_delivery`, and for an item that spells no one value: a per-byte
+/// item of another length than one byte, a hex that does not decode, a kind
+/// this crate does not know.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn i_delivery_values(v: &Value) -> Option<Vec<Option<Vec<u8>>>> {
+    if v["resp"].as_str() != Some("i_delivery") {
+        return None;
+    }
+    let mut out = Vec::new();
+    for item in v["items"].as_array()? {
+        let value = item.get("value")?;
+        if value.is_null() {
+            out.push(None);
+            continue;
+        }
+        let one = if let Some(text) = value["content"].as_str() {
+            Some(text.as_bytes().to_vec()).filter(|b| b.len() == 1)?
+        } else if let Some(hex) = value["hex"].as_str() {
+            Some(crate::hex::decode(hex)?).filter(|b| b.len() == 1)?
+        } else if let Some(text) = value["atom"].as_str() {
+            text.as_bytes().to_vec()
+        } else {
+            crate::hex::decode(value["atom_hex"].as_str()?)?
+        };
+        out.push(Some(one));
+    }
+    Some(out)
+}
+
 /// Returns a `delivery`'s atoms with the positions its items cover.
 ///
 /// Each atom is the `atom` or `atom_hex` item's offset among those
@@ -743,10 +780,49 @@ pub(crate) struct Metadata {
     /// The position the address named's text last changed at.
     ///
     /// It is `doc_metadata`'s `arranged_at` (wire.md §The response
-    /// envelope): the text a reader of the address named reads. `None`
-    /// where the board keeps none, a document never arranged since its
-    /// mint, and where the answer carries no such member, an older board.
-    pub(crate) arranged_at: Option<u64>,
+    /// envelope): the text a reader of the address named reads, the
+    /// member's three forms kept apart.
+    pub(crate) arranged_at: ArrangedAt,
+}
+
+/// A `doc_metadata` answer's `arranged_at`, as the board served it.
+///
+/// It is wire.md §The response envelope's member. The member absent and the
+/// member `null` are two answers: a merge's fence holds a side unchanged by
+/// its `arranged_at`, so an answer that carries none tells it nothing (the
+/// `merge::reads` module's doc).
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArrangedAt {
+    /// No such member: an older board, which keeps no such position.
+    Unserved,
+    /// `null`: a document never arranged since its mint, or one minted
+    /// before the board kept the position.
+    Unarranged,
+    /// The position the text last changed at.
+    At(u64),
+}
+
+impl ArrangedAt {
+    /// Returns the position served, `None` where none is.
+    #[cfg_attr(not(feature = "merge"), allow(dead_code))]
+    pub(crate) fn position(self) -> Option<u64> {
+        match self {
+            ArrangedAt::At(q) => Some(q),
+            ArrangedAt::Unserved | ArrangedAt::Unarranged => None,
+        }
+    }
+
+    /// Returns the form `doc_metadata`'s `arranged_at` member spells.
+    ///
+    /// A member that is neither `null` nor a number reads as unserved.
+    fn of(member: Option<&Value>) -> ArrangedAt {
+        match member {
+            Some(Value::Null) => ArrangedAt::Unarranged,
+            Some(q) => q.as_u64().map_or(ArrangedAt::Unserved, ArrangedAt::At),
+            None => ArrangedAt::Unserved,
+        }
+    }
 }
 
 /// The merge marker a draft carries (wire.md §The response envelope,
@@ -837,7 +913,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         merge: marker_of(v),
         own_count: count("own_count"),
         at: v["at"].as_u64(),
-        arranged_at: v["arranged_at"].as_u64(),
+        arranged_at: ArrangedAt::of(v.get("arranged_at")),
     })
 }
 
@@ -1103,7 +1179,7 @@ mod tests {
         // its shot made against the memberless document.
         let meta = metadata(&json!({"arranged_at":7,"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
         assert_eq!((meta.at, meta.placed, meta.base_extent, meta.published, meta.owner.as_str()), (Some(7), Some(5), Some(3), true, "1.0.1"));
-        assert_eq!(meta.arranged_at, Some(7), "the shot's own arrangement");
+        assert_eq!(meta.arranged_at, ArrangedAt::At(7), "the shot's own arrangement");
         assert_eq!(meta.shot_base.as_deref(), Some("1.0.1.0.1"), "the shot's recorded base");
         assert_eq!(meta.own_count, Some(5), "the member's own count");
         assert_eq!(
@@ -1117,14 +1193,18 @@ mod tests {
         let staged = metadata(&json!({"arranged_at":8,"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
         assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
         assert_eq!((staged.source_copied, staged.shot_base), (Some(5), None), "the copy's count; no shot minted it");
-        assert_eq!(staged.arranged_at, Some(8), "arranged last by the stage that minted it");
+        assert_eq!(staged.arranged_at, ArrangedAt::At(8), "arranged last by the stage that minted it");
         // `<!-- wire: response doc_metadata_fork -->`: a fork minted before
         // the position map, its `arranged_at` `null`; an older board's
-        // answer, carrying no such member, reads the same.
+        // answer, carrying no such member, is another answer, though
+        // neither serves a position (the mutant that reads the two alike
+        // lets a merge's fence pass over a board that keeps no position).
         let mut fork = json!({"arranged_at":null,"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null});
-        assert_eq!(metadata(&fork).expect("a doc_metadata answer").arranged_at, None, "never arranged since its mint");
+        let never = metadata(&fork).expect("a doc_metadata answer").arranged_at;
+        assert_eq!((never, never.position()), (ArrangedAt::Unarranged, None), "never arranged since its mint");
         fork.as_object_mut().expect("an object").remove("arranged_at");
-        assert_eq!(metadata(&fork).expect("a doc_metadata answer").arranged_at, None, "no member served");
+        let unserved = metadata(&fork).expect("a doc_metadata answer").arranged_at;
+        assert_eq!((unserved, unserved.position()), (ArrangedAt::Unserved, None), "no member served");
         // An answer without `own_count` — a board that serves no such count —
         // reads it as `None`, and everything else as before.
         let mut older = json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052u64,"time_from":"anchor"});

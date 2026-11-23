@@ -582,7 +582,10 @@ fn journal_published(journal: &Address) -> String {
 /// `fork_base_moved`, a draft of another document under
 /// `base_not_in_chain`; a position the board does not answer under its own
 /// fault's code — no longer, `history_reclaimed`; past its head,
-/// `beyond_head`; inside one commit, `not_a_position`; and the take-backs'
+/// `beyond_head`; inside one commit, `not_a_position`; a side that changed
+/// while the composition read it, or after the position it stands at,
+/// under `side_moved`, its detail naming the side and saying nothing was
+/// merged and to run the merge again; and the take-backs'
 /// — another account's draft under `not_owner`, a published document under
 /// `published_target`, nothing to undo under `nothing_to_undo` with the
 /// library's reason, a draft carrying no merge under `no_merge`; the
@@ -622,6 +625,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::HistoryReclaimed { .. } => "history_reclaimed",
         Refusal::BeyondHead { .. } => "beyond_head",
         Refusal::NotAPosition { .. } => "not_a_position",
+        Refusal::SideMoved { .. } => "side_moved",
         Refusal::OverCap { .. } => "too_many_runs",
         Refusal::NeedsSignedSession => "signed_session_required",
         Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
@@ -834,6 +838,25 @@ mod tests {
         let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Draft) else { panic!("the board's refusal") };
         assert_eq!((r.code.as_str(), r.detail.as_deref()), ("landing_begun", Some(words.as_str())));
         for said in ["1.0.1.0.72 at position 21", "--into 1.0.1.0.72", "--undo 1.0.1.0.72"] {
+            assert!(words.contains(said), "the detail says {said:?}: {words}");
+        }
+        assert_eq!(finish(Err(refused(refusal, Step::Draft))), 1);
+    }
+
+    /// Checks that a side that moved is the board's refusal naming the side.
+    ///
+    /// A side that changed while the composition read it, or after the
+    /// position it stands at, is `side_moved`, exit 1, its detail the
+    /// library's own words: the side, that nothing was merged, and that the
+    /// merge is run again (skep #1144).
+    #[test]
+    fn a_side_moved_is_the_boards_refusal_naming_the_side_and_the_way_on() {
+        let side = skep_client::address::parse_address("1.0.1.0.66").expect("an address");
+        let refusal = Refusal::SideMoved { side, at: 13, before: Some(13), after: Some(14) };
+        let words = refusal.to_string();
+        let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Draft) else { panic!("the board's refusal") };
+        assert_eq!((r.code.as_str(), r.detail.as_deref()), ("side_moved", Some(words.as_str())));
+        for said in ["1.0.1.0.66 changed while this merge was reading it", "nothing was merged", "compose the merge again"] {
             assert!(words.contains(said), "the detail says {said:?}: {words}");
         }
         assert_eq!(finish(Err(refused(refusal, Step::Draft))), 1);

@@ -104,11 +104,6 @@ use crate::refusal::Refusal;
 /// again; past the count the call is refused `arrangement_moved`.
 const DIFF_TRIES: usize = 3;
 
-/// The bytes an `i_delivery` answer takes beside its items.
-///
-/// Its envelope: `as_of`, the `items` member and `resp`.
-const ANSWER_ENVELOPE: usize = 64;
-
 /// The mapping a diff applies to its two images before it plans them.
 ///
 /// It is handed `since`'s image and the draft's last, and answers the two
@@ -231,7 +226,7 @@ struct Asking {
 /// per-byte values is read whole. A span past a part goes on in the next; a
 /// span marked in `withheld`, and one read to its end, is in none.
 fn parts(gone: &[Gone], read: &[u64], withheld: &[bool]) -> Vec<Vec<Asking>> {
-    let budget = MAX_ANSWER_BYTES.saturating_sub(ANSWER_ENVELOPE) as u64;
+    let budget = MAX_ANSWER_BYTES.saturating_sub(frames::I_DELIVERY_ENVELOPE) as u64;
     let (mut parts, mut part, mut positions, mut bytes) = (Vec::new(), Vec::new(), 0u64, 0u64);
     for (span, gone) in gone.iter().enumerate().filter(|(span, _)| !withheld[*span]) {
         let digits = gone.first.saturating_add(gone.width).to_string().len();

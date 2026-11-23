@@ -1364,6 +1364,9 @@ fn the_merge_references_state_the_shells_shapes() {
         "naming the hop, the version on the side's line published from doc, where the side's own base or source is not doc",
         "reason hop_unrecorded, naming the hop, a version on the side's line the board records no base for, its base never taken from its address",
         "refused merge_refused fork_base_moved {fork, source, head} where its source is not the head",
+        "is refused merge_refused {arm: \"side_moved\", side, at, before, after}, isError, nothing landed",
+        "before and after the side's arranged_at at the two reads, equal where its recorded base moved and its text did not; call again, which reads it as it stands",
+        "as_of the one position the composition stands at, where every side that can change held the state it was read in",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }

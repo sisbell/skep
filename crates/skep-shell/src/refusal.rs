@@ -474,7 +474,13 @@ impl Name {
     /// (`shell/merge.rs`'s `merge_refusal`, which the refusals of
     /// `history.past` and `history.restore` cross through too): `too_fragmented
     /// {doc, runs_seen}`, `history_busy`, `history_reclaimed {at, floor}`,
-    /// `beyond_head {at, head}`, `not_a_position {at, nearest}`, `not_past
+    /// `beyond_head {at, head}`, `not_a_position {at, nearest}`, `side_moved
+    /// {side, at, before, after}` (a side `merge.compose` read at the head —
+    /// the head, the draft, the fork — or the draft it landed over changed
+    /// while it was read or after `at`, the position the composition stands
+    /// at; `before` and `after` its `arranged_at` at the two reads, equal
+    /// where its recorded base moved and its text did not; nothing merged,
+    /// and the way on is to call again), `not_past
     /// {draft, at, current}` (a past state's `at` at or past `current`, the
     /// draft's position), `fork_base_moved {fork, source, head}`,
     /// `base_not_in_chain {into, head}`, `window_withheld {origin,

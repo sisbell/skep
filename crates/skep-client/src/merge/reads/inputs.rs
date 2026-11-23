@@ -68,19 +68,20 @@ pub enum Side {
     Member(Address),
     /// A draft of the trunk owner's account (§1.2 shape (2)).
     ///
-    /// It is read as of `position` where one is given — which is then the one
-    /// position P every read of the composition is made at — else at the
-    /// position the composition's first read answers, its base and its image
-    /// alike. Its anchor is the base the board records for it — the `base`
-    /// member of its `doc_metadata`, the member or the bare document it was
-    /// staged from, moved to the member each publication it rendered minted
-    /// (wire.md §Namespace, `stage`) — read as of the same position, so a
-    /// record's side, which carries the position its draft was read at,
-    /// composes against the base that stood then; the merge's base is derived
-    /// up the recorded bases from it (the `reads` module's doc), so a draft
-    /// staged before the document's first version merges over the document's
-    /// own arrangement from before that version, whether it is still
-    /// unpublished or its publication landed as version 1's daughter. A draft
+    /// It is read as of `position` where one is given — which is then the
+    /// position P the composition stands at, every side that can change read
+    /// as of it — else at the head, fenced, P the position its fences and
+    /// the others' stand at (the `reads` module's doc), its base and its
+    /// image alike. Its anchor is the base the board records for it — the
+    /// `base` member of its `doc_metadata`, the member or the bare document
+    /// it was staged from, moved to the member each publication it rendered
+    /// minted (wire.md §Namespace, `stage`) — read off the same answer as its
+    /// state, so a record's side, which carries the position its draft was
+    /// read at, composes against the base that stood then; the merge's base
+    /// is derived up the recorded bases from it (the `reads` module's doc),
+    /// so a draft staged before the document's first version merges over the
+    /// document's own arrangement from before that version, whether it is
+    /// still unpublished or its publication landed as version 1's daughter. A draft
     /// the board records no base for, or whose recorded base lies in another
     /// document, is refused [`Refusal::BaseUnknown`]; a base the caller names
     /// beside it must be the one the records derive
@@ -91,11 +92,11 @@ pub enum Side {
     Draft {
         /// The draft's address.
         at: Address,
-        /// The commit position the draft is read at; `None` for the position
-        /// the composition's first read answers.
+        /// The commit position the draft is read at; `None` for the head.
         ///
-        /// The record's side carries the position read either way: this
-        /// one, or the one the first read answered.
+        /// Read at the head, the draft is fenced. The record's side carries
+        /// the position read either way: this one, or P, the position the
+        /// composition's fences stand at.
         position: Option<u64>,
     },
     /// A cross-owner fork of the document (§1.2 shape (4), case (j)).
@@ -116,8 +117,9 @@ pub enum Side {
     /// inherited as an alternative, moved to the head by each landing into it —
     /// else its source, the `source` member, the version member or the bare
     /// document a `version` minted it sharing. Both are read off the fork's one
-    /// `doc_metadata` at the composition's position, a recorded base never
-    /// passed over for the source. The merge's base is derived up the recorded
+    /// `doc_metadata` — at the head its opening fence, else as of the
+    /// composition's position — a recorded base never passed over for the
+    /// source. The merge's base is derived up the recorded
     /// bases from the anchor (the `reads` module's doc), never the caller's to
     /// name ([`Refusal::ForkBaseNamed`]): a fork taken before the document's
     /// first version merges over the document's own arrangement from before
@@ -264,19 +266,20 @@ pub struct Merged {
     /// The record the landing will write, unlanded.
     ///
     /// Its `landed` is none, its `claims` none, its `replaces` the prior
-    /// record's link where one stands, its draft side at `as_of`, the one
-    /// position the draft was read at, and its fork and draft sides with
-    /// their states as of it. The landing fills `landed` and
+    /// record's link where one stands, its draft side at `as_of`, the
+    /// position the draft stood at as it was read, and its fork and draft
+    /// sides with their states as of it. The landing fills `landed` and
     /// `claims`, and sets `replaces` from its own read of the merger's
     /// newest record for the key (the `land` module's doc; P20).
     pub record: Record,
-    /// The one position the shape's reads were taken at, P.
+    /// The one position the composition stands at, P.
     ///
-    /// It is the position the draft side named, else the `as_of` the first
-    /// read answered; every frame the composition sent was answered at it
-    /// (the `reads` module's doc). It is never the highest `as_of` any read
-    /// answered: the prior records' lookup reads the journal at the head
-    /// and raises no position here. The draft landing is typed against it.
+    /// It is the position the draft side named, else the highest `as_of` the
+    /// opening fences answered: every side that can change held, at P, the
+    /// state the composition read it in (the `reads` module's doc). It is
+    /// never the highest `as_of` any read answered: the closing fences and
+    /// the prior records' lookup read at the head and raise no position
+    /// here. The draft landing is typed against it.
     pub as_of: u64,
     /// The standing record for the key, where one is current.
     ///

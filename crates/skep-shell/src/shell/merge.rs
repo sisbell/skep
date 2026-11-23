@@ -1057,6 +1057,7 @@ impl Shell {
             R::HistoryReclaimed { at, floor } => other("history_reclaimed", json!({"at": at, "floor": floor})),
             R::BeyondHead { at, head, .. } => other("beyond_head", json!({"at": at, "head": head})),
             R::NotAPosition { at, nearest, .. } => other("not_a_position", json!({"at": at, "nearest": nearest})),
+            R::SideMoved { side, at, before, after } => other("side_moved", json!({"side": s(&side), "at": at, "before": before, "after": after})),
             R::ForkBaseMoved { fork, source, head } => other("fork_base_moved", json!({"fork": s(&fork), "source": s(&source), "head": s(&head)})),
             R::BaseNotInChain { into, head } => other("base_not_in_chain", json!({"into": s(&into), "head": s(&head)})),
             R::WindowWithheld { origin, positions } => {
@@ -1160,7 +1161,9 @@ impl Shell {
     ///    board serves no count of the document's arrangement from before
     ///    its first version (an older board), `base_unknown` —
     ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
-    ///    with its arm, the board's verdicts verbatim; at a re-open at the
+    ///    with its arm — `side_moved` where a side changed while the
+    ///    composition read it, nothing composed — the board's verdicts
+    ///    verbatim; at a re-open at the
     ///    draft side or of a fork landed in another draft, the read of the
     ///    person's own record of the landing the marker marks, through the
     ///    links of the kind to `into` (`skep_client::merge::landing_record`):
@@ -1179,7 +1182,8 @@ impl Shell {
     ///    landed; where the fork moved since, the composition
     ///    again, as above, then the read of what the landing replaces
     ///    (`skep_client::merge::replaced`): `unreadable`,
-    ///    `no_such_document`, `merge_refused` with its arm, a halt's face,
+    ///    `no_such_document`, `merge_refused` with its arm — `side_moved`
+    ///    where `into` changed since the composition — a halt's face,
     ///    `session_died`; then `over_cap` where M passes the cap, nothing
     ///    landed;
     /// 6. where no `into` is named, the read of the person's own standing

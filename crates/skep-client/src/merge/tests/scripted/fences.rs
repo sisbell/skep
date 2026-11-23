@@ -1,10 +1,50 @@
 //! The fences the merge module keeps, over the scripted board.
 //!
 //! The suite checks that the one class scan the module sends is the
-//! journal's find, and that `head_of` walks the feed to the last trunk
-//! publish.
+//! journal's find, that `head_of` walks the feed to the last trunk
+//! publish, and that a composition and a landing read nothing at a
+//! position, so a busy history pool stops neither.
 
 use super::*;
+
+/// A COMPOSITION AND A LANDING REBUILD NO PAST STATE (skep #1144; the
+/// owner's ruling of 2026-11-22): the race shape composed and landed by a
+/// shot, and a draft side composed and landed by a shot — its words read
+/// by identity — or in its draft, send no frame through `/op-at`, every
+/// read at the head, the sides that can change fenced and every value read
+/// at the head. So a board whose history pool answers `history_busy` to
+/// every read at a position composes and lands each all the same, the pool
+/// never asked (the mutant that leaves any read at the composition's
+/// position meets the busy pool and refuses `HistoryBusy`).
+#[test]
+fn a_composition_and_a_landing_read_nothing_at_a_position_and_a_busy_history_stops_neither() {
+    let draft_side = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
+    let race = World::race as fn() -> World;
+    let cells = [
+        ("the race shape, by a shot", race, race_inputs(), false),
+        ("a draft side, by a shot", World::window_and_draft, draft_side.clone(), false),
+        ("a draft side, in its draft", World::window_and_draft, draft_side, true),
+    ];
+    for busy in [0, 10] {
+        for (cell, world, inputs, in_draft) in &cells {
+            let mut w = world();
+            w.busy = busy;
+            let (dialer, board, signer) = open(w);
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), inputs)
+                .unwrap_or_else(|e| panic!("{cell}, busy {busy}: {e:?}"));
+            let landing = if *in_draft {
+                draft_landing(&session, &signer, Some(a(S)))
+            } else {
+                shot(&session, &signer)
+            };
+            land(&board, &merged, landing).unwrap_or_else(|e| panic!("{cell}, busy {busy}: {e:?}"));
+            let ops = dialer.ops();
+            assert!(ops.iter().all(|o| !o.starts_with("at:")), "{cell}: nothing read at a position: {ops:?}");
+            assert_eq!(dialer.world().busy, busy, "{cell}: the history pool never asked");
+        }
+    }
+}
 
 /// THE ONE CLASS SCAN IS THE JOURNAL'S FIND: of every `find_links_ftt`
 /// the module sends — composing, landing, looking a record up, finding

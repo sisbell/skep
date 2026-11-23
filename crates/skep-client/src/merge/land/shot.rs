@@ -13,7 +13,8 @@ use skep_identity::{BoardTerm, EntryBody};
 use crate::address::parse_address;
 use crate::board::{acked_addr, acked_at, answers, frames, Answer, Rejection};
 use crate::halt::{Halt, Refused};
-use crate::merge::reads::{session_ended, stretches, values_for, Family, Merged, Refusal, Side};
+use crate::merge::compose::Run;
+use crate::merge::reads::{session_ended, stretches, values_of, Family, Merged, Refusal, Side};
 use crate::merge::windows::{self, ShotParts};
 use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
 
@@ -172,7 +173,8 @@ impl Writer<'_> {
     ///
     /// The frame and its body go through the publication's request builder
     /// with the daughters as its one deposit list — every copied run's values
-    /// re-read through the side that holds them, every window by address, the
+    /// re-read at the head through the side that holds them, each holder's
+    /// runs in as few reads as the budgets allow, every window by address, the
     /// base group the head and its extent as read, `supersede` the `Member`
     /// sides with the skip read first ([`Writer::daughters`]) — and, where the
     /// shot renders a draft side, the list cut where that draft cuts it with
@@ -199,7 +201,8 @@ impl Writer<'_> {
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
         // The list as sent: cut at the kept places of the draft side the shot
-        // renders, its image the one read at the composition's position.
+        // renders, its image the one the composition read — at the head
+        // inside its fences, or as of the draft's named position.
         let rendered = draft.filter(|d| merged.inputs.sides.iter().any(|s| matches!(s, Side::Draft { at, .. } if at == *d)));
         let image = rendered.and_then(|d| merged.maps.iter().find(|m| m.doc == *d)).map(|m| m.runs.as_slice());
         let sent = windows::kept_places(&shot.runs, image);
@@ -208,6 +211,14 @@ impl Writer<'_> {
         }
         let term = self.signing_term()?;
         let supersede = self.daughters(merged)?;
+        // Every copied run's values, read at the head through the side that
+        // holds it, each holder's runs in as few reads as the budgets allow.
+        let copied: Vec<(Option<usize>, &Run)> = sent
+            .iter()
+            .filter(|(placed, _)| matches!(placed.family, Family::Own | Family::DraftNative))
+            .map(|(placed, _)| (placed.side.map(|s| s.0 as usize), &placed.through))
+            .collect();
+        let mut values = values_of(&self.reader, doc, &merged.maps, &copied)?.into_iter();
         let mut runs = Vec::with_capacity(sent.len());
         let mut pieces = Vec::with_capacity(sent.len());
         let mut places = Vec::with_capacity(sent.len());
@@ -226,12 +237,7 @@ impl Writer<'_> {
                     pieces.push(Piece::Window { start: i_start, width: run.width });
                 }
                 Family::Own | Family::DraftNative => {
-                    let items = values_for(
-                        &self.reader,
-                        &merged.maps,
-                        placed.side.map(|s| s.0 as usize),
-                        &placed.through,
-                    )?;
+                    let items = values.next().ok_or_else(|| own_fault_face("a copied run's values were not read", format!("{run:?}")))?;
                     pieces.push(Piece::Values(items));
                 }
             }

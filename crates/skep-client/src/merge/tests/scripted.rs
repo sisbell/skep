@@ -283,8 +283,14 @@ struct World {
     memo: BTreeMap<String, Value>,
     /// `image` refuses `image_too_large` past this many runs.
     image_cap: usize,
-    /// `retrieve_v` refuses `too_many_items` past this width.
+    /// `retrieve_v` and `retrieve_i` refuse `too_many_items` past this many
+    /// positions, every spec's counted.
     delivery_cap: u64,
+    /// A `retrieve_v`'s answer past this many bytes is the dialer's
+    /// `TooLarge`, read no further — `H.1`'s read apart — where a cell
+    /// sets one: a composite value's item is as long as the value, so a
+    /// read within the delivery budget can pass the dialer's cap.
+    value_answer_cap: Option<usize>,
     /// `compare` refuses `too_many_blocks` past this many blocks an
     /// operand.
     compare_cap: usize,
@@ -310,6 +316,12 @@ struct World {
     /// N-th frame the dialer serves is answered, the document's
     /// arrangement becomes these runs, one commit.
     interleave: Option<(usize, String, Vec<Run>)>,
+    /// A recorded base moved in the middle of a walk, the text not: before
+    /// the N-th frame the dialer serves is answered, the document's
+    /// recorded base becomes this member at its whole count, one commit —
+    /// as the draft's own publication moves it, its `arranged_at` where it
+    /// stood (wire.md §Namespace, `stage`).
+    rebase: Option<(usize, String, String)>,
     /// The journal reclaimed in the middle of a walk.
     ///
     /// Before the N-th frame the dialer serves is answered, `floor`
@@ -364,6 +376,8 @@ struct World {
     pre_chain: BTreeMap<String, Vec<Run>>,
     /// `doc_metadata` serves no `own_count`: an older board.
     no_own_count: bool,
+    /// `doc_metadata` serves no `arranged_at`: an older board.
+    no_arranged_at: bool,
 }
 
 impl World {
@@ -802,6 +816,9 @@ impl World {
                     let own = self.own_arrangement(doc, Some(position)).unwrap_or_default();
                     answer["own_count"] = json!(own.iter().map(|r| r.width).sum::<u64>().to_string());
                 }
+                if self.no_arranged_at {
+                    answer.as_object_mut().expect("an object").remove("arranged_at");
+                }
                 Ok(reply(200, answer))
             }
             "retrieve_doc_v_span_set" => {
@@ -830,23 +847,72 @@ impl World {
                 Ok(reply(200, json!({"resp": "runs", "as_of": position, "runs": runs})))
             }
             "retrieve_v" => {
-                let spec = &frame["specs"][0];
-                let doc = spec["doc"].as_str().unwrap();
-                if doc == HEAD_MEMBER_1 {
+                let specs = frame["specs"].as_array().expect("`specs`, a list");
+                if specs[0]["doc"] == HEAD_MEMBER_1 {
                     let record = json!({"type": "skep-head", "position": 1, "chain": chain_hex(1)}).to_string();
                     let items = if self.head { json!([{"atom": record}]) } else { json!([]) };
                     return Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})));
                 }
-                if self.withheld.contains(doc) {
-                    return Ok(masked(doc));
+                // Every spec's document consulted, then the delivery's
+                // budget over every spec, then the items in spec order —
+                // adjacent bytes one `content` item across two specs too
+                // (wire.md §The response envelope, `delivery`).
+                let mut width = 0u64;
+                for spec in specs {
+                    let doc = spec["doc"].as_str().unwrap();
+                    if self.withheld.contains(doc) {
+                        return Ok(masked(doc));
+                    }
+                    width += span(&spec["span"]).1;
                 }
-                let (from, width) = span(&spec["span"]);
                 if width > self.delivery_cap {
                     return Ok(rejected("too_many_items"));
                 }
-                let Some(runs) = self.arrangement(doc, at) else { return Ok(rejected("doc_not_registered")) };
-                let items = self.items(&clip(&runs, from, width));
+                let mut clipped = Vec::new();
+                for spec in specs {
+                    let (from, width) = span(&spec["span"]);
+                    let Some(runs) = self.arrangement(spec["doc"].as_str().unwrap(), at) else { return Ok(rejected("doc_not_registered")) };
+                    clipped.extend(clip(&runs, from, width));
+                }
+                let items = self.items(&clipped);
                 Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})))
+            }
+            "retrieve_i" => {
+                // THE READ BY IDENTITY (wire.md §Content & provenance
+                // reads): each span's document derived from its start and
+                // consulted first — one this reader may not read refuses
+                // the whole read `withheld`, naming it — the budget over
+                // every span, then one item a position in span order, its
+                // value as minted, `null` where none was.
+                let spans: Vec<(String, u64, u64)> = frame["spans"]
+                    .as_array()
+                    .expect("`spans`, a list")
+                    .iter()
+                    .map(|s| {
+                        let (prefix, first) = s["start"].as_str().unwrap().rsplit_once('.').expect("an element address");
+                        let minted_under = prefix.strip_suffix(".0.1").expect("a content I-address");
+                        (minted_under.to_string(), first.parse().unwrap(), s["width"].as_str().unwrap().parse().unwrap())
+                    })
+                    .collect();
+                if let Some((doc, ..)) = spans.iter().find(|(doc, ..)| self.withheld.contains(doc)) {
+                    return Ok(masked(doc));
+                }
+                if spans.iter().map(|s| s.2).sum::<u64>() > self.delivery_cap {
+                    return Ok(rejected("too_many_items"));
+                }
+                let mut items = Vec::new();
+                for (doc, first, width) in &spans {
+                    for n in *first..first + width {
+                        let value = match self.values.get(&(doc.clone(), n)) {
+                            Some(Val::Byte(b)) if b.is_ascii() => json!({"content": (*b as char).to_string()}),
+                            Some(Val::Byte(b)) => json!({"hex": format!("{b:02x}")}),
+                            Some(Val::Atom(s)) => json!({"atom": s}),
+                            Some(Val::Ref(_)) | None => Value::Null,
+                        };
+                        items.push(json!({"at": format!("{doc}.0.1.{n}"), "value": value}));
+                    }
+                }
+                Ok(reply(200, json!({"resp": "i_delivery", "as_of": position, "items": items})))
             }
             "compare" => {
                 // Every region's document consulted in declaration
@@ -1556,6 +1622,13 @@ impl Dialer for Scripted {
             let (_, doc, runs) = w.interleave.take().unwrap();
             w.change(&doc, runs);
         }
+        // A recorded base moves before this frame is answered, the text not.
+        if w.rebase.as_ref().is_some_and(|(n, _, _)| *n == served) {
+            let (_, doc, base) = w.rebase.take().unwrap();
+            let extent = w.docs.get(&base).expect("a member of the world").runs.iter().map(|r| r.width).sum();
+            let at = w.commit("publish", vec![base.clone(), doc.clone()]);
+            w.docs.get_mut(&doc).expect("a draft of the world").staged.insert(at, (base, extent));
+        }
         // The journal reclaimed before this frame is answered.
         if w.reclaim.is_some_and(|(n, _)| n == served) {
             let (_, floor) = w.reclaim.take().unwrap();
@@ -1583,7 +1656,14 @@ impl Dialer for Scripted {
         }
         match req.path.as_str() {
             "/health" => Ok(reply(200, w.health())),
-            "/op" => w.op(&frame, None),
+            "/op" => {
+                let answer = w.op(&frame, None)?;
+                let value_read = frame["op"] == "retrieve_v" && frame["specs"][0]["doc"] != HEAD_MEMBER_1;
+                match w.value_answer_cap {
+                    Some(cap) if value_read && answer.body.len() > cap => Err(DialError::TooLarge { cap }),
+                    _ => Ok(answer),
+                }
+            }
             "/op-at" => {
                 if w.busy > 0 {
                     w.busy -= 1;
@@ -1719,7 +1799,7 @@ fn draft_landing_world() -> World {
     w
 }
 
-/// The draft side's inputs: `S` read at the composition's position.
+/// The draft side's inputs: `S` read at the head, fenced.
 fn draft_inputs() -> Inputs {
     Inputs {
         sides: vec![Side::Draft { at: a(S), position: None }],

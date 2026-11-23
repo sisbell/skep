@@ -470,16 +470,45 @@ fn a_window_withheld_crosses_as_typed_data_naming_the_origin_and_its_words() {
     shell.shutdown();
 }
 
+/// Checks that a side that changed while the composition read it crosses
+/// as typed data naming the side, the position and its two states.
+///
+/// The library's `SideMoved` is `merge_refused` with the arm `side_moved`,
+/// `side` the side, `at` the position the composition stands at, `before`
+/// and `after` its `arranged_at` at the two reads — numbers, `null` where
+/// the board served `null` — so a page and an agent say what changed and
+/// compose again; the session stands (the mutants that drop a member, or
+/// cross the refusal as a halt).
+#[test]
+fn a_side_moved_crosses_as_typed_data_naming_the_side_and_its_two_states() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let side = skep_client::address::parse_address("1.0.1.0.66").expect("an address");
+    let session = shell.sessions.get(&standing).unwrap();
+    let crossed = shell.merge_refusal(&session, Library::SideMoved { side: side.clone(), at: 13, before: Some(13), after: Some(14) });
+    let v = crossed.to_value();
+    assert_eq!(
+        (crossed.name(), v["arm"].as_str(), v["side"].as_str(), v["at"].as_u64(), v["before"].as_u64(), v["after"].as_u64()),
+        ("merge_refused", Some("side_moved"), Some("1.0.1.0.66"), Some(13), Some(13), Some(14)),
+        "{v}"
+    );
+    let never_arranged = shell.merge_refusal(&session, Library::SideMoved { side, at: 13, before: None, after: Some(14) }).to_value();
+    assert_eq!((&never_arranged["before"], &never_arranged["after"]), (&json!(null), &json!(14)), "{never_arranged}");
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    shell.shutdown();
+}
+
 /// Returns a board whose trunk `doc` holds `members`, and the frames sent it.
 ///
 /// Every member answers where `members` is none. Its `/health` is a board
 /// that takes writes and its `in_claims` names no claim; its `doc_metadata`
 /// of `doc` and of each member the trunk holds is a published document's,
-/// of a daughter of a trunk member one recording its address parent as its
-/// `shot_base`, of any other address `doc_not_registered`; its
-/// `retrieve_doc_v_span_set` at
-/// a position is `withheld`, so a composition stops at its read of the head
-/// it was handed, naming it. Every other `/op` is an empty delivery (no
+/// never arranged since its mint, of a daughter of a trunk member one
+/// recording its address parent as its `shot_base`, of any other address
+/// `doc_not_registered`; its `retrieve_doc_v_span_set` is `withheld`, so a
+/// composition, past the head's fence, stops at its read of the head's
+/// extent, naming the head it was handed. Every other `/op` is an empty delivery (no
 /// `H.1`, so no index opens) and every other path is answered nothing. Past
 /// its 64th read of a trunk member it answers nothing either, so a head read
 /// that walks on past the bound ends `unreachable` and never holds the
@@ -546,11 +575,11 @@ fn answer_as_a_trunk(mut stream: std::net::TcpStream, doc: &str, members: Option
             let parent = frame["doc"].as_str().and_then(|d| d.strip_prefix(doc)?.strip_prefix('.')).and_then(|v| Some(format!("{doc}.{}", &v[..v.rfind('.')?])));
             match frame["op"].as_str() {
                 _ if member.is_some() && trunk_reads > 64 => return,
-                Some("doc_metadata") if registered => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2"}),
-                Some("doc_metadata") if parent.is_some() => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2", "shot_base": parent}),
+                Some("doc_metadata") if registered => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2", "arranged_at": null}),
+                Some("doc_metadata") if parent.is_some() => json!({"resp": "doc_metadata", "as_of": 10, "published": true, "owner": "1.0.2", "shot_base": parent, "arranged_at": null}),
                 Some("doc_metadata") => json!({"resp": "rejected", "code": "doc_not_registered", "op": "doc_metadata"}),
                 Some("in_claims") => json!({"resp": "claims", "as_of": 10, "claims": []}),
-                Some("retrieve_doc_v_span_set") if path == "/op-at" => json!({"resp": "rejected", "code": "withheld", "op": "retrieve_doc_v_span_set"}),
+                Some("retrieve_doc_v_span_set") => json!({"resp": "rejected", "code": "withheld", "op": "retrieve_doc_v_span_set"}),
                 _ => json!({"resp": "delivery", "as_of": 10, "items": []}),
             }
         }

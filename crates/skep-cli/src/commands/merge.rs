@@ -124,7 +124,8 @@
 //! (`doc`, `base`, `sides`, `gaps`, `values`, `record`); the report adds
 //! `head`, `runs` (M as `origin`, `i_start`, `width`, `side`, `family`),
 //! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `as_of` — the one
-//! position every read of the composition was made at — `landed`, and to
+//! position the composition stands at, where every side that can change
+//! held the state it was read in — `landed`, and to
 //! each gap a `default` — its placement as this run composed it, in
 //! `--resolve`'s own spelling, so a merger copies it and varies it. A draft
 //! landing's `landed` carries the draft, the write's `position`, the

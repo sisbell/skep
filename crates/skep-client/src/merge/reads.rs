@@ -17,14 +17,16 @@
 //!
 //! The reads, in the record's order (§1.3): the document's metadata; each
 //! side's line of recorded bases, walked to the trunk; the head's extent;
-//! the base, derived from where those lines end, imaged whole; the head and
-//! each side imaged whole; the shared material joined by the core over the
-//! lists; the values where the value rule has work, read through the side
-//! that holds them; and the prior records for the key, so a standing record
-//! is known before anything is written (§3, idempotence). Every `image`
-//! past the run budget is re-asked in halves and the parts re-joined by
-//! I-adjacency (§8: "a region past the budget can be asked in parts"),
-//! every `retrieve_v` past the delivery budget likewise.
+//! the head imaged whole, then the base, derived from where those lines
+//! end — the head's own image where the base is the head, else imaged
+//! whole; each side imaged whole; the shared material joined by the core
+//! over the lists; the values where the value rule has work, read through
+//! the side that holds them; and the prior records for the key, so a
+//! standing record is known before anything is written (§3, idempotence).
+//! Every `image` past the run budget is re-asked in halves and the parts
+//! re-joined by I-adjacency (§8: "a region past the budget can be asked in
+//! parts"), every value read past the delivery budget or the dialer's
+//! answer cap likewise.
 //!
 //! **The base, from the records** (the owner's ruling of 2026-11-02: a
 //! version tree takes a daughter's parent from the base the board recorded,
@@ -40,7 +42,7 @@
 //! member or the bare document it was staged from, moved to the member each
 //! publication it rendered minted (wire.md §Namespace, `stage`). From the
 //! anchor the line climbs the bases the board recorded, each hop below the
-//! trunk read at P off its own `doc_metadata` — its `shot_base`, the base
+//! trunk read off its own `doc_metadata` — its `shot_base`, the base
 //! its shot was made against, else its `source`, the member a `version`
 //! snapshotted into it — until it ends at the document itself or at a trunk
 //! member, where the address is the record: a shot naming the head lands on
@@ -53,59 +55,82 @@
 //! board's fault, faced. The base is the document itself where any side's
 //! line ends there — a side begun before the document's first version — its
 //! image the document's own arrangement from before that version, read with
-//! `own` at P where the trunk's `own_count` is above 0 and not read at all
-//! at 0 (PUB-2.66); else it is the earliest trunk member the head and the
+//! `own` where the trunk's `own_count` is above 0 and not read at all at 0
+//! (PUB-2.66); else it is the earliest trunk member the head and the
 //! lines end at, the nearest common ancestor on the trunk. The lines are
 //! walked before the head's extent, and the base is never the caller's to
 //! know: a base the caller names is checked against the derived one beside
 //! every side and refused where it disagrees, and one named beside a fork
 //! side is refused unread.
 //!
-//! **One position for everything** (skep #762; the landing lane's ruling).
-//! Every frame a shape's reads send is answered at ONE board position P:
-//! the position the draft side names where it names one, else the `as_of`
-//! of the shape's first read, the document's `doc_metadata`, made at the
-//! head. Every later read — a fork's anchor, a draft's base, each hop of a
-//! side's line, the head's extent and image, the base's image, each side's
-//! image, the values read through the sides, the join's `compare` — goes
-//! through `/op-at` at P, so
-//! the record describes a state the board held at one moment and never one
-//! that an edit landing between two reads composed; the record carries P
-//! for its draft side (§4: "for a draft read at N") and each fork's and
-//! draft's state as of P — the position its text last changed at,
-//! `doc_metadata`'s `arranged_at`, off the one answer its anchor is read
-//! from (skep #770) — the result carries P as its `as_of`, and the draft
-//! landing is typed against P. A P the board
-//! does not answer is refused by name — its history reclaimed
-//! ([`Refusal::HistoryReclaimed`]), past the board's head
-//! ([`Refusal::BeyondHead`]) or inside one commit
-//! ([`Refusal::NotAPosition`]) — never read at the head instead; where P is
-//! the position a merge record names, [`record::verify`] answers for it
-//! (skep #761). The prior records' lookup after the shape's reads reads the
-//! journal, not a draft, and stays at the head. A side whose base the
-//! library cannot read — a member of another document or the bare document
-//! itself, a fork in the document's own tree, a draft of an account other
-//! than the trunk owner's, a draft the board records no base for, a fork it
-//! records neither a base nor a source for, or one whose base, else source,
-//! lies in another document (decision 15) — refuses before the first
-//! `image`, as does a fork of the trunk owner's own account, whose draft is
+//! **One state, fenced at the head** (skep #762, #1144; the owner's ruling
+//! of 2026-11-22). The record describes a state the
+//! board held at ONE board position P, never one an edit landing between two
+//! reads composed, and a composition reads it at the HEAD, rebuilding no
+//! past state. What can change while it reads — the head, a side that is a
+//! trunk member, which can take a deposit, the draft and each fork — is
+//! FENCED: its `doc_metadata` is read before any `image` and again after the
+//! images and the values, a fork's and a draft's opening fence the read its
+//! anchor and its state come off, and P is the highest `as_of` the opening
+//! fences answered. A side whose closing fence answers another `arranged_at`
+//! — the position its text last changed at, which every placement, removal,
+//! reorder, shot and snapshot into it moves — or another recorded base or
+//! source, which move without it, is refused [`Refusal::SideMoved`], nothing
+//! written, the way on to compose again: every opening fence came before
+//! every closing one, so each side fenced held at P the state its image was
+//! read in. What cannot change is read at the head with no fence: a member
+//! below the head and each hop of a side's line are published versions, the
+//! same at every position, and the document's own arrangement from before
+//! its first version stands once a version does. Every VALUE is read at the
+//! head ([`values_of`]): a member's by its V-ordinals, which a version never
+//! moves and the head moves only by deposits past its extent; a draft's or a
+//! fork's by the I-addresses its image served, a value at an I-address being
+//! written once — so a value read needs no past state whenever it is made,
+//! and the shot reads each holder's values in as few reads as the budgets
+//! allow. The record carries P for its draft side (§4: "for a draft read at
+//! N") and each fork's and draft's state as of P — its `arranged_at`, off the
+//! one answer its anchor is read from (skep #770) — the result carries P as
+//! its `as_of`, and the draft landing is typed against P, so an edit to the
+//! draft after P is refused `arrangement_moved`. A composition whose draft
+//! side names a position reads as of it instead — the trunk, the head, the
+//! draft, each fork and each side that is a trunk member, each image and
+//! anchor — the members that cannot change at the head, and fences nothing:
+//! P is the position named. A verification reads every metadata and image as
+//! of one position, its draft side's, else the `as_of` of its first read,
+//! made at the head, and its values at the head ([`record::verify`]). A
+//! position the board does not answer is refused by name — its history
+//! reclaimed ([`Refusal::HistoryReclaimed`]), past the board's head
+//! ([`Refusal::BeyondHead`]) or inside one commit ([`Refusal::NotAPosition`])
+//! — never read at the head instead; where it is the position a merge record
+//! names, [`record::verify`] answers for it (skep #761). The prior records'
+//! lookup after the shape's reads reads the journal, at the head.
+//!
+//! A side whose base the library cannot read — a member of another
+//! document or the bare document itself, a fork in the document's own
+//! tree, a draft of an account other than the trunk owner's, a draft the
+//! board records no base for, a fork it records neither a base nor a source
+//! for, or one whose base, else source, lies in another document (decision
+//! 15) — refuses before the first `image`, as does a fork of the trunk
+//! owner's own account, whose draft is
 //! the draft side and never a fork ([`Refusal::ForkOfOwner`]), a side whose
 //! line passes a hop the board records no parent for, and a side begun
 //! before the document's first version where the board serves no
 //! `own_count`, its base an arrangement this board does not count
 //! ([`Refusal::BareSource`]); a side the reader may not read refuses at its
 //! own read. A run a readable side windows from a document the reader may
-//! not read is answered whole by `image` and `compare` and masked by
-//! `retrieve_v` (wire.md §The read predicate, "a delivery masks per run"),
-//! so it refuses where a value is read, naming that document
+//! not read is answered whole by `image` and `compare`; a member's value
+//! read masks it at its own position (`retrieve_v`; wire.md §The read
+//! predicate, "a delivery masks per run") and a read by identity of a
+//! draft's or a fork's words refuses it whole (`retrieve_i`), each naming
+//! that document, so it refuses where a value is read
 //! ([`Refusal::Unreadable`]); the value rule switched off reads no value of
 //! it.
 //!
 //! The reads go through [`Board::op`] under the caller's token, or with no
-//! token where none is given, for the first read and the journal's, and
-//! [`Board::op_at`] for every read at P, whose `history_busy` is retried a
-//! bounded number of times (§7, "What it reads through"); the feed walk
-//! goes through [`Board::changes`]. Nothing here writes.
+//! token where none is given, and through [`Board::op_at`] for a read as of
+//! a position, whose `history_busy` is retried a bounded number of times
+//! (§7, "What it reads through"); the feed walk goes through
+//! [`Board::changes`]. Nothing here writes.
 //!
 //! **The session's end.** Every read and write of the merge, the restore
 //! and the take-backs that meets the death signal under the caller's token
@@ -148,7 +173,7 @@ pub(crate) use correspondence::{owners_records, records_of};
 pub use inputs::{Family, Inputs, Merged, Role, Side};
 pub(super) use join::{check_join, first_difference};
 pub(crate) use reader::{session_ended, OnEnd, Reader};
-pub(super) use readings::{check_shape, read_shape, values_for};
+pub(super) use readings::{check_shape, fence, read_shape, values_for, values_of, Reading};
 pub(super) use refusal::stretches;
 pub use refusal::{NoUndo, Refusal};
 
@@ -178,7 +203,8 @@ pub(super) const MAX_DELIVERY_ITEMS: u64 = 1 << 17;
 /// How many times a `history_busy` on a read at a position is retried.
 ///
 /// Past them the read is [`Refusal::HistoryBusy`] (§7: "retry with backoff,
-/// bounded").
+/// bounded"). A composition naming no position, and a landing, read at the
+/// head and never meet it.
 const HISTORY_BUSY_RETRIES: u32 = 4;
 
 // ── compose ───────────────────────────────────────────────────────────────
@@ -190,12 +216,13 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 /// the shot's bytes, which the landing reads.
 ///
 /// `token` is the caller's — `None` reads as a guest, which reads public
-/// members alone. Every read of the shape is made at one board position P
-/// (the module's doc), which the result carries as `as_of` and as the
-/// record's draft side position, so a verifier reads the draft and its
-/// recorded base as this composition did (§4: "for a draft read at N") and
-/// the landing types its write against it. The result carries M with each
-/// run's family, the gap report, the counts (`counts.m` against
+/// members alone. The shape is read at the head, each side that can change
+/// fenced, or as of the position its draft side names (the module's doc),
+/// and stands at one board position P, which the result carries as `as_of`
+/// and as the record's draft side position, so a verifier reads the draft
+/// and its recorded base as this composition did (§4: "for a draft read at
+/// N") and the landing types its write against it. The result carries M
+/// with each run's family, the gap report, the counts (`counts.m` against
 /// [`SHOT_RUN_CAP`], carried, not refused here), the record the landing
 /// would write, and the standing record for the key where one is current.
 ///
@@ -210,8 +237,14 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 /// named base the sides' recorded bases do not derive,
 /// [`Refusal::DraftBaseDisagrees`] or [`Refusal::NamedBaseDisagrees`]; a
 /// side begun before the document's first version on a board serving no
-/// `own_count`, [`Refusal::BareSource`] — then the prior records' reads'
-/// refusals, which `record::current` answers.
+/// `own_count`, [`Refusal::BareSource`]; a side that can change that changed
+/// while it was read, [`Refusal::SideMoved`] naming it, nothing written, and
+/// a board serving no `arranged_at` to fence a side by, faced; a draft side
+/// named at a position the board does not answer,
+/// [`Refusal::HistoryReclaimed`], [`Refusal::BeyondHead`] or
+/// [`Refusal::NotAPosition`], and [`Refusal::HistoryBusy`] past the bounded
+/// retries — a composition naming no position meets none of the four — then
+/// the prior records' reads' refusals, which `record::current` answers.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {
@@ -224,6 +257,7 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
     let reader = Reader::new(board, token, OnEnd::Rerun);
     let readings = read_shape(
         &reader,
+        Reading::Composing,
         &inputs.doc,
         &inputs.head,
         inputs.base.clone(),
@@ -271,8 +305,8 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         key,
         cap: SHOT_RUN_CAP,
         record,
-        // P explicitly — never the reader's highest `as_of`, which the prior
-        // records' reads at the head just raised.
+        // P explicitly — never the reader's highest `as_of`, which the
+        // closing fences and the prior records' reads at the head raised.
         as_of: at,
         prior,
         head_extent,

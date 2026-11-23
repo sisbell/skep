@@ -1,30 +1,34 @@
 //! The composition's reads over the scripted board.
 //!
-//! The suite checks `compose`: §1.3's reads in order, each at the one
-//! position the first read answered, nothing written; the sides whose base
-//! the board does not serve, refused before any image, and more sides than
-//! one byte numbers, refused before any read; the base each side's line
-//! ends at — a version begun before version 1, the document's own
-//! arrangement and its text before a window addressed below it, a named
-//! base checked beside the recorded ones, a line the board cannot serve; a
-//! fork merged from the source the board serves, its own text a window, a
-//! staged fork over its recorded base, a fork's anchor; an image in parts
-//! rejoined, a sub-run value read mapped to the side's V-ordinals, origins
-//! bare documents; and a draft side read at a position, retrying
-//! `history_busy`, the record naming the position, its base read off the
-//! board, a draft staged from a daughter composing over the daughter's
-//! base.
+//! The suite checks `compose`: §1.3's reads in order, each at the head,
+//! nothing written; the sides whose base the board does not serve, refused
+//! before any image, and more sides than one byte numbers, refused before
+//! any read; the base each side's line ends at — a version begun before
+//! version 1, the document's own arrangement and its text before a window
+//! addressed below it, a named base checked beside the recorded ones, a
+//! line the board cannot serve; a fork merged from the source the board
+//! serves, its own text a window, a staged fork over its recorded base, a
+//! fork's anchor; an image in parts rejoined, a sub-run value read mapped
+//! to the side's V-ordinals, origins bare documents; a draft side read at
+//! a position, retrying `history_busy`, the record naming the position,
+//! its base read off the board, a draft staged from a daughter composing
+//! over the daughter's base; and the fences — a side that changes while it
+//! is read refused, a draft's recorded base moved while it is read
+//! refused, a trunk member read as of a draft's named position, and a
+//! board serving no `arranged_at` refused at the first fence.
 
 use super::*;
 
-/// §1.3's reads IN ORDER: the document's metadata at the head, then —
-/// each at the ONE POSITION that read answered (skep #762) — the
-/// daughter's metadata for the base the board recorded for it (skep
-/// #1113), the head's extent, the base's extent and image, the head's
-/// image, the daughter's extent and image, then the prior records by the
-/// links of the kind to each side at the head — and nothing written. The
-/// result is the race shape's M with its counts, key, cap and unlanded
-/// record, its `as_of` that one position.
+/// §1.3's reads IN ORDER, every one AT THE HEAD (skep #1144): the
+/// document's metadata, the daughter's for the base the board recorded for
+/// it (skep #1113), the head's OPENING FENCE — its `doc_metadata` — then
+/// the head's extent and image, the base's extent and image, the
+/// daughter's extent and image, the head's CLOSING FENCE, then the prior
+/// records by the links of the kind to each side — and nothing written,
+/// nothing read through `/op-at`. The daughter is a published version
+/// below the head and takes no fence. The result is the race shape's M
+/// with its counts, key, cap and unlanded record, its `as_of` the position
+/// the head's fence stood at.
 #[test]
 fn compose_reads_in_the_records_order_and_writes_nothing() {
     let (dialer, board, _) = open(World::race());
@@ -33,30 +37,29 @@ fn compose_reads_in_the_records_order_and_writes_nothing() {
         dialer.ops(),
         [
             "doc_metadata",
-            "at:doc_metadata",
-            "at:retrieve_doc_v_span_set",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
-            "at:image",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
+            "doc_metadata",
+            "doc_metadata",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "doc_metadata",
             "find_links_ftt",
             "find_links_ftt"
         ],
-        "the first read at the head, every read of the shape after it at its position, the journal's at the head"
+        "every read at the head, none rebuilding a past state"
     );
-    let p = dialer.world().position;
-    for op in ["doc_metadata", "retrieve_doc_v_span_set", "image"] {
-        assert!(
-            dialer.positions(op).iter().all(|at| *at == p),
-            "`{op}` at the one position {p}: {:?}",
-            dialer.positions(op)
-        );
-    }
+    let metadata: Vec<String> = dialer
+        .frames("doc_metadata")
+        .iter()
+        .map(|f| f["doc"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(
-        dialer.frames("doc_metadata")[1]["doc"],
-        format!("{D}.1.1"),
-        "the daughter's metadata, its recorded base `D.1` ending its line on the trunk"
+        metadata,
+        [D.to_string(), format!("{D}.1.1"), format!("{D}.2"), format!("{D}.2")],
+        "the trunk's, the daughter's — its recorded base `D.1` ending its line on the trunk — then the head's two fences"
     );
     let docs: Vec<String> = dialer
         .frames("retrieve_doc_v_span_set")
@@ -72,8 +75,8 @@ fn compose_reads_in_the_records_order_and_writes_nothing() {
         dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
     assert_eq!(
         imaged,
-        [format!("{D}.1"), format!("{D}.2"), format!("{D}.1.1")],
-        "the base, the head, the daughter"
+        [format!("{D}.2"), format!("{D}.1"), format!("{D}.1.1")],
+        "the head, the base, the daughter"
     );
     assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)], "the big cat");
     assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 1, m: 3 });
@@ -181,8 +184,8 @@ fn a_foreign_side_or_a_side_without_a_served_base_refuses_before_any_image() {
     refuses(fork(unminted), None, Refusal::BaseUnknown(fork(unminted)));
     assert_eq!(
         dialer.ops(),
-        ["doc_metadata", "at:doc_metadata"],
-        "the trunk's metadata, then the fork's for its anchor at the one position, and nothing after"
+        ["doc_metadata", "doc_metadata"],
+        "the trunk's metadata, then the fork's opening fence for its anchor, at the head, and nothing after"
     );
     assert_eq!(dialer.frames("doc_metadata")[1]["doc"], unminted);
     refuses(fork(of_z), None, Refusal::BaseUnknown(fork(of_z)));
@@ -230,8 +233,8 @@ fn a_foreign_side_or_a_side_without_a_served_base_refuses_before_any_image() {
     refuses(draft(unstaged), None, Refusal::BaseUnknown(draft(unstaged)));
     assert_eq!(
         dialer.ops(),
-        ["doc_metadata", "at:doc_metadata"],
-        "the trunk's metadata, then the draft's for its base at the one position, and nothing after"
+        ["doc_metadata", "doc_metadata"],
+        "the trunk's metadata, then the draft's opening fence for its base, at the head, and nothing after"
     );
     refuses(draft(of_z_draft), None, Refusal::BaseUnknown(draft(of_z_draft)));
     // A FORK is another account's document (skep #1107): the merger's
@@ -282,9 +285,10 @@ fn imaged(dialer: &Scripted) -> Vec<String> {
 /// a draft staged from the empty `D` and published once `D.1` stood, is
 /// recorded against `D` while its address says `D.1`. The composition
 /// reads the base the board recorded — ONE `doc_metadata` of the
-/// daughter, at the one position, right after the trunk's — and
-/// composes over `D`'s own arrangement from before version 1, empty
-/// (`own_count` 0), reading nothing of it: the head's "the fox jumps"
+/// daughter, at the head, right after the trunk's, the head's fences
+/// around its images and values — and composes over `D`'s own
+/// arrangement from before version 1, empty (`own_count` 0), reading
+/// nothing of it: the head's "the fox jumps"
 /// and the daughter's "the cat" are both additions at the one spot —
 /// their values read through the sides that hold them, the value rule
 /// finding no identical bytes — ONE unsettled `order` gap, the head's
@@ -301,17 +305,19 @@ fn a_version_begun_before_version_1_composes_over_the_documents_own_arrangement(
         dialer.ops(),
         [
             "doc_metadata",
-            "at:doc_metadata",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
-            "at:retrieve_v",
-            "at:retrieve_v",
+            "doc_metadata",
+            "doc_metadata",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_v",
+            "retrieve_v",
+            "doc_metadata",
             "find_links_ftt",
             "find_links_ftt"
         ],
-        "the trunk's metadata, the daughter's for its recorded base, the head and the daughter — nothing of `D`"
+        "the trunk's metadata, the daughter's for its recorded base, the head's fence, the head and the daughter and their values, the head's fence again — nothing of `D`, all at the head"
     );
     let delivered: Vec<String> = dialer
         .frames("retrieve_v")
@@ -451,7 +457,7 @@ fn every_side_whose_line_ends_at_the_document_composes_over_it() {
             .iter()
             .map(|f| f["doc"].as_str().unwrap().to_string())
             .collect();
-        let line: Vec<String> = match &side {
+        let mut line: Vec<String> = match &side {
             Side::Member(m) => vec![D.to_string(), m.to_string(), format!("{D}.1.1")],
             Side::Draft { at, .. } if at == &a(published_from) => {
                 vec![D.to_string(), at.to_string(), format!("{D}.1.1")]
@@ -461,9 +467,18 @@ fn every_side_whose_line_ends_at_the_document_composes_over_it() {
             }
             other => vec![D.to_string(), other.address().to_string()],
         };
+        // The head's opening fence after the lines; then the closing
+        // fences, a draft's or a fork's before the head's — a member
+        // below the head takes none.
+        let head = format!("{D}.2");
+        line.push(head.clone());
+        if !matches!(side, Side::Member(_)) {
+            line.push(side.address().to_string());
+        }
+        line.push(head);
         assert_eq!(
             met, line,
-            "{side:?}: the trunk's, the side's own, then each hop of its line"
+            "{side:?}: the trunk's, the side's own, each hop of its line, then the fences"
         );
     }
     let (bare_based, ordinary) =
@@ -493,7 +508,7 @@ fn every_side_whose_line_ends_at_the_document_composes_over_it() {
 /// the arrangement suite's shape, `stage.rs`'s): `D` held "abcz" before
 /// its first version, `own_count` 4; version 1 is "abc"; the daughter
 /// `D.1.1`, begun from `D` and recorded against it, is "abcwz". The base
-/// is read ONCE, `image` with `own`, at the one position, and M is
+/// is read ONCE, `image` with `own`, at the head, and M is
 /// "abcw": the head's removal of "z" stands and the daughter's "w" goes
 /// beside the surviving "c", an `anchor` gap the rules settle — where
 /// over `D.1`, as the address would have it, "z" comes back as the
@@ -524,11 +539,10 @@ fn a_documents_own_arrangement_is_read_with_own_where_its_count_is_above_0() {
         vec![frames::image_own(D, 1, 4)],
         "the document's own arrangement, read once with `own`"
     );
-    let p = dialer.world().position;
     assert!(
-        dialer.positions("image").iter().all(|at| *at == p),
-        "at the one position: {:?}",
-        dialer.positions("image")
+        dialer.ops().iter().all(|o| !o.starts_with("at:")),
+        "at the head, no past state rebuilt: {:?}",
+        dialer.ops()
     );
     assert_eq!(merged.key.base, a(D));
     assert_eq!(m_runs(&merged), vec![run(D, 1, 3), run(D, 5, 1)], "abcw");
@@ -700,10 +714,11 @@ fn more_sides_than_one_byte_numbers_refuse_before_any_read() {
 /// source the board serves for it. The fork `F`, another account's
 /// private document minted by `version` off the base `D.1` ("the cat
 /// sat"), has removed " sat"; the head added "big ". The reads, in
-/// order: the trunk's metadata, THE FORK'S METADATA for its `source`,
-/// the head's extent, the base's extent and image — the base `D.1`,
-/// derived from the source and never named — the head's image, the
-/// fork's extent and image, the prior records. M is the race shape's
+/// order, each at the head: the trunk's metadata, THE FORK'S METADATA for
+/// its `source` — its opening fence — the head's opening fence, the
+/// head's extent and image, the base's extent and image — the base `D.1`,
+/// derived from the source and never named — the fork's extent and image,
+/// the fork's and the head's closing fences, the prior records. M is the race shape's
 /// "the big cat", the fork's role `fork`, the merge lands as the trunk's
 /// next member, and `verify` recomputes its record against the source
 /// the board serves.
@@ -718,13 +733,16 @@ fn case_j_a_fork_of_a_published_version_merges_from_the_source_the_board_serves(
         dialer.ops(),
         [
             "doc_metadata",
-            "at:doc_metadata",
-            "at:retrieve_doc_v_span_set",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
-            "at:image",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
+            "doc_metadata",
+            "doc_metadata",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "doc_metadata",
+            "doc_metadata",
             "find_links_ftt",
             "find_links_ftt"
         ]
@@ -734,13 +752,18 @@ fn case_j_a_fork_of_a_published_version_merges_from_the_source_the_board_serves(
         .iter()
         .map(|f| f["doc"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(metadata, [D.to_string(), F.to_string()], "the trunk's, then the fork's");
+    let head = format!("{D}.2");
+    assert_eq!(
+        metadata,
+        [D.to_string(), F.to_string(), head.clone(), F.to_string(), head],
+        "the trunk's, the fork's and the head's opening fences, then their closing fences"
+    );
     let imaged: Vec<String> =
         dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
     assert_eq!(
         imaged,
-        [format!("{D}.1"), format!("{D}.2"), F.to_string()],
-        "the base the source names, the head, the fork"
+        [format!("{D}.2"), format!("{D}.1"), F.to_string()],
+        "the head, the base the source names, the fork"
     );
     assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)], "the big cat");
     assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 1, m: 3 });
@@ -854,8 +877,8 @@ fn a_staged_fork_composes_over_the_base_the_board_records_never_its_source() {
         .collect();
     assert_eq!(
         metadata,
-        [D.to_string(), y.to_string()],
-        "the trunk's, then the fork's one read for its anchor"
+        [D.to_string(), y.to_string(), v3.clone(), y.to_string(), v3.clone()],
+        "the trunk's, the fork's opening fence — its one read for its anchor — and the head's, then their closing fences"
     );
     assert_eq!(
         merged.key.base,
@@ -935,7 +958,12 @@ fn a_forks_anchor_is_its_recorded_base_else_its_source_each_in_the_documents_cha
         .iter()
         .map(|f| f["doc"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(metadata, [D.to_string(), x2.to_string()], "nothing of its source read");
+    let head = format!("{D}.2");
+    assert_eq!(
+        metadata,
+        [D.to_string(), x2.to_string(), head.clone(), x2.to_string(), head],
+        "the trunk's, the alternative's and the head's fences: nothing of its source read"
+    );
     let merged = compose(&board, Some(&token()), &with_side(fork(minted)))
         .expect("the version's fork composes");
     assert_eq!(merged.key.base, a(&v1), "a fork with no recorded base stands on its source");
@@ -949,8 +977,8 @@ fn a_forks_anchor_is_its_recorded_base_else_its_source_each_in_the_documents_cha
         );
         assert_eq!(
             dialer.ops(),
-            ["doc_metadata", "at:doc_metadata"],
-            "{refused}: the trunk's and the fork's, nothing imaged"
+            ["doc_metadata", "doc_metadata"],
+            "{refused}: the trunk's and the fork's opening fence, nothing imaged"
         );
     }
 }
@@ -984,8 +1012,9 @@ fn an_image_in_parts_is_rejoined_and_coalesced_before_counting() {
 /// A SUB-RUN value read is mapped to the side's own V-ordinals (the
 /// fragment model): with the retype normalization on, the base bytes a
 /// side retyped are read through the other side's copy as the fragments
-/// of that side's runs — `D·5` at V 5 of one run, `D·6–7` at V 6 of the
-/// next — and the retyped bytes at the retyping side's V 5.
+/// of that side's runs — `D·5` at V 5 of one run, `D·6–7` at V 7 of the
+/// next — in ONE read of that member at the head, a spec a fragment, and
+/// the retyped bytes at the retyping side's V 5.
 #[test]
 fn a_sub_run_value_read_is_mapped_to_the_sides_v_ordinals() {
     let mut w = World::new();
@@ -1007,15 +1036,18 @@ fn a_sub_run_value_read_is_mapped_to_the_sides_v_ordinals() {
         vec![run(D, 1, 5), run(D, 16, 1), run(D, 6, 6)],
         "the c-at sat: the base identity kept"
     );
-    let reads: Vec<(String, u64, u64)> = dialer
+    let reads: Vec<Vec<(String, u64, u64)>> = dialer
         .frames("retrieve_v")
         .iter()
         .map(|f| {
-            let (from, width) = span(&f["specs"][0]["span"]);
-            (f["specs"][0]["doc"].as_str().unwrap().to_string(), from, width)
+            f["specs"].as_array().unwrap().iter().map(|spec| {
+                let (from, width) = span(&spec["span"]);
+                (spec["doc"].as_str().unwrap().to_string(), from, width)
+            }).collect()
         })
         .collect();
-    assert_eq!(reads, [(format!("{D}.1.1"), 5, 1), (format!("{D}.1.1"), 7, 2), (format!("{D}.2"), 5, 3)], "D·5 at the daughter's V 5, D·6–7 at its V 7 past the '-', the retyped 'cat' at the head's V 5");
+    assert_eq!(reads, [vec![(format!("{D}.1.1"), 5, 1), (format!("{D}.1.1"), 7, 2)], vec![(format!("{D}.2"), 5, 3)]], "D·5 at the daughter's V 5 and D·6–7 at its V 7 past the '-', one read; the retyped 'cat' at the head's V 5");
+    assert!(dialer.ops().iter().all(|o| !o.starts_with("at:")), "every value read at the head: {:?}", dialer.ops());
 }
 
 /// Origins are BARE documents: an I-address minted under a member
@@ -1071,20 +1103,27 @@ fn origins_are_bare_documents_so_anchors_resolve() {
 
 /// A draft side at a position is read through `/op-at` — its recorded
 /// base first, then its extent and its image, each as of the position —
-/// and the record's side names that position: one `history_busy` is
-/// retried and the read answers; past the bounded retries the
-/// composition refuses `HistoryBusy`.
+/// and so are the trunk's metadata and the head, the sides that can
+/// change, so the record stands at one state; the base, a version below
+/// the head, the same at every position, is read at the head, and nothing
+/// is fenced. The record's side names that position: one `history_busy`
+/// is retried and the read answers; past the bounded retries the
+/// composition refuses `HistoryBusy`. The shot's values are read at the
+/// head, the head's by its V-ordinals and the draft's by the I-addresses
+/// its image served, never at the position.
 #[test]
 fn a_draft_at_a_position_retries_history_busy_then_refuses() {
-    let (dialer, board, _) = open(World::window_and_draft());
+    let (dialer, board, signer) = open(World::window_and_draft());
+    let session = sign_in(&board, &signer);
     let at = dialer.world().position;
     dialer.world().busy = 1;
+    dialer.clear();
     let inputs = Inputs {
         sides: vec![Side::Draft { at: a(S), position: Some(at) }],
         base: Some(a(&format!("{D}.1"))),
         ..race_inputs()
     };
-    let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+    let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
     assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 7), run(S, 1, 3)]);
     assert_eq!(
         merged.families,
@@ -1093,31 +1132,47 @@ fn a_draft_at_a_position_retries_history_busy_then_refuses() {
     assert_eq!(
         dialer.positions("doc_metadata"),
         [at, at, at],
-        "the named position is every read's: the trunk's metadata, one busy, one answered, then the draft's base: {:?}",
+        "the named position: the trunk's metadata, one busy, one answered, then the draft's base: {:?}",
         dialer.ops()
     );
-    assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [at, at, at], "the head's, the base's, the draft's extent");
-    assert_eq!(dialer.positions("image"), [at, at, at], "the base, the head, the draft");
-    assert!(
-        dialer.ops().iter().all(|o| o.starts_with("at:") || o == "find_links_ftt"),
-        "nothing of the shape read at the head: {:?}",
+    assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [at, at], "the head's and the draft's extent");
+    assert_eq!(dialer.positions("image"), [at, at], "the head and the draft");
+    let at_head: Vec<(String, Value)> = dialer
+        .served
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(line, _)| ["doc_metadata", "retrieve_doc_v_span_set", "image"].contains(&line.as_str()))
+        .map(|(line, f)| (line.clone(), f.get("d").or(f.get("doc")).cloned().unwrap_or_default()))
+        .collect();
+    assert_eq!(
+        at_head,
+        [("retrieve_doc_v_span_set".to_string(), json!(format!("{D}.1"))), ("image".to_string(), json!(format!("{D}.1")))],
+        "the base below the head, read at the head, and no fence: {:?}",
         dialer.ops()
     );
-    assert_eq!(merged.as_of, at, "the one position the reads were taken at");
+    assert_eq!(merged.as_of, at, "the one position the composition stands at");
     assert_eq!(
         merged.record.sides[1],
         SideAt::Draft { at: a(S), position: Some(at), arranged: SideState::At(at) },
         "the record's side names the position named, and the draft's state there — its last change the world's last commit"
+    );
+    dialer.clear();
+    land(&board, &merged, shot(&session, &signer)).expect("landed");
+    assert!(dialer.ops().iter().all(|o| !o.starts_with("at:")), "the shot reads nothing at a position: {:?}", dialer.ops());
+    assert_eq!(
+        dialer.frames("retrieve_i"),
+        [frames::retrieve_i(&[(&format!("{S}.0.1.1"), 3)])],
+        "the draft's words by the addresses its image served"
     );
     dialer.world().busy = 10;
     assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::HistoryBusy));
 }
 
 /// THE RECORD NAMES THE POSITION A DRAFT SIDE WAS READ AT (skep #453): a
-/// draft side named with no position is read at the position the
-/// composition's first read answered — the head when it began — which
-/// every read after the first is made at, and the record's side carries
-/// it, the inputs as given. `verify` then reads the draft AND its
+/// draft side named with no position is read at the head, fenced, and the
+/// record's side carries the position its fences stood at — the head when
+/// the composition began — the inputs as given. `verify` then reads the draft AND its
 /// recorded base as of that position — its `doc_metadata`, its extent,
 /// its image and the join's `compare` each through `/op-at` at it — so
 /// once a publication of the draft itself has moved its base to the
@@ -1141,11 +1196,9 @@ fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
     );
     assert_eq!(merged.inputs, inputs, "the inputs as given");
     let ops = dialer.ops();
-    assert_eq!(ops[0], "doc_metadata", "the first read, at the head, fixes the position: {ops:?}");
-    assert!(
-        ops[1..].iter().take_while(|o| *o != "find_links_ftt").all(|o| o.starts_with("at:")),
-        "every read of the shape after the first at that position: {ops:?}"
-    );
+    assert!(ops.iter().all(|o| !o.starts_with("at:")), "every read at the head, the draft fenced: {ops:?}");
+    let fenced = |doc: &str| dialer.frames("doc_metadata").iter().filter(|f| f["doc"] == doc).count();
+    assert_eq!((fenced(S), fenced(&format!("{D}.2"))), (2, 2), "the draft and the head each read before their images and after: {ops:?}");
     // The shot renders the draft and keeps its recorded base; the record
     // read back names the position.
     let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
@@ -1228,9 +1281,10 @@ fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
 
 /// A DRAFT SIDE's BASE IS READ OFF THE BOARD (skep #743): the draft's
 /// `doc_metadata` is read for the base the board records for it — right
-/// after the trunk's, as a fork's is for its source — and the merge's
-/// base is derived from it, so the caller names none; the reads then run
-/// in the record's order and nothing is written. A base the caller names
+/// after the trunk's, as a fork's is for its source, its opening fence —
+/// and the merge's base is derived from it, so the caller names none; the
+/// reads then run in the record's order, each at the head, and nothing is
+/// written. A base the caller names
 /// is checked, never trusted: one equal to the derived base is taken; a
 /// different one refuses `DraftBaseDisagrees`, naming both, before any
 /// `image`.
@@ -1245,13 +1299,16 @@ fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
         dialer.ops(),
         [
             "doc_metadata",
-            "at:doc_metadata",
-            "at:retrieve_doc_v_span_set",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
-            "at:image",
-            "at:retrieve_doc_v_span_set",
-            "at:image",
+            "doc_metadata",
+            "doc_metadata",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "retrieve_doc_v_span_set",
+            "image",
+            "doc_metadata",
+            "doc_metadata",
             "find_links_ftt",
             "find_links_ftt"
         ]
@@ -1261,13 +1318,18 @@ fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
         .iter()
         .map(|f| f["doc"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(metadata, [D.to_string(), S.to_string()], "the trunk's, then the draft's");
+    let head = format!("{D}.2");
+    assert_eq!(
+        metadata,
+        [D.to_string(), S.to_string(), head.clone(), S.to_string(), head],
+        "the trunk's, the draft's opening fence, the head's, then their closing fences"
+    );
     let imaged: Vec<String> =
         dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
     assert_eq!(
         imaged,
-        [format!("{D}.1"), format!("{D}.2"), S.to_string()],
-        "the base the board records for the draft, the head, the draft"
+        [format!("{D}.2"), format!("{D}.1"), S.to_string()],
+        "the head, the base the board records for the draft, the draft"
     );
     assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 7), run(S, 1, 3)]);
     assert_eq!(
@@ -1345,8 +1407,8 @@ fn a_draft_staged_from_a_daughter_composes_over_the_daughters_base() {
         dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
     assert_eq!(
         imaged,
-        [format!("{D}.1"), format!("{D}.2"), t.to_string()],
-        "the derived base imaged, never the daughter"
+        [format!("{D}.2"), format!("{D}.1"), t.to_string()],
+        "the head, then the derived base imaged, never the daughter"
     );
     let named = |b: &str| Inputs { base: Some(a(b)), ..inputs.clone() };
     assert_eq!(
@@ -1362,4 +1424,194 @@ fn a_draft_staged_from_a_daughter_composes_over_the_daughters_base() {
         compose(&board, Some(&token()), &named(&format!("{D}.1"))).expect("composed").key.base,
         a(&format!("{D}.1"))
     );
+}
+
+/// Composes `inputs` over `world()` twice — once untouched, the premise,
+/// and once with `doc` arranged as `runs` by another hand right after its
+/// image was read — and answers what the second composition answered.
+fn edited_after_its_image(world: &dyn Fn() -> World, inputs: &Inputs, doc: &str, runs: Vec<Run>) -> Result<Merged, Refusal> {
+    let (dialer, board, _) = open(world());
+    compose(&board, Some(&token()), inputs).expect("the premise: it composes untouched");
+    let image = dialer.served.lock().unwrap().iter().position(|(line, f)| line == "image" && f["d"] == doc).expect("its image");
+    let mut w = world();
+    // The frame after the image's, counted from 1.
+    w.interleave = Some((image + 2, doc.to_string(), runs));
+    let (dialer, board, _) = open(w);
+    let answered = compose(&board, Some(&token()), inputs);
+    assert!(dialer.world().interleave.is_none(), "{doc}: the edit landed mid-walk");
+    answered
+}
+
+/// The draft landing's shape with `D.3`, the trunk's current head, one
+/// deposit past `D.2`'s words: a trunk member that can still take one.
+fn world_with_v3() -> World {
+    let mut w = World::window_and_draft();
+    w.text(D, 20, "??");
+    w.member(&format!("{D}.3"), vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 7), run(D, 20, 1)], Some(16));
+    w.trunk_head.insert(D.to_string(), format!("{D}.3"));
+    w
+}
+
+/// A SIDE THAT CHANGES WHILE THE COMPOSITION READS IT IS REFUSED (skep
+/// #1144; the owner's ruling of 2026-11-22): every side that can change
+/// is FENCED — its `doc_metadata` read before any image and again after
+/// the images and the values, all at the head — and one another hand
+/// edits right after its image was read refuses `SideMoved` naming it,
+/// `before` and `after` its `arranged_at` at the two fences, `at` the
+/// position the opening fences stood at, nothing written and nothing read
+/// at a position: the draft side; a fork side; the head, a deposit
+/// appended past its extent; and the trunk's current head named as a side
+/// beside a draft, which can take a deposit too (F2; the mutant fencing
+/// the draft alone composes over each of the others' edit, the one
+/// fencing the head and the named head alone over the trunk member's).
+#[test]
+fn a_side_that_changes_while_the_composition_reads_it_is_refused_naming_it() {
+    let refused = |world: &dyn Fn() -> World, inputs: &Inputs, doc: &str, runs: Vec<Run>| -> Refusal {
+        edited_after_its_image(world, inputs, doc, runs).expect_err("refused")
+    };
+    let p = World::window_and_draft().position;
+    assert_eq!(
+        refused(&World::window_and_draft, &with_side(Side::Draft { at: a(S), position: None }), S, vec![run(D, 1, 11)]),
+        Refusal::SideMoved { side: a(S), at: p, before: Some(p), after: Some(p + 1) },
+        "the draft, its \"!!!\" deleted"
+    );
+    let with_fork = || {
+        let mut w = World::race();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        w
+    };
+    let p = with_fork().position;
+    assert_eq!(
+        refused(&with_fork, &with_side(Side::Fork(a(F))), F, vec![run(D, 1, 4)]),
+        Refusal::SideMoved { side: a(F), at: p, before: None, after: Some(p + 1) },
+        "the fork, never arranged since its mint, then edited"
+    );
+    let with_deposit_text = || {
+        let mut w = World::race();
+        w.text(D, 16, "?");
+        w
+    };
+    let p = World::race().position;
+    let deposited = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 16, 1)];
+    assert_eq!(
+        refused(&with_deposit_text, &race_inputs(), &format!("{D}.2"), deposited),
+        Refusal::SideMoved { side: a(&format!("{D}.2")), at: p, before: None, after: Some(p + 1) },
+        "the head, a deposit past its extent"
+    );
+    let v3 = format!("{D}.3");
+    let p = world_with_v3().position;
+    let beside = Inputs { sides: vec![Side::Draft { at: a(S), position: None }, Side::Member(a(&v3))], ..race_inputs() };
+    let deposited = vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 7), run(D, 20, 2)];
+    assert_eq!(
+        refused(&world_with_v3, &beside, &v3, deposited),
+        Refusal::SideMoved { side: a(&v3), at: p, before: None, after: Some(p + 1) },
+        "the trunk's current head named as a side, a deposit past its extent"
+    );
+    // The words: the side changed while it was read, nothing merged, and
+    // the way on.
+    let said = Refusal::SideMoved { side: a(S), at: p, before: Some(p), after: Some(p + 1) }.to_string();
+    assert!(
+        said.contains(&format!("{S} changed while this merge was reading it (its text changed at position {})", p + 1))
+            && said.contains("nothing was merged; compose the merge again"),
+        "{said}"
+    );
+}
+
+/// A DRAFT WHOSE RECORDED BASE MOVES WHILE THE COMPOSITION READS IT IS
+/// REFUSED, ITS TEXT UNCHANGED (skep #1144): the draft's own publication
+/// moves its recorded base and leaves its arrangement as it stood, so its
+/// `arranged_at` stands too; the fence compares where the board records the
+/// draft standing beside its state, and the composition refuses
+/// `SideMoved` naming the draft, `before` and `after` the one position, its
+/// words saying the recorded base moved and the text did not (the mutant
+/// fencing by `arranged_at` alone composes over the base that stood at the
+/// first read).
+#[test]
+fn a_drafts_recorded_base_moved_while_it_is_read_is_refused_its_text_unchanged() {
+    let inputs = with_side(Side::Draft { at: a(S), position: None });
+    let (dialer, board, _) = open(World::window_and_draft());
+    compose(&board, Some(&token()), &inputs).expect("the premise: it composes unmoved");
+    let image = dialer.served.lock().unwrap().iter().position(|(line, f)| line == "image" && f["d"] == S).expect("the draft's image");
+    let mut w = World::window_and_draft();
+    let p = w.position;
+    w.rebase = Some((image + 2, S.to_string(), format!("{D}.2")));
+    let (dialer, board, _) = open(w);
+    let refused = compose(&board, Some(&token()), &inputs);
+    {
+        let w = dialer.world();
+        assert!(w.rebase.is_none(), "the base moved mid-walk");
+        assert_eq!(w.docs[S].history.keys().next_back(), Some(&p), "the premise: the text unmoved");
+    }
+    assert_eq!(refused, Err(Refusal::SideMoved { side: a(S), at: p, before: Some(p), after: Some(p) }));
+    let said = refused.unwrap_err().to_string();
+    assert!(
+        said.contains(&format!("the base the board records for {S} moved while this merge was reading it, its text unchanged"))
+            && said.contains("nothing was merged"),
+        "{said}"
+    );
+}
+
+/// A SIDE THAT IS A TRUNK MEMBER IS READ AS OF A DRAFT SIDE'S NAMED
+/// POSITION (skep #1144, F2): the trunk's current head, named as a side
+/// beside a draft side named at a position, can take a deposit, so it is
+/// read as of that position as the head and the draft are — never at the
+/// head, where a deposit landed since would stand beside the draft's past
+/// state — while the base, a version below the head, the same at every
+/// position, is read at the head.
+#[test]
+fn a_side_that_is_a_trunk_member_is_read_as_of_a_draft_sides_named_position() {
+    let (dialer, board, _) = open(world_with_v3());
+    let at = dialer.world().position;
+    let v3 = format!("{D}.3");
+    let inputs = Inputs {
+        sides: vec![Side::Draft { at: a(S), position: Some(at) }, Side::Member(a(&v3))],
+        ..race_inputs()
+    };
+    compose(&board, Some(&token()), &inputs).expect("composed");
+    let imaged = |line: &str| -> Vec<(String, Option<u64>)> {
+        dialer
+            .served
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(served, _)| served == line)
+            .map(|(_, f)| match line {
+                "at:image" => (f["frame"]["d"].as_str().unwrap().to_string(), f["at"].as_u64()),
+                _ => (f["d"].as_str().unwrap().to_string(), None),
+            })
+            .collect()
+    };
+    assert_eq!(
+        imaged("at:image"),
+        [(format!("{D}.2"), Some(at)), (S.to_string(), Some(at)), (v3, Some(at))],
+        "the head, the draft and the trunk member, each as of the position"
+    );
+    assert_eq!(imaged("image"), [(format!("{D}.1"), None)], "the base below the head, at the head");
+}
+
+/// A BOARD SERVING NO `arranged_at` CANNOT HOLD A SIDE TO ONE STATE (skep
+/// #1144, F3): its `doc_metadata` answers carry no such member — an older
+/// board — so a fence would pass over any edit, and the composition
+/// refuses as the board's fault at the first fence, naming the side and
+/// the member, with nothing imaged and nothing written — never as `null`,
+/// a side never arranged (the mutant that reads the member absent as
+/// `null` composes unguarded). A draft side named at a position, read as
+/// of it and fenced not at all, composes on that board.
+#[test]
+fn a_board_serving_no_arranged_at_is_refused_at_the_first_fence_and_composes_nothing() {
+    let mut w = World::window_and_draft();
+    w.no_arranged_at = true;
+    let (dialer, board, _) = open(w);
+    let at = dialer.world().position;
+    let err = compose(&board, Some(&token()), &with_side(Side::Draft { at: a(S), position: None }))
+        .expect_err("refused");
+    let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("faced: {err:?}") };
+    assert!(
+        face.state.contains("arranged_at") && face.state.contains(S) && face.cause.contains("an older board"),
+        "{face}"
+    );
+    assert!(face.act.contains("nothing was merged and nothing was written"), "{face}");
+    assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the trunk's metadata, then the draft's opening fence, and nothing after");
+    compose(&board, Some(&token()), &with_side(Side::Draft { at: a(S), position: Some(at) }))
+        .expect("read as of the position named, no fence");
 }

@@ -271,12 +271,51 @@ fn a_position_of_a_read_by_identity_takes_its_room_at_most() {
     let example = r#"{"as_of":9,"items":[{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},{"at":"1.0.1.0.1.0.1.2","value":null}],"resp":"i_delivery"}"#;
     let first = r#"{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},"#;
     assert!(example.contains(first) && first.len() == 34 + addr.len());
+    // The answer's envelope at its widest — the largest `as_of` — takes the
+    // room the constant gives it.
+    let widest = json!({"as_of": u64::MAX, "items": [], "resp": "i_delivery"}).to_string();
+    assert!(widest.len() <= frames::I_DELIVERY_ENVELOPE, "{widest}");
     // A part of the delivery budget at that room, under a short address,
     // fits the dialer's cap; under a long one it does not, so a reader sizes
     // its parts by the room.
     let budget = 1usize << 17;
-    assert!(budget * (frames::I_ITEM_ROOM + 22) + 64 <= crate::dial::MAX_ANSWER_BYTES);
-    assert!(budget * (frames::I_ITEM_ROOM + 31) + 64 > crate::dial::MAX_ANSWER_BYTES);
+    let envelope = frames::I_DELIVERY_ENVELOPE;
+    assert!(budget * (frames::I_ITEM_ROOM + 22) + envelope <= crate::dial::MAX_ANSWER_BYTES);
+    assert!(budget * (frames::I_ITEM_ROOM + 31) + envelope > crate::dial::MAX_ANSWER_BYTES);
+}
+
+/// A read by identity answers one value a position, `null` in its place.
+///
+/// The wire's own `i_delivery` example decodes to `h` and a position the
+/// document never minted; a `hex` per-byte value is its one byte and a
+/// composite its whole bytes. A per-byte item spelling other than one byte,
+/// a hex that does not decode, a kind this crate does not know and an item
+/// with no `value` spell no answer, and neither does a `delivery` or a
+/// rejection (the mutant that reads `null` as an empty value lets a word
+/// the board never minted be signed as nothing). A several-span
+/// `retrieve_v` is one spec a span, in order, and one span its one spec.
+#[test]
+fn a_read_by_identity_decodes_one_value_a_position_and_keeps_null_in_its_place() {
+    // `<!-- wire: response i_delivery -->`.
+    let example: Value = serde_json::from_str(r#"{"as_of":9,"items":[{"at":"1.0.1.0.1.0.1.1","value":{"content":"h"}},{"at":"1.0.1.0.1.0.1.2","value":null}],"resp":"i_delivery"}"#).unwrap();
+    assert_eq!(answers::i_delivery_values(&example), Some(vec![Some(b"h".to_vec()), None]));
+    let one = |value: Value| {
+        answers::i_delivery_values(&json!({"as_of": 9, "items": [{"at": "1.0.1.0.1.0.1.1", "value": value}], "resp": "i_delivery"}))
+    };
+    assert_eq!(one(json!({"hex": "e2"})), Some(vec![Some(vec![0xe2])]));
+    assert_eq!(one(json!({"atom": "chunk"})), Some(vec![Some(b"chunk".to_vec())]));
+    assert_eq!(one(json!({"atom_hex": "00ff"})), Some(vec![Some(vec![0x00, 0xff])]));
+    for spells_none in [json!({"content": "hi"}), json!({"content": ""}), json!({"hex": "e2e2"}), json!({"hex": "zz"}), json!({"ref": "1.0.1.0.1.0.2.1"})] {
+        assert_eq!(one(spells_none.clone()), None, "{spells_none}");
+    }
+    assert_eq!(answers::i_delivery_values(&json!({"as_of": 9, "items": [{"at": "1.0.1.0.1.0.1.1"}], "resp": "i_delivery"})), None, "an item with no value");
+    assert_eq!(answers::i_delivery_values(&json!({"as_of": 9, "items": [{"content": "h"}], "resp": "delivery"})), None, "a delivery is no read by identity");
+    assert_eq!(answers::i_delivery_values(&json!({"code": "withheld", "op": "retrieve_i", "resp": "rejected", "site": {"addr": "1.0.1.0.64"}})), None);
+    assert_eq!(
+        frames::retrieve_v_of("1.0.1.0.1.2", &[(1, 4), (10, 7)]),
+        json!({"op": "retrieve_v", "specs": [{"doc": "1.0.1.0.1.2", "span": {"start": "1.1", "width": "0.4"}}, {"doc": "1.0.1.0.1.2", "span": {"start": "1.10", "width": "0.7"}}]})
+    );
+    assert_eq!(frames::retrieve_v("1.0.1.0.1.2", 1, 4), frames::retrieve_v_of("1.0.1.0.1.2", &[(1, 4)]), "one span, one spec");
 }
 
 /// A whole image is decoded whole, its runs tiling the positions from 1.

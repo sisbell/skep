@@ -1,21 +1,25 @@
 //! The landing over the scripted board: the shot and the draft landing.
 //!
-//! The suite checks the shot: its frame and body, byte-checked; the claim's
-//! and the record's reads after it; a lost ack completed by `resume`; a
-//! daughter reported at once; a shot naming a daughter at a moved head
-//! refused whole; the member sides named `supersede`, never a draft side;
-//! the record written after the merger's own publication; and the run cap,
-//! before any frame. It checks the draft landing: one `set_arrangement`
-//! typed at the composition, refused whole after an edit between compose
-//! and land, and a race on a draft that is no side; every read made at the
-//! first read's position; a position reclaimed, past the head or inside a
-//! commit, and a withheld draft side, each refused or withholding the
-//! verdict; a newer head told while the landing stands; a baseless draft
-//! sent no base; the fork gate; a side's state and the key's text, a fork
-//! arranged or edited since its state answering `SideMoved`, read at a
-//! draft side's position, and arranged since its landing another key; what
-//! a landing replaces; the scripted board judging `set_arrangement` as the
-//! store does; and a fresh draft staged from the head.
+//! The suite checks the shot: its frame and body, byte-checked; its values
+//! read at the head in parts past the delivery budget, and asked again in
+//! halves where a read is too large; the claim's and the record's reads
+//! after it; a lost ack completed by `resume`; a daughter reported at
+//! once; a shot naming a daughter at a moved head refused whole; the member
+//! sides named `supersede`, never a draft side; the record written after
+//! the merger's own publication; and the run cap, before any frame. It
+//! checks the draft landing: one `set_arrangement` typed at the
+//! composition, refused whole after an edit between compose and land, and
+//! a race on a draft that is no side; a draft edited while the composition
+//! reads it refused, and one edited before read as it stands; a position
+//! reclaimed, past the head or inside a commit, and a withheld draft side,
+//! each refused or withholding the verdict; a newer head told while the
+//! landing stands; a baseless draft sent no base; the fork gate; a side's
+//! state and the key's text, a fork arranged or edited since its state
+//! answering `SideMoved`, read at a draft side's position, and arranged
+//! since its landing another key; what a landing replaces, read at the
+//! head and held to the composition's position; the scripted board judging
+//! `set_arrangement` as the store does; and a fresh draft staged from the
+//! head.
 
 use super::*;
 
@@ -87,46 +91,13 @@ fn the_shot_frame_and_its_body_are_byte_checked() {
         "{frame}"
     );
     // The body, hand-built from the same pieces, verifies the attest.
-    let window = a(&format!("{Z}.0.1.1"));
-    let values: Vec<[u8; 1]> = b"the cat sat!!!".iter().map(|b| [*b]).collect();
-    let pieces: Vec<ShotSegmentPiece<'_>> = values[..4]
-        .iter()
-        .map(|v| ShotSegmentPiece::Value(v))
-        .chain(std::iter::once(ShotSegmentPiece::Window {
-            start: &window,
-            width: std::num::NonZeroU64::new(5).unwrap(),
-        }))
-        .chain(values[4..].iter().map(|v| ShotSegmentPiece::Value(v)))
-        .collect();
-    let head = a(&format!("{D}.2"));
-    let body = entry_body_publish(pieces, Some(ShotBase { member: &head, extent: 16 }));
-    let term = board.board_term().unwrap().unwrap();
-    let alg = Signer::public_key(&signer).alg();
-    assert_eq!(frame["attest"]["alg"].as_str(), Some(alg));
-    let sig = crate::hex::decode(frame["attest"]["sig"].as_str().unwrap()).unwrap();
-    let expected = entry_frame(alg, term, &a(ACCOUNT), DocTerm::One(&a(D)), &body);
-    assert_eq!(
-        skep_signature::verify(
-            Signer::tag(&signer),
-            Signer::public_key(&signer),
-            &expected,
-            &sig
-        ),
-        Ok(()),
-        "the attest signs the body the pieces spell"
-    );
-    // The values were read through the sides that hold them: D's through
-    // the head, the draft's through the draft.
-    let reads: Vec<(String, u64, u64)> = dialer
-        .frames("retrieve_v")
-        .iter()
-        .filter(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1)
-        .map(|f| {
-            let (from, width) = span(&f["specs"][0]["span"]);
-            (f["specs"][0]["doc"].as_str().unwrap().to_string(), from, width)
-        })
-        .collect();
-    assert_eq!(reads, [(format!("{D}.2"), 1, 4), (format!("{D}.2"), 10, 7), (S.into(), 12, 3)]);
+    signs_the_cat_sat(&board, &signer, frame);
+    // The values were read at the head through the sides that hold them:
+    // D's through the head by its V-ordinals, both stretches in one read;
+    // the draft's by the I-addresses its image served.
+    assert_eq!(value_reads(&dialer), [vec![(format!("{D}.2"), 1, 4), (format!("{D}.2"), 10, 7)]]);
+    assert_eq!(dialer.frames("retrieve_i"), [crate::board::frames::retrieve_i(&[(&format!("{S}.0.1.1"), 3)])]);
+    assert!(dialer.ops().iter().all(|o| !o.starts_with("at:")), "nothing read at a position: {:?}", dialer.ops());
     assert_eq!(
         *position,
         dialer
@@ -140,6 +111,199 @@ fn the_shot_frame_and_its_body_are_byte_checked() {
     let member = dialer.world().docs.get(&format!("{D}.3")).unwrap().clone();
     assert_eq!(member.runs, vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 10)], "the draft's text re-minted under D at D·12, I-adjacent to D·5–11 and so one run with it");
     assert_eq!((member.placed, member.base_extent), (Some(19), Some(16)));
+}
+
+/// Asserts the shot `frame`'s `attest` verifies over the body `pieces`
+/// spell, its base the head `D.2` at `extent`.
+fn signs(board: &Board, signer: &HybridSigner, frame: &Value, pieces: Vec<ShotSegmentPiece<'_>>, extent: u64) {
+    let head = a(&format!("{D}.2"));
+    let body = entry_body_publish(pieces, Some(ShotBase { member: &head, extent }));
+    let term = board.board_term().unwrap().unwrap();
+    let alg = Signer::public_key(signer).alg();
+    assert_eq!(frame["attest"]["alg"].as_str(), Some(alg));
+    let sig = crate::hex::decode(frame["attest"]["sig"].as_str().unwrap()).unwrap();
+    let expected = entry_frame(alg, term, &a(ACCOUNT), DocTerm::One(&a(D)), &body);
+    assert_eq!(
+        skep_signature::verify(Signer::tag(signer), Signer::public_key(signer), &expected, &sig),
+        Ok(()),
+        "the attest signs the body the pieces spell"
+    );
+}
+
+/// Asserts the shot `frame` of the shot's byte-checked shape signs "the
+/// cat sat!!!" by value, the window onto `Z`'s "hello" after "the ".
+fn signs_the_cat_sat(board: &Board, signer: &HybridSigner, frame: &Value) {
+    let window = a(&format!("{Z}.0.1.1"));
+    let values: Vec<[u8; 1]> = b"the cat sat!!!".iter().map(|b| [*b]).collect();
+    let pieces: Vec<ShotSegmentPiece<'_>> = values[..4]
+        .iter()
+        .map(|v| ShotSegmentPiece::Value(v))
+        .chain(std::iter::once(ShotSegmentPiece::Window {
+            start: &window,
+            width: std::num::NonZeroU64::new(5).unwrap(),
+        }))
+        .chain(values[4..].iter().map(|v| ShotSegmentPiece::Value(v)))
+        .collect();
+    signs(board, signer, frame, pieces, 16);
+}
+
+/// The specs of each `retrieve_v` a dialer served but `H.1`'s, as `(doc,
+/// from, width)`.
+fn value_reads(dialer: &Scripted) -> Vec<Vec<(String, u64, u64)>> {
+    dialer
+        .frames("retrieve_v")
+        .iter()
+        .filter(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1)
+        .map(|f| {
+            f["specs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|spec| {
+                    let (from, width) = span(&spec["span"]);
+                    (spec["doc"].as_str().unwrap().to_string(), from, width)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// THE SHOT READS EACH HOLDER'S VALUES IN AS FEW READS AS ITS BUDGETS ALLOW
+/// (skep #1144): the head's own words, read at the head by its V-ordinals,
+/// go out in one `retrieve_v` while they fit the delivery budget and in
+/// parts past it — 131,074 positions in two, the first the budget's
+/// 131,072 — and the attest signs every value they deliver (the mutant
+/// that reads past the budget is refused `too_many_items` whole, and the
+/// one that splits a part back to the wrong stretch signs other words).
+/// The side is a draft staged from `D.1` and left as staged, so the shot
+/// claims no daughter and renders no draft: its body is the values alone.
+#[test]
+fn the_shot_reads_a_holders_values_in_parts_past_the_delivery_budget() {
+    let budget = crate::merge::reads::MAX_DELIVERY_ITEMS;
+    let n = budget + 1;
+    let mut w = World::new();
+    w.text(D, 1, &"a".repeat(n as usize));
+    w.text(D, n + 1, "b");
+    let base = vec![run(D, 1, n)];
+    let head = vec![run(D, 1, n), run(D, n + 1, 1)];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), base.clone(), None);
+    w.member(&format!("{D}.2"), head, Some(n));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    w.doc(S, false, ACCOUNT, base);
+    w.staged(S, &format!("{D}.1"), n);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
+    let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+    assert_eq!(m_runs(&merged), vec![run(D, 1, n + 1)], "the premise: the head's words, one run");
+    dialer.clear();
+    land(&board, &merged, shot(&session, &signer)).expect("landed");
+    let member = format!("{D}.2");
+    assert_eq!(
+        value_reads(&dialer),
+        [vec![(member.clone(), 1, budget)], vec![(member.clone(), budget + 1, 1), (member, budget + 2, 1)]],
+        "the budget's positions, then the rest of the first stretch and the second, at the head"
+    );
+    let values: Vec<[u8; 1]> = (0..=n).map(|k| [if k < n { b'a' } else { b'b' }]).collect();
+    signs(&board, &signer, &dialer.frames("publish")[0], values.iter().map(|v| ShotSegmentPiece::Value(v)).collect(), n + 1);
+}
+
+/// A VALUE READ TOO LARGE IS ASKED AGAIN IN HALVES (skep #1144): the shot
+/// reads the head's two stretches in one `retrieve_v`. Refused
+/// `too_many_items`, it goes again one read a stretch, and a stretch still
+/// refused in halves of its width; and where its answer passes the
+/// dialer's cap — a composite value's item is as long as the value, so a
+/// read within the budget can pass it where each stretch alone fits — it
+/// goes again one read a stretch. Each lands, the attest signing the body
+/// the whole read would have spelled (the mutant that halves on
+/// `too_many_items` alone halts on the dialer's `TooLarge`).
+#[test]
+fn a_value_read_too_large_is_asked_again_in_halves() {
+    let head = format!("{D}.2");
+    let whole = vec![(head.clone(), 1, 4), (head.clone(), 10, 7)];
+    // The answer the whole read would carry, and each stretch's.
+    let answer = |specs: &[(u64, u64)]| World::window_and_draft().op(&crate::board::frames::retrieve_v_of(&head, specs), None).expect("an answer").body.len();
+    let (both, first, second) = (answer(&[(1, 4), (10, 7)]), answer(&[(1, 4)]), answer(&[(10, 7)]));
+    assert!(first.max(second) < both, "the premise: each stretch's answer is shorter than the whole read's");
+    // The shot over a board `refusing` sizes as it does: the value reads it
+    // made, the attest checked.
+    let landed = |refusing: &dyn Fn(&mut World)| {
+        let mut w = World::window_and_draft();
+        refusing(&mut w);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        dialer.clear();
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        signs_the_cat_sat(&board, &signer, &dialer.frames("publish")[0]);
+        value_reads(&dialer)
+    };
+    let (first_four, last_seven) = (vec![(head.clone(), 1, 4)], vec![(head.clone(), 10, 7)]);
+    assert_eq!(
+        landed(&|w| w.delivery_cap = 4),
+        [whole.clone(), first_four.clone(), last_seven.clone(), vec![(head.clone(), 10, 3)], vec![(head.clone(), 13, 4)]],
+        "too_many_items: one read a stretch, then a stretch in halves"
+    );
+    assert_eq!(
+        landed(&move |w| w.value_answer_cap = Some(both - 1)),
+        [whole, first_four, last_seven],
+        "past the dialer's cap: one read a stretch"
+    );
+}
+
+/// WHAT A LANDING REPLACES IS READ AT THE HEAD, HELD TO THE COMPOSITION'S
+/// POSITION (skep #1144, F4): `replaced` reads the draft's image at the
+/// head between two `doc_metadata` reads, nothing at a position, and
+/// answers its stretches where the draft is unchanged since the
+/// composition. A draft another hand edits between the two reads refuses
+/// `SideMoved` with its two states; one edited after the composition
+/// refuses it with `before` and `after` the edit's position, past `at`, its
+/// words saying the draft changed after the merge was composed — never that
+/// a base moved — as the landing typed against `at` would be refused
+/// `arrangement_moved`; and one minted after the composition is
+/// `NoSuchDocument`, as it was at that position.
+#[test]
+fn what_a_landing_replaces_is_read_at_the_head_and_held_to_the_compositions_position() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let p = merged.as_of;
+    dialer.clear();
+    assert_eq!(replaced(&board, Some(session.token()), &a(S), &merged), Ok(vec![]), "M carries every word S holds");
+    assert_eq!(
+        dialer.ops(),
+        ["doc_metadata", "retrieve_doc_v_span_set", "image", "doc_metadata"],
+        "the draft's two reads around its image, at the head"
+    );
+    // Edited between the two reads: before the fourth frame.
+    dialer.clear();
+    dialer.world().interleave = Some((4, S.to_string(), vec![run(D, 1, 11)]));
+    let edited = p + 1;
+    assert_eq!(
+        replaced(&board, Some(session.token()), &a(S), &merged),
+        Err(Refusal::SideMoved { side: a(S), at: p, before: Some(p), after: Some(edited) })
+    );
+    // Read again, the draft stands as edited after the composition.
+    let refused = replaced(&board, Some(session.token()), &a(S), &merged);
+    assert_eq!(refused, Err(Refusal::SideMoved { side: a(S), at: p, before: Some(edited), after: Some(edited) }));
+    let said = refused.unwrap_err().to_string();
+    assert!(
+        said.contains(&format!("{S} changed at position {edited}, after this merge was composed at position {p}"))
+            && !said.contains("base")
+            && said.contains("nothing was merged"),
+        "{said}"
+    );
+    // Minted after the composition.
+    let x = "1.0.1.0.79";
+    {
+        let mut w = dialer.world();
+        let minted = w.commit("create_new_document", vec![x.to_string()]);
+        w.doc(x, false, ACCOUNT, Vec::new());
+        w.docs.get_mut(x).unwrap().history = BTreeMap::from([(minted, Vec::new())]);
+    }
+    assert_eq!(replaced(&board, Some(session.token()), &a(x), &merged), Err(Refusal::NoSuchDocument(a(x))));
 }
 
 /// After the shot, in order: the claim's read at the daughter (and no
@@ -673,7 +837,7 @@ fn over_the_cap_refuses_with_the_count_before_any_frame() {
 
 /// THE DRAFT LANDING IS ONE WRITE (the landing lane's rulings R1, R4,
 /// R5; skep #764): the merger's newest record for the key read first,
-/// then the draft's base at the composition's position, then one
+/// then the draft's base as it stands, at the head, then one
 /// `set_arrangement` of M into the draft — its runs, `as_of` the ONE
 /// position the merge was composed at, `head` the head and its extent as
 /// read, `base` the same pair since the board records a base for the
@@ -715,10 +879,10 @@ fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_
     );
     assert_eq!(
         ops[..3],
-        ["find_links_ftt", "find_links_ftt", "at:doc_metadata"],
-        "the merger's newest record for the key — the links of the kind to its two sides, none standing — then the draft's base, read at the composition's position: {ops:?}"
+        ["find_links_ftt", "find_links_ftt", "doc_metadata"],
+        "the merger's newest record for the key — the links of the kind to its two sides, none standing — then the draft's base, read as it stands: {ops:?}"
     );
-    assert_eq!(dialer.positions("doc_metadata"), [p]);
+    assert!(ops.iter().all(|o| !o.starts_with("at:")), "nothing read at a position: {ops:?}");
     // The draft holds M; the base re-recorded on the head at the extent
     // read; the marker beside it, at the write's position.
     let w = dialer.world();
@@ -847,37 +1011,48 @@ fn a_race_on_a_draft_that_is_no_side_says_landing_there_again_replaces_the_chang
     assert_eq!(w.docs.get(t).unwrap().runs, edited, "the edit kept");
 }
 
-/// EVERY READ OF THE COMPOSITION IS MADE AT ONE POSITION (skep #762): an
-/// edit to the draft landing between the composition's first read and
-/// its second — the draft's "!!!" deleted — changes nothing the
-/// composition read: M holds the "!!!", every `/op-at` read was asked at
-/// the first read's position, `as_of` is that position and the record's
-/// draft side names it. Read at the head as it went, the composition
-/// would pair the draft's base and extent from one moment with an image
-/// from the next.
+/// A DRAFT EDITED WHILE THE COMPOSITION READS IT IS REFUSED (skep #1144):
+/// another hand deletes the draft's "!!!" after the draft's opening fence
+/// and before its closing one, and the composition refuses `SideMoved`
+/// naming the draft — `before` its state at the opening fence, `after` the
+/// edit's position, `at` the position the composition stood at — with no
+/// read at a position and nothing written. The same edit landed before
+/// the draft's opening fence is read as it stands: M holds no "!!!", and
+/// P, past the edit, is the result's `as_of` and the record's draft
+/// side's position, the draft's state the edit's. Read with no fence,
+/// the composition would pair the draft's base and state from one moment
+/// with an image from the next.
 #[test]
-fn every_read_of_the_composition_is_made_at_the_first_reads_position() {
+fn a_draft_edited_while_the_composition_reads_it_is_refused_and_one_edited_before_is_read_as_it_stands() {
+    // After the draft's opening fence: before the head's, the third frame.
+    let mut w = draft_landing_world();
+    w.interleave = Some((3, S.to_string(), vec![run(D, 1, 11)]));
+    let (dialer, board, _) = open(w);
+    let p = dialer.world().position;
+    let refused = compose(&board, Some(&token()), &draft_inputs());
+    assert!(dialer.world().interleave.is_none(), "the edit landed mid-walk");
+    let edited = p + 1;
+    assert_eq!(dialer.world().docs.get(S).unwrap().history.keys().next_back(), Some(&edited), "the premise: the edit's position");
+    assert_eq!(refused, Err(Refusal::SideMoved { side: a(S), at: edited, before: Some(p), after: Some(edited) }));
+    let said = refused.unwrap_err().to_string();
+    assert!(said.contains(&format!("{S} changed while this merge was reading it")) && said.contains("nothing was merged") && said.contains("compose the merge again"), "{said}");
+    let ops = dialer.ops();
+    assert!(ops.iter().all(|o| !o.starts_with("at:")), "no read at a position: {ops:?}");
+    assert!(!ops.iter().any(|o| ["set_arrangement", "publish", "insert", "make_link", "stage"].contains(&o.as_str())), "nothing written: {ops:?}");
+    // Before the draft's opening fence: the second frame.
     let mut w = draft_landing_world();
     w.interleave = Some((2, S.to_string(), vec![run(D, 1, 11)]));
     let (dialer, board, _) = open(w);
-    let p = dialer.world().position;
+    let edited = dialer.world().position + 1;
     let merged = compose(&board, Some(&token()), &draft_inputs()).expect("composed");
     assert!(dialer.world().interleave.is_none(), "the edit landed mid-walk");
-    assert_eq!(dialer.world().docs.get(S).unwrap().runs, vec![run(D, 1, 11)], "the draft as the other hand left it");
-    assert_eq!(m_runs(&merged), draft_m(), "M as of the one position: the \"!!!\" the edit removed is in it");
-    assert_eq!(merged.as_of, p, "the first read's position, not the edit's");
+    assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)], "the draft as the other hand left it: no \"!!!\"");
+    assert_eq!(merged.as_of, edited, "P past the edit");
     assert_eq!(
         merged.record.sides[1],
-        SideAt::Draft { at: a(S), position: Some(p), arranged: SideState::At(p) },
-        "the draft's state as of the one position, not the edit's"
+        SideAt::Draft { at: a(S), position: Some(edited), arranged: SideState::At(edited) },
+        "the draft's state as it was read"
     );
-    for op in ["doc_metadata", "retrieve_doc_v_span_set", "image"] {
-        let positions = dialer.positions(op);
-        assert!(!positions.is_empty() && positions.iter().all(|at| *at == p), "`{op}`: {positions:?}");
-    }
-    let ops = dialer.ops();
-    assert_eq!(ops[0], "doc_metadata", "{ops:?}");
-    assert!(ops[1..].iter().take_while(|o| *o != "find_links_ftt").all(|o| o.starts_with("at:")), "every read after the first at the one position: {ops:?}");
 }
 
 /// A POSITION THE BOARD HAS RECLAIMED is refused by name and never read
@@ -1847,7 +2022,10 @@ fn a_fresh_draft_is_staged_from_the_head_then_landed_in_and_a_re_run_stages_noth
     assert_eq!(frame["id"].as_str(), Some(landing_id(&format!("{}:{fresh}@{stage_at}", merged.key.text()), "draft").as_str()), "the fresh draft and the stage's position");
     assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the stage recorded a base, so it is re-recorded");
     assert_eq!(frame["merge"], json!({"sides": [S]}));
-    assert_eq!(dialer.positions("doc_metadata"), [stage_at], "the fresh draft's base read at the stage's position");
+    assert!(
+        dialer.frames("doc_metadata").iter().any(|f| f["doc"] == fresh.to_string()) && ops.iter().all(|o| !o.starts_with("at:")),
+        "the fresh draft's base read as it stands, nothing at a position: {ops:?}"
+    );
     let w = dialer.world();
     assert_eq!(w.docs.get(&fresh.to_string()).unwrap().runs, draft_m());
     assert_eq!(

@@ -7,7 +7,8 @@
 //! by reference, a
 //! retry keeping its ids, and `already_published` at the shot read again
 //! and sent once more, never a second member or atom; a draft the merger
-//! may not read, refused before any write; a claimed board whose head is
+//! may not read, refused before any write; an edit past the draft's
+//! closing fence, past P, refused at the draft landing; a claimed board whose head is
 //! owed landing nothing, a landing that stands writing its record unsigned,
 //! and a claim past the head's read met by one signed send (SP-14); a
 //! journal the act cannot write into leaving the act standing, checked
@@ -532,9 +533,9 @@ fn the_draft_landings_refusals_are_mapped() {
 /// A draft the merger may not read is refused before any write, naming it.
 ///
 /// `X` is another account's private draft, withheld. A landing into `X`
-/// meets `withheld` at its one read of `X`'s metadata at the
-/// composition's position, after the merger's newest record for the
-/// key, the undo and the withdrawal of `X` at theirs at the head — each
+/// meets `withheld` at its one read of `X`'s metadata as it stands, after
+/// the merger's newest record for the key, the undo and the withdrawal of
+/// `X` at theirs, all at the head — each
 /// [`Refusal::Unreadable`] naming `X`, with no `stage`,
 /// `set_arrangement`, journal mint, `insert` or `make_link` sent and no
 /// commit made. A fresh landing whose standing record names a draft
@@ -565,8 +566,8 @@ fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
     );
     assert_eq!(
         dialer.ops(),
-        ["find_links_ftt", "find_links_ftt", "at:doc_metadata"],
-        "the merger's newest record for the key, then the one read of X, at the composition's position"
+        ["find_links_ftt", "find_links_ftt", "doc_metadata"],
+        "the merger's newest record for the key, then the one read of X, as it stands"
     );
     nothing_sent("a landing into X");
     dialer.clear();
@@ -594,6 +595,56 @@ fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
         dialer.ops()
     );
     assert_eq!(dialer.world().rows.len(), rows, "no commit");
+}
+
+/// P IS WHERE THE OPENING FENCES STAND (skep #1144): another hand's edit
+/// to the draft after the composition read it — after the draft's
+/// closing fence and before the head's, or after every closing fence and
+/// before the prior records' read — leaves the draft unchanged across its
+/// fences, so the composition answers, and P, where the opening fences
+/// stood, is before the edit: the draft landing typed against P is
+/// refused `arrangement_moved`, nothing written and the edit kept (the
+/// mutants taking P from the last closing fence, or from the reader's
+/// highest `as_of`, type the write past the edit and lose it).
+#[test]
+fn an_edit_past_the_drafts_closing_fence_is_past_p_and_the_draft_landing_refuses_it() {
+    // The frames of a composition no hand edits, counted from 1.
+    let (dialer, board, _) = open(draft_landing_world());
+    compose(&board, Some(&token()), &draft_inputs()).expect("composed untouched");
+    let first_find = dialer.served_index("find_links_ftt");
+    let head = format!("{D}.2");
+    {
+        let served = dialer.served.lock().unwrap();
+        let fence = |k: usize| served[k - 1].1["doc"].as_str().map(str::to_string);
+        assert_eq!(
+            (fence(first_find - 2), fence(first_find - 1)),
+            (Some(S.to_string()), Some(head)),
+            "the premise: the draft's closing fence, then the head's, then the prior records"
+        );
+    }
+    for (cell, before) in [
+        ("after the draft's closing fence, before the head's", first_find - 1),
+        ("after every closing fence, before the prior records", first_find),
+    ] {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let p = dialer.world().position;
+        dialer.clear();
+        dialer.world().interleave = Some((before, S.to_string(), vec![run(D, 1, 11)]));
+        let merged = compose(&board, Some(session.token()), &draft_inputs())
+            .unwrap_or_else(|e| panic!("{cell}: the draft unchanged across its fences: {e:?}"));
+        assert!(dialer.world().interleave.is_none(), "{cell}: the edit landed mid-walk");
+        assert_eq!(merged.as_of, p, "{cell}: P where the opening fences stood, before the edit");
+        assert_eq!(m_runs(&merged), draft_m(), "{cell}: M as the draft was read, \"!!!\" in it");
+        let rows = dialer.world().rows.len();
+        let err = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))))
+            .expect_err("the draft changed past P");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{cell}: {err:?}") };
+        assert_eq!(refused.code, "arrangement_moved", "{cell}");
+        let w = dialer.world();
+        assert_eq!(w.docs[S].runs, vec![run(D, 1, 11)], "{cell}: the edit kept");
+        assert_eq!(w.rows.len(), rows, "{cell}: nothing written");
+    }
 }
 
 /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NO SHOT (SP-14): `/health`

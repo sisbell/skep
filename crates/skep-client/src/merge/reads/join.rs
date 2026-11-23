@@ -78,7 +78,7 @@ pub(in crate::merge) fn first_difference(
 /// the daemon's equi-join on I-address — faced; the reads' refusals.
 pub(in crate::merge) fn check_join(reader: &Reader<'_>, readings: &Readings) -> Result<(), Refusal> {
     let base = &readings.base_image;
-    // The oracle at the one position every image was read at.
+    // The oracle at the one position a verification reads every image at.
     let at = Some(readings.at);
     let regions: Vec<(Address, u64, u64)> =
         readings.maps.iter().map(|m| (m.doc.clone(), 1, m.extent)).collect();

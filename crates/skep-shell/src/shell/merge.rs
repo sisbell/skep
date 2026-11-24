@@ -2075,22 +2075,23 @@ impl Words<'_> {
 /// the index of the gap it names.
 ///
 /// Each is `⟨gap id⟩: ⟨choice⟩` — `keep_both` (the gap's placement as
-/// composed), `omit`, `{order: [sides]}` (each a side among the gap's runs,
-/// none twice), `{keep_only: side}`, `{after: anchor}` or `{before: anchor}`
-/// (the gap's own anchor) — naming each gap once, at a gap the rules left
-/// unsettled. A gap the rules settled, `resolved_by` `rule` — an `anchor`
-/// gap, or an `order` gap the value rule's dedup kept once — takes none: its
-/// placement is the rules', which the library's own composition never lets
-/// a resolution move, and a record naming a merger there would say the
-/// merger placed it. A spine's `moves` gap takes none either: its runs are
-/// the base material each side moved, so no reading of the draft can show
-/// which side's order of the spine it holds (`draft_holds`). At a `moves`
-/// gap with spots (CM-I33) the one choice is `{order: [side]}` or
-/// `{keep_only: side}` naming the side whose placement the composition took,
-/// a confirmation: the words are where the draft holds them, and another
-/// holder's placement is reached by moving them to its spot and composing
-/// again (`holders_moved`). Nothing is settled here: a choice is recorded
-/// only where the draft holds it (`draft_holds`, `settle_resolutions`).
+/// composed, [`kept`]), `omit`, `{order: [sides]}` (each a side among the
+/// gap's runs, none twice), `{keep_only: side}`, `{after: anchor}` or
+/// `{before: anchor}` (the gap's own anchor) — naming each gap once, at a
+/// gap the rules left unsettled. A gap the rules settled, `resolved_by`
+/// `rule` — an `anchor` gap, or an `order` gap the value rule's dedup kept
+/// once — takes none: its placement is the rules', which the library's own
+/// composition never lets a resolution move, and a record naming a merger
+/// there would say the merger placed it. A spine's `moves` gap takes none
+/// either: its runs are the base material each side moved, so no reading of
+/// the draft can show which side's order of the spine it holds
+/// (`draft_holds`). At a `moves` gap with spots (CM-I33) the one choice is
+/// `{order: [side]}` or `{keep_only: side}` naming the side whose placement
+/// the composition took, a confirmation: the words are where the draft
+/// holds them, and another holder's placement is reached by moving them to
+/// its spot and composing again (`holders_moved`). Nothing is settled here:
+/// a choice is recorded only where the draft holds it (`draft_holds`,
+/// `settle_resolutions`).
 ///
 /// # Errors
 ///
@@ -2138,11 +2139,35 @@ pub(super) fn checked_resolutions(gaps: &[Gap], resolutions: &Map<String, Value>
         if !gap.spots.is_empty() && placed.as_ref() != Some(&gap.placed) {
             return Err(malformed());
         }
-        if chosen.insert(ix, placed.unwrap_or_else(|| gap.placed.clone())).is_some() {
+        if chosen.insert(ix, placed.unwrap_or_else(|| kept(gap))).is_some() {
             return Err(malformed());
         }
     }
     Ok(chosen)
+}
+
+/// Returns the placement `keep_both` confirms at `gap`: its placement as
+/// composed, spelled as the merge record re-states it (`Record::options`).
+///
+/// A gap of one side placed by an anchor is that side's order, the same
+/// words at the same place, which the record re-states as itself wherever
+/// the gap lies — at an end of M, over an empty spine — where an anchor's
+/// placement is re-stated by the anchor that stands, or not at all; a gap
+/// that holds no runs, a collision no side filled, places nothing,
+/// `omitted`. Every other gap keeps the placement it was composed with.
+fn kept(gap: &Gap) -> Placement {
+    let (Placement::After | Placement::Before) = gap.placed else { return gap.placed.clone() };
+    let mut sides: Vec<SideIx> = Vec::new();
+    for (side, _) in &gap.runs {
+        if !sides.contains(side) {
+            sides.push(*side);
+        }
+    }
+    match sides.len() {
+        0 => Placement::Omitted,
+        1 => Placement::Order(sides),
+        _ => gap.placed.clone(),
+    }
 }
 
 /// Settles each gap `chosen` names at the placement it asks (the module

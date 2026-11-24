@@ -887,10 +887,16 @@ fn the_record_round_trips_and_names_its_type() {
         },
     ];
     merged.record.values.applied = vec![GapId(1)];
+    merged.record.values.retyped = vec![(SideIx(0), run(D, 20, 3))];
     let v = merged.record.to_value();
     assert_eq!(
         (v["type"].as_str(), v["v"].as_u64(), v["rules"].as_str()),
-        (Some("merge"), Some(1), Some("merge-rules-3"))
+        (Some("merge"), Some(1), Some("merge-rules-4"))
+    );
+    assert_eq!(
+        v["values"]["retyped"],
+        json!([{"side": 0, "i_start": format!("{D}.0.1.20"), "width": "3"}]),
+        "each run the retype took out of M, with its side"
     );
     assert_eq!(
         v["gaps"][0]["runs"][0],
@@ -924,6 +930,11 @@ fn the_record_round_trips_and_names_its_type() {
             },
             Resolution {
                 gap: GapId(1),
+                choice: Choice::Before(a(&format!("{D}.0.1.5"))),
+                by: ResolvedBy::Agent
+            },
+            Resolution {
+                gap: GapId(1),
                 choice: Choice::Order(vec![SideIx(1), SideIx(0)]),
                 by: ResolvedBy::Agent
             },
@@ -934,7 +945,7 @@ fn the_record_round_trips_and_names_its_type() {
             },
             Resolution { gap: GapId(2), choice: Choice::Omit, by: answer }
         ],
-        "each gap a merger settled re-stated as its place, then its placement"
+        "each gap a merger settled re-stated as its place by each anchor that stands, then its placement"
     );
     let mut other = v.clone();
     other["type"] = json!("skep-head");

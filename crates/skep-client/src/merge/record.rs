@@ -95,15 +95,23 @@ pub const TYPE: &str = crate::publication::MERGE_RECORD_TYPE;
 /// The schema's version, `v`.
 pub const SCHEMA_VERSION: u64 = 1;
 
-/// The rule set's version, `rules`: §2's rule set, `merge-rules-3`.
+/// The rule set's version, `rules`: §2's rule set, `merge-rules-4`.
 ///
 /// Its gaps hold a `moves` gap with spots wherever two or more sides placed
 /// one fresh identity at different spots (CM-I33), and each gap keeps the
 /// number the report composed with no resolution gives it, the order chosen
-/// at a spine's `moves` gap included (skep #1155). [`verify`] composes
-/// under this build's rules whatever version a record names, so a record
-/// written under an earlier set can verify `Differs` where the sets part.
-pub const RULES: &str = "merge-rules-3";
+/// at a spine's `moves` gap included (skep #1155). An identity several
+/// sides hold at one spot is kept where it breaks no holder's own order,
+/// whichever side is listed first, and asks where none can be found; the
+/// sides' reorders fold in the order listed, each applied where it composes
+/// with those applied before it and a `moves` gap where it does not, a
+/// choice at one such gap settling that gap alone; a move takes the
+/// placement of a run placed twice nearest the gap's composed place; and
+/// `KeepBoth` confirms a gap's placement as composed, never putting back a
+/// copy the dedup dropped. [`verify`] composes under this build's rules
+/// whatever version a record names, so a record written under an earlier
+/// set can verify `Differs` where the sets part.
+pub const RULES: &str = "merge-rules-4";
 
 /// Returns the `by` member: this library's crate and version.
 pub(super) fn by() -> String {
@@ -632,6 +640,14 @@ impl Record {
             "replaces": self.replaces.as_ref().map(ToString::to_string),
             "by": self.by,
         });
+        if !self.values.retyped.is_empty() {
+            body["values"]["retyped"] = self
+                .values
+                .retyped
+                .iter()
+                .map(|(side, run)| side_run_to_value(*side, run))
+                .collect();
+        }
         if !self.answers.is_empty() {
             body["answers"] = Value::Array(self.answers.iter().map(PartAnswer::to_value).collect());
         }
@@ -644,11 +660,11 @@ impl Record {
     /// one missing a member this build cannot do without or spelling one it
     /// cannot read — a gap naming a side past the one byte a side is
     /// numbered by among them; a missing `landed`, `claims`, `retries`,
-    /// `replaces`, `by`, `values.applied` or `answers`, or a gap's missing
-    /// `spots`, reads as its empty value, a side's missing `arranged` as
-    /// [`SideState::Unrecorded`], and `rules` is not read: [`verify`]
-    /// composes under this build's [`RULES`]. A member this build does not
-    /// know is left unread.
+    /// `replaces`, `by`, `values.applied`, `values.retyped` or `answers`, or
+    /// a gap's missing `spots`, reads as its empty value, a side's missing
+    /// `arranged` as [`SideState::Unrecorded`], and `rules` is not read:
+    /// [`verify`] composes under this build's [`RULES`]. A member this build
+    /// does not know is left unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
             return None;
@@ -679,6 +695,9 @@ impl Record {
         let applied = v["values"]["applied"].as_array().map_or(Some(Vec::new()), |a| {
             a.iter().map(|g| g.as_u64().map(|n| GapId(n as u32))).collect()
         })?;
+        let retyped = v["values"]["retyped"]
+            .as_array()
+            .map_or(Some(Vec::new()), |a| a.iter().map(side_run_from_value).collect())?;
         let answers = v["answers"].as_array().map_or(Some(Vec::new()), |a| {
             a.iter().map(PartAnswer::from_value).collect()
         })?;
@@ -695,6 +714,7 @@ impl Record {
                 dedup: v["values"]["dedup"].as_bool()?,
                 retype: v["values"]["retype"].as_bool()?,
                 applied,
+                retyped,
             },
             answers,
             replaces: v["replaces"].as_str().and_then(parse_address),
@@ -726,13 +746,15 @@ impl Record {
     /// resolutions as the gaps record them, so a verifier composes the same
     /// M and the same gaps (§4). Each gap a person, an agent or an answer
     /// settled is re-stated as its place, then its placement (§1.4 step 7):
-    /// the place is `After` the anchor M holds before the gap, or, at the
-    /// start of M, `Before` the one after it, and the placement is the order
-    /// or the omission its `placed` spells. A gap placed `after` is re-stated
-    /// by its place alone and one placed `before` by its `before` anchor,
-    /// either of which places a gap of one group by that anchor; a `moves`
-    /// gap, which has no anchors, is re-stated by its order alone — at one
-    /// with spots the holder whose placement M took (CM-I33).
+    /// the place is a move `After` the anchor M holds before the gap and one
+    /// `Before` the anchor after it, each that stands, which name the place
+    /// together where a run the base places twice holds an anchor at two
+    /// places (skep #763); the placement is the order or the omission its
+    /// `placed` spells. At a gap of one group a move also places it by its
+    /// anchor, so a gap placed `after` gives its `After` last and one placed
+    /// `before` its `Before`. A `moves` gap, which has no anchors, is
+    /// re-stated by its order alone — at one with spots the holder whose
+    /// placement M took (CM-I33).
     pub fn options(&self) -> Options {
         let mut resolutions = Vec::new();
         for gap in &self.gaps {
@@ -740,20 +762,20 @@ impl Record {
                 Some(ResolvedBy::Rule) | None => continue,
                 Some(by) => by.clone(),
             };
-            let place = gap
-                .after
-                .clone()
-                .map(Choice::After)
-                .or_else(|| gap.before.clone().map(Choice::Before));
-            // The place first: at a gap of one group a move also sets the
+            let after = gap.after.clone().map(Choice::After);
+            let before = gap.before.clone().map(Choice::Before);
+            let places: Vec<Choice> = match gap.placed {
+                Placement::After => before.into_iter().chain(after).collect(),
+                _ => after.into_iter().chain(before).collect(),
+            };
+            // The places first: at a gap of one group a move also sets the
             // placement, which the order or the omission after it sets again.
             let choices: Vec<Choice> = match &gap.placed {
                 Placement::Order(sides) => {
-                    place.into_iter().chain([Choice::Order(sides.clone())]).collect()
+                    places.into_iter().chain([Choice::Order(sides.clone())]).collect()
                 }
-                Placement::Omitted => place.into_iter().chain([Choice::Omit]).collect(),
-                Placement::After => place.into_iter().collect(),
-                Placement::Before => gap.before.clone().map(Choice::Before).into_iter().collect(),
+                Placement::Omitted => places.into_iter().chain([Choice::Omit]).collect(),
+                Placement::After | Placement::Before => places,
             };
             resolutions.extend(
                 choices.into_iter().map(|choice| Resolution { gap: gap.id, choice, by: by.clone() }),
@@ -842,11 +864,7 @@ fn gap_to_value(g: &Gap) -> Value {
         Some(ResolvedBy::Agent) => Value::from("agent"),
         Some(ResolvedBy::Answer(a)) => Value::from(format!("answer:{a}")),
     };
-    let runs: Vec<Value> = g
-        .runs
-        .iter()
-        .map(|(side, run)| json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width.to_string()}))
-        .collect();
+    let runs: Vec<Value> = g.runs.iter().map(|(side, run)| side_run_to_value(*side, run)).collect();
     let mut gap = json!({
         "id": g.id.0,
         "kind": kind,
@@ -871,6 +889,22 @@ fn gap_to_value(g: &Gap) -> Value {
             .collect();
     }
     gap
+}
+
+/// Returns a run with the side that placed it as the record spells one:
+/// `{side, i_start, width}`, a gap's runs and the retype's alike (§4).
+fn side_run_to_value(side: SideIx, run: &Run) -> Value {
+    json!({"side": side.0, "i_start": run.address_at(0).map(|a| a.to_string()), "width": run.width.to_string()})
+}
+
+/// Returns the run and its side a `{side, i_start, width}` object spells,
+/// the origin by [`origin_of`]; `None` for one this build cannot read.
+fn side_run_from_value(v: &Value) -> Option<(SideIx, Run)> {
+    let i_start = v["i_start"].as_str()?;
+    let origin = origin_of(i_start)?;
+    let first = last_component(&parse_address(i_start)?)?;
+    let width: u64 = v["width"].as_str()?.parse().ok()?;
+    Some((side_ix(&v["side"])?, Run::new(origin, first, width)))
 }
 
 /// Returns the gap a JSON object spells, its runs' origins by [`origin_of`].
@@ -904,17 +938,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         Value::String(s) => Some(ResolvedBy::Answer(parse_address(s.strip_prefix("answer:")?)?)),
         _ => return None,
     };
-    let runs = v["runs"]
-        .as_array()?
-        .iter()
-        .map(|r| {
-            let i_start = r["i_start"].as_str()?;
-            let origin = origin_of(i_start)?;
-            let first = last_component(&parse_address(i_start)?)?;
-            let width: u64 = r["width"].as_str()?.parse().ok()?;
-            Some((side_ix(&r["side"])?, Run::new(origin, first, width)))
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let runs = v["runs"].as_array()?.iter().map(side_run_from_value).collect::<Option<Vec<_>>>()?;
     let anchor = |m: &Value| match m {
         Value::Null => Some(None),
         Value::String(s) => parse_address(s).map(Some),

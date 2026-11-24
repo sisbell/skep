@@ -1275,7 +1275,10 @@ fn part_value(part: &WindowPart) -> Value {
 /// It is spelled as a `--resolve` choice the core takes back: the sides'
 /// order where sides were placed, `after:`/`before:` the anchor where one
 /// stands, the one side's order where the gap lies at an end of M, `omit`
-/// where nothing was placed.
+/// where nothing was placed. A gap that holds no runs — a collision no
+/// side filled — at an end of M is named by its other anchor, the same
+/// place, or `omit` where it has none: an order of no side is no choice
+/// [`resolution`] takes.
 fn default_of(gap: &Gap) -> String {
     let order = |sides: &[SideIx]| {
         format!("order:{}", sides.iter().map(|s| s.0.to_string()).collect::<Vec<_>>().join(","))
@@ -1289,11 +1292,20 @@ fn default_of(gap: &Gap) -> String {
         }
         order(&sides)
     };
-    match &gap.placed {
-        Placement::Order(sides) => order(sides),
-        Placement::After => gap.after.as_ref().map_or_else(own_sides, |a| format!("after:{a}")),
-        Placement::Before => gap.before.as_ref().map_or_else(own_sides, |b| format!("before:{b}")),
-        Placement::Omitted => "omit".to_string(),
+    // The place by the gap's anchor on its own side; at an end of M, where
+    // it has none, its sides' order, or, where it holds no runs, its other
+    // anchor — the same place — else nothing.
+    let (own, other) = match &gap.placed {
+        Placement::Order(sides) => return order(sides),
+        Placement::Omitted => return "omit".to_string(),
+        Placement::After => (("after", &gap.after), ("before", &gap.before)),
+        Placement::Before => (("before", &gap.before), ("after", &gap.after)),
+    };
+    match (own, other) {
+        ((at, Some(anchor)), _) => format!("{at}:{anchor}"),
+        _ if !gap.runs.is_empty() => own_sides(),
+        (_, (at, Some(anchor))) => format!("{at}:{anchor}"),
+        _ => "omit".to_string(),
     }
 }
 
@@ -1405,6 +1417,42 @@ mod tests {
         );
     }
 
+    /// A gap that holds no runs — a collision no side filled — at an end of
+    /// M is spelled by its other anchor, the same place, and with no anchor
+    /// at all as `omit`: every default is a choice `--resolve` takes back
+    /// (the mutant that keeps the order of the gap's sides spells `order:`,
+    /// which the grammar refuses).
+    #[test]
+    fn a_default_of_a_gap_holding_no_runs_is_a_choice_the_command_takes_back() {
+        let a = |s: &str| parse_address(s).expect("an address");
+        let gap = |after: Option<Address>, before: Option<Address>| Gap {
+            id: GapId(1),
+            kind: GapKind::Collision,
+            after,
+            before,
+            runs: Vec::new(),
+            placed: Placement::After,
+            settled: false,
+            resolved_by: None,
+            spots: Vec::new(),
+        };
+        let spelled = |g: &Gap| {
+            let default = default_of(g);
+            let parsed = resolution(&format!("1={default}"), &ResolvedBy::Person)
+                .expect("a choice the command takes");
+            (default, parsed.choice)
+        };
+        assert_eq!(
+            spelled(&gap(None, Some(a("1.0.1.0.1.0.1.5")))),
+            ("before:1.0.1.0.1.0.1.5".to_string(), Choice::Before(a("1.0.1.0.1.0.1.5")))
+        );
+        assert_eq!(spelled(&gap(None, None)), ("omit".to_string(), Choice::Omit));
+        assert_eq!(
+            spelled(&gap(Some(a("1.0.1.0.1.0.1.4")), None)),
+            ("after:1.0.1.0.1.0.1.4".to_string(), Choice::After(a("1.0.1.0.1.0.1.4")))
+        );
+    }
+
     /// A place the merge kept once is said and reported (§5, case (g)): the
     /// gap, the head whose copy M holds, and the side's address, where its
     /// copy and any link on it stay; `deduped` spells the dropped run as the
@@ -1442,7 +1490,12 @@ mod tests {
             runs: RunCounts { a: 2, b: 3, m: 3 },
             retries: 0,
             gaps: vec![gap],
-            values: ValueLog { dedup: true, retype: false, applied: vec![GapId(2)] },
+            values: ValueLog {
+                dedup: true,
+                retype: false,
+                applied: vec![GapId(2)],
+                retyped: Vec::new(),
+            },
             answers: Vec::new(),
             replaces: None,
             by: "skep-client".into(),

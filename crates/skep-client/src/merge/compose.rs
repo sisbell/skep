@@ -9,12 +9,14 @@
 //! `gaps`, `splice` and `report` are those steps in that order, with
 //! `collision_regions` feeding `gaps` and `resolve` applying step 7's
 //! resolutions ahead of the splice. Before them `claim_identities` finds
-//! each fresh identity several sides hold: at one spot it is kept once, the
-//! earliest side's, and at two or more it is a `moves` gap with spots
-//! (CM-I33), the merger's choice of holder applied before the walk.
-//! §2's rules
-//! decide each gap's kind and its default; §5's value rule reads bytes at a
-//! shared gap (the dedup) and, switched on, before the walk (the retype).
+//! each fresh identity several sides hold: at one spot it is kept once, by
+//! the holder whose keeping breaks no holder's own order (`Kept::of`),
+//! whichever side is listed first, and at two or more it is a `moves` gap
+//! with spots (CM-I33), the merger's choice of holder applied before the
+//! walk. §2's rules decide each gap's kind and its default — the sides'
+//! reorders folded into the spine in the order listed (`fold`); §5's value
+//! rule reads bytes at a shared gap (the dedup) and, switched on, before the
+//! walk (the retype), logging each run either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms —
 //! the record on the trunk, where every member was minted against the one
@@ -177,24 +179,35 @@ pub struct Resolution {
 pub enum Choice {
     /// The sides' groups in this order; a side left out is not placed.
     ///
-    /// At a `moves` gap, the one side whose order the spine takes; at one
+    /// At a `moves` gap, the one side whose order the spine takes — the
+    /// side whose order it took, confirmed, or the other, whose reorder is
+    /// then applied first and every other side's folded after it; at one
     /// with spots, the one side whose placement of the words M takes.
     Order(Vec<SideIx>),
     /// The gap's material placed after this surviving base position.
     ///
     /// It lands at the first place after the position where some list's run
-    /// starts or ends — right after it where one does.
+    /// starts or ends — right after it where one does. Where the base places
+    /// the position's run twice (skep #763) the address names each
+    /// placement: the gap goes to the place every move naming it names,
+    /// else the last move's, the nearest its composed place among them.
     After(Address),
     /// The gap's material placed before this surviving base position.
     ///
     /// It lands at the last place at or before the position where some
-    /// list's run starts or ends — right before it where one does.
+    /// list's run starts or ends — right before it where one does. Where the
+    /// base places the position's run twice, as `After`.
     Before(Address),
     /// Only this side's material placed; the other sides' is left out.
     ///
     /// At a `moves` gap with spots, as `Order` of this one side.
     KeepOnly(SideIx),
-    /// Every side's material placed in the default order, confirmed.
+    /// Every group placed as composed, confirmed.
+    ///
+    /// It confirms the gap's placement as the composition left it — an
+    /// order the value rule's dedup thinned included, never putting a
+    /// dropped copy back (§5, case (g)); a gap of fewer than two groups
+    /// takes none.
     KeepBoth,
     /// Nothing placed: the gap's material left out of M.
     ///
@@ -248,12 +261,14 @@ pub enum GapKind {
     Collision,
     /// A side's reorder the spine did not take: unsettled (R4 iii).
     ///
-    /// With no `spine_hint` it arises where the sides' reorders do not
-    /// compose, as where two sides reordered overlapping material, and the
-    /// default is the earliest reordering side's order, each later side
-    /// whose order differs from it a `moves` gap, its reorder not applied.
-    /// Under a `spine_hint` the default is the hinted side's order, and each
-    /// other side whose reorder differs from it is a `moves` gap.
+    /// With no `spine_hint` the sides' reorders fold in the order listed,
+    /// each applied where it composes with those applied before it, and it
+    /// arises for each that does not, as where two sides reordered
+    /// overlapping material: the default is the order the fold gave, the
+    /// side's reorder not applied, the gap naming the earliest applied side
+    /// its reorder overlaps as the one whose order the spine took. Under a
+    /// `spine_hint` the default is the hinted side's order, and each other
+    /// side whose reorder differs from it is a `moves` gap.
     ///
     /// It is also one fresh identity two or more sides placed at different
     /// spots (CM-I33): unsettled, the default the earliest holding side's
@@ -369,6 +384,13 @@ pub struct ValueLog {
     pub retype: bool,
     /// The gaps where the dedup dropped a side's copy.
     pub applied: Vec<GapId>,
+    /// Each fresh run the retype normalization took out of M, with the side
+    /// that placed it (§5, case (f)).
+    ///
+    /// Its bytes equal the base material the side removed in its place, so M
+    /// holds that material by the base's identity instead, and any link on
+    /// the run stays in its side. Empty with the retype off.
+    pub retyped: Vec<(SideIx, Run)>,
 }
 
 /// What [`compose_runs`] returns.
@@ -447,22 +469,29 @@ pub enum InPlaceOp {
 /// the side whose order the spine takes where the sides disagree about the
 /// order of the surviving base material; `None` computes it — the base's
 /// order, or the one side's that reordered, or the reorders of two or more
-/// sides composed where they touch different material, else the earliest
-/// reordering side's, with a `moves` gap for each later side whose order
-/// differs from it. `values` answers a side's run with its items, which
-/// the value rule compares; a run asked may be a part of a run the side
-/// holds; `None` leaves the rule unfired there. The composition writes
-/// nothing and dials nothing (merge record §1.4, §7).
+/// sides folded in the order listed, each composed with those applied
+/// before it where they touch different material, and each that does not a
+/// `moves` gap, its reorder not applied, so one overlapping pair voids
+/// neither the other sides' reorders nor its earlier side's. `values`
+/// answers a side's run with its items, which the value rule compares; a
+/// run asked may be a part of a run the side holds; `None` leaves the rule
+/// unfired there. The composition writes nothing and dials nothing (merge
+/// record §1.4, §7).
 ///
 /// Before the walk, a fresh identity two or more sides hold is kept by one
 /// of them. Where every holder placed it at one spot — the nearest base
 /// position before it and after it that every holder keeps — it is kept
-/// once, the earliest holder's, and asks nothing. Where the spots differ it
-/// is a `moves` gap with spots (CM-I33), numbered first, by its earliest
-/// holder and its place there: unsettled, the earliest holder's placement
-/// its default, every other holder's copy left out; `Choice::Order` or
-/// `Choice::KeepOnly` of one holder keeps that holder's placement instead,
-/// the later of two standing, and any other choice there is `ignored`.
+/// once, where it breaks no holder's own order and asks the least: in a
+/// holder's own stretch, or at that common spot, read off each list's
+/// anchors and never off the order the sides are listed in but where two
+/// places rank alike (`Kept::of`); where every place breaks some holder's
+/// order, the words that would come out of it join the keeper's gap, which
+/// asks. Where the spots differ it is a `moves` gap with spots (CM-I33),
+/// numbered first, by its earliest holder and its place there: unsettled,
+/// the earliest holder's placement its default, every other holder's copy
+/// left out; `Choice::Order` or `Choice::KeepOnly` of one holder keeps that
+/// holder's placement instead, the later of two standing, and any other
+/// choice there is `ignored`.
 ///
 /// The walk, in the record's seven steps: the removals, the spine, each
 /// side's additions with their anchors, the placement of each by its
@@ -474,13 +503,15 @@ pub enum InPlaceOp {
 /// default, the first gap of the walk at the defaults with its kind, its
 /// place in the spine and the same runs besides the moved words, and any
 /// other gap, one the moved words make, is numbered after that walk's
-/// last. With no `spine_hint`, a spine's `moves` gap resolved by
-/// `Choice::Order` of one side walks the whole composition again under
-/// that side's order, and every gap keeps the number the walk at the
-/// default order gave it (skep #1155): a `moves` gap the number of the one
-/// holding the same side's reorder, the one the merger chose at its own,
-/// and every other gap the number of the gap with its kind and the same
-/// runs — a collision no side filled, of the one over the same base
+/// last. A spine's `moves` gap resolved by `Choice::Order` of the side
+/// whose order the spine took is settled, nothing walked again. With no
+/// `spine_hint`, one resolved by `Choice::Order` of the other side walks the
+/// whole composition again, that side's reorder applied first and every
+/// other side's folded after it, and every gap keeps the number the walk at
+/// the default order gave it (skep #1155): a `moves` gap the number of the
+/// one between the same two sides, else the one holding the same side's
+/// reorder, and every other gap the number of the gap with its kind and the
+/// same runs — a collision no side filled, of the one over the same base
 /// positions — never by its place, which the order moves. A gap that walk
 /// did not have is numbered after its last, so a resolution naming one the
 /// chosen order removes stands in `ignored`, and every resolution in one
@@ -507,16 +538,15 @@ pub fn compose_runs(
     let r = Refinement::of(base, sides);
     let chain = r.chain(doc);
     let mut seqs = r.sides.clone();
-    if options.retype {
-        undo_retypes(&r, &mut seqs, values);
-    }
+    let retyped = if options.retype { undo_retypes(&r, &mut seqs, values) } else { Vec::new() };
     let claimed = Claimed::of(&r, &seqs, &options.resolutions);
     let hint = spine_hint.and_then(|h| r.side_ix.iter().position(|s| *s == h));
-    let (first, numbering) = walk(&r, &chain, &claimed, SpineOrder::Given(hint), options, values);
+    let walked =
+        Walking { r: &r, chain: &chain, claimed: &claimed, options, values, retyped: &retyped };
+    let (first, numbering) = walk(&walked, SpineOrder::Given(hint));
     if hint.is_none() {
-        if let Some((side, by)) = moves_choice(&r, &first, &options.resolutions) {
-            let chosen = SpineOrder::Chosen { side, by, numbering: &numbering };
-            return walk(&r, &chain, &claimed, chosen, options, values).0;
+        if let Some(side) = moves_choice(&r, &numbering, &options.resolutions) {
+            return walk(&walked, SpineOrder::Chosen { side, numbering: &numbering }).0;
         }
     }
     first
@@ -528,41 +558,55 @@ enum SpineOrder<'a> {
     ///
     /// The gaps are numbered by this walk.
     Given(Option<usize>),
-    /// The order of the side a merger chose at a spine's `moves` gap.
+    /// The order a merger chose at a spine's `moves` gap: that side's
+    /// reorder applied first, every other folded after it.
     ///
-    /// Every `moves` gap is settled by who chose, `by`, and every gap is
-    /// numbered by `numbering`, the walk's at the order given (skep #1155).
-    Chosen { side: usize, by: ResolvedBy, numbering: &'a Numbering },
+    /// Every gap is numbered by `numbering`, the walk's at the order given
+    /// (skep #1155).
+    Chosen { side: usize, numbering: &'a Numbering },
+}
+
+/// What every walk of one composition reads.
+struct Walking<'a> {
+    r: &'a Refinement,
+    /// The document's chain, as `Refinement::chain` reads it.
+    chain: &'a HashSet<usize>,
+    /// The sequences once each fresh identity several sides hold is kept by
+    /// one, with the gaps with spots that decided it.
+    claimed: &'a Claimed,
+    options: &'a Options,
+    values: &'a dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+    /// The runs the retype normalization took out of M (`undo_retypes`).
+    retyped: &'a [(SideIx, Run)],
 }
 
 /// Runs the seven steps over the normalized sequences under one spine order.
 ///
-/// `chain` is the document's chain, as `Refinement::chain` reads it,
-/// `claimed` the sequences once each fresh identity several sides hold is
-/// kept by one, with the gaps with spots that decided it, and `order` the
-/// spine's order and what the gaps are numbered by. Beside the composition
-/// it returns the numbering its gaps took, which a walk under a chosen
-/// order numbers its own by.
-fn walk(
-    r: &Refinement,
-    chain: &HashSet<usize>,
-    claimed: &Claimed,
-    order: SpineOrder<'_>,
-    options: &Options,
-    values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
-) -> (Composed, Numbering) {
+/// `order` is the spine's order and what the gaps are numbered by. Beside
+/// the composition it returns the numbering its gaps took, which a walk
+/// under a chosen order numbers its own by.
+fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
+    let Walking { r, chain, claimed, options, values, retyped } = *walking;
     let in_base = r.in_base();
-    let seqs = &claimed.seqs;
+    let seqs = &claimed.kept.seqs;
     let in_side: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
     let (removed_by, removed) = removals(r, &in_side);
     let after_claims = claimed.claims.len() as u32 + 1;
-    let (hint, forced) = match &order {
+    let (hint, chosen) = match &order {
         SpineOrder::Given(hint) => (*hint, None),
-        SpineOrder::Chosen { side, by, .. } => (Some(*side), Some(by.clone())),
+        SpineOrder::Chosen { side, .. } => (None, Some(*side)),
     };
-    let (spine, spine_pos, mut moves) = spine_of(r, seqs, &in_base, &removed, hint, forced, after_claims);
-    let stretches = additions(seqs, &in_base);
-    let placed = placement(r, &stretches, &removed_by, &removed, &spine, &spine_pos);
+    let (spine, spine_pos, mut moves) =
+        spine_of(r, seqs, &in_base, &removed, hint, chosen, after_claims);
+    let layout = Layout {
+        r,
+        in_base: &in_base,
+        removed_by: &removed_by,
+        removed: &removed,
+        spine: &spine,
+        spine_pos: &spine_pos,
+    };
+    let (stretches, placed) = layout.place(&claimed.kept);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
     let first = after_claims + moves.len() as u32;
     let (mut entries, mut applied) = gaps(r, chain, &stretches, &placed, &regions, first, options, values);
@@ -577,8 +621,7 @@ fn walk(
         // stretches differ between the two, so the removals, the spine and
         // the collision regions are this walk's; and the dedup changes no
         // kind, run or place, so that walk reads no value.
-        let stretches = additions(defaults, &in_base);
-        let placed = placement(r, &stretches, &removed_by, &removed, &spine, &spine_pos);
+        let (stretches, placed) = layout.place(defaults);
         let (at_defaults, _) = gaps(r, chain, &stretches, &placed, &regions, first, options, &|_, _| None);
         number_as(&mut entries, &mut applied, &at_defaults, &claimed.moved(), first);
     }
@@ -594,34 +637,34 @@ fn walk(
         runs,
         gaps,
         counts,
-        values: ValueLog { dedup: options.dedup, retype: options.retype, applied },
+        values: ValueLog {
+            dedup: options.dedup,
+            retype: options.retype,
+            applied,
+            retyped: retyped.to_vec(),
+        },
         ignored,
     };
     (composed, Numbering::of(entries, moves, &claimed.claims))
 }
 
-/// Returns the resolution of a spine's `moves` gap, if one is given.
+/// Returns the side a merger chose at a spine's `moves` gap, where one
+/// chose the side whose reorder the spine did not take.
 ///
-/// It is the side whose order the merger chose, and who chose. A `moves`
-/// gap with spots moves no base material: its choice was applied before
-/// the walk and re-walks nothing.
-fn moves_choice(r: &Refinement, composed: &Composed, resolutions: &[Resolution]) -> Option<(usize, ResolvedBy)> {
-    for res in resolutions {
-        let spine_moves = |g: &&Gap| g.id == res.gap && g.kind == GapKind::Moves && g.spots.is_empty();
-        let Some(gap) = composed.gaps.iter().find(spine_moves) else {
-            continue;
-        };
-        if let Choice::Order(sides) = &res.choice {
-            if let [side] = sides.as_slice() {
-                if gap.runs.iter().any(|(s, _)| s == side) {
-                    if let Some(ix) = r.side_ix.iter().position(|s| s == side) {
-                        return Some((ix, res.by.clone()));
-                    }
-                }
-            }
-        }
-    }
-    None
+/// The first such resolution in the list is the one the composition walks
+/// again under. A choice of the side whose order the spine took confirms
+/// it and walks nothing again (`resolve`), and a `moves` gap with spots
+/// moves no base material: its choice was applied before the walk.
+fn moves_choice(
+    r: &Refinement,
+    numbering: &Numbering,
+    resolutions: &[Resolution],
+) -> Option<usize> {
+    resolutions.iter().find_map(|res| {
+        let gap = numbering.moves.iter().find(|m| m.id == res.gap)?;
+        let loser = matches!(&res.choice, Choice::Order(sides) if sides.as_slice() == [r.side_ix[gap.loser]]);
+        loser.then_some(gap.loser)
+    })
 }
 
 // ── the refinement ────────────────────────────────────────────────────────
@@ -814,17 +857,54 @@ impl Refinement {
         Some(out)
     }
 
-    /// Returns the base fragment holding `addr`, by its index in the base.
-    fn locate(&self, addr: &Address, in_base: &[Option<usize>]) -> Option<usize> {
-        let doc = skep_address::document_of(addr)?;
-        let o = self.origins.iter().position(|x| *x == doc)?;
-        let field = addr.element_field()?;
-        if field.len() != 2 || field[0] != content_subspace() {
-            return None;
-        }
-        let n = u64::try_from(&field[1]).ok()?;
-        let f = self.frags.iter().position(|fr| fr.origin == o && fr.start <= n && n - fr.start < fr.width)?;
-        in_base[f]
+    /// Returns each base fragment holding `addr`, by its index in the base.
+    ///
+    /// A run the base places twice holds `addr` once per placement (skep
+    /// #763), so there may be more than one; none for an address no base
+    /// run holds.
+    fn locate(&self, addr: &Address, in_base: &[Option<usize>]) -> Vec<usize> {
+        let held = || -> Option<(usize, u64)> {
+            let doc = skep_address::document_of(addr)?;
+            let o = self.origins.iter().position(|x| *x == doc)?;
+            let field = addr.element_field()?;
+            if field.len() != 2 || field[0] != content_subspace() {
+                return None;
+            }
+            Some((o, u64::try_from(&field[1]).ok()?))
+        };
+        let Some((o, n)) = held() else { return Vec::new() };
+        let holding = |fr: &Frag| fr.origin == o && fr.start <= n && n - fr.start < fr.width;
+        self.frags
+            .iter()
+            .enumerate()
+            .filter(|(_, fr)| holding(fr))
+            .filter_map(|(f, _)| in_base[f])
+            .collect()
+    }
+
+    /// Returns the spine gaps a move names: after each surviving placement
+    /// of the position an `After` names, before each of the one a `Before`
+    /// names; `None` for a choice that is no move.
+    fn places(
+        &self,
+        choice: &Choice,
+        in_base: &[Option<usize>],
+        spine_pos: &[Option<usize>],
+    ) -> Option<Vec<usize>> {
+        let (addr, shift) = match choice {
+            Choice::After(addr) => (addr, 1),
+            Choice::Before(addr) => (addr, 0),
+            Choice::Order(_) | Choice::KeepOnly(_) | Choice::KeepBoth | Choice::Omit => {
+                return None
+            }
+        };
+        Some(
+            self.locate(addr, in_base)
+                .into_iter()
+                .filter_map(|bi| spine_pos[bi])
+                .map(|p| p + shift)
+                .collect(),
+        )
     }
 }
 
@@ -843,9 +923,15 @@ fn element_address(origin: &Address, ordinal: u64) -> Option<Address> {
 /// whole, whose bytes equal that material's, is replaced by the material's
 /// own fragments, so the base's identity is kept. The removed bytes are
 /// read from another side that still holds them — a base run's value is
-/// never read.
-fn undo_retypes(r: &Refinement, seqs: &mut [Vec<usize>], values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>) {
+/// never read. Returned is each stretch so replaced, as runs with its side,
+/// in side order: the value log's `retyped`.
+fn undo_retypes(
+    r: &Refinement,
+    seqs: &mut [Vec<usize>],
+    values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+) -> Vec<(SideIx, Run)> {
     let in_base = r.in_base();
+    let mut retyped = Vec::new();
     for s in 0..seqs.len() {
         let presence: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
         let mut replacements: Vec<(usize, usize, Vec<usize>)> = Vec::new();
@@ -860,6 +946,9 @@ fn undo_retypes(r: &Refinement, seqs: &mut [Vec<usize>], values: &dyn Fn(SideIx,
             let removed = r.bytes(t, (lo..hi).map(|bi| r.base[bi]), values);
             let fresh = r.bytes(s, st.frags.iter().copied(), values);
             if removed.is_some() && removed == fresh {
+                retyped.extend(
+                    r.coalesce(st.frags.iter().copied()).into_iter().map(|run| (r.side_ix[s], run)),
+                );
                 replacements.push((st.at, st.frags.len(), (lo..hi).map(|bi| r.base[bi]).collect()));
             }
         }
@@ -867,6 +956,7 @@ fn undo_retypes(r: &Refinement, seqs: &mut [Vec<usize>], values: &dyn Fn(SideIx,
             seqs[s].splice(at..at + len, base_frags);
         }
     }
+    retyped
 }
 
 /// The base indices of the nearest base positions before a place in a
@@ -922,9 +1012,9 @@ struct Claimed {
     /// The gaps with spots, numbered from 1.
     claims: Vec<Claim>,
     /// The sequences under the gaps' choices.
-    seqs: Vec<Vec<usize>>,
+    kept: Kept,
     /// The sequences at every gap's default, where a choice moved one.
-    defaults: Option<Vec<Vec<usize>>>,
+    defaults: Option<Kept>,
 }
 
 impl Claimed {
@@ -932,9 +1022,11 @@ impl Claimed {
     /// spots applied.
     ///
     /// Of two resolutions naming one gap the later stands; one naming no
-    /// holder changes nothing, and `resolve` lists it as not applied.
+    /// holder changes nothing, and `resolve` lists it as not applied. Each
+    /// identity several sides hold at one spot is then kept by one of them
+    /// (`Kept::of`), under the choices and at the defaults alike.
     fn of(r: &Refinement, seqs: &[Vec<usize>], resolutions: &[Resolution]) -> Claimed {
-        let mut claims = claim_identities(r, seqs);
+        let (mut claims, shares) = claim_identities(r, seqs);
         for res in resolutions {
             let Some(claim) = claims.iter_mut().find(|c| c.id == res.gap) else { continue };
             if let Some(holder) = claim.holder_named(r, &res.choice) {
@@ -945,8 +1037,8 @@ impl Claimed {
         }
         let moved = claims.iter().any(|c| c.chosen != 0);
         Claimed {
-            seqs: kept(r, seqs, &claims, |c| c.chosen),
-            defaults: moved.then(|| kept(r, seqs, &claims, |_| 0)),
+            kept: Kept::of(r, &claimed(seqs, &claims, |c| c.chosen), &shares),
+            defaults: moved.then(|| Kept::of(r, &claimed(seqs, &claims, |_| 0), &shares)),
             claims,
         }
     }
@@ -958,23 +1050,38 @@ impl Claimed {
     }
 }
 
-/// Returns the gaps with spots: each fresh identity two or more sides hold
-/// at different spots (merge record §2, the one rule; CM-I33).
+/// A fresh fragment two or more sides hold at one spot (merge record §2,
+/// the one rule: an identical addition is not a difference).
 ///
-/// A holder's spot is the nearest base position before the identity and
-/// after it in the holder's own sequence that every holder keeps, so a
-/// neighbour one holder removed moves nothing. An identity every holder
-/// placed at one spot is no gap: an identical addition is not a
-/// difference. Contested fragments that stand together in their earliest
+/// The spot is read by the base positions every holder keeps, as a gap
+/// with spots reads its holders' (CM-I33); here every holder's is the same.
+struct Share {
+    frag: usize,
+    /// The sides that hold it, in side order.
+    holders: Vec<usize>,
+    /// The spot every holder places it at.
+    spot: Anchors,
+}
+
+/// Returns the gaps with spots and the identities held at one spot.
+///
+/// The gaps with spots are each fresh identity two or more sides hold at
+/// different spots (merge record §2, the one rule; CM-I33). A holder's spot
+/// is the nearest base position before the identity and after it in the
+/// holder's own sequence that every holder keeps, so a neighbour one holder
+/// removed moves nothing. An identity every holder placed at one spot is no
+/// gap: an identical addition is not a difference, and it is a `Share`, one
+/// per fragment. Contested fragments that stand together in their earliest
 /// holder's sequence, held by the same sides at the same spots, are one
 /// gap, numbered from 1 by the earliest holder, then by place there.
-fn claim_identities(r: &Refinement, seqs: &[Vec<usize>]) -> Vec<Claim> {
+fn claim_identities(r: &Refinement, seqs: &[Vec<usize>]) -> (Vec<Claim>, Vec<Share>) {
     let in_base = r.in_base();
     let presence: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
     // Each holder's common anchors at each place of its sequence, once per
     // set of holders.
     let mut anchors: HashMap<Vec<usize>, Vec<Vec<Anchors>>> = HashMap::new();
     let mut claims: Vec<Claim> = Vec::new();
+    let mut shares: Vec<Share> = Vec::new();
     for (s, seq) in seqs.iter().enumerate() {
         // The gap the fragment before this one in `seq` joined.
         let mut open: Option<usize> = None;
@@ -995,6 +1102,7 @@ fn claim_identities(r: &Refinement, seqs: &[Vec<usize>]) -> Vec<Claim> {
             let spots: Vec<Anchors> =
                 places.iter().zip(&anchors[&sides]).map(|(&(_, i), at)| at[i]).collect();
             if spots.iter().all(|spot| *spot == spots[0]) {
+                shares.push(Share { frag: f, holders: sides, spot: spots[0] });
                 open = None;
                 continue;
             }
@@ -1021,7 +1129,7 @@ fn claim_identities(r: &Refinement, seqs: &[Vec<usize>]) -> Vec<Claim> {
             holder.frags.sort_by_key(|&f| presence[holder.side][f]);
         }
     }
-    claims
+    (claims, shares)
 }
 
 /// Returns, at each place of `seq`, the nearest base position before it and
@@ -1047,32 +1155,210 @@ fn common_anchors(
     out
 }
 
-/// Returns the sequences with each fresh identity several sides hold kept
-/// by one of them.
+/// Returns the sequences with each gap with spots' fragments kept by one
+/// holder, the one `holder` names: every other holder's copy taken out.
+fn claimed(
+    seqs: &[Vec<usize>],
+    claims: &[Claim],
+    holder: impl Fn(&Claim) -> usize,
+) -> Vec<Vec<usize>> {
+    let mut out = seqs.to_vec();
+    for claim in claims {
+        let chosen = holder(claim);
+        for (_, held) in claim.holders.iter().enumerate().filter(|(k, _)| *k != chosen) {
+            out[held.side].retain(|f| !held.frags.contains(f));
+        }
+    }
+    out
+}
+
+/// A side's stretch by its side and its two anchors, as base indices.
 ///
-/// A gap with spots' fragments stay with the holder `holder` names; every
-/// other fragment two sides hold stays where the earliest of them holds it,
-/// an identical addition at one spot kept once.
-fn kept(r: &Refinement, seqs: &[Vec<usize>], claims: &[Claim], holder: impl Fn(&Claim) -> usize) -> Vec<Vec<usize>> {
-    let in_base = r.in_base();
-    let mut keeper: Vec<Option<usize>> = vec![None; r.frags.len()];
-    for (s, seq) in seqs.iter().enumerate() {
-        for &f in seq {
-            if in_base[f].is_none() && keeper[f].is_none() {
-                keeper[f] = Some(s);
+/// A side places each base position at most once, so its stretches stand
+/// between distinct pairs of anchors, and taking fresh fragments out of a
+/// sequence leaves every stretch's anchors as they were.
+type StretchAt = (usize, Option<usize>, Option<usize>);
+
+/// The sequences once each identity several sides hold at one spot is kept
+/// by one of them (merge record §2, the one rule; §1.4 step 5).
+///
+/// Beside them stand the stretches placed elsewhere than their own anchors:
+/// a keeper's stretch placed at its fragments' common spot, and a stretch
+/// that joins another's gap (`Kept::of`).
+struct Kept {
+    /// The sequences, each shared fragment in its keeper's alone.
+    seqs: Vec<Vec<usize>>,
+    /// Each stretch placed at a common spot instead of its own anchors.
+    spots: HashMap<StretchAt, Anchors>,
+    /// Each stretch placed in another stretch's gap.
+    joins: HashMap<StretchAt, StretchAt>,
+}
+
+/// Where a shared fragment is kept, and what that asks.
+///
+/// It is ranked by `Keeping::rank`: a placement that keeps every holder's
+/// order before one that does not, then the fewest gaps it asks, a holder's
+/// own stretch before the common spot, the earliest place, the earliest
+/// side.
+struct Keeping {
+    /// The side whose sequence keeps the fragment.
+    side: usize,
+    /// Its stretch holding the fragment.
+    at: StretchAt,
+    /// Where the stretch is placed: its own anchors, or the common spot.
+    anchors: Anchors,
+    /// Whether the stretch is placed at the common spot.
+    at_spot: bool,
+    /// The holders whose order this placement breaks.
+    breaks: Vec<usize>,
+    /// The gaps this placement asks: a holder's own material at the same
+    /// place, or a corner or a collision at the keeper's anchors.
+    asks: usize,
+}
+
+impl Keeping {
+    fn rank(&self) -> (bool, usize, bool, (i64, i64), usize) {
+        (
+            !self.breaks.is_empty(),
+            self.asks,
+            self.at_spot,
+            stretch_key(self.anchors.0, self.anchors.1),
+            self.side,
+        )
+    }
+}
+
+impl Kept {
+    /// Returns `seqs` with each identity of `shares` kept by one holder.
+    ///
+    /// An identical addition is kept once (§2), and which holder keeps it
+    /// decides where M places it: in that holder's stretch, by that
+    /// stretch's anchors, every other holder's copy taken out. So the copy is
+    /// kept where it breaks no holder's own order: placed at another
+    /// stretch's place, a holder's words beside it would come out on the
+    /// wrong side of it, and its words placed between the two places too
+    /// (§2 R1, a side's runs in its own order). Each holder's stretch is a
+    /// candidate, and — where every holder's stretch holds only fragments
+    /// every holder holds — the fragment's common spot, read by the base
+    /// positions every holder keeps, carried by the earliest holder. Of the
+    /// candidates that break no order, the one asking the fewest gaps is
+    /// taken — a holder's own words at the same place make an `order` gap,
+    /// anchors both gone a `corner`, the keeper's removal there overlapping
+    /// another's a `collision` — then a holder's own stretch before the
+    /// common spot, then the earliest place, then the earliest side. Where
+    /// every candidate breaks an order, the holders' words around the
+    /// fragment cannot be laid in every holder's order, and the stretches
+    /// that would come out of order join the keeper's gap, which asks: an
+    /// `order` gap of the sides' groups. The choice reads each list's
+    /// anchors alone, never the order the sides are listed in, but where
+    /// two candidates rank alike.
+    fn of(r: &Refinement, seqs: &[Vec<usize>], shares: &[Share]) -> Kept {
+        let in_base = r.in_base();
+        let presence: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
+        let (removed_by, removed) = removals(r, &presence);
+        let stretches = additions(seqs, &in_base);
+        let mut holding: HashMap<(usize, usize), usize> = HashMap::new();
+        for (i, st) in stretches.iter().enumerate() {
+            for &f in &st.frags {
+                holding.insert((st.side, f), i);
             }
         }
-    }
-    for claim in claims {
-        let chosen = &claim.holders[holder(claim)];
-        for &f in &chosen.frags {
-            keeper[f] = Some(chosen.side);
+        let mut strip: Vec<HashSet<usize>> = vec![HashSet::new(); seqs.len()];
+        let mut spots = HashMap::new();
+        let mut joins = HashMap::new();
+        for share in shares {
+            let stretch = |t: usize| &stretches[holding[&(t, share.frag)]];
+            let pure = share.holders.iter().all(|&t| {
+                stretch(t)
+                    .frags
+                    .iter()
+                    .all(|&g| share.holders.iter().all(|&h| presence[h][g].is_some()))
+            });
+            let mut candidates: Vec<(usize, Anchors, bool)> =
+                share.holders.iter().map(|&k| (k, (stretch(k).x, stretch(k).y), false)).collect();
+            if pure {
+                candidates.push((share.holders[0], share.spot, true));
+            }
+            let keeping = candidates
+                .into_iter()
+                .map(|(k, anchors, at_spot)| {
+                    let key = stretch_key(anchors.0, anchors.1);
+                    let (mut breaks, mut asks) = (Vec::new(), 0);
+                    for &t in share.holders.iter().filter(|&&t| at_spot || t != k) {
+                        let own = stretch(t);
+                        let own_key = stretch_key(own.x, own.y);
+                        let at = own
+                            .frags
+                            .iter()
+                            .position(|&g| g == share.frag)
+                            .expect("a stretch holds its fragment");
+                        let theirs = |g: &usize| *g != share.frag && presence[k][*g].is_none();
+                        let (before, after) = (
+                            own.frags[..at].iter().any(theirs),
+                            own.frags[at + 1..].iter().any(theirs),
+                        );
+                        if own_key == key {
+                            asks += usize::from(!at_spot && (before || after));
+                            continue;
+                        }
+                        let (lo, hi) = (own_key.min(key), own_key.max(key));
+                        let between = stretches.iter().any(|s| {
+                            s.side == t && lo < stretch_key(s.x, s.y) && stretch_key(s.x, s.y) < hi
+                        });
+                        if between || (own_key < key && after) || (own_key > key && before) {
+                            breaks.push(t);
+                        }
+                    }
+                    let (lo, hi) =
+                        (anchors.0.map_or(0, |x| x + 1), anchors.1.unwrap_or(r.base.len()));
+                    let gone = |bi: Option<usize>| bi.is_some_and(|bi| removed[bi]);
+                    let collision = (lo..hi).any(|bi| {
+                        removed_by[k][bi]
+                            && (0..removed_by.len()).any(|t| t != k && removed_by[t][bi])
+                    });
+                    asks += usize::from((gone(anchors.0) && gone(anchors.1)) || collision);
+                    let at = (k, stretch(k).x, stretch(k).y);
+                    Keeping { side: k, at, anchors, at_spot, breaks, asks }
+                })
+                .min_by_key(Keeping::rank)
+                .expect("a share has holders");
+            for &t in share.holders.iter().filter(|&&t| t != keeping.side) {
+                strip[t].insert(share.frag);
+            }
+            if keeping.at_spot {
+                spots.insert(keeping.at, keeping.anchors);
+            }
+            // Where the holders' words cannot be laid in every holder's
+            // order, those that would come out of order join the keeper's
+            // gap.
+            let key = stretch_key(keeping.anchors.0, keeping.anchors.1);
+            for &t in &keeping.breaks {
+                let own = stretch(t);
+                let own_key = stretch_key(own.x, own.y);
+                let (lo, hi) = (own_key.min(key), own_key.max(key));
+                for s in
+                    stretches.iter().filter(|s| s.side == t && (s.side, s.x, s.y) != keeping.at)
+                {
+                    let at = stretch_key(s.x, s.y);
+                    if at == own_key || (lo < at && at < hi) {
+                        joins.insert((t, s.x, s.y), keeping.at);
+                    }
+                }
+            }
         }
+        let seqs = seqs
+            .iter()
+            .enumerate()
+            .map(|(s, seq)| seq.iter().copied().filter(|f| !strip[s].contains(f)).collect())
+            .collect();
+        Kept { seqs, spots, joins }
     }
-    seqs.iter()
-        .enumerate()
-        .map(|(s, seq)| seq.iter().copied().filter(|&f| in_base[f].is_some() || keeper[f] == Some(s)).collect())
-        .collect()
+}
+
+/// Returns a stretch's sort key at a spine gap: its anchors as base indices,
+/// the start before every index and the end after every index.
+fn stretch_key(x: Option<usize>, y: Option<usize>) -> (i64, i64) {
+    (x.map_or(-1, |x| x as i64), y.map_or(i64::MAX, |y| y as i64))
 }
 
 // ── step 1: the removals ──────────────────────────────────────────────────
@@ -1106,14 +1392,16 @@ struct Moves {
 /// Returns step 2's spine and its `moves` gaps (merge record §1.4).
 ///
 /// The spine is the surviving base material in the order M keeps it — the
-/// base's, unless a side reordered it: then that side's; the reorders of
-/// two or more sides composed where they touch different material, else the
-/// earliest reordering side's order with a `moves` gap for each later side
-/// whose order differs from it (§2 R4 iii). `hint`
-/// names the side whose order wins outright; `forced` marks every `moves`
-/// gap settled by the merger who named it; the gaps are numbered from
-/// `first`, after the gaps with spots, in the order of the sides whose
-/// reorders they hold, and a walk under a chosen order numbers them again
+/// base's, unless sides reordered it: their reorders folded in the order
+/// the sides are listed (`fold`), each that composes with those applied
+/// before it applied, and each that does not a `moves` gap, its reorder not
+/// applied (§2 R4 iii). `hint` names the side whose order wins outright,
+/// every other side's reorder that differs from it a `moves` gap; `chosen`
+/// names the side a merger chose, its reorder applied first and every other
+/// folded after it. No `moves` gap is settled here: a merger settles one by
+/// confirming its winner (`resolve`). The gaps are numbered from `first`,
+/// after the gaps with spots, in the order of the sides whose reorders they
+/// hold, and a walk under a chosen order numbers them again
 /// (`Numbering::number`).
 fn spine_of(
     r: &Refinement,
@@ -1121,7 +1409,7 @@ fn spine_of(
     in_base: &[Option<usize>],
     removed: &[bool],
     hint: Option<usize>,
-    forced: Option<ResolvedBy>,
+    chosen: Option<usize>,
     first: u32,
 ) -> (Vec<usize>, Vec<Option<usize>>, Vec<Moves>) {
     let surv: Vec<usize> = (0..r.base.len()).filter(|&bi| !removed[bi]).collect();
@@ -1130,40 +1418,94 @@ fn spine_of(
         .map(|seq| seq.iter().filter_map(|&f| in_base[f]).filter(|&bi| !removed[bi]).collect())
         .collect();
     let reordered: Vec<usize> = (0..seqs.len()).filter(|&s| orders[s] != surv).collect();
-    let (spine, winner) = match hint {
-        Some(h) => (orders[h].clone(), Some(h)),
-        None => match reordered.as_slice() {
-            [] => (surv.clone(), None),
-            [one] => (orders[*one].clone(), Some(*one)),
-            many => {
-                let given: Vec<(usize, &[usize])> = many.iter().map(|&s| (s, orders[s].as_slice())).collect();
-                match compose_reorders(&surv, &given) {
-                    Some(spine) => (spine, None),
-                    None => (orders[many[0]].clone(), Some(many[0])),
-                }
-            }
-        },
+    let (spine, lost) = match hint {
+        Some(h) => {
+            let lost = reordered
+                .iter()
+                .filter(|&&s| s != h && orders[s] != orders[h])
+                .map(|&s| (h, s))
+                .collect();
+            (orders[h].clone(), lost)
+        }
+        None => fold(&surv, &orders, &reordered, chosen),
     };
     let mut spine_pos = vec![None; r.base.len()];
     for (p, &bi) in spine.iter().enumerate() {
         spine_pos[bi] = Some(p);
     }
-    let mut moves = Vec::new();
-    if let Some(winner) = winner {
-        for &loser in reordered.iter().filter(|&&s| s != winner && orders[s] != spine) {
+    let moves = lost
+        .into_iter()
+        .enumerate()
+        .map(|(k, (winner, loser))| {
             let mut runs = moved_runs(r, &surv, winner, &orders[winner]);
             runs.extend(moved_runs(r, &surv, loser, &orders[loser]));
-            moves.push(Moves {
-                id: GapId(first + moves.len() as u32),
+            Moves {
+                id: GapId(first + k as u32),
                 winner,
                 loser,
                 runs,
-                settled: forced.is_some(),
-                resolved_by: forced.clone(),
-            });
+                settled: false,
+                resolved_by: None,
+            }
+        })
+        .collect();
+    (spine, spine_pos, moves)
+}
+
+/// Folds the sides' reorders into one order of the survivors (§2 R4 iii).
+///
+/// `reordered` lists the sides whose order differs from the base's, in the
+/// order the sides are listed, and `first`, where a merger chose it, comes
+/// before them all. Each in turn is applied where it composes with every
+/// reorder applied before it (`compose_reorders`); a side whose order is
+/// the spine's already adds nothing; and each other side is lost to the
+/// earliest applied side its own reorder overlaps — else to the first
+/// applied, where it overlaps none alone but all together. Returned are the
+/// spine and each lost side with the side it lost to, `(winner, loser)`.
+/// The fold of two sides is their composition where they compose and the
+/// first's order where they do not, so every pair of sides is judged as a
+/// merge of two, and a side's reorder that touches material no earlier side
+/// moved is never voided by an overlap between two others.
+fn fold(
+    surv: &[usize],
+    orders: &[Vec<usize>],
+    reordered: &[usize],
+    first: Option<usize>,
+) -> (Vec<usize>, Vec<(usize, usize)>) {
+    let mut applied: Vec<usize> = first.into_iter().collect();
+    let mut spine = first.map_or_else(|| surv.to_vec(), |f| orders[f].clone());
+    let mut lost = Vec::new();
+    let composed = |sides: &[usize]| -> Option<Vec<usize>> {
+        let given: Vec<(usize, &[usize])> =
+            sides.iter().map(|&s| (s, orders[s].as_slice())).collect();
+        compose_reorders(surv, &given)
+    };
+    for &s in reordered.iter().filter(|&&s| Some(s) != first) {
+        if orders[s] == spine {
+            continue;
+        }
+        if applied.is_empty() {
+            applied.push(s);
+            spine = orders[s].clone();
+            continue;
+        }
+        let with: Vec<usize> = applied.iter().copied().chain([s]).collect();
+        match composed(&with) {
+            Some(both) => {
+                applied = with;
+                spine = both;
+            }
+            None => {
+                let winner = applied
+                    .iter()
+                    .copied()
+                    .find(|&a| composed(&[a, s]).is_none())
+                    .unwrap_or(applied[0]);
+                lost.push((winner, s));
+            }
         }
     }
-    (spine, spine_pos, moves)
+    (spine, lost)
 }
 
 /// Returns the base material a side moved, as runs with the side.
@@ -1348,11 +1690,78 @@ fn additions(seqs: &[Vec<usize>], in_base: &[Option<usize>]) -> Vec<Stretch> {
 /// `home` is the gap of the spine it lands in (gap `g` lies before the
 /// spine's `g`-th survivor, `0` the start), `kind` `None` for an addition
 /// between two anchors that stand together, which asks nothing where it is
-/// one-sided.
+/// one-sided, and `key` the spot it sorts by there, its anchors'
+/// (`stretch_key`).
+#[derive(Clone, Copy)]
 struct Placed {
     kind: Option<GapKind>,
     home: usize,
     before: bool,
+    key: (i64, i64),
+}
+
+/// The spine and the removals one walk places stretches by.
+struct Layout<'a> {
+    r: &'a Refinement,
+    in_base: &'a [Option<usize>],
+    removed_by: &'a [Vec<bool>],
+    removed: &'a [bool],
+    spine: &'a [usize],
+    spine_pos: &'a [Option<usize>],
+}
+
+impl Layout<'_> {
+    /// Returns step 3's additions over `kept` and step 4's placements.
+    ///
+    /// A keeper's stretch `kept` places at a common spot is placed by that
+    /// spot's anchors, and a stretch that joins another's gap takes that
+    /// stretch's placement (`Kept::of`), so the two group as one gap.
+    fn place(&self, kept: &Kept) -> (Vec<Stretch>, Vec<Placed>) {
+        let mut stretches = additions(&kept.seqs, self.in_base);
+        let ids: Vec<StretchAt> = stretches.iter().map(|st| (st.side, st.x, st.y)).collect();
+        for (st, id) in stretches.iter_mut().zip(&ids) {
+            if let Some(&(x, y)) = kept.spots.get(id) {
+                (st.x, st.y) = (x, y);
+            }
+        }
+        let mut placed = placement(
+            self.r,
+            &stretches,
+            self.removed_by,
+            self.removed,
+            self.spine,
+            self.spine_pos,
+        );
+        let index: HashMap<StretchAt, usize> =
+            ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+        let joined: Vec<(usize, usize)> = ids
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| Some((i, *index.get(&joined_to(&kept.joins, *id)?)?)))
+            .collect();
+        let at_own = placed.clone();
+        for (i, j) in joined {
+            placed[i] = at_own[j];
+        }
+        (stretches, placed)
+    }
+}
+
+/// Returns the stretch whose gap `from` joins, following joins in turn.
+///
+/// `None` where `from` joins none. The joins are finite, so a chain of them
+/// ends, or returns to a stretch it passed, where it stops.
+fn joined_to(joins: &HashMap<StretchAt, StretchAt>, from: StretchAt) -> Option<StretchAt> {
+    let mut at = *joins.get(&from)?;
+    let mut passed = vec![from];
+    while let Some(&next) = joins.get(&at) {
+        if passed.contains(&next) {
+            break;
+        }
+        passed.push(at);
+        at = next;
+    }
+    Some(at)
 }
 
 /// Returns step 4's placements (merge record §1.4, §2).
@@ -1377,13 +1786,19 @@ fn placement(
     stretches
         .iter()
         .map(|st| {
+            let key = stretch_key(st.x, st.y);
             let lo = st.x.map_or(0, |x| x + 1);
             let hi = st.y.unwrap_or(r.base.len());
             let collision = (lo..hi).any(|bi| {
                 removed_by[st.side][bi] && (0..removed_by.len()).any(|t| t != st.side && removed_by[t][bi])
             });
             if collision {
-                return Placed { kind: Some(GapKind::Collision), home: left(st.x), before: false };
+                return Placed {
+                    kind: Some(GapKind::Collision),
+                    home: left(st.x),
+                    before: false,
+                    key,
+                };
             }
             let x_survives = st.x.is_none_or(|x| !removed[x]);
             let y_survives = st.y.is_none_or(|y| !removed[y]);
@@ -1398,16 +1813,21 @@ fn placement(
                         (Some(p), Some(q)) => p + 1 == q,
                     };
                     let kind = if together { None } else { Some(GapKind::Cut) };
-                    Placed { kind, home: after(st.x), before: false }
+                    Placed { kind, home: after(st.x), before: false, key }
                 }
-                (true, false) => Placed { kind: Some(GapKind::Anchor), home: after(st.x), before: false },
+                (true, false) => {
+                    Placed { kind: Some(GapKind::Anchor), home: after(st.x), before: false, key }
+                }
                 (false, true) => {
                     // The right anchor survives: before it in the spine —
                     // and where it is `⊤`, the end of the document, before
                     // the spine's end.
-                    Placed { kind: Some(GapKind::Anchor), home: st.y.and_then(|y| spine_pos[y]).unwrap_or(spine.len()), before: true }
+                    let home = st.y.and_then(|y| spine_pos[y]).unwrap_or(spine.len());
+                    Placed { kind: Some(GapKind::Anchor), home, before: true, key }
                 }
-                (false, false) => Placed { kind: Some(GapKind::Corner), home: left(st.x), before: false },
+                (false, false) => {
+                    Placed { kind: Some(GapKind::Corner), home: left(st.x), before: false, key }
+                }
             }
         })
         .collect()
@@ -1518,7 +1938,7 @@ fn gaps(
 ) -> (Vec<Entry>, Vec<GapId>) {
     let mut entries: Vec<Entry> = Vec::new();
     for (st, p) in stretches.iter().zip(placed) {
-        let key = (st.x.map_or(-1, |x| x as i64), st.y.map_or(i64::MAX, |y| y as i64));
+        let key = p.key;
         let found = entries.iter().position(|e| {
             e.home == p.home
                 && e.kind == p.kind
@@ -1709,29 +2129,37 @@ impl Numbering {
 
     /// Numbers the gaps of a walk under a chosen order as these were.
     ///
-    /// A `moves` gap takes the number of the one here holding the same
-    /// side's reorder, save the one holding the reorder of the side whose
-    /// order the spine took here, which lost to the chosen side: it takes the
-    /// number of the one here holding the chosen side's, the gap the merger
-    /// chose at. Every other gap takes the number of the first gap here not
-    /// yet taken with its kind and the same groups, fragment for fragment —
-    /// a collision no side filled, of the one over the same base positions.
-    /// A gap matching none, one the chosen order makes, is numbered after
-    /// the last here, the `moves` gaps first, then the others in M's order;
-    /// a gap here matching none, one the chosen order removes, leaves its
-    /// number unused. The value log's ids follow their gaps.
+    /// A `moves` gap takes the number of the one here between the same two
+    /// sides, whichever won — so the gap the merger chose at keeps its
+    /// number, its winner now the chosen side — else of the one here whose
+    /// reorder lost as its own did, each number taken once. Every other gap
+    /// takes the number of the first gap here not yet taken with its kind
+    /// and the same groups, fragment for fragment — a collision no side
+    /// filled, of the one over the same base positions. A gap matching none,
+    /// one the chosen order makes, is numbered after the last here, the
+    /// `moves` gaps first, then the others in M's order; a gap here matching
+    /// none, one the chosen order removes, leaves its number unused. The
+    /// value log's ids follow their gaps.
     fn number(&self, entries: &mut [Entry], moves: &mut [Moves], applied: &mut [GapId]) {
         let mut next = self.last;
-        let winner = self.moves.first().map(|m| m.winner);
-        for gap in moves.iter_mut() {
-            let held = if Some(gap.loser) == winner { gap.winner } else { gap.loser };
-            gap.id = match self.moves.iter().find(|m| m.loser == held) {
-                Some(m) => m.id,
-                None => {
-                    next += 1;
-                    GapId(next)
-                }
-            };
+        let pair = |m: &Moves| (m.winner.min(m.loser), m.winner.max(m.loser));
+        let mut open: Vec<&Moves> = self.moves.iter().collect();
+        let mut ids: Vec<Option<GapId>> = vec![None; moves.len()];
+        for (id, gap) in ids.iter_mut().zip(moves.iter()) {
+            if let Some(at) = open.iter().position(|m| pair(m) == pair(gap)) {
+                *id = Some(open.remove(at).id);
+            }
+        }
+        for (id, gap) in ids.iter_mut().zip(moves.iter()).filter(|(id, _)| id.is_none()) {
+            if let Some(at) = open.iter().position(|m| m.loser == gap.loser) {
+                *id = Some(open.remove(at).id);
+            }
+        }
+        for (gap, id) in moves.iter_mut().zip(ids) {
+            gap.id = id.unwrap_or_else(|| {
+                next += 1;
+                GapId(next)
+            });
         }
         let mut open: Vec<(GapId, &Entry)> = self.entries.iter().filter_map(|e| Some((e.id?, e))).collect();
         let mut renumbered: HashMap<GapId, GapId> = HashMap::new();
@@ -1767,11 +2195,17 @@ impl Numbering {
 /// naming no gap, a gap the rules settled, or a choice the gap cannot take.
 /// At a gap with spots the choice of one holder was applied before the
 /// walk (`Claimed::of`), and every other choice there is not applied. At a
-/// spine's `moves` gap only the order the spine took applies. At any other
-/// gap, two naming it apply in turn and combine: an `After` or a `Before`
-/// moves the gap, and at a gap of one group places it by that anchor too;
-/// every other choice sets what is placed; where two set the same, the
-/// later stands.
+/// spine's `moves` gap the order the spine took applies, settling it — the
+/// other side's order chosen re-walks the spine (`moves_choice`) — and
+/// every other choice there is not applied. At any other gap, every
+/// `After` and `Before` naming it moves it together: an address names a
+/// position of each placement of a run the base places twice (skep #763),
+/// so each names the places beside each surviving placement, and the gap
+/// goes to the one every move names, else the one the last move names —
+/// of those, the nearest its composed place, the earlier on a tie. A move
+/// at a gap of one group places it by its anchor too. Every other choice
+/// sets what is placed, `KeepBoth` the placement as composed; of two that
+/// set the same, the later stands.
 fn resolve(
     r: &Refinement,
     entries: &mut [Entry],
@@ -1781,6 +2215,26 @@ fn resolve(
     in_base: &[Option<usize>],
     spine_pos: &[Option<usize>],
 ) -> Vec<Resolution> {
+    let composed: Vec<(usize, Placement)> =
+        entries.iter().map(|e| (e.home, e.placed.clone())).collect();
+    for (entry, (home, _)) in entries.iter_mut().zip(&composed) {
+        let Some(id) = entry.id else { continue };
+        let named: Vec<Vec<usize>> = resolutions
+            .iter()
+            .filter(|res| res.gap == id)
+            .filter_map(|res| r.places(&res.choice, in_base, spine_pos))
+            .filter(|places| !places.is_empty())
+            .collect();
+        let Some(last) = named.last() else { continue };
+        let every: Vec<usize> =
+            last.iter().copied().filter(|p| named.iter().all(|n| n.contains(p))).collect();
+        let pool = if every.is_empty() { last } else { &every };
+        entry.home = pool
+            .iter()
+            .copied()
+            .min_by_key(|p| (p.abs_diff(*home), *p))
+            .expect("a move names a place");
+    }
     let mut ignored = Vec::new();
     for res in resolutions {
         if let Some(claim) = claims.iter().find(|c| c.id == res.gap) {
@@ -1790,18 +2244,20 @@ fn resolve(
             continue;
         }
         if let Some(gap) = moves.iter_mut().find(|m| m.id == res.gap) {
-            let chosen = matches!(&res.choice, Choice::Order(sides) if sides.as_slice() == [r.side_ix[gap.winner]]);
-            if gap.settled && chosen {
+            if matches!(&res.choice, Choice::Order(sides) if sides.as_slice() == [r.side_ix[gap.winner]])
+            {
+                gap.settled = true;
                 gap.resolved_by = Some(res.by.clone());
             } else {
                 ignored.push(res.clone());
             }
             continue;
         }
-        let Some(entry) = entries.iter_mut().find(|e| e.id == Some(res.gap)) else {
+        let Some(i) = entries.iter().position(|e| e.id == Some(res.gap)) else {
             ignored.push(res.clone());
             continue;
         };
+        let entry = &mut entries[i];
         if entry.resolved_by == Some(ResolvedBy::Rule) {
             ignored.push(res.clone());
             continue;
@@ -1817,18 +2273,18 @@ fn resolve(
                 }
                 fits
             }
-            Choice::After(addr) | Choice::Before(addr) => {
-                let before = matches!(res.choice, Choice::Before(_));
-                match r.locate(addr, in_base).and_then(|bi| spine_pos[bi]) {
-                    Some(p) => {
-                        entry.home = if before { p } else { p + 1 };
-                        if entry.groups.len() == 1 {
-                            entry.placed = if before { Placement::Before } else { Placement::After };
-                        }
-                        true
-                    }
-                    None => false,
+            Choice::After(_) | Choice::Before(_) => {
+                let fits = r
+                    .places(&res.choice, in_base, spine_pos)
+                    .is_some_and(|places| !places.is_empty());
+                if fits && entry.groups.len() == 1 {
+                    entry.placed = if matches!(res.choice, Choice::Before(_)) {
+                        Placement::Before
+                    } else {
+                        Placement::After
+                    };
                 }
+                fits
             }
             Choice::KeepOnly(side) => {
                 let fits = sides.contains(side);
@@ -1840,7 +2296,7 @@ fn resolve(
             Choice::KeepBoth => {
                 let fits = sides.len() >= 2;
                 if fits {
-                    entry.placed = Placement::Order(sides.clone());
+                    entry.placed = composed[i].1.clone();
                 }
                 fits
             }

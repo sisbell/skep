@@ -96,22 +96,27 @@
 //! * `collision` — two or more sides removed overlapping material, whether
 //!   all, some or none of them put something in its place: unsettled, the
 //!   default what was put there kept in the commit order.
-//! * `moves` — a side's move the spine did not take: unsettled, the default
-//!   the earliest moving side's order where the sides' moves do not compose
-//!   — as where two sides moved overlapping material — or the hinted side's
-//!   under a `spine_hint`; and one fresh identity two or more sides placed
-//!   at different spots, each spot read by the base positions every holder
-//!   keeps: unsettled, its `spots` naming each placement, the default the
-//!   earliest holder's, numbered before every other gap (CM-I33).
+//! * `moves` — a side's move the spine did not take: unsettled. The sides'
+//!   moves fold in the order listed, each applied where it composes with
+//!   those applied before it, and the gap stands for each that does not —
+//!   as where two sides moved overlapping material — the default the order
+//!   the fold gave, or the hinted side's under a `spine_hint`. And one fresh
+//!   identity two or more sides placed at different spots, each spot read
+//!   by the base positions every holder keeps: unsettled, its `spots`
+//!   naming each placement, the default the earliest holder's, numbered
+//!   before every other gap (CM-I33). The same identity at one spot is kept
+//!   once, where it breaks no side's own order, whichever side is listed
+//!   first.
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
 //! identity, and a gap left with one side's material is settled by it; the
 //! record lists each place kept once under `values.applied`, and
 //! [`Record::deduped`] reads each with the sides kept and the runs dropped,
-//! which stay in their side with any link on them; a
-//! retype beside an edit keeps the retyping side's identity unless the
-//! caller asks the base's back. The rule reads the values of the runs it
+//! which stay in their side with any link on them; a retype beside an edit
+//! keeps the retyping side's identity unless the caller asks the base's
+//! back, and the record then lists each retyped run M no longer holds under
+//! `values.retyped`, with its side. The rule reads the values of the runs it
 //! compares, a run a side windows from another document among them; where
 //! the reader may not read that document the composition refuses naming it
 //! ([`Refusal::Unreadable`]; [`verify`] answers [`Verdict::Unreadable`]),

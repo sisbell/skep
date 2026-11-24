@@ -58,7 +58,8 @@
 //! re-statement carried, read again at the next call — nothing sent, the
 //! landing's reading of a choice off an image checked by its runs, their
 //! order and a gap with spots' spot, a choice the draft holds recorded as
-//! named and verifying `Equal` (skep #1147); the
+//! named and verifying `Equal` (skep #1147); `keep_both` at a gap of one
+//! side, or of none, recorded as the merge record re-states it; the
 //! landing on the trunk through the publication family's shot with the
 //! claim, then the record; with no person present, the landing's undo and
 //! the withdrawal's typed at that write's own position and refused past the
@@ -2676,6 +2677,68 @@ fn the_resolutions_are_checked_against_the_composed_gaps() {
     assert_eq!(checked(json!({"2": {"keep_only": 1}})).unwrap(), BTreeMap::from([(1, placed(&[1]))]));
     assert_eq!(checked(json!({"02": "omit"})).unwrap(), BTreeMap::from([(1, Placement::Omitted)]), "\"02\" names gap 2");
     assert_eq!(checked(json!({"2": {"after": after.to_string()}})).unwrap(), BTreeMap::from([(1, Placement::After)]));
+}
+
+/// Checks that `keep_both` at a gap no group of two sides fills records a
+/// placement the merge record re-states as itself (the merge record's §4),
+/// with no daemon behind it.
+///
+/// A corner at the start of M, before the head's first survivor, a corner
+/// over an empty spine and a collision no side filled are each composed by
+/// the library, confirmed `keep_both`, recorded settled by a person at the
+/// placement the shell checked and composed again under the record's own
+/// options: each gap comes back as recorded and M the same — the corners as
+/// the side's order, the collision `omitted` (the mutant that records the
+/// composed `after` gets back `before`, or over an empty spine a gap no one
+/// settled).
+#[test]
+fn keep_both_records_a_placement_the_record_restates_as_itself() {
+    use std::collections::BTreeMap;
+
+    use skep_client::merge::{compose_runs, GapKind, Options, Placement, Record, ResolvedBy, Role, Run, SideAt, SideIx};
+    let a = |s: &str| parse_address(s).unwrap();
+    let d = a("1.0.1.0.1");
+    let rd = |s: u64, w: u64| Run::new(d.clone(), s, w);
+    let unread = |_: SideIx, _: &Run| None;
+    let cases = [
+        // The head removed the base's first three positions, the side added
+        // at 2|3: a corner at the start of M.
+        (vec![rd(1, 6)], vec![rd(4, 3)], vec![rd(1, 2), rd(7, 1), rd(3, 4)], GapKind::Corner, Placement::Order(vec![SideIx(1)])),
+        // The head removed every position, the side added at 1|2: a corner
+        // over an empty spine.
+        (vec![rd(1, 3)], vec![], vec![rd(1, 1), rd(4, 1), rd(2, 2)], GapKind::Corner, Placement::Order(vec![SideIx(1)])),
+        // Both removed every position: a collision no side filled.
+        (vec![rd(1, 3)], vec![], vec![], GapKind::Collision, Placement::Omitted),
+    ];
+    for (base, head, side, kind, want) in cases {
+        let sides = [(SideIx(0), head), (SideIx(1), side)];
+        let composed = compose_runs(&base, &d, &sides, None, &Options::default(), &unread);
+        let shape: Vec<_> = composed.gaps.iter().map(|g| (g.kind, g.after.is_some(), g.settled, g.placed.clone())).collect();
+        assert_eq!(shape, vec![(kind, false, false, Placement::After)], "{composed:?}");
+        let checked = super::super::merge::checked_resolutions(&composed.gaps, json!({"1": "keep_both"}).as_object().unwrap()).unwrap();
+        let mut gaps = composed.gaps.clone();
+        gaps[0].placed = checked[&0].clone();
+        gaps[0].settled = true;
+        gaps[0].resolved_by = Some(ResolvedBy::Person);
+        let record = Record {
+            doc: d.clone(),
+            base: a("1.0.1.0.1.1"),
+            sides: vec![SideAt::Member { at: a("1.0.1.0.1.2"), role: Role::Head }, SideAt::Member { at: a("1.0.1.0.1.1.1"), role: Role::Alternative }],
+            landed: None,
+            claims: vec![],
+            runs: composed.counts,
+            retries: 0,
+            gaps: gaps.clone(),
+            values: composed.values.clone(),
+            answers: vec![],
+            replaces: None,
+            by: String::new(),
+            link: None,
+        };
+        let again = compose_runs(&base, &d, &sides, None, &record.options(), &unread);
+        assert_eq!((again.gaps, again.runs), (gaps, composed.runs), "re-stated as recorded, M the same");
+        assert_eq!(checked, BTreeMap::from([(0, want)]), "keep_both: the side's order, or nothing at a gap of none");
+    }
 }
 
 /// Checks the words a shot of a selection publishes, read off a draft's

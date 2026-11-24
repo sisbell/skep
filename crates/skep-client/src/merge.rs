@@ -32,7 +32,9 @@
 //! side's words a record names as published sent by reference to them — with
 //! its signed body carrying the supersession claims — one per daughter,
 //! each marking the daughter superseded by the member in the commit that
-//! mints it — the
+//! mints it, and a shot superseding none that would publish the head's own
+//! list again refused ([`Refusal::HeadHolds`]) — every write asked again
+//! once under its id where its answer is lost — the
 //! claims' read, the record in a merge journal, a private document of the
 //! merger's own and never a published one, with its link homed beside it,
 //! the draft landing — one `set_arrangement` typed against the position the

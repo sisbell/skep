@@ -36,16 +36,24 @@
 //! and §6) — and a `--draft` side's own words taken from the draft in the
 //! same commit, so it reads them as published, words a record already names
 //! as published sent by reference to them, and a draft changed since the
-//! composition refused with nothing published (the library's `land` doc);
-//! with `--into` it lands the
+//! composition refused with nothing published (the library's `land` doc) —
+//! and where the head already holds the merged list and the daughter a claim
+//! of the merger's own already names, as at a run made again with no
+//! `--head` after the version landed, it publishes nothing and refuses
+//! `head_holds`, exit 1, no second version identical to the head minted; a
+//! stop after the composition at `--publish` says the run that finds a
+//! version the shot may have landed, `--head` naming the head this merge was
+//! composed on; with `--into` it lands the
 //! merged list in a draft as one `set_arrangement` typed against that
 //! position — refused whole where the draft changed since, the draft's base
 //! re-recorded on the head and the merge marked beside it where the board
 //! records a base for it; with `--new` it stages a fresh draft from the head
 //! and lands there — or, where the merger's own landing of the key already
-//! stands in a draft, reports that landing and stages nothing, its `fresh`
-//! false, and where a fork or a draft side moved since the merger's own landing
-//! of the merge, so the key is another, lands in the draft the merger's newest
+//! stands in a draft, the draft still marking it, reports that landing and
+//! stages nothing, its `fresh` false — a landing taken back, whatever its
+//! take-back's record says, standing no more — and where a fork or a draft
+//! side moved since the merger's own landing of the merge, so the key is
+//! another, lands in the draft the merger's newest
 //! record of the merge names, found with the states ignored (`landed_draft`),
 //! its `fresh` false, and where
 //! the merge landed in a draft of the merger's that no record of theirs
@@ -193,7 +201,7 @@ enum Land {
     /// `--new`: a fresh draft staged from the head, then the same write.
     ///
     /// Where the merger's own landing of the key stands in a draft, the
-    /// library reports it and stages nothing.
+    /// draft still marking it, the library reports it and stages nothing.
     New,
 }
 
@@ -399,15 +407,28 @@ fn run(
             .map(|draft| replaced(board, Some(token), draft, &merged))
             .transpose()
             .map_err(|r| refused(r, step))?;
+        let publishing = matches!(landing, Land::Publish(_));
         let landing = match landing {
             Land::Publish(answers) => Landing::Shot { merger, draft: None, answers: (**answers).clone(), journal },
             Land::Into(_) | Land::New => Landing::Draft { merger, into, journal },
         };
-        let landed = land(board, &merged, landing).map_err(|r| match r {
-            // The command's own refusal, in its words: the board was never
-            // asked, and the parts' words are this command's to say (SP-10).
-            Refusal::WindowPartsOwed { parts, misfits, given } => Stop::Refusal(owed_block(&merged, &parts, &misfits, &given)),
-            other => refused(other, step),
+        let landed = land(board, &merged, landing).map_err(|r| {
+            // A stop that may follow the shot: the run that finds the version
+            // names the head this merge was composed on, since the feed's
+            // head is then the version itself, which holds the merge.
+            if publishing && matches!(r, Refusal::Halt(_) | Refusal::SessionEnded(_)) {
+                talk(format!(
+                    "where this merge was published before the stop, run this again with --head {}: it finds the version and writes its record, publishing nothing twice",
+                    merged.inputs.head
+                ));
+            }
+            match r {
+                // The command's own refusal, in its words: the board was
+                // never asked, and the parts' words are this command's to
+                // say (SP-10).
+                Refusal::WindowPartsOwed { parts, misfits, given } => Stop::Refusal(owed_block(&merged, &parts, &misfits, &given)),
+                other => refused(other, step),
+            }
         })?;
         say_landed(&merged, &landed, stretches.as_deref(), &asked.kind);
         report["landed"] = landed_value(&merged, &landed, stretches.as_deref());

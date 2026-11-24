@@ -13,8 +13,10 @@
 //! found by the account's own links of the kind, homed in the journals that
 //! hold their records, each candidate's `doc_metadata` read and taken only
 //! where it is a private draft of the account's — or a private draft minted
-//! on first use with `create_new_document{published: false}`. The library
-//! never changes a journal's flag.
+//! on first use with `create_new_document{published: false}`, under the
+//! per-session id `merge.journal:<account>` and asked again once under it
+//! where its answer is lost (`send_write`), so one session mints one
+//! journal. The library never changes a journal's flag.
 //!
 //! **The find is a class scan.** The account's links of the kind are read by
 //! one `find_links_ftt` over `ty` and `home` the account, the read the
@@ -38,7 +40,7 @@ use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::publication::{is_busy, owned_by, SCAN_BUSY_REISSUES};
 
-use super::land::{Merger, Writer};
+use super::land::{send_write, Merger, Writer};
 use super::reads::{comps, session_ended, OnEnd, Reader, Refusal};
 
 /// Returns the journal a merge record goes to (decision 7).
@@ -189,7 +191,7 @@ pub(super) fn found(
     }
     let id = format!("merge.journal:{account}");
     let v = document(
-        board.op(Some(merger.token), &frames::create_document(account, false, Some(&id)))?,
+        send_write(board, merger.token, &frames::create_document(account, false, Some(&id)))?,
         "minting the merge journal",
         on_end,
     )?;

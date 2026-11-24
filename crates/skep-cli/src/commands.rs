@@ -596,6 +596,9 @@ fn journal_published(journal: &Address) -> String {
 /// written, and the two ways on; the shot's own `supersede_refused`,
 /// whose detail at `head_moved` says the head moved under the merge, that
 /// nothing was published, and to run the merge again on the head it names;
+/// `head_holds`, a `--publish` whose head already holds the merged list and
+/// whose daughter a claim of the merger's own already names, nothing
+/// published, so no second version identical to the head is minted;
 /// and `landing_begun`, a `--new` landing that found this merge landed in a
 /// draft of the merger's with no record, nothing staged or written, its
 /// detail naming the draft, the position and the ways on (PUB-8.32).
@@ -637,6 +640,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::NotPast { .. } => "not_past",
         Refusal::SupersedeRefused { .. } => "supersede_refused",
         Refusal::AlreadyPublished { .. } => "already_published",
+        Refusal::HeadHolds { .. } => "head_holds",
         Refusal::LandingBegun { .. } => "landing_begun",
         Refusal::WindowPartsOwed { .. } => "window_parts_owed",
     };

@@ -119,9 +119,10 @@ impl Newest {
     /// names this one by its link, carrying no landing. `verify` reads the
     /// draft at it, where the draft held the first landing's M. A fresh
     /// landing that finds the record standing answers the position the
-    /// marker, else that row, names, and the
-    /// record's only where the draft marks no landing of the merge at or
-    /// past it ([`Newest::draft_landing`]). A merge composed again after a
+    /// marker, else that row, names, and finds none standing where the draft
+    /// marks no landing of the merge at or past the record's position, the
+    /// landing taken back whether or not its take-back's record was written
+    /// ([`Newest::draft_landing`]). A merge composed again after a
     /// fork or a draft side moved has another key, so no newest record of
     /// it names the draft, and its landing there writes a record of its own.
     pub(super) fn naming(&self, landed: &RecordLanding) -> Option<&Address> {
@@ -142,20 +143,27 @@ impl Newest {
     ///
     /// It is a fresh landing's answer with nothing staged: the draft, the
     /// position its draft marks the landing at — `marked`'s answer for the
-    /// draft, the board's mark as [`Writer::marked_landing`] reads it — and
+    /// draft, the board's mark as [`Writer::landing_mark`] reads it — and
     /// the record's link, with no newer head told and `staged` false. The
     /// record names the write that first landed the key in the draft, and a
     /// later landing of the key there moves the mark past it (skep #790), so
-    /// a mark below that position is an earlier merge's standing again — its
-    /// marker put back, or on a draft with no recorded base its landing
-    /// beneath one taken back; where `marked` answers none, or only such a
-    /// one, the position the record names is answered. `None` where the
-    /// newest names no draft landing or none stands, `marked` then never
-    /// called.
+    /// the landing stands where the draft marks this merge's landing at or
+    /// past that position. A mark below it is an earlier merge's standing
+    /// again — its marker put back, or on a draft with no recorded base its
+    /// landing beneath one taken back — and no mark is a landing taken back:
+    /// the board's mark is the fact and the record its testimony, so a
+    /// take-back whose record went unwritten leaves no landing standing,
+    /// whatever the record names, and the key is open to land again. A draft
+    /// whose mark cannot be read — `marked` answers
+    /// [`Refusal::HistoryReclaimed`], a past state its rows' walk needs gone
+    /// from the board — is answered at the position the record names: a
+    /// landing that cannot be judged is never made a second time. `None`
+    /// where the newest names no draft landing, `marked` then never called,
+    /// or where its draft marks no landing of this merge at or past it.
     ///
     /// # Errors
     ///
-    /// `marked`'s, each as itself (SP-14).
+    /// `marked`'s but [`Refusal::HistoryReclaimed`], each as itself (SP-14).
     pub(super) fn draft_landing(
         &self,
         marked: impl FnOnce(&Address) -> Result<Option<u64>, Refusal>,
@@ -164,7 +172,14 @@ impl Newest {
         let Some(RecordLanding::Draft { draft, position: recorded }) = &record.landed else {
             return Ok(None);
         };
-        let position = marked(draft)?.filter(|at| at >= recorded).unwrap_or(*recorded);
+        let position = match marked(draft) {
+            Ok(mark) => match mark.filter(|at| at >= recorded) {
+                Some(at) => at,
+                None => return Ok(None),
+            },
+            Err(Refusal::HistoryReclaimed { .. }) => *recorded,
+            Err(e) => return Err(e),
+        };
         Ok(Some(Landed::Draft {
             into: draft.clone(),
             position,

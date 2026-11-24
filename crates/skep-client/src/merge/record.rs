@@ -465,8 +465,11 @@ pub enum RecordLanding {
         /// record (skep #790), so the mark, never this, names the draft's
         /// latest landing, and a fresh landing that finds this record
         /// standing answers the mark's position as `Landed::Draft`'s
-        /// `position`, this one only where the draft marks no landing of
-        /// the merge at or past it. `verify` reads the draft at it.
+        /// `position`, this one only where the mark cannot be read, the walk
+        /// of a baseless draft's rows needing a past state the board has
+        /// reclaimed; a draft marking no landing of the merge at or past it
+        /// holds none, and that landing stages afresh. `verify` reads the
+        /// draft at it.
         position: u64,
     },
 }

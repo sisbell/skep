@@ -175,8 +175,10 @@ fn value_reads(dialer: &Scripted) -> Vec<Vec<(String, u64, u64)>> {
 /// 131,072 — and the attest signs every value they deliver (the mutant
 /// that reads past the budget is refused `too_many_items` whole, and the
 /// one that splits a part back to the wrong stretch signs other words).
-/// The side is a draft staged from `D.1` and left as staged, so the shot
-/// claims no daughter and renders no draft: its body is the values alone.
+/// The side is a draft staged from `D.1` that removed the base's last word,
+/// "c", which the head keeps, so the merge is no copy of the head's list
+/// (P13) while the shot claims no daughter and renders no draft: its body
+/// is the values alone.
 #[test]
 fn the_shot_reads_a_holders_values_in_parts_past_the_delivery_budget() {
     let budget = crate::merge::reads::MAX_DELIVERY_ITEMS;
@@ -184,19 +186,20 @@ fn the_shot_reads_a_holders_values_in_parts_past_the_delivery_budget() {
     let mut w = World::new();
     w.text(D, 1, &"a".repeat(n as usize));
     w.text(D, n + 1, "b");
-    let base = vec![run(D, 1, n)];
-    let head = vec![run(D, 1, n), run(D, n + 1, 1)];
+    w.text(D, n + 2, "c");
+    let base = vec![run(D, 1, n), run(D, n + 2, 1)];
+    let head = vec![run(D, 1, n), run(D, n + 1, 1), run(D, n + 2, 1)];
     w.doc(D, true, ACCOUNT, head.clone());
     w.member(&format!("{D}.1"), base.clone(), None);
-    w.member(&format!("{D}.2"), head, Some(n));
+    w.member(&format!("{D}.2"), head, Some(n + 1));
     w.trunk_head.insert(D.to_string(), format!("{D}.2"));
-    w.doc(S, false, ACCOUNT, base);
-    w.staged(S, &format!("{D}.1"), n);
+    w.doc(S, false, ACCOUNT, vec![run(D, 1, n)]);
+    w.staged(S, &format!("{D}.1"), n + 1);
     let (dialer, board, signer) = open(w);
     let session = sign_in(&board, &signer);
     let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
     let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
-    assert_eq!(m_runs(&merged), vec![run(D, 1, n + 1)], "the premise: the head's words, one run");
+    assert_eq!(m_runs(&merged), vec![run(D, 1, n + 1)], "the premise: the head's words but \"c\", one run");
     dialer.clear();
     land(&board, &merged, shot(&session, &signer)).expect("landed");
     let member = format!("{D}.2");
@@ -206,7 +209,7 @@ fn the_shot_reads_a_holders_values_in_parts_past_the_delivery_budget() {
         "the budget's positions, then the rest of the first stretch and the second, at the head"
     );
     let values: Vec<[u8; 1]> = (0..=n).map(|k| [if k < n { b'a' } else { b'b' }]).collect();
-    signs(&board, &signer, &dialer.frames("publish")[0], values.iter().map(|v| ShotSegmentPiece::Value(v)).collect(), n + 1);
+    signs(&board, &signer, &dialer.frames("publish")[0], values.iter().map(|v| ShotSegmentPiece::Value(v)).collect(), n + 2);
 }
 
 /// A VALUE READ TOO LARGE IS ASKED AGAIN IN HALVES (skep #1144): the shot
@@ -477,6 +480,41 @@ fn a_lost_ack_is_completed_by_resume_and_nothing_is_written_twice() {
     dialer.clear();
     assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None));
     assert_eq!(dialer.ops(), ["doc_metadata"]);
+}
+
+/// THE HEAD HOLDS THE MERGE (P13): the shot landed and both its answers
+/// were lost, so the merger runs the merge again from the head the feed
+/// names, `D.3` — the version the shot minted, whose claim already names
+/// the daughter. Composed on it, M is `D.3`'s own list and the shot
+/// supersedes no daughter left, so the landing is refused naming `D.3`
+/// before anything is sent: no `publish`, no record, no `D.4`. The
+/// composition the first shot was made from still resumes on its own head,
+/// finding `D.3` and writing its record once.
+#[test]
+fn a_merge_run_again_on_the_head_it_published_is_refused_and_resumes_on_its_own() {
+    let (dialer, board, signer) = open(World::race());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    dialer.world().drop_acks = 2;
+    let lost = land(&board, &merged, shot(&session, &signer));
+    assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "both answers lost: {lost:?}");
+    // The run again, in a session of its own: no memo stands.
+    dialer.world().memo.clear();
+    let head = head_of(&board, Some(session.token()), &a(D)).expect("the feed").expect("a head");
+    assert_eq!(head, a(&format!("{D}.3")), "the premise: the head is the version the shot minted");
+    let again = compose(&board, Some(session.token()), &Inputs { head: head.clone(), ..race_inputs() })
+        .expect("composed again");
+    dialer.clear();
+    assert_eq!(land(&board, &again, shot(&session, &signer)), Err(Refusal::HeadHolds { head }));
+    let ops = dialer.ops();
+    assert!(!ops.iter().any(|o| ["publish", "insert", "make_link", "create_new_document"].contains(&o.as_str())), "nothing sent: {ops:?}");
+    assert!(!dialer.world().docs.contains_key(&format!("{D}.4")), "no second version");
+    dialer.clear();
+    let resumed = resume(&board, &merged, shot(&session, &signer)).expect("resumed");
+    let Some(Landed::Member { address, .. }) = &resumed else { panic!("{resumed:?}") };
+    assert_eq!(address.to_string(), format!("{D}.3"), "the member the first shot minted");
+    assert_eq!(dialer.frames("insert").len(), 1, "its record written once: {:?}", dialer.ops());
+    assert!(dialer.frames("publish").is_empty(), "no shot: {:?}", dialer.ops());
 }
 
 /// A DAUGHTER in the acknowledgment — the head moved under a merge whose
@@ -849,7 +887,10 @@ fn over_the_cap_refuses_with_the_count_before_any_frame() {
 /// beside it at the write's position; the record with `landed` the draft
 /// and THE WRITE's position. A second landing over the same `merged` in
 /// the session follows the record the first one followed, so the board's
-/// memo answers its id: the same landing, nothing written twice.
+/// memo answers its id: the same landing, nothing written twice. `resume`
+/// answers the landing, writing nothing, and again after an edit of the
+/// draft, which it reads as of the marker's position (the mutant that reads
+/// the draft at the head answers none).
 #[test]
 fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_the_record() {
     let (dialer, board, signer) = open(draft_landing_world());
@@ -910,16 +951,18 @@ fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_
     assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
     assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
     // `resume` finds the draft holding M and answers the marker's
-    // position, the record standing; a draft holding another list is no
-    // landing to resume.
+    // position, the record standing; an edit since the landing changes
+    // nothing, the draft read as of the marker's position, where the landing
+    // placed M (skep #914: a landing stands until it is taken back).
+    let landed_s = Some(Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None, staged: false });
     dialer.clear();
-    assert_eq!(
-        resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"),
-        Some(Landed::Draft { into: a(S), position: *position, record: record.clone(), head_moved: None, staged: false })
-    );
+    assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"), landed_s);
     assert!(dialer.frames("set_arrangement").is_empty(), "a resume sends nothing: {:?}", dialer.ops());
     dialer.world().change(S, vec![run(D, 1, 11)]);
-    assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"), None);
+    dialer.clear();
+    assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, Some(a(S)))).expect("resumed"), landed_s, "the landing stands, the edit since it beside");
+    assert_eq!(dialer.positions("image"), vec![*position], "the draft imaged as of the marker's position: {:?}", dialer.ops());
+    assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "the record stands: {:?}", dialer.ops());
 }
 
 /// AN EDIT TO THE DRAFT BETWEEN COMPOSE AND LAND IS REFUSED WHOLE (THE
@@ -1620,8 +1663,10 @@ fn the_keys_text_spells_each_state_and_an_unrecorded_one_equals_no_other() {
 /// matching `Unarranged` to any position answers `Equal` — and so does
 /// the record with its fork's `arranged` stripped, `Unrecorded`, the
 /// fork arranged after its landing, where before it verified `Equal`. A
-/// record composed over the fork in that state, `At` its position,
-/// answers `SideMoved` once the forker edits it again, never `Differs`.
+/// record composed over the fork in that state, `At` its position — a
+/// shot of it refused `HeadHolds`, the head already holding the fork's
+/// words, so landed in a fresh draft — answers `SideMoved` once the forker
+/// edits it again, never `Differs`.
 #[test]
 fn a_fork_recorded_unarranged_answers_side_moved_once_it_is_arranged() {
     let mut w = World::race();
@@ -1681,7 +1726,12 @@ fn a_fork_recorded_unarranged_answers_side_moved_once_it_is_arranged() {
         again.record.sides[1],
         SideAt::Fork { at: a(F), arranged: SideState::At(arranged) }
     );
-    land(&board, &again, shot(&session, &signer)).expect("landed again");
+    assert_eq!(
+        land(&board, &again, shot(&session, &signer)),
+        Err(Refusal::HeadHolds { head: a(&head) }),
+        "no version identical to the head"
+    );
+    land(&board, &again, draft_landing(&session, &signer, None)).expect("landed again");
     let second = current(&board, Some(&token()), &a(K), &again.key)
         .expect("the lookup")
         .expect("the record");

@@ -812,7 +812,8 @@ fn a_fork_edited_since_its_draft_landing_lands_again_with_a_record_of_its_own() 
 /// found from the draft; and the draft's recorded base stands at `D.1`, the
 /// shot keeping it (skep #944), so a merge run again from the draft over the
 /// head `D.2` finds the member it made, and one over the head the merge
-/// minted lands a member still holding "big ". Once a publication of the
+/// minted composes a list still holding "big " and is refused `HeadHolds`,
+/// that member holding the list already (P13). Once a publication of the
 /// draft itself moves its base past the record's position, the record
 /// verifies Equal as of the position it names for the draft, Unreadable
 /// naming the draft to a guest the board withholds it from, and one naming
@@ -1000,15 +1001,18 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
     assert_eq!(board.health().unwrap().log_position(), at, "nothing written");
     let over_member = compose(&board, Some(&token), &Inputs { head: member.clone(), ..inputs.clone() }).expect("composed over the merge's member");
     assert_eq!(over_member.key.base, base, "the draft's own base, never the member");
-    let Landed::Member { address: rerun, .. } = land(&board, &over_member, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }).expect("landed") else {
-        panic!("a member")
-    };
-    assert_eq!(rerun.to_string(), format!("{d}.4"), "the trunk's next member");
     assert_eq!(
-        image(&board, &token, &rerun, 18),
+        as_image(&m_of(&over_member)),
         vec![(format!("{d}.0.1.1"), 4), (format!("{d}.0.1.12"), 4), (format!("{d}.0.1.5"), 7), (format!("{d}.0.1.16"), 3)],
         "the big cat sat!!! — the head's words kept"
     );
+    let at = board.health().unwrap().log_position();
+    assert_eq!(
+        land(&board, &over_member, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None }),
+        Err(Refusal::HeadHolds { head: member.clone() }),
+        "the member holds the list already: no version identical to it is minted"
+    );
+    assert_eq!(board.health().unwrap().log_position(), at, "nothing written");
     // A publication of the draft itself moves its base (wire.md §Namespace,
     // `stage`): the draft's words as it holds them, off the trunk's head.
     let own = shot(
@@ -1017,7 +1021,7 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         &device,
         &bare_token,
         &d,
-        Some((&rerun, 18)),
+        Some((&member, 18)),
         &[Staged::Names { draft: &draft }, Staged::Own { from: 1, text: "the cat sat" }, Staged::Own { from: 16, text: "!!!" }],
     );
     let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
@@ -1239,8 +1243,9 @@ fn a_run_the_draft_holds_at_two_places_lands_and_re_windows_the_draft_at_both() 
 /// `S` is staged from the head, "!!!" typed, and a shot of its words names it
 /// with no place — the state a shot that re-windowed nothing left, its words
 /// `S` still shows as its own though a record names them published (skep
-/// #939). The merge composes them as `S`'s fresh text; the shot sends them by
-/// reference and the board re-windows `S`, nothing refused. Member and draft
+/// #939), with a word typed since. The merge composes them as `S`'s fresh
+/// text; the shot sends the published ones by reference, the word typed since
+/// re-minted, and the board re-windows `S`, nothing refused. Member and draft
 /// hold the published words by identity, `verify` reads Equal, and the same
 /// `land` writes nothing.
 #[test]
@@ -1253,10 +1258,11 @@ fn a_draft_whose_words_a_shot_left_standing_merges_them_by_reference() {
     let raw = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&head, 15)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }, Staged::Draft { draft: &draft, from: 1, text: "!!!" }]);
     assert_eq!(raw.to_string(), format!("{d}.3"));
     assert_eq!(image(&rig.board, &token, &draft, 18).last().cloned(), Some((format!("{draft}.0.1.1"), 3)), "the premise: S still shows the published words as its own");
+    insert_text(&rig.board, &rig.bare, &draft.to_string(), 19, "?");
     let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
     let inputs = Inputs { doc: d.clone(), head: raw.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
     let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
-    assert_eq!(m_of(&merged).last(), Some(&rd(&draft, 1, 3)), "the premise: M carries them as S's fresh text");
+    assert_eq!(m_of(&merged).last(), Some(&rd(&draft, 1, 4)), "the premise: M carries them as S's fresh text, the word typed since beside them");
     let published = image(&rig.board, &token, &raw, 18);
     let landing = || Landing::Shot { merger: merger(&rig, &session), draft: None, answers: Answers::default(), journal: None };
     let landed = land(&rig.board, &merged, landing()).expect("landed");

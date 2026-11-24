@@ -78,11 +78,13 @@ pub enum Landing<'a> {
         /// was composed on (R3): `stage {from: the head}`, then the write
         /// typed against the stage's position, the base the stage recorded
         /// re-recorded on the head — unless the merger's newest record for
-        /// the key, read at the landing, names a draft landing, which is
-        /// reported at the position its draft marks it with nothing staged,
-        /// its `staged` false, or, where it names none, a draft of the
-        /// merger's carries a landing of the merge no record of theirs
-        /// names, refused [`Refusal::LandingBegun`] with nothing staged.
+        /// the key, read at the landing, names a draft landing its draft
+        /// still marks, which is reported at the position its draft marks it
+        /// with nothing staged, its `staged` false, or, where it names none,
+        /// a draft of the merger's carries a landing of the merge no record
+        /// of theirs names, refused [`Refusal::LandingBegun`] with nothing
+        /// staged. A record whose draft marks no landing of the merge — taken
+        /// back, its take-back's record unwritten — names none.
         ///
         /// [`Refusal::LandingBegun`]: super::Refusal::LandingBegun
         into: Option<Address>,
@@ -161,10 +163,12 @@ pub enum Landed {
         /// Where the landing was found standing, it is the position the
         /// board marks it at — the draft's marker, or on a draft with no
         /// recorded base its `set_arrangement` row — for a `resume` naming
-        /// the draft, the draft holding M, and for a fresh landing the
-        /// merger's newest record for the key names; such a fresh landing,
-        /// its draft marking none of the merge at or past the position that
-        /// record names, answers the record's position. A landing into the
+        /// the draft, the draft as of it holding M, and for a fresh landing
+        /// the merger's newest record for the key names, its draft marking
+        /// the merge at or past the position that record names; such a
+        /// fresh landing whose draft cannot be judged, the walk of its rows
+        /// needing a past state the board has reclaimed, answers the
+        /// record's position. A landing into the
         /// draft the standing record names is the same landing (skep #790):
         /// `position` is this write's, and the record's own is the first
         /// landing's.

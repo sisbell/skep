@@ -4169,6 +4169,59 @@ fn merged_names_the_member_and_writes_a_missing_record_once() {
     sd.shutdown();
 }
 
+/// Checks that the merged arm records the merge as the member holds it,
+/// and only where the member verifies, against the daemon.
+///
+/// L takes the merge of E.2 with E.1.1, "the fox jumps today", and the page's
+/// own slot publishes L as E.3, which writes no merge record. In the first
+/// cell L's two additions were swapped first, "the fox today jumps":
+/// `merge.compose` of the daughter answers MERGED and writes the record
+/// with the gap read off E.3, `[1, 0]` by the person, verifying `Equal` (the
+/// mutant that reads the gaps at their defaults, `[0, 1]`, finds E.3 differs
+/// and writes no record). In the second, a word was written into L besides,
+/// which no gap's choice holds: the arm answers MERGED with no record —
+/// `record_link` null, `unrecorded` naming `merge_refused` `member_differs`
+/// — nothing written (the mutant that writes the record unverified writes
+/// one that verifies `Differs`).
+#[test]
+fn merged_records_the_member_as_it_holds_the_merge_and_only_where_it_verifies() {
+    let cell = |label: &str, word: bool| {
+        let dir = TempDir::new().unwrap();
+        let sd = spawn(&dir.path().join("board"), true);
+        let g = ground(&dir, &sd);
+        let f = family(&g);
+        let l = g.addr(frames::stage(&f.e2, None));
+        let landed = merged_into(&g, &f, &f.e11, &l);
+        let gap = landed["gaps"][0]["id"].as_u64().expect("the order gap");
+        g.op(frames::rearrange(&l, &[8, 14, 20], g.position(), None));
+        if word {
+            g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["so "], "as_of": g.position()}));
+        }
+        let text = if word { "so the fox today jumps" } else { "the fox today jumps" };
+        assert_eq!(g.text(&l, text.len() as u64), text, "{label}: the premise");
+        g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{label}: {r}"));
+        let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{label}: {r}"));
+        let e3 = format!("{}.3", f.edition);
+        assert_eq!(acked["member"].as_str(), Some(e3.as_str()), "{label}: {acked}");
+        let before = g.position();
+        let merged = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{label}: {r}"));
+        assert_report_declared(&merged);
+        assert_eq!((merged["outcome"].as_str(), merged["member"].as_str()), (Some("merged"), Some(e3.as_str())), "{label}: {merged}");
+        if word {
+            assert_eq!(merged["record_link"], Value::Null, "{label}: no record: {merged}");
+            assert_eq!((merged["unrecorded"]["name"].as_str(), merged["unrecorded"]["arm"].as_str()), (Some("merge_refused"), Some("member_differs")), "{label}: {merged}");
+            assert_eq!(g.position(), before, "{label}: nothing written");
+        } else {
+            assert!(merged["record_link"].is_string() && merged.get("unrecorded").is_none(), "{label}: the record written: {merged}");
+            assert_recorded(&g, &landed, gap, json!([1, 0]));
+        }
+        g.shell.shutdown();
+        sd.shutdown();
+    };
+    cell("the two swapped", false);
+    cell("a word besides", true);
+}
+
 /// Checks that a landing cut off before its record is named, then recorded.
 ///
 /// Against the daemon (skep #1103): the person's draft L, staged from E.2,

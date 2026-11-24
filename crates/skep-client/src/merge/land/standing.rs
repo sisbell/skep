@@ -27,10 +27,11 @@ use super::writer::{Stem, Writer};
 /// and the record. `shoot` is whether a landing not found standing is made.
 /// A fresh draft landing looks for a landing begun and never recorded
 /// before its journal's check and its stage, with `shoot` on or off
-/// ([`Writer::landing_begun`]). A journal named is checked once, after the
-/// read-first steps and before the landing's first write
-/// ([`Writer::check_journal`]); a landing found standing writes nothing
-/// before its record and checks none.
+/// ([`Writer::landing_begun`]), then reads every document M windows
+/// ([`Writer::windows_readable`]) before the stage. A journal named is
+/// checked once, after the read-first steps and before the landing's first
+/// write ([`Writer::check_journal`]); a landing found standing writes
+/// nothing before its record and checks none.
 ///
 /// # Errors
 ///
@@ -121,9 +122,12 @@ pub(super) fn walk(
                     (into.clone(), merged.as_of, text, false)
                 }
                 None => {
+                    // The record's draft, judged by its mark: a draft whose
+                    // rows' walk needs a past state the board reclaimed is
+                    // answered by the record, never landed into again.
                     let marked = |draft: &Address| {
                         let meta = writer.reader.metadata(draft, None)?;
-                        writer.marked_landing(merged, draft, &meta)
+                        writer.landing_mark(merged, draft, &meta)
                     };
                     if let Some(standing) = newest.draft_landing(marked)? {
                         return Ok(Some(standing));
@@ -138,6 +142,9 @@ pub(super) fn walk(
                     if !shoot {
                         return Ok(None);
                     }
+                    // Every window's origin read before the stage, so the
+                    // one write's source gate refuses nothing past it.
+                    writer.windows_readable(merged)?;
                     check_journal()?;
                     let (fresh, at) = writer.stage(merged, &newest)?;
                     let text = format!("{}:{fresh}@{at}", merged.key.text());

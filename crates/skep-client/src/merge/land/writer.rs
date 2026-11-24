@@ -4,7 +4,10 @@
 //! landing, the undo and the withdrawal write through it: one write's
 //! answer, the check of a journal named, the head the shot signs over and
 //! its `attest`. [`Stem`] spells each write's per-session ids (the `land`
-//! module's doc).
+//! module's doc), and [`send_write`] sends every write of a merge — the
+//! journal's mint among them — asking it again once under its id where the
+//! transport lost its answer, so a lost acknowledgment within a session is
+//! answered by the board's memo and nothing applies twice.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,7 +15,7 @@ use skep_address::Address;
 use skep_identity::{entry_frame, BoardTerm, DocTerm, EntryBody};
 
 use crate::address::parse_address;
-use crate::board::{Answer, Board, BoardHead};
+use crate::board::{Answer, Board, BoardHead, Token};
 use crate::halt::Halt;
 use crate::merge::reads::{session_ended, OnEnd, Reader, Refusal};
 use crate::sign::sig_hex;
@@ -49,6 +52,30 @@ impl Stem {
     }
 }
 
+/// Sends one write under `token`, asking it again once where the transport
+/// lost its answer and the frame carries an `id`.
+///
+/// The board answers a frame under an id it has acknowledged in the session
+/// with that acknowledgment, never judging it again (wire.md §Correlation
+/// and idempotency), so the second ask lands nothing twice: it gets the
+/// write's acknowledgment where the first ask applied it, and applies it
+/// where the first ask never reached the board. A frame naming no id is
+/// sent once.
+///
+/// # Errors
+///
+/// [`Board::op`]'s, a dial fault past the one re-ask among them.
+pub(in crate::merge) fn send_write(
+    board: &Board,
+    token: &Token,
+    frame: &Value,
+) -> Result<Answer, Halt> {
+    match board.op(Some(token), frame) {
+        Err(Halt::Dial(_)) if frame.get("id").is_some() => board.op(Some(token), frame),
+        answer => answer,
+    }
+}
+
 /// The landing's writer: the merger and a reader under its token.
 ///
 /// The undo and the withdrawal (the `undo` module) write through it too:
@@ -70,17 +97,18 @@ impl<'a> Writer<'a> {
 }
 
 impl Writer<'_> {
-    /// Sends one write under the merger's token.
+    /// Sends one write under the merger's token, answering its document.
     ///
-    /// Its answer is the response document.
+    /// The write goes through [`send_write`], so a lost acknowledgment is
+    /// asked again once under the frame's id.
     ///
     /// # Errors
     ///
     /// The death signal under the token, [`Refusal::SessionEnded`] naming
     /// the write `during` names, faced for the writer's act; otherwise
-    /// [`Board::op`]'s errors.
+    /// [`send_write`]'s, a dial fault past the one re-ask among them.
     pub(in crate::merge) fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
-        match self.board.op(Some(self.merger.token), frame)? {
+        match send_write(self.board, self.merger.token, frame)? {
             Answer::Closed => Err(session_ended(during, self.reader.on_end())),
             Answer::Document(v) => Ok(v),
         }

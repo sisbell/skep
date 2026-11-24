@@ -4,18 +4,23 @@
 //! builder and sends it, signed over the board's head where the board has
 //! one, and sends it once more where the twin fence meets it or a claim
 //! landed past the head's read; the daughters' skip is read before signing
-//! and their claims after the shot (the `land` module's doc).
+//! and their claims after the shot (the `land` module's doc). A shot naming
+//! no daughter whose list the head already holds is refused before its
+//! values are read, so no version identical to the head is minted
+//! ([`Refusal::HeadHolds`]).
 
 use serde_json::Value;
 use skep_address::Address;
 use skep_identity::{BoardTerm, EntryBody};
 
 use crate::address::parse_address;
-use crate::board::{acked_addr, acked_at, answers, frames, Answer, Rejection};
+use crate::board::{acked_addr, acked_at, answers, frames, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
-use crate::merge::reads::{session_ended, stretches, values_of, Family, Merged, Refusal, Side};
-use crate::merge::windows::{self, ShotParts};
+use crate::merge::reads::{
+    first_difference, runs_of, stretches, values_of, Family, Merged, Refusal, Side,
+};
+use crate::merge::windows::{self, AnsweredRun, ShotParts};
 use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
 
 use super::faults::{head_owed, own_fault, own_fault_face, shape_face};
@@ -181,10 +186,12 @@ impl Writer<'_> {
     /// its kept place beside each piece ([`windows::kept_places`]; none for
     /// a draft named beside the sides, whose image no read made) — then the
     /// frame with its `attest` and its id, the records read again first
-    /// ([`windows::recheck`]), one re-ask under the same id on a lost
-    /// acknowledgment, and the frame sent once more, signed, under the same
-    /// id where it went unsigned and a claim landed past the head's read
-    /// ([`Writer::attest_after_claim`]).
+    /// ([`windows::recheck`]), sent through [`Writer::answered_write`], so a
+    /// lost acknowledgment is asked again once under the same id, and the
+    /// frame sent once more, signed, under the same id where it went
+    /// unsigned and a claim landed past the head's read
+    /// ([`Writer::attest_after_claim`]). Where the skip leaves no daughter
+    /// and the head holds the whole list (`head_holds`), nothing is sent.
     ///
     /// # Errors
     ///
@@ -192,11 +199,13 @@ impl Writer<'_> {
     /// then the head's refusal and halts ([`Writer::signing_term`]), read
     /// before the values, nothing sent, and read again after a claim,
     /// nothing sent past it; the skip reads' refusals at the daughters;
-    /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
-    /// answer was given; the value reads' refusals; the attest's fault; a
-    /// body past [`SHOT_BODY_BUDGET`], a run with no address and a window of
-    /// width 0, as the library's own faults; the death signal,
-    /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask.
+    /// [`Refusal::HeadHolds`] where no daughter is left and the head holds
+    /// the list, nothing sent; [`Refusal::WindowPartsOwed`] naming a part a
+    /// record names since its answer was given; the value reads' refusals;
+    /// the attest's fault; a body past [`SHOT_BODY_BUDGET`], a run with no
+    /// address and a window of width 0, as the library's own faults; the
+    /// death signal, [`Refusal::SessionEnded`]; a dial fault after the one
+    /// re-ask.
     fn send_shot(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<Value, Refusal> {
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
@@ -211,6 +220,11 @@ impl Writer<'_> {
         }
         let term = self.signing_term()?;
         let supersede = self.daughters(merged)?;
+        // A shot that supersedes nothing and places the head's own list
+        // would mint a version identical to the head.
+        if supersede.is_empty() && head_holds(merged, &shot.runs)? {
+            return Err(Refusal::HeadHolds { head: head.clone() });
+        }
         // Every copied run's values, read at the head through the side that
         // holds it, each holder's runs in as few reads as the budgets allow.
         let copied: Vec<(Option<usize>, &Run)> = sent
@@ -279,33 +293,14 @@ impl Writer<'_> {
         // The records read again just before the send: a part a record names
         // since its answer was given is refused again, nothing published.
         windows::recheck(self, merged, shot, draft)?;
-        let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
+        let frame = request.frame(self.attest(term, doc, &body)?);
+        let mut v = self.answered_write(&frame, "publishing the merge")?;
         // A claim landed past the head's read: the shot once more, signed,
         // under its own id (the `land` module's doc).
         if let Some(attest) = self.attest_after_claim(term, &v, doc, &body)? {
-            v = self.shoot(&request.frame(Some(attest)))?;
+            v = self.answered_write(&request.frame(Some(attest)), "publishing the merge")?;
         }
         Ok(v)
-    }
-
-    /// Sends the shot's frame, answering the board's document.
-    ///
-    /// A lost acknowledgment is re-asked once under the same id in the same
-    /// session (§1.5: the per-session idempotency key), else `resume`.
-    ///
-    /// # Errors
-    ///
-    /// The death signal, [`Refusal::SessionEnded`]; a dial fault after the
-    /// one re-ask; the frame's other halts.
-    fn shoot(&self, frame: &Value) -> Result<Value, Refusal> {
-        let answer = match self.board.op(Some(self.merger.token), frame) {
-            Err(Halt::Dial(_)) => self.board.op(Some(self.merger.token), frame)?,
-            other => other?,
-        };
-        match answer {
-            Answer::Closed => Err(session_ended("publishing the merge", self.reader.on_end())),
-            Answer::Document(v) => Ok(v),
-        }
     }
 
     /// Returns the `attest` a shot sent unsigned is sent again with, where a
@@ -402,4 +397,32 @@ impl Writer<'_> {
         }
         Ok(out)
     }
+}
+
+/// Returns whether the head, as the composition imaged it, holds `runs`.
+///
+/// It does where no run re-mints a draft side's words and the head's image
+/// is the list itself, run for run by identity, nothing beside it: a shot of
+/// `runs` from the head would mint the head's own list again.
+///
+/// # Errors
+///
+/// A run of the head's image that is no content I-address, the board's
+/// fault, faced.
+fn head_holds(merged: &Merged, runs: &[AnsweredRun]) -> Result<bool, Refusal> {
+    let Some(head) = merged.maps.first() else {
+        return Ok(false);
+    };
+    if runs
+        .iter()
+        .any(|placed| placed.family == Family::DraftNative)
+    {
+        return Ok(false);
+    }
+    let held = runs_of(&head.runs)?;
+    let placed: Vec<(Run, Family)> = runs
+        .iter()
+        .map(|placed| (placed.run.clone(), Family::Own))
+        .collect();
+    Ok(first_difference(&placed, &held, &merged.inputs.doc).is_none())
 }

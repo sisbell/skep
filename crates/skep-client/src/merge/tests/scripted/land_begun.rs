@@ -309,6 +309,50 @@ fn a_landing_cut_off_before_its_record_is_completed_by_resume_naming_it() {
     );
 }
 
+/// A landing cut off before its record is completed by `resume` naming its
+/// draft, whatever the person edited there since.
+///
+/// The owner's ruling on skep #914: a landing stands until it is taken
+/// back, so an edit after it ends nothing; R16 (4): its record-only
+/// completion. After the cut-off the person edits `L`, the marker standing.
+/// The merge composed again and resumed naming `L` reads `L` as of the
+/// landing's own position, where it held M, and writes its one record — no
+/// stage and no `set_arrangement` — answering the landing at its position;
+/// `verify` answers `Equal`, reading `L` there, and a fresh landing finds it
+/// standing (the mutant that reads `L` as it stands answers none).
+#[test]
+fn a_landing_cut_off_before_its_record_is_completed_by_resume_after_an_edit() {
+    let (dialer, board, signer, l, at) =
+        cut_off_before_the_record(minted_head_world, &draft_inputs(), None);
+    let edited = dialer.world().change(&l.to_string(), vec![run(D, 1, 4), run(D, 12, 4)]);
+    assert!(edited > at, "the premise: an edit past the landing");
+    let session = sign_in(&board, &signer);
+    let into_l = || draft_landing(&session, &signer, Some(l.clone()));
+    let again =
+        compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+    dialer.clear();
+    let resumed = resume(&board, &again, into_l()).expect("resumed").expect("the landing");
+    let Landed::Draft { into, position, staged, .. } = &resumed else { panic!("{resumed:?}") };
+    assert_eq!((into, *position, *staged), (&l, at, false), "{resumed:?}");
+    let wrote: Vec<String> = dialer
+        .ops()
+        .into_iter()
+        .filter(|o| ["stage", "set_arrangement", "insert", "make_link"].contains(&o.as_str()))
+        .collect();
+    assert_eq!(wrote, ["insert", "make_link"], "the record alone");
+    let record = Record::from_value(&appended_record(&dialer)).expect("the record");
+    assert_eq!(
+        verify(&board, Some(session.token()), &record),
+        Ok(Verdict::Equal),
+        "L read at the landing's position"
+    );
+    assert_eq!(
+        land(&board, &again, draft_landing(&session, &signer, None)),
+        Ok(resumed),
+        "found standing"
+    );
+}
+
 /// A landing begun in another account's draft is not the merger's.
 ///
 /// A draft of a sub-account of the merger's, which the merger's

@@ -11,7 +11,8 @@
 //! one JSON document with nothing else on stdout, then `--publish` landing
 //! the next version whose image is the report's runs and whose record is
 //! found from the daughter, the same `--publish` again landing nothing
-//! twice with the prior named, a gap both sides added at reported
+//! twice with the prior named, and with no `--head` refused `head_holds`,
+//! the feed's head already holding the list, a gap both sides added at reported
 //! unsettled with its default and then `--resolve`d the other way round as
 //! the AGENT's choice (the runner has no terminal), a resolution naming no
 //! gap reported as not applied, the same words added by both kept once,
@@ -547,7 +548,8 @@ fn the_usage_forms_are_refused_before_any_socket() {
 }
 
 /// THE WHOLE WALK: composed and printed, published once with its record,
-/// published again without landing twice, a gap both sides added at
+/// published again without landing twice — the head named, the member
+/// read first; no head named, refused `head_holds` — a gap both sides added at
 /// resolved as the agent's choice, a resolution naming no gap not applied,
 /// the same words added by both kept once, said and reported, and the
 /// merged list landed in a draft.
@@ -621,6 +623,18 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["prior"]["key"]["sides"], json!([daughter_s, head_s]), "the key's sides in address order");
     assert_eq!(v["record"]["replaces"].as_str(), Some(link.as_str()), "a later record names what it replaces");
     assert_eq!(position(), before, "nothing landed twice");
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
+
+    // THE SAME PUBLISH AGAIN, no head named: the feed's head is the merge,
+    // which holds the list, and the daughter is claimed already, so the
+    // shot would mint a version identical to it: refused head_holds, exit
+    // 1, nothing on stdout, nothing landed (P13).
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--publish"]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(r.err.contains("head_holds"), "{}", r.err);
+    assert!(r.err.contains(&format!("{member} already holds this merge")), "{}", r.err);
+    assert_eq!(position(), before, "nothing landed");
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
 
     // --INTO a draft, against the head the merge was composed from: the
@@ -1331,7 +1345,9 @@ fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_r
 /// member's words by identity, not as its own, and its recorded base stands
 /// at the head it was staged from, the shot keeping it (skep #944). The same
 /// `--publish` again — the draft staged from the head and the head named, so
-/// the merge composes what it composed — finds the member and lands nothing.
+/// the merge composes what it composed — finds the member and lands nothing;
+/// with no head named it composes on the member, which holds the list, and is
+/// refused `head_holds`.
 #[test]
 fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_lands_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -1362,15 +1378,25 @@ fn a_draft_published_by_a_merge_reads_as_the_members_words_and_the_same_publish_
     assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the same member, read first");
     assert_eq!(position(), before, "nothing landed twice");
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
+
+    // The same `--publish` with no head named: composed on the member, the
+    // draft's words its own, so the list is the member's and no daughter
+    // is left to supersede: refused head_holds, exit 1, nothing landed.
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--kind", &kind, "--publish"]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("head_holds") && r.err.contains(&format!("{member} already holds this merge")), "{}", r.err);
+    assert_eq!(position(), before, "nothing landed");
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
     session.close().expect("close");
 }
 
 /// Checks a draft's already-published words merge by reference (skep #939).
 ///
-/// `--draft ⟨S⟩ --publish` over a draft whose words a shot left standing: the
-/// words a record names as published go by reference, so the merge lands,
-/// exit 0, its version the published words, and the draft reads them by
-/// identity where it read its own.
+/// `--draft ⟨S⟩ --publish` over a draft whose words a shot left standing, a
+/// word typed since beside them: the words a record names as published go by
+/// reference, so the merge lands, exit 0, its version the published words and
+/// the word typed since, and the draft reads them by identity where it read
+/// its own.
 #[test]
 fn a_draft_whose_words_are_already_published_merges_them_by_reference() {
     let dir = tempfile::tempdir().unwrap();
@@ -1385,6 +1411,8 @@ fn a_draft_whose_words_are_already_published_merges_them_by_reference() {
     let raw = rig.shot(&session, &d, Some((&head, 15)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }, Staged::Draft { draft: &s, from: 1, text: "!!!" }]);
     assert_eq!(raw.to_string(), format!("{d}.3"));
     assert_eq!(rig.image(&token, &s, 18)[3], (format!("{s}.0.1.1"), "3".into()), "the premise: the draft still shows the published words as its own");
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": s.to_string(), "at": {"subspace": "1", "ordinal": "19"}, "values": ["?"], "as_of": as_of})));
     let (d_s, s_s) = (d.to_string(), s.to_string());
     let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--kind", &kind, "--publish"]);
     let v = report(&r);

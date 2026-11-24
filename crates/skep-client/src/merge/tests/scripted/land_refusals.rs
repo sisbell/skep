@@ -300,7 +300,7 @@ fn a_draft_word_a_record_names_goes_by_reference_with_its_place_and_lands_once()
 /// Checks that a retry reading the shot's own records keeps its ids.
 ///
 /// The first call read no record, its shot and its atom landed, and the
-/// link's send was lost; the retry over the one composition reads the
+/// link's send was lost with its re-ask; the retry over the one composition reads the
 /// shot's own record and so sends by reference. The read-first finds the
 /// member, and the record is written under the first call's ids — the
 /// twins, which only this call read, no part of them, whether or not a
@@ -313,9 +313,9 @@ fn a_retry_that_reads_the_shots_own_records_keeps_its_ids_and_writes_no_second_a
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
         let landing = || Landing::Shot { merger: merger(&session, &signer), draft: None, answers: answers.clone(), journal: None };
-        dialer.world().lose_before = Some("make_link");
+        dialer.world().lose_before = Some(("make_link", 2));
         let lost = land(&board, &merged, landing());
-        assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "the link's send lost: {lost:?}");
+        assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "the link's send lost, and its re-ask: {lost:?}");
         let member = format!("{D}.3");
         let minted = dialer.world().docs.get(&member).expect("the premise: the shot landed").runs.iter().find(|r| r.origin == a(D) && r.width == 3).expect("the premise: the words re-minted under the trunk").clone();
         plant_record(&mut dialer.world(), 1, minted.i_start, 3);
@@ -589,6 +589,37 @@ fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
     let read: Vec<Value> =
         dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
     assert_eq!(read, [json!(S), json!(S)], "S read as it stands, each: {:?}", dialer.ops());
+    assert!(
+        dialer.frames("stage").is_empty() && dialer.frames("set_arrangement").is_empty(),
+        "nothing staged or written: {:?}",
+        dialer.ops()
+    );
+    assert_eq!(dialer.world().rows.len(), rows, "no commit");
+}
+
+/// A fresh landing whose M windows a document withheld since is refused
+/// before its stage (P13).
+///
+/// M windows "hello" from `Z`, readable when the merge was composed and
+/// withheld before the landing. The one write's source gate would refuse
+/// it past the stage, leaving the staged draft standing with nothing in
+/// it, so the landing reads each origin M windows first and is refused
+/// [`Refusal::WindowWithheld`] naming `Z` and its words in M, positions 5
+/// to 9: no `stage`, no `set_arrangement`, no commit (the mutant that
+/// reads no window first stages a draft).
+#[test]
+fn a_fresh_landing_over_a_window_withheld_since_is_refused_before_its_stage() {
+    let (dialer, board, signer) = open(World::window_and_draft());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    assert!(merged.families.contains(&Family::Window), "the premise: M windows Z");
+    dialer.world().withheld.insert(Z.to_string());
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(
+        land(&board, &merged, draft_landing(&session, &signer, None)),
+        Err(Refusal::WindowWithheld { origin: a(Z), positions: vec![(5, 5)] })
+    );
     assert!(
         dialer.frames("stage").is_empty() && dialer.frames("set_arrangement").is_empty(),
         "nothing staged or written: {:?}",
@@ -1018,13 +1049,13 @@ fn a_journal_the_act_cannot_write_into_leaves_the_act_standing_with_its_record_u
     assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "the record, once: {:?}", dialer.ops());
     assert!(dialer.frames("publish").is_empty(), "nothing landed twice");
 
-    // A landing into `S`, its acknowledgment lost: the draft holding M,
-    // no record.
+    // A landing into `S`, its acknowledgment lost and its re-ask's: the
+    // draft holding M, no record.
     let (dialer, board, signer) = open(world(draft_landing_world()));
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     let into_s = |journal: Option<&str>| Landing::Draft { merger: merger(&session, &signer), into: Some(a(S)), journal: journal.map(a) };
-    dialer.world().drop_acks = 1;
+    dialer.world().drop_acks = 2;
     let lost = land(&board, &merged, into_s(None));
     assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "the ack lost: {lost:?}");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "the premise: the draft holds M");

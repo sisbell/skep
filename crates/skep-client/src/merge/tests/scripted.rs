@@ -369,9 +369,9 @@ struct World {
     /// What lands as that refusal is answered: the board's state moved
     /// under the refused write.
     on_refused: Option<OnRefused>,
-    /// The next write of this op is lost at the transport before it is
-    /// applied: nothing committed and no acknowledgment.
-    lose_before: Option<&'static str>,
+    /// The next N writes of this op are lost at the transport before they
+    /// are applied: nothing committed and no acknowledgment.
+    lose_before: Option<(&'static str, usize)>,
     /// The merger's enrolled key.
     key: Option<PublicKey>,
     /// The session dies before the N-th frame the dialer serves is
@@ -1032,8 +1032,8 @@ impl World {
     /// acknowledgment kept; the next `drop_acks` acknowledgments lost at
     /// the transport.
     fn write(&mut self, frame: &Value) -> Result<Response, DialError> {
-        if self.lose_before.is_some_and(|op| frame["op"] == op) {
-            self.lose_before = None;
+        if let Some((op, n)) = self.lose_before.filter(|(op, _)| frame["op"] == *op) {
+            self.lose_before = (n > 1).then_some((op, n - 1));
             return Err(DialError::Io("the write was lost".into()));
         }
         let id = frame["id"].as_str().map(str::to_string);

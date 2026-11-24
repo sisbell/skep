@@ -240,8 +240,9 @@
 //! the act's write, for a lost acknowledgment at its writes, a board too
 //! busy to answer the find of the account's journal, or a journal the
 //! record's step finds unable to take it, the landing's record stands
-//! alone, which the halt says; a lost acknowledgment of the act's own
-//! write, the dialer's halt, leaves it alone too. A `resume` of the landing
+//! alone, which the halt says; the act's own write unanswered past its
+//! re-ask and its row's read (**The lost answer**), the dialer's halt,
+//! leaves it alone too. A `resume` of the landing
 //! after either act finds nothing to resume of the write taken back,
 //! whether or not either record was written: it goes by the marker, which
 //! the act cleared, or put back as the earlier landing left it — the
@@ -266,9 +267,24 @@
 //! **Nothing signed.** The one write is a draft's `set_arrangement` and the
 //! record's two writes go into a private journal, none of which takes an
 //! `attest`, so neither act reads the board's head: each lands on a claimed
-//! board whose head is owed as on any other. A lost acknowledgment of the
-//! one write is the dialer's halt, with no re-ask: each act reads first on
-//! a re-run.
+//! board whose head is owed as on any other.
+//!
+//! **The lost answer.** Each of the act's writes is asked again once under
+//! its id where its answer is lost (the `land` module's `send_write`), and
+//! the board answers an id it has acknowledged in the session with that
+//! acknowledgment, so the write lands once and the act goes on to its
+//! record. Where the re-ask's answer is lost too, the one write is looked
+//! for on the draft's own rows past the position it was typed against: the
+//! first row there to change the draft's arrangement is the write's where
+//! it is a `set_arrangement` row carrying the frame's base and merge terms
+//! and the draft as of it holds the frame's runs, and the act answers that
+//! row's position and writes its record. Else it is the dialer's halt, the
+//! write unconfirmed — never landed, or not landed yet, which no read tells
+//! apart — and a run again reads the draft as it stands: where the write
+//! landed after all, the take-back is done, and a run again of an undo
+//! takes back the landing beneath it, where one stands, as a step of its
+//! own. So the write a lost answer stopped is finished by the act itself
+//! wherever the board shows it, never sent again over the state it made.
 //!
 //! **The session's end.** The death signal under the merger's token is
 //! [`Refusal::SessionEnded`]: up to and at the one write the act is run
@@ -447,8 +463,11 @@ pub struct Unwithdrawn {
 ///   `source_not_registered`, `no_base_to_record`, `base_not_in_chain`,
 ///   `base_extent_too_large` and the runs' refusals as the library's own
 ///   faults, since it sends only the base, the marker and the runs it read,
-///   mapped through the records the board served; a lost acknowledgment as
-///   the dialer's halt, with no re-ask;
+///   mapped through the records the board served; a lost acknowledgment
+///   asked again once under its id, and where the re-ask's is lost too, the
+///   read of the draft's rows past the typed position and of the draft at
+///   the write's row (**The lost answer**), each refusal as itself, then the
+///   dialer's halt where no row shows the write;
 /// - the record's reads' refusals; a journal the record's step finds unable
 ///   to take it, as [`Refusal::Halt`] saying the merge is out of the draft
 ///   — and an earlier landing's merge back in it, where one stands again —
@@ -1233,23 +1252,99 @@ fn capped_runs(sent: &Image) -> Result<Vec<Value>, Refusal> {
 /// Sends the one write, answering its position.
 ///
 /// The frame goes under the merger's token, unsigned — a draft's
-/// `set_arrangement` takes no `attest`, so no head is read — and its answer
-/// is judged by [`judge`].
+/// `set_arrangement` takes no `attest`, so no head is read — through
+/// [`Writer::answered_write`], which asks it again once under its id where
+/// its answer is lost, and its answer is judged by [`judge`]. Where the
+/// re-ask's answer is lost too, the draft's own rows past `as_of` are read
+/// for the write's (`landed_at`; the module's doc, **The lost answer**).
 ///
 /// # Errors
 ///
 /// As [`undo`]'s one write's.
 fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
-    let v = writer.answered_write(
-        frame,
-        match act {
-            Act::Undo { .. } => "taking the merge back out of the draft",
-            Act::Withdraw => "taking the merge out of the draft",
-            Act::Unwithdraw { .. } => "putting the merge back into the draft",
-            Act::Restore => "restoring the draft",
-        },
-    )?;
+    let during = match act {
+        Act::Undo { .. } => "taking the merge back out of the draft",
+        Act::Withdraw => "taking the merge out of the draft",
+        Act::Unwithdraw { .. } => "putting the merge back into the draft",
+        Act::Restore => "restoring the draft",
+    };
+    let v = match writer.answered_write(frame, during) {
+        Err(Refusal::Halt(Halt::Dial(lost))) => {
+            return landed_at(&writer.reader, draft, as_of, frame)?
+                .ok_or(Refusal::Halt(Halt::Dial(lost)));
+        }
+        answer => answer?,
+    };
     judge(&v, frame, draft, as_of, act)
+}
+
+/// Returns the position a take-back's write landed at, its answers lost.
+///
+/// The write was typed against `as_of`, so where it landed it is the first
+/// write past `as_of` to change the draft's arrangement: the first row of
+/// the draft's own feed past `as_of` naming it with an arrangement op — on
+/// the supplement, `drafts=true` (wire.md §The change feed) — is read, and
+/// it is the write's where it is a `set_arrangement` row carrying the
+/// frame's two terms, the base it records and its merge beside its head,
+/// and where the draft as of it holds the frame's runs as the frame spells
+/// them, I-adjacent pieces of one chain joined as every take-back joins
+/// what it sends (`mapped_image`): the end the write meant. `None` where it
+/// is not — the write never landed, or is still on its way, which no read
+/// tells apart — and where no such row stands.
+///
+/// # Errors
+///
+/// The feed walk's (`feed_rows`) and the read of the draft at the row
+/// (`arranged_at`), each as itself; a run of the state read there that is
+/// no content I-address, the board's fault, faced.
+fn landed_at(
+    reader: &Reader<'_>,
+    draft: &Address,
+    as_of: u64,
+    frame: &Value,
+) -> Result<Option<u64>, Refusal> {
+    const ARRANGING: [&str; 7] = [
+        "insert",
+        "delete",
+        "copy",
+        "reinstate",
+        "rearrange",
+        "set_arrangement",
+        "publish",
+    ];
+    let text = draft.to_string();
+    let mut first: Option<Value> = None;
+    feed_rows(reader, &text, true, as_of, |row| {
+        let names = row["docs"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|x| *x == text));
+        let arranges = row["op"].as_str().is_some_and(|op| ARRANGING.contains(&op));
+        if first.is_none() && names && arranges {
+            first = Some(row.clone());
+        }
+    })?;
+    let Some(row) = first else { return Ok(None) };
+    // The row's terms as the frame's write records them: the base's
+    // address, and the merge beside the head with the position it names.
+    let merge = frame["merge"].as_object().map(|m| {
+        let mut term = serde_json::json!({"sides": m["sides"], "head": frame["head"]["at"]});
+        if let Some(at) = m.get("at") {
+            term["at"] = at.clone();
+        }
+        term
+    });
+    let terms = row["base"] == frame["base"]["at"] && row["merge"] == merge.unwrap_or(Value::Null);
+    let Some(at) = row["at"]
+        .as_u64()
+        .filter(|_| row["op"] == "set_arrangement" && terms)
+    else {
+        return Ok(None);
+    };
+    let held = mapped_image(
+        &arranged_at(reader, draft, at, "the position the take-back's row names")?,
+        &[],
+    )?;
+    Ok((Value::Array(written_runs(&held)?) == frame["runs"]).then_some(at))
 }
 
 /// Judges a `set_arrangement`'s answer `v` to `frame`, answering the write's

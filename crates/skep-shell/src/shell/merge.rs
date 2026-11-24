@@ -98,7 +98,8 @@
 //! composition, a gap the words raise at their new spot among them; words
 //! at no holder's spot, or gone, settle nothing. The landing the marker
 //! names is recorded first where no record of the person's names it and
-//! `into` still holds M, by the library's `resume` naming `into` — a
+//! that landing placed M — `into` read as of the marker's position, whatever
+//! was edited in it since — by the library's `resume` naming `into` — a
 //! record-only completion, no
 //! write of the landing's sent again — so a landing cut off before its
 //! record is recorded once when its draft is named; a fork landed in
@@ -131,7 +132,16 @@
 //! record of the person's names that merge — another account's record of
 //! the kind naming it stands for none — the record is written then through
 //! the library's `record_published`, the resume of a stop between the shot
-//! and its record (P14). A standing record of the person's own naming a
+//! and its record (P14): every gap read off the member's image as THE
+//! RE-OPEN reads a draft, and the record written only where the member
+//! verifies against it (`skep_client::merge::verify` answering `Equal`).
+//! A member that does not — edited past its gaps' choices, or holding window
+//! parts its shot answered, which no read recovers — is answered with
+//! `record_link` null and `unrecorded` naming why (`merge_refused` with
+//! `member_differs` and the first position it differs at, `unreadable`
+//! naming a document the verification could not read), nothing written: no
+//! record claims what the member does not hold. A standing record of the
+//! person's own naming a
 //! draft landing of the merge is read before a fresh draft is asked for, as
 //! the library's landing reads it — the newest record of their own account
 //! for the key, never the composition's `prior`, which can be another
@@ -147,7 +157,9 @@
 //! with what it replaced — else the landing goes into it, a record of its
 //! own written. The library is handed `into` none only where neither read
 //! found a record (the survey §5 item 2). Where no record of the person's
-//! stands for a landing of the key, a landing of the merge begun in a
+//! names a landing of the key its draft still marks — none written, or one
+//! whose landing was taken back with the take-back's record unwritten — a
+//! landing of the merge begun in a
 //! draft of theirs and never recorded — cut off between its one write and
 //! its record — is the library's refusal at the first read, `merge_refused`
 //! with `landing_begun` naming the `draft` and the `position`, nothing
@@ -1052,6 +1064,7 @@ impl Shell {
             R::Published { doc } => Refusal::shell(Name::NOT_OWNER, json!({"addr": s(&doc), "published": true})),
             R::PublishedJournal { journal } => other("published_journal", json!({"journal": s(&journal)})),
             R::AlreadyPublished { draft, member } => other("already_published", json!({"draft": s(&draft), "member": s(&member)})),
+            R::HeadHolds { head } => other("head_holds", json!({"head": s(&head)})),
             R::LandingBegun { draft, position } => other("landing_begun", json!({"draft": s(&draft), "position": position})),
             R::NothingToUndo { draft, why } => {
                 let mut detail = json!({"draft": s(&draft)});
@@ -1570,14 +1583,8 @@ impl Shell {
     ///
     /// The draft's image read's (`whole_draft`); the composition's again,
     /// through `merge_refusal`, where a holder's placement was moved.
-    fn reopened(&self, session: &SessionEntry, key: (String, u64), form: Form, mut merged: lib::Merged, into: &Address, at: Option<u64>) -> Result<Value, Refusal> {
-        let image = self.whole_draft(session, into)?;
-        let moved = holders_moved(&merged.record.gaps, &image, &self.surface().settler());
-        if !moved.is_empty() {
-            let mut inputs = merged.inputs.clone();
-            inputs.options.resolutions.extend(moved);
-            merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
-        }
+    fn reopened(&self, session: &SessionEntry, key: (String, u64), form: Form, merged: lib::Merged, into: &Address, at: Option<u64>) -> Result<Value, Refusal> {
+        let (merged, image) = self.held_in(session, merged, into)?;
         let mut read = merged.clone();
         settle_by_edit(&mut read, &image, self.surface());
         let position = at.unwrap_or(merged.as_of);
@@ -1586,15 +1593,52 @@ impl Shell {
         Ok(answer)
     }
 
+    /// Returns `merged` composed as `doc`'s image holds its gaps with spots,
+    /// beside that image.
+    ///
+    /// Where the image holds a gap with spots' words at another holding
+    /// side's spot (`holders_moved`), the merge is composed again over
+    /// `merged`'s own inputs with that side's placement chosen, settled by
+    /// the merger; every other gap stands as composed, for the caller to read
+    /// off the image (`settle_by_edit`). `doc` is the draft a re-open reads,
+    /// or the member the merged arm records.
+    ///
+    /// # Errors
+    ///
+    /// The image read's (`whole_draft`); the composition's again, through
+    /// `merge_refusal`, where a holder's placement was moved.
+    fn held_in(&self, session: &SessionEntry, mut merged: lib::Merged, doc: &Address) -> Result<(lib::Merged, Vec<SelectionRun>), Refusal> {
+        let image = self.whole_draft(session, doc)?;
+        let moved = holders_moved(&merged.record.gaps, &image, &self.surface().settler());
+        if !moved.is_empty() {
+            let mut inputs = merged.inputs.clone();
+            inputs.options.resolutions.extend(moved);
+            merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
+        }
+        Ok((merged, image))
+    }
+
     /// Answers THE MERGED ARM: the member a claim of the person's own names
     /// the daughter superseded by, and the record of that merge — the
     /// person's own standing one, or written now through the library's
     /// `record_published` where none of theirs names it (the module doc).
     ///
+    /// The record written is the member's testimony: every gap read off the
+    /// member's image as THE RE-OPEN reads a draft (`held_in`,
+    /// `settle_by_edit`), and the record written only where the member
+    /// verifies against it (`skep_client::merge::verify` answering `Equal`)
+    /// — a member edited past its gaps' choices, or holding window parts the
+    /// shot answered, which no read recovers, is answered with no record,
+    /// `unrecorded` naming why, so no record claims what the member does not
+    /// hold.
+    ///
     /// # Errors
     ///
-    /// The composition's, as `merge.compose`'s step 5; the member's
-    /// `doc_metadata` read's; the record's, as `merge.land`'s record.
+    /// The composition's, as `merge.compose`'s step 5; where no record of
+    /// the person's names the member, the member's image read's and the
+    /// composition's again where a holder's placement moved (`held_in`), the
+    /// member's `doc_metadata` read's, the verification's, through
+    /// `merge_refusal`, and the record's, as `merge.land`'s record.
     fn merged_arm(&self, session: &SessionEntry, signed: &Signed, doc: &Address, daughter: &Address, member: &Address, claims: Vec<Address>, kind: &Address) -> Result<Value, Refusal> {
         // The head the merge was composed on: the member's predecessor on
         // the trunk, or the trunk member a daughter member lies under.
@@ -1603,7 +1647,7 @@ impl Shell {
             return Err(Refusal::shell(Name::MERGE_REFUSED, json!({"arm": "claim_names_no_member", "member": member.to_string()})));
         };
         let inputs = lib::Inputs { doc: doc.clone(), head, base: None, sides: vec![lib::Side::Member(daughter.clone())], options: lib::Options::default(), kind: kind.clone() };
-        let merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
+        let mut merged = lib::compose(&session.board, Some(&session.token), &inputs).map_err(|r| self.merge_refusal(session, r))?;
         // The person's own standing record naming the member: the
         // composition's `prior` only where its link lies in their account,
         // exactly. The claim's home is the trunk, theirs, and the currency
@@ -1611,20 +1655,42 @@ impl Shell {
         // elsewhere is another account's record of the kind, standing where
         // the person holds none.
         let own = |p: &&lib::Record| p.link.as_ref().and_then(|l| account_of(&l.to_string())).is_some_and(|a| a == signed.account);
-        let standing = merged.prior.as_ref().filter(own).filter(|p| matches!(&p.landed, Some(lib::RecordLanding::Member { member: m, .. }) if m == member));
+        let standing = merged.prior.as_ref().filter(own).filter(|p| matches!(&p.landed, Some(lib::RecordLanding::Member { member: m, .. }) if m == member)).map(|p| (p.link.clone(), p.to_value()));
         // The record: the standing one, its body the report's, else written
-        // now — the resume of a stop between the shot and its record.
-        let (record_link, claims, body) = match standing {
-            Some(prior) => (prior.link.clone(), claims, Some(prior.to_value())),
+        // now — the resume of a stop between the shot and its record — with
+        // the gaps as the member holds them, where the member verifies.
+        let (record_link, claims, body, unrecorded) = match standing {
+            Some((link, body)) => (link, claims, Some(body), None),
             None => {
+                let (held, image) = self.held_in(session, merged, member)?;
+                merged = held;
+                settle_by_edit(&mut merged, &image, self.surface());
                 let position = self.metadata_read(session, member)?["at"].as_u64().unwrap_or(merged.as_of);
-                let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
-                // The resume of a stop between the shot and its record: the
-                // answers the shot was given are not known here, so none are
-                // recorded.
-                match lib::record_published(&session.board, &merged, merger, member, position, None, &[]).map_err(|r| self.merge_refusal(session, r))? {
-                    lib::Landed::Member { record, claims, .. } => (Some(record), claims, None),
-                    _ => (None, claims, None),
+                let mut testimony = merged.record.clone();
+                testimony.landed = Some(lib::RecordLanding::Member { member: member.clone(), position });
+                match lib::verify(&session.board, Some(&session.token), &testimony).map_err(|r| self.merge_refusal(session, r))? {
+                    lib::Verdict::Equal => {
+                        let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
+                        // The answers the shot was given are not known here,
+                        // so none are recorded: a member holding answered
+                        // window parts verifies against none and is never
+                        // recorded here.
+                        match lib::record_published(&session.board, &merged, merger, member, position, None, &[]).map_err(|r| self.merge_refusal(session, r))? {
+                            lib::Landed::Member { record, claims, .. } => (Some(record), claims, None, None),
+                            _ => (None, claims, None, None),
+                        }
+                    }
+                    // The member holds otherwise than the record would say:
+                    // the residue named, no record written.
+                    lib::Verdict::Differs { at } => {
+                        let why = Refusal::shell(Name::MERGE_REFUSED, json!({"arm": "member_differs", "member": member.to_string(), "at": at}));
+                        (None, claims, None, Some(why))
+                    }
+                    lib::Verdict::Unreadable(doc) => (None, claims, None, Some(Refusal::shell(Name::UNREADABLE, json!({"doc": doc.to_string()})))),
+                    lib::Verdict::SideMoved { side, .. } => {
+                        let why = Refusal::shell(Name::MERGE_REFUSED, json!({"arm": "side_moved", "side": side.to_string()}));
+                        (None, claims, None, Some(why))
+                    }
                 }
             }
         };
@@ -1632,6 +1698,9 @@ impl Shell {
         let mut extra = json!({"member": member.to_string(), "claims": claims.iter().map(ToString::to_string).collect::<Vec<_>>(), "record_link": record_link.map(|l| l.to_string())});
         if let Some(body) = body {
             extra["record"] = body;
+        }
+        if let Some(unrecorded) = unrecorded {
+            extra["unrecorded"] = unrecorded.to_value();
         }
         Ok(report_json(&merged, &form, "merged", extra))
     }
@@ -1813,7 +1882,10 @@ impl Shell {
         let deduped = deduped_json(&composition.merged.record);
         match self.confirm_standing(&session, &key, &state, switches, answers, "merge.land")? {
             Confirmation::Acknowledged { session: current, ack } => {
-                let signed = self.signed_within_call(&current, "merge.land")?;
+                // The record's two writes go into a private journal and sign
+                // nothing, so the call's own hand, taken at its door, serves:
+                // nothing is read past the acknowledgment that could answer
+                // the landing as an error.
                 let merger = lib::Merger { token: &current.token, account: &signed.account, signer: &*signed.signer };
                 let recorded = lib::record_published(&current.board, &composition.merged, merger, &ack.member, ack.at, None, &part_answers);
                 self.merges.take(&key);

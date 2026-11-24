@@ -19,13 +19,15 @@
 //! **What the step reads** (the reads of §1.5 in their order): one
 //! `doc_metadata` per distinct window origin at the head, other than a draft
 //! the landing names, whose words the shot re-mints; each unpublished
-//! origin's records in that origin's own account (`Record::of`), a window
-//! onto another account's origin among them, none where the origin answers
-//! `withheld`, since a registered private document this merger may not read
-//! gives up no words and no records; the feed row of each record's commit
-//! for the version it names; the first and last words of each part the
-//! refusal or the acknowledgment says; and the records of the draft side's
-//! own words, over M's draft-native runs (the twins, below).
+//! origin's records in that origin's own account (`Record::of`), read once
+//! over every run of M that windows it, a window onto another account's
+//! origin among them, none where the origin answers `withheld`, since a
+//! registered private document this merger may not read gives up no words
+//! and no records; the feed row of each record's commit for the version it
+//! names; the first and last words of each part the refusal or the
+//! acknowledgment says, read together, a part of a withheld origin saying
+//! none with no read; and the records of the draft side's own words, over
+//! M's draft-native runs (the twins, below).
 //!
 //! **Where a part stands.** A part's own place is its M-ordinal. The words
 //! it stands after are read off M, the merged text, since the shot lands in
@@ -92,20 +94,23 @@
 //! refusal says comes back as data (SP-10); the program that embeds this
 //! library says them, rendered inert (SP-15).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::{account_of, parse_address};
 use crate::board::answers::IRun;
+use crate::board::frames::{self, Slot};
 use crate::halt::Halt;
+use crate::publication::enumerate::read_record_as;
 use crate::publication::landed::recompose;
-use crate::publication::parts::{composed_parts, origin_state, parts_of, window_records, OriginState};
-use crate::publication::{self, answers_onto, compose_part, owned_by, renamed, Door, Fault, ISpan, OriginAnswer as Answer, OwedAnswer, PartComposition, PartKey, Publisher, Window};
+use crate::publication::parts::{composed_parts, origin_state, parts_of, OriginState};
+use crate::publication::{self, answers_onto, compose_part, owned_by, renamed, Door, Fault, ISpan, OriginAnswer as Answer, OwedAnswer, PartComposition, PartKey, Publisher, Record, Window, MAX_WIRE_LIST};
 
 use super::compose::{Item, PlacedRun, Run, SideIx};
 use super::land::{own_fault_face, Merger, Writer};
-use super::reads::{content_prefix, records_of, session_ended, values_for, Family, Merged, Refusal, Side};
+use super::reads::{content_prefix, records_of, session_ended, values_for, values_of, Family, Merged, Refusal, Side};
 use super::record::{PartAnswer, RecordedAnswer};
 
 /// The positions read for a part's first words, or for the words before it.
@@ -417,6 +422,23 @@ pub(super) fn applied(runs: &[PlacedRun], families: &[Family], doc: &Address, an
     out
 }
 
+/// Returns each draft-native run of `runs` — a draft side's words a shot
+/// re-mints under the trunk — with the V-ordinal, from 1, it lands at in the
+/// member the shot mints, the side its words are read through and the run
+/// they are read as: what a member's words are checked against where the
+/// addresses match by width alone (`first_word_difference`).
+pub(super) fn re_minted(runs: &[AnsweredRun]) -> Vec<(u64, Option<usize>, &Run)> {
+    let mut at = 1u64;
+    let mut out = Vec::new();
+    for answered in runs {
+        if answered.family == Family::DraftNative {
+            out.push((at, answered.side.map(|s| usize::from(s.0)), &answered.through));
+        }
+        at = at.saturating_add(answered.run.width);
+    }
+    out
+}
+
 /// Returns the shot's window parts and the draft's words named as published.
 ///
 /// The parts are composed from `answers` and the draft's words from its
@@ -432,7 +454,7 @@ pub(super) fn applied(runs: &[PlacedRun], families: &[Family], doc: &Address, an
 /// ([`twins_of`]).
 pub(super) fn step(writer: &Writer<'_>, merged: &Merged, answers: &Answers, draft: Option<&Address>) -> Result<ShotParts, Refusal> {
     let door = Door::new(writer.board, writer.merger.token);
-    let windows = read_windows(&door, writer.merger.account, merged, draft).map_err(|f| refused(f, writer))?;
+    let (windows, withheld) = read_windows(&door, writer.merger.account, merged, draft).map_err(|f| refused(f, writer))?;
     let versions = versions_of(&door, &publisher(writer), &windows).map_err(|f| refused(f, writer))?;
     let (answered, misfits) = bound(&windows, &versions, answers);
     let mut owed = Vec::new();
@@ -451,20 +473,39 @@ pub(super) fn step(writer: &Writer<'_>, merged: &Merged, answers: &Answers, draf
             }
         }
     }
-    let reads = PartReads { writer, merged, source: Source::Merged, versions: &versions };
-    let given = windows
-        .iter()
-        .flat_map(|w| (0..w.parts.len()).map(move |k| (w, k)))
+    let reads = PartReads {
+        writer,
+        merged,
+        source: Source::Merged,
+        versions: &versions,
+        withheld: &withheld,
+    };
+    // The answers given, then, where the step refuses, the parts owed: their
+    // words read together.
+    let refusing = !owed.is_empty() || !misfits.is_empty();
+    let mut wanted: Vec<Wanted<'_>> = every_part(&windows)
         .filter(|(w, k)| answered.contains_key(&w.key(*k)))
-        .map(|(w, k)| reads.part(w, k, answered.get(&w.key(k)).copied(), false, false))
-        .collect::<Result<Vec<_>, Refusal>>()?;
-    if !owed.is_empty() || !misfits.is_empty() {
-        let parts = windows
-            .iter()
-            .flat_map(|w| (0..w.parts.len()).map(move |k| (w, k)))
-            .filter(|(w, k)| owed.contains(&w.key(*k)))
-            .map(|(w, k)| reads.part(w, k, None, true, false))
-            .collect::<Result<Vec<_>, Refusal>>()?;
+        .map(|(window, k)| Wanted {
+            window,
+            k,
+            answer: answered.get(&window.key(k)).copied(),
+            after: false,
+            named_since: false,
+        })
+        .collect();
+    let answered_parts = wanted.len();
+    if refusing {
+        wanted.extend(every_part(&windows).filter(|(w, k)| owed.contains(&w.key(*k))).map(|(window, k)| Wanted {
+            window,
+            k,
+            answer: None,
+            after: true,
+            named_since: false,
+        }));
+    }
+    let mut given = reads.parts(&wanted)?;
+    if refusing {
+        let parts = given.split_off(answered_parts);
         return Err(Refusal::WindowPartsOwed { parts, misfits, given });
     }
     let mut shot = ShotParts { windows, answered, runs: Vec::new(), recorded, twins: Vec::new(), given };
@@ -528,25 +569,38 @@ pub(super) fn retwin(writer: &Writer<'_>, merged: &Merged, shot: &mut ShotParts)
 /// named since its answer was given.
 pub(super) fn recheck(writer: &Writer<'_>, merged: &Merged, shot: &ShotParts, draft: Option<&Address>) -> Result<(), Refusal> {
     let door = Door::new(writer.board, writer.merger.token);
-    let now = read_windows(&door, writer.merger.account, merged, draft).map_err(|f| refused(f, writer))?;
+    let (now, withheld) = read_windows(&door, writer.merger.account, merged, draft).map_err(|f| refused(f, writer))?;
     let moved = renamed(&shot.windows, &now);
     if moved.is_empty() {
         return Ok(());
     }
     let carried = answers_onto(&shot.windows, &shot.answered, &now);
     let versions = versions_of(&door, &publisher(writer), &now).map_err(|f| refused(f, writer))?;
-    let reads = PartReads { writer, merged, source: Source::Merged, versions: &versions };
-    let mut parts = Vec::new();
+    let reads = PartReads {
+        writer,
+        merged,
+        source: Source::Merged,
+        versions: &versions,
+        withheld: &withheld,
+    };
+    let mut wanted = Vec::new();
     for (key, _) in moved {
         if carried.contains_key(&key) {
             continue;
         }
         let window = now.iter().find(|w| w.run == key.run).expect("a part `renamed` answered is a part of `now`");
-        parts.push(reads.part(window, key.part, None, true, true)?);
+        wanted.push(Wanted {
+            window,
+            k: key.part,
+            answer: None,
+            after: true,
+            named_since: true,
+        });
     }
-    if parts.is_empty() {
+    if wanted.is_empty() {
         return Ok(());
     }
+    let parts = reads.parts(&wanted)?;
     Err(Refusal::WindowPartsOwed { parts, misfits: Vec::new(), given: shot.given.clone() })
 }
 
@@ -563,13 +617,28 @@ pub fn owed_parts(board: &crate::board::Board, merged: &Merged, merger: Merger<'
     let writer = Writer::new(board, merger, super::reads::OnEnd::Rerun);
     let door = Door::new(board, merger.token);
     let versions = versions_of(&door, &publisher(&writer), windows).map_err(|f| refused(f, &writer))?;
-    let reads = PartReads { writer: &writer, merged, source: Source::Draft(into), versions: &versions };
-    owed.iter()
+    let none = BTreeSet::new();
+    let reads = PartReads {
+        writer: &writer,
+        merged,
+        source: Source::Draft(into),
+        versions: &versions,
+        withheld: &none,
+    };
+    let wanted = owed
+        .iter()
         .map(|o| {
             let window = windows.iter().find(|w| w.run == o.part.run).ok_or_else(|| own_fault_face("an owed part names no window", format!("{:?}", o.part)))?;
-            reads.part(window, o.part.part, None, true, false)
+            Ok(Wanted {
+                window,
+                k: o.part.part,
+                answer: None,
+                after: true,
+                named_since: false,
+            })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    reads.parts(&wanted)
 }
 
 /// Returns each answer standing at `windows`' parts as the acknowledgment
@@ -582,13 +651,25 @@ pub fn given_parts(board: &crate::board::Board, merged: &Merged, merger: Merger<
     let writer = Writer::new(board, merger, super::reads::OnEnd::Rerun);
     let door = Door::new(board, merger.token);
     let versions = versions_of(&door, &publisher(&writer), windows).map_err(|f| refused(f, &writer))?;
-    let reads = PartReads { writer: &writer, merged, source: Source::Draft(into), versions: &versions };
-    windows
-        .iter()
-        .flat_map(|w| (0..w.parts.len()).map(move |k| (w, k)))
+    let none = BTreeSet::new();
+    let reads = PartReads {
+        writer: &writer,
+        merged,
+        source: Source::Draft(into),
+        versions: &versions,
+        withheld: &none,
+    };
+    let wanted: Vec<Wanted<'_>> = every_part(windows)
         .filter(|(w, k)| answers.contains_key(&w.key(*k)))
-        .map(|(w, k)| reads.part(w, k, answers.get(&w.key(k)).copied(), false, false))
-        .collect()
+        .map(|(window, k)| Wanted {
+            window,
+            k,
+            answer: answers.get(&window.key(k)).copied(),
+            after: false,
+            named_since: false,
+        })
+        .collect();
+    reads.parts(&wanted)
 }
 
 /// Returns the record's answers for `windows` under `answers` — what a
@@ -629,8 +710,10 @@ fn publisher<'a>(writer: &Writer<'a>) -> Publisher<'a> {
 ///
 /// [`origin_state`]'s and [`window_records`]'s faults, a window of the
 /// merger's own answering `withheld` among them.
-fn read_windows(door: &Door<'_>, account: &str, merged: &Merged, draft: Option<&Address>) -> Result<Vec<Window>, Fault> {
+fn read_windows(door: &Door<'_>, account: &str, merged: &Merged, draft: Option<&Address>) -> Result<(Vec<Window>, BTreeSet<Address>), Fault> {
     let mut states: BTreeMap<String, OriginState> = BTreeMap::new();
+    let mut records: BTreeMap<String, Vec<Record>> = BTreeMap::new();
+    let mut withheld = BTreeSet::new();
     let mut out = Vec::new();
     let mut ordinal = 1u64;
     for (i, (placed, family)) in merged.composed.runs.iter().zip(&merged.families).enumerate() {
@@ -657,9 +740,61 @@ fn read_windows(door: &Door<'_>, account: &str, merged: &Merged, draft: Option<&
         }
         let piece = publication::Run::new(run.origin.clone(), run.i_start, run.width);
         let owner = account_of(&origin).unwrap_or_default();
-        let records = if state == OriginState::Private { window_records(door, &owner, &piece)? } else { Vec::new() };
-        let parts = parts_of(&piece, at, &records, foreign);
-        out.push(Window { run: i, origin: run.origin.clone(), owner, i_start: run.i_start, width: run.width, parts });
+        if state == OriginState::Withheld {
+            withheld.insert(run.origin.clone());
+        } else if !records.contains_key(&origin) {
+            // Every run of M onto the origin, its records read once.
+            let onto: Vec<publication::Run> = merged.composed.runs.iter().filter(|p| p.run.origin == run.origin).map(|p| publication::Run::new(p.run.origin.clone(), p.run.i_start, p.run.width)).collect();
+            records.insert(origin.clone(), origin_records(door, &owner, &origin, &onto)?);
+        }
+        let held = records.get(&origin).map_or(&[][..], Vec::as_slice);
+        let parts = parts_of(&piece, at, held, foreign);
+        out.push(Window {
+            run: i,
+            origin: run.origin.clone(),
+            owner,
+            i_start: run.i_start,
+            width: run.width,
+            parts,
+        });
+    }
+    Ok((out, withheld))
+}
+
+/// Reads the correspondence records homed in `origin` whose `from` covers
+/// part of `runs`, M's runs onto it, held to `owner` — the origin's own
+/// account, since only its owner's commit mints a record homed in it (the
+/// link-sets design §5.5).
+///
+/// It is the publication family's read of a window's records
+/// (`publication::parts`' `window_records`) made once for the origin: one
+/// four-set read over the record class homed in the origin per
+/// `MAX_WIRE_LIST` of the runs' spans, each span asked once however many
+/// runs hold it, and each hit read once and kept by the reader's own test
+/// (`read_record_as`). A record covering no word of a run cuts no part of
+/// it ([`parts_of`]), and a word is named by one record at most (the twin
+/// fence), so each run's parts are those a read of its own records cuts.
+///
+/// # Errors
+///
+/// The reads' faults.
+fn origin_records(door: &Door<'_>, owner: &str, origin: &str, runs: &[publication::Run]) -> Result<Vec<Record>, Fault> {
+    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
+    let home = unit(origin);
+    let subtype = unit(frames::T_CORRESPONDENCE);
+    let mut asked = HashSet::new();
+    let spans: Vec<Value> = runs.iter().filter(|r| asked.insert((r.i_start, r.width))).map(|r| frames::i_span(&r.i_start_text(), r.width)).collect();
+    let mut out: Vec<Record> = Vec::new();
+    for chunk in spans.chunks(MAX_WIRE_LIST) {
+        let query = frames::find_links_four(Slot::Spans(&home), Slot::Spans(chunk), Slot::Any, Slot::Spans(&subtype));
+        for hit in door.addrs(origin, &query)? {
+            if out.iter().any(|r| r.link.to_string() == hit) {
+                continue;
+            }
+            if let Some(record) = read_record_as(door, owner, &hit)? {
+                out.push(record);
+            }
+        }
     }
     Ok(out)
 }
@@ -768,40 +903,171 @@ struct PartReads<'a> {
     merged: &'a Merged,
     source: Source<'a>,
     versions: &'a BTreeMap<String, Address>,
+    /// The window origins this merger may not read, as the step's reads of
+    /// their states answered them: none off a draft.
+    withheld: &'a BTreeSet<Address>,
+}
+
+/// One part a refusal or an acknowledgment names.
+struct Wanted<'w> {
+    /// The part's window.
+    window: &'w Window,
+    /// The part's index in its window.
+    k: usize,
+    /// The answer standing at it, where one does.
+    answer: Option<Answer>,
+    /// Whether the words before it are read.
+    after: bool,
+    /// Whether a record named it only after its answer was given.
+    named_since: bool,
+}
+
+/// What one stretch before a part stands for in its words before it.
+enum Before {
+    /// The read at this index of the batch.
+    Read(usize),
+    /// Words of an origin this merger may not read: what stood before them
+    /// is cut away, as a read of them refused cuts it.
+    Withheld,
+}
+
+/// Returns every part of `windows`, each with its window, in order.
+fn every_part(windows: &[Window]) -> impl Iterator<Item = (&Window, usize)> {
+    windows.iter().flat_map(|w| (0..w.parts.len()).map(move |k| (w, k)))
 }
 
 impl PartReads<'_> {
-    /// Returns `window`'s `k`-th part as a refusal or an acknowledgment
-    /// names it, reading the words before it where `want_after`.
+    /// Returns each of `wanted` as a refusal or an acknowledgment names it.
+    ///
+    /// Their words are read together ([`PartReads::words`]): at the shot,
+    /// one `values_of` of every part's first words and of the runs of M
+    /// before each part that wants them, each holder's in as few reads as
+    /// the budgets allow; off a draft, one `values_by_ordinal` of the
+    /// draft's spans. A part of an origin this merger may not read says no
+    /// words, and such words before a part cut what stood before them,
+    /// with no read. Where the reads together are refused, each part is read
+    /// alone ([`PartReads::part`]), so every answer and refusal is a part's
+    /// own.
+    ///
+    /// # Errors
+    ///
+    /// As [`PartReads::part`]'s.
+    fn parts(&self, wanted: &[Wanted<'_>]) -> Result<Vec<WindowPart>, Refusal> {
+        match self.words(wanted) {
+            Some(words) => Ok(wanted.iter().zip(words).map(|(w, (first, before))| self.named(w, first, before)).collect()),
+            None => wanted.iter().map(|w| self.part(w)).collect(),
+        }
+    }
+
+    /// Reads every part's first words and, where it wants them, the words
+    /// before it, together; `None` where the reads are refused.
+    fn words(&self, wanted: &[Wanted<'_>]) -> Option<Vec<(Option<String>, Option<String>)>> {
+        let merged = self.merged;
+        // Each part's first words' read, none where its origin is withheld,
+        // and its words before it as the reads they fold.
+        let mut plan: Vec<(Option<usize>, Option<Vec<Before>>)> = Vec::with_capacity(wanted.len());
+        let items = match &self.source {
+            Source::Merged => {
+                let mut reads: Vec<(Option<usize>, Run)> = Vec::new();
+                for w in wanted {
+                    let part = &w.window.parts[w.k];
+                    let first = (!self.withheld.contains(&w.window.origin)).then(|| {
+                        reads.push((None, Run::new(w.window.origin.clone(), part.span.first, part.span.width.min(WORDS_READ))));
+                        reads.len() - 1
+                    });
+                    let before = (w.after && part.ordinal > 1).then(|| {
+                        let from = part.ordinal.saturating_sub(WORDS_READ).max(1);
+                        let mut stretches = Vec::new();
+                        let mut at = 1u64;
+                        for placed in &merged.composed.runs {
+                            let run = &placed.run;
+                            let (lo, hi) = (at.max(from), (at + run.width).min(part.ordinal));
+                            if lo < hi {
+                                if self.withheld.contains(&run.origin) {
+                                    stretches.push(Before::Withheld);
+                                } else {
+                                    reads.push((placed.side.map(|s| s.0 as usize), Run::new(run.origin.clone(), run.i_start + (lo - at), hi - lo)));
+                                    stretches.push(Before::Read(reads.len() - 1));
+                                }
+                            }
+                            at = at.saturating_add(run.width);
+                        }
+                        stretches
+                    });
+                    plan.push((first, before));
+                }
+                let asked: Vec<(Option<usize>, &Run)> = reads.iter().map(|(prefer, run)| (*prefer, run)).collect();
+                values_of(&self.writer.reader, &merged.inputs.doc, &merged.maps, &asked).ok()?
+            }
+            Source::Draft(into) => {
+                let mut spans: Vec<(u64, u64)> = Vec::new();
+                for w in wanted {
+                    let part = &w.window.parts[w.k];
+                    let first = (!self.withheld.contains(&w.window.origin)).then(|| {
+                        spans.push((part.ordinal, part.span.width.min(WORDS_READ)));
+                        spans.len() - 1
+                    });
+                    let before = (w.after && part.ordinal > 1).then(|| {
+                        let from = part.ordinal.saturating_sub(WORDS_READ).max(1);
+                        spans.push((from, part.ordinal - from));
+                        vec![Before::Read(spans.len() - 1)]
+                    });
+                    plan.push((first, before));
+                }
+                self.writer.reader.values_by_ordinal(into, &spans).ok()?
+            }
+        };
+        let before = |stretches: &[Before]| {
+            let mut words: Vec<Item> = Vec::new();
+            for stretch in stretches {
+                match stretch {
+                    Before::Read(i) => words.extend(items[*i].iter().cloned()),
+                    Before::Withheld => words.clear(),
+                }
+            }
+            spell_last(&words)
+        };
+        Some(plan.iter().map(|(first, stretches)| (first.map(|i| spell_first(&items[i])), stretches.as_deref().map(before))).collect())
+    }
+
+    /// Returns one part as a refusal or an acknowledgment names it, its
+    /// words read alone.
     ///
     /// # Errors
     ///
     /// The words' reads' refusals; a position none of the images holds, the
     /// shot's own fault.
-    fn part(&self, window: &Window, k: usize, answer: Option<Answer>, want_after: bool, named_since: bool) -> Result<WindowPart, Refusal> {
-        let part = &window.parts[k];
+    fn part(&self, w: &Wanted<'_>) -> Result<WindowPart, Refusal> {
+        let part = &w.window.parts[w.k];
         let (writer, merged, source) = (self.writer, self.merged, &self.source);
-        let reading = Run::new(window.origin.clone(), part.span.first, part.span.width.min(WORDS_READ));
+        let reading = Run::new(w.window.origin.clone(), part.span.first, part.span.width.min(WORDS_READ));
         let words = first_words(writer, merged, source, &reading, part.ordinal)?;
-        let after = if want_after { words_before(writer, merged, source, part.ordinal)? } else { None };
+        let after = if w.after { words_before(writer, merged, source, part.ordinal)? } else { None };
+        Ok(self.named(w, words, after))
+    }
+
+    /// Returns one part as a refusal or an acknowledgment names it, its
+    /// first words `words` and the words before it `after`.
+    fn named(&self, w: &Wanted<'_>, words: Option<String>, after: Option<String>) -> WindowPart {
+        let (window, part) = (w.window, &w.window.parts[w.k]);
         let record = part.record.as_ref().map(|r| r.link.clone());
         let version = part.record.as_ref().and_then(|r| self.versions.get(&r.link.to_string()).cloned());
-        Ok(WindowPart {
-            key: window.key(k),
+        WindowPart {
+            key: window.key(w.k),
             words,
             after,
             ordinal: part.ordinal,
             origin: window.origin.clone(),
-            owner: (window.owner != writer.merger.account).then(|| window.owner.clone()),
+            owner: (window.owner != self.writer.merger.account).then(|| window.owner.clone()),
             span: part.span.clone(),
             record,
             counterpart: part.counterpart(),
             version,
-            sides: sides_showing(merged, &part.span),
+            sides: sides_showing(self.merged, &part.span),
             admits: part.admitted(),
-            answer,
-            named_since,
-        })
+            answer: w.answer,
+            named_since: w.named_since,
+        }
     }
 }
 

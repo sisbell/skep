@@ -148,7 +148,8 @@ impl Writer<'_> {
             let Some(at) = self.marked_landing(merged, into, &meta)? else {
                 return Ok(None);
             };
-            return Ok(self.holds_merge(merged, into, at)?.then_some((at, None)));
+            let held = self.holds_merge(merged, into, at, meta.arranged_at.position())?;
+            return Ok(held.then_some((at, None)));
         }
         let target: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
         // The base to record: the head's pair, only where the board records
@@ -267,31 +268,50 @@ impl Writer<'_> {
 
     /// Returns whether the landing at `at` placed M whole in `into`.
     ///
-    /// It reads `into` as of `at`, the position the board marks this merge's
-    /// landing at, so the edits made in the draft since its landing change
-    /// nothing: a landing stands until it is taken back (skep #914), and the
-    /// test is of the list it placed, which tells this composition's landing
-    /// from one of another composition of the same head and sides — the key
-    /// holds no choice. A `resume` naming the draft, a fresh landing looking
-    /// for its own ([`Writer::found_standing`]) and the words of a refused
-    /// landing all judge a landing by it. Where the board has reclaimed that
-    /// position, `into` is read as it stands instead: holding M whole there,
-    /// it holds this composition's landing.
+    /// It reads `into` as it stood at `at`, the position the board marks this
+    /// merge's landing at, so the edits made in the draft since its landing
+    /// change nothing: a landing stands until it is taken back (skep #914),
+    /// and the test is of the list it placed, which tells this composition's
+    /// landing from one of another composition of the same head and sides —
+    /// the key holds no choice. A `resume` naming the draft, a fresh landing
+    /// looking for its own ([`Writer::found_standing`]) and the words of a
+    /// refused landing all judge a landing by it.
+    ///
+    /// `arranged_at` is the draft's own as the caller's `doc_metadata` read
+    /// it. Where it is `at`, the text has not changed since the landing, so
+    /// the draft is read at the head and its `doc_metadata` read again after
+    /// the image: an `arranged_at` still `at` keeps that image, the state as
+    /// of the landing, with no past state rebuilt. Else, and where a write
+    /// landed between the two reads, `into` is read as of `at` through
+    /// `/op-at`. Where the board has reclaimed that position, `into` is read
+    /// as it stands instead: holding M whole there, it holds this
+    /// composition's landing.
     ///
     /// # Errors
     ///
-    /// The draft's `image` reads' refusals but a position reclaimed;
-    /// [`Refusal::HistoryBusy`] past the bounded retries; an `image` run that
-    /// is no content I-address.
+    /// The draft's `image` reads' refusals but a position reclaimed, and the
+    /// `doc_metadata` read's after a head image; [`Refusal::HistoryBusy`]
+    /// past the bounded retries; an `image` run that is no content I-address.
     pub(super) fn holds_merge(
         &self,
         merged: &Merged,
         into: &Address,
         at: u64,
+        arranged_at: Option<u64>,
     ) -> Result<bool, Refusal> {
-        let imaged = match self.reader.imaged(into, Some(at)) {
-            Err(Refusal::HistoryReclaimed { .. }) => self.reader.imaged(into, None)?,
-            imaged => imaged?,
+        let unchanged = if arranged_at == Some(at) {
+            let imaged = self.reader.imaged(into, None)?;
+            let still = self.reader.metadata(into, None)?.arranged_at.position() == Some(at);
+            still.then_some(imaged)
+        } else {
+            None
+        };
+        let imaged = match unchanged {
+            Some(imaged) => imaged,
+            None => match self.reader.imaged(into, Some(at)) {
+                Err(Refusal::HistoryReclaimed { .. }) => self.reader.imaged(into, None)?,
+                imaged => imaged?,
+            },
         };
         let current = runs_of(&imaged.runs)?;
         let target: Vec<(Run, Family)> =
@@ -456,7 +476,7 @@ impl Writer<'_> {
                 Some(link) => format!("its record is {link}"),
                 None => "its record is not written".to_string(),
             };
-            if !self.holds_merge(merged, into, at)? {
+            if !self.holds_merge(merged, into, at, meta.arranged_at.position())? {
                 return Ok(format!(
                     "this merge landed in {into} at position {at}, after it was composed at position {as_of}, and {record}, placing another list than this composition's — nothing was written"
                 ));

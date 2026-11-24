@@ -3,7 +3,9 @@
 //! [`check_join`] holds the core's join against the board's `compare` (the
 //! merge record's §1.3 step 4); [`first_difference`] finds where a member's
 //! or a draft's runs leave the list a merge composed, a draft side's fresh
-//! runs matched by their width in the document's own I-space.
+//! runs matched by their width in the document's own I-space, and
+//! [`first_word_difference`] where a member's words at those runs leave the
+//! draft side's own.
 
 use serde_json::Value;
 use skep_address::Address;
@@ -14,7 +16,7 @@ use crate::merge::compose::Run;
 
 use super::inputs::Family;
 use super::reader::{shape, Imaged, Reader};
-use super::readings::Readings;
+use super::readings::{values_of, Readings};
 use super::refusal::Refusal;
 
 /// Returns the first V-ordinal, counted from 1, at which two lists differ.
@@ -56,6 +58,47 @@ pub(in crate::merge) fn first_difference(
         }
     }
     (i < expected.len() || j < actual.len()).then_some(cursor)
+}
+
+/// Returns the first V-ordinal, counted from 1, at which `member` holds
+/// other words than the draft side's words a shot re-mints there.
+///
+/// `native` names each draft-native run of the list a merge composed: the
+/// V-ordinal of `member` it lands at, the side its words are read through
+/// and the run they are read as. [`first_difference`] matches such a run by
+/// its width alone, the shot giving the words new addresses, so the words
+/// decide: the member's at those ordinals ([`Reader::values_by_ordinal`])
+/// and the run's own through the side that holds them ([`values_of`]), both
+/// read at the head and compared position by position. Values confirm here
+/// what the addresses cannot; they never stand for identity (D6). `None`
+/// where every word agrees, and where `native` is empty, nothing read.
+///
+/// # Errors
+///
+/// The two reads' refusals, each as itself (SP-14).
+pub(in crate::merge) fn first_word_difference(
+    reader: &Reader<'_>,
+    doc: &Address,
+    maps: &[Imaged],
+    member: &Address,
+    native: &[(u64, Option<usize>, &Run)],
+) -> Result<Option<u64>, Refusal> {
+    if native.is_empty() {
+        return Ok(None);
+    }
+    let spans: Vec<(u64, u64)> = native.iter().map(|(at, _, run)| (*at, run.width)).collect();
+    let held = reader.values_by_ordinal(member, &spans)?;
+    let through: Vec<(Option<usize>, &Run)> =
+        native.iter().map(|(_, side, run)| (*side, *run)).collect();
+    let own = values_of(reader, doc, maps, &through)?;
+    for (((at, _, _), held), own) in native.iter().zip(held).zip(own) {
+        let differs = held.iter().zip(&own).position(|(h, o)| h != o);
+        let short = (held.len() != own.len()).then(|| held.len().min(own.len()));
+        if let Some(k) = differs.or(short) {
+            return Ok(Some(at + k as u64));
+        }
+    }
+    Ok(None)
 }
 
 // ── the oracle of the join ────────────────────────────────────────────────

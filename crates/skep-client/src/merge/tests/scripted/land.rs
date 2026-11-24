@@ -311,10 +311,10 @@ fn what_a_landing_replaces_is_read_at_the_head_and_held_to_the_compositions_posi
 
 /// After the shot, in order: the claim's read at the daughter (and no
 /// `assert_sup` — the scripted board panics on one), the record's read
-/// by the links of the kind to each side of the key, the daughter then
-/// the head, as the composition reads the prior records, the journal
-/// found by the account's own links of the kind — `home` the account —
-/// then MINTED private, the atom appended as a PLAIN insert at the
+/// by the links of the kind to the daughter — a record links every side
+/// but the head — the journal found by the account's own links of the
+/// kind, one `window_ftt` page with `home` the account finding none, then
+/// MINTED private, the atom appended as a PLAIN insert at the
 /// journal's end, the link homed in the journal beside it, from the atom
 /// to the member and the daughter under the kind, unsigned. A second
 /// `land` reads each of the three writes standing and writes nothing.
@@ -340,8 +340,7 @@ fn the_claim_is_read_and_the_record_is_written_after_the_shot_each_read_first() 
             "publish",
             "in_claims",
             "find_links_ftt",
-            "find_links_ftt",
-            "find_links_ftt",
+            "window_ftt",
             "create_new_document",
             "retrieve_doc_v_span_set",
             "insert",
@@ -356,14 +355,20 @@ fn the_claim_is_read_and_the_record_is_written_after_the_shot_each_read_first() 
     );
     let links = dialer.frames("find_links_ftt");
     assert_eq!(
-        (links[0]["q"]["to"][0]["start"].as_str(), links[1]["q"]["to"][0]["start"].as_str()),
-        (Some(format!("{D}.1.1").as_str()), Some(format!("{D}.2").as_str())),
-        "the record's read-first: the links of the kind to each side of the key"
+        links.iter().map(|f| f["q"]["to"][0]["start"].clone()).collect::<Vec<_>>(),
+        [json!(format!("{D}.1.1"))],
+        "the record's read-first: the links of the kind to the daughter, the side but the head"
     );
+    let page = &dialer.frames("window_ftt")[0];
     assert_eq!(
-        (links[2]["q"]["home"][0]["start"].as_str(), links[2]["q"]["to"].as_str()),
-        (Some(ACCOUNT), Some("any")),
-        "the journal's find: the account's own links of the kind"
+        (
+            page["q"]["home"][0]["start"].as_str(),
+            page["q"]["to"].as_str(),
+            &page["cur"],
+            page["n"].as_u64()
+        ),
+        (Some(ACCOUNT), Some("any"), &Value::Null, Some(1)),
+        "the journal's find: the account's own links of the kind, a page of one"
     );
     assert_eq!(
         dialer.frames("create_new_document")[0],
@@ -515,6 +520,120 @@ fn a_merge_run_again_on_the_head_it_published_is_refused_and_resumes_on_its_own(
     assert_eq!(address.to_string(), format!("{D}.3"), "the member the first shot minted");
     assert_eq!(dialer.frames("insert").len(), 1, "its record written once: {:?}", dialer.ops());
     assert!(dialer.frames("publish").is_empty(), "no shot: {:?}", dialer.ops());
+}
+
+/// A VERSION OF OTHER WORDS IS NO LANDING OF THE MERGE: a draft side's words
+/// are re-minted by the shot, so a member's addresses match M's draft-native
+/// runs by their widths alone, and the words decide. The merge of `S` lands
+/// as `D.3`, "!!!" re-minted, both its answers lost; `resume` finds it, its
+/// words `S`'s own. Then the person writes "???" in `S` in their place and
+/// runs the merge again on `D.2`, as the command's halt says to: `D.3` holds
+/// the same widths and other words, so `resume` answers no landing, `verify`
+/// of a record claiming `D.3` for this composition answers `Differs` at the
+/// first re-minted word, and `land` publishes "???" from `D.2`, answered as
+/// its daughter — never `D.3` reported as this merge's landing with "???"
+/// published nowhere. The mutant comparing the addresses alone answers `D.3`
+/// at the second `resume`, `Equal` at `verify` and `D.3` at `land`.
+#[test]
+fn a_version_of_other_words_of_the_draft_sides_widths_is_no_landing_of_the_merge() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    dialer.world().drop_acks = 2;
+    let lost = land(&board, &merged, shot(&session, &signer));
+    assert!(matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))), "both answers lost: {lost:?}");
+    let member = a(&format!("{D}.3"));
+    let found = resume(&board, &merged, shot(&session, &signer)).expect("resumed");
+    assert!(
+        matches!(&found, Some(Landed::Member { address, .. }) if *address == member),
+        "{found:?}"
+    );
+    {
+        let mut w = dialer.world();
+        w.text(S, 4, "???");
+        w.change(S, vec![run(D, 1, 11), run(S, 4, 3)]);
+    }
+    let again = compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+    assert_eq!(m_runs(&again)[3], run(S, 4, 3), "the premise: the same widths, other words");
+    dialer.clear();
+    assert_eq!(resume(&board, &again, shot(&session, &signer)), Ok(None));
+    let mut claimed = again.record.clone();
+    let minted = dialer.world().rows.iter().find(|r| r.docs[0] == member.to_string()).unwrap().at;
+    claimed.landed = Some(RecordLanding::Member {
+        member: member.clone(),
+        position: minted,
+    });
+    assert_eq!(verify(&board, Some(session.token()), &claimed), Ok(Verdict::Differs { at: 16 }));
+    dialer.clear();
+    let landed = land(&board, &again, shot(&session, &signer)).expect("landed");
+    assert!(
+        matches!(&landed, Landed::AsDaughter { address, .. } if address.to_string() == format!("{D}.2.1")),
+        "{landed:?}"
+    );
+    assert_eq!(dialer.frames("publish").len(), 1, "\"???\" published: {:?}", dialer.ops());
+}
+
+/// Another draft's merge of the same widths records no landing it did not
+/// make: `S2`, staged from `D.1` with "???" after the base's text, is merged
+/// onto `D.2` once `S`'s merge stands as `D.3`, "!!!" re-minted. `D.3`
+/// matches `S2`'s list by its widths and holds other words, so the
+/// read-first answers no landing, the shot lands as `D.2`'s daughter, and no
+/// record of `S2`'s key names `D.3` (the mutant comparing addresses alone
+/// writes one).
+#[test]
+fn another_drafts_merge_of_the_same_widths_records_no_landing_it_did_not_make() {
+    const S2: &str = "1.0.1.0.67";
+    let mut w = draft_landing_world();
+    w.text(S2, 1, "???");
+    w.doc(S2, false, ACCOUNT, vec![run(D, 1, 11), run(S2, 1, 3)]);
+    w.staged(S2, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let first = land(&board, &merged, shot(&session, &signer)).expect("S's merge landed");
+    assert!(
+        matches!(&first, Landed::Member { address, .. } if address.to_string() == format!("{D}.3")),
+        "{first:?}"
+    );
+    let other = Inputs {
+        sides: vec![Side::Draft { at: a(S2), position: None }],
+        ..draft_inputs()
+    };
+    let merged = compose(&board, Some(session.token()), &other).expect("S2's merge composed");
+    dialer.clear();
+    let landed = land(&board, &merged, shot(&session, &signer)).expect("S2's merge landed");
+    assert!(
+        matches!(&landed, Landed::AsDaughter { address, .. } if address.to_string() == format!("{D}.2.1")),
+        "{landed:?}"
+    );
+    assert_eq!(dialer.frames("publish").len(), 1, "{:?}", dialer.ops());
+    assert!(
+        dialer.frames("insert").is_empty(),
+        "no record of a landing it did not make: {:?}",
+        dialer.ops()
+    );
+}
+
+/// A member of another width is no landing, and its image is not read: the
+/// read-first takes `placed` for the list's width first. Beside the race's
+/// composition, eleven positions wide, stand another hand's `D.3` and the
+/// head's daughters `D.2.1` and `D.2.2`, five, six and seven wide: `resume`
+/// answers none having read the metadata of each and of the absent `D.2.3`,
+/// and no image (the mutant reading the image first reads three).
+#[test]
+fn a_member_of_another_width_is_no_landing_and_its_image_is_not_read() {
+    let mut w = World::race();
+    w.member(&format!("{D}.3"), vec![run(D, 1, 5)], Some(15));
+    w.member(&format!("{D}.2.1"), vec![run(D, 1, 6)], Some(15));
+    w.member(&format!("{D}.2.2"), vec![run(D, 1, 7)], Some(15));
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let width: u64 = m_runs(&merged).iter().map(|r| r.width).sum();
+    assert_eq!(width, 11, "the premise: {:?}", m_runs(&merged));
+    dialer.clear();
+    assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None));
+    assert_eq!(dialer.ops(), ["doc_metadata"; 4], "the metadata of four members alone");
 }
 
 /// A DAUGHTER in the acknowledgment — the head moved under a merge whose
@@ -801,8 +920,7 @@ fn the_record_is_written_after_the_mergers_own_publication_and_never_a_second_sh
         [
             "in_claims",
             "find_links_ftt",
-            "find_links_ftt",
-            "find_links_ftt",
+            "window_ftt",
             "create_new_document",
             "retrieve_doc_v_span_set",
             "insert",
@@ -920,8 +1038,8 @@ fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_
     );
     assert_eq!(
         ops[..3],
-        ["find_links_ftt", "find_links_ftt", "doc_metadata"],
-        "the merger's newest record for the key — the links of the kind to its two sides, none standing — then the draft's base, read as it stands: {ops:?}"
+        ["find_links_ftt", "doc_metadata", "set_arrangement"],
+        "the merger's newest record for the key — the links of the kind to the draft, the one side but the head, none standing — then the draft's base, read as it stands, then the one write: {ops:?}"
     );
     assert!(ops.iter().all(|o| !o.starts_with("at:")), "nothing read at a position: {ops:?}");
     // The draft holds M; the base re-recorded on the head at the extent
@@ -2129,4 +2247,61 @@ fn a_fresh_draft_is_staged_from_the_head_then_landed_in_and_a_re_run_stages_noth
     // and the record read at the landing answers it.
     assert_eq!(merged.prior, None, "the premise: composed before its landing");
     assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, None)).expect("resumed"), Some(as_found(&landed)));
+}
+
+/// A landing found standing is read at the head while its draft is unchanged
+/// since it: the draft's `arranged_at` is the landing's own position, so its
+/// image at the head is the state the landing left, kept where the draft's
+/// `doc_metadata`, read again after the image, still names that position —
+/// no past state rebuilt, no `/op-at` read. An edit landing in the draft just
+/// before that head image moves `arranged_at`, so the draft is read as of the
+/// landing through `/op-at` and the landing is still found; and every read
+/// after the edit reads it so. The mutant that never reads at the head sends
+/// an `/op-at` read at the first `resume`; the one that keeps the head image
+/// without the second `doc_metadata` answers no landing at the second.
+#[test]
+fn a_landing_found_standing_is_read_at_the_head_while_its_draft_is_unchanged() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+    let Landed::Draft { into, position, .. } = &landed else {
+        panic!("{landed:?}")
+    };
+    let fresh = into.to_string();
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &merged, draft_landing(&session, &signer, None)),
+        Ok(Some(as_found(&landed)))
+    );
+    assert!(
+        dialer.ops().iter().all(|o| !o.starts_with("at:")),
+        "no past state rebuilt: {:?}",
+        dialer.ops()
+    );
+    let head_image = {
+        let served = dialer.served.lock().unwrap();
+        1 + served
+            .iter()
+            .position(|(line, f)| line == "retrieve_doc_v_span_set" && f["doc"] == fresh)
+            .expect("the draft read at the head")
+    };
+    dialer.world().interleave = Some((head_image, fresh.clone(), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)]));
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &merged, draft_landing(&session, &signer, None)),
+        Ok(Some(as_found(&landed)))
+    );
+    assert_eq!(dialer.positions("image"), [*position], "read as of the landing: {:?}", dialer.ops());
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &merged, draft_landing(&session, &signer, None)),
+        Ok(Some(as_found(&landed)))
+    );
+    assert_eq!(
+        dialer.positions("image"),
+        [*position],
+        "read as of the landing again: {:?}",
+        dialer.ops()
+    );
 }

@@ -1540,6 +1540,13 @@ fn moved_set(surv: &[usize], order: &[usize]) -> HashSet<usize> {
 /// moved survivor keeps its place among that material as its side put it;
 /// two moved survivors stand in the order the side that changed their order
 /// gave, else the base's.
+///
+/// The cost is quadratic in the moved survivors: the slots are filled in one
+/// pass, and the survivors of one slot are ordered by their scores — how
+/// many of the slot's others each comes before. The pair order is a
+/// tournament, so one order keeps every pair of a slot exactly where its
+/// scores are all distinct, and it is the scores' order, highest first;
+/// equal scores are a cycle no order keeps.
 fn compose_reorders(surv: &[usize], orders: &[(usize, &[usize])]) -> Option<Vec<usize>> {
     let top = surv.iter().copied().max().map_or(0, |m| m + 1);
     let mut base_pos = vec![usize::MAX; top];
@@ -1598,13 +1605,21 @@ fn compose_reorders(surv: &[usize], orders: &[(usize, &[usize])]) -> Option<Vec<
             }
         }
     }
+    let mut slots: Vec<Vec<usize>> = vec![Vec::new(); kept.len() + 1];
+    for &bi in &moved {
+        slots[slot[bi]].push(bi);
+    }
     let mut spine = Vec::with_capacity(surv.len());
-    for s in 0..=kept.len() {
-        let mut here: Vec<usize> = moved.iter().copied().filter(|&bi| slot[bi] == s).collect();
-        while !here.is_empty() {
-            let first = here.iter().position(|&x| here.iter().all(|&y| x == y || before(x, y)))?;
-            spine.push(here.remove(first));
+    for (s, here) in slots.iter().enumerate() {
+        let mut scored: Vec<(usize, usize)> = here
+            .iter()
+            .map(|&x| (here.iter().filter(|&&y| y != x && before(x, y)).count(), x))
+            .collect();
+        scored.sort_unstable_by_key(|&(score, _)| std::cmp::Reverse(score));
+        if scored.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return None;
         }
+        spine.extend(scored.into_iter().map(|(_, x)| x));
         if s < kept.len() {
             spine.push(kept[s]);
         }

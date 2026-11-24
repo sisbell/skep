@@ -18,9 +18,11 @@ enum Ends {
 }
 
 /// What the deaths staged over one act answered: how many ended the
-/// session, and how many were a token-free read's, the board's fault.
+/// session, how many of those a take-back's past its one write, and how
+/// many were a token-free read's, the board's fault.
 struct Deaths {
     ended: usize,
+    past_the_write: usize,
     faulted: usize,
 }
 
@@ -54,7 +56,7 @@ fn deaths_of<S>(
     let (whole, requests) = run(None);
     assert_eq!(whole, Ok(()), "{cell}: the premise, the act whole");
     let write = requests.iter().position(|(line, _)| line == "set_arrangement");
-    let mut deaths = Deaths { ended: 0, faulted: 0 };
+    let mut deaths = Deaths { ended: 0, past_the_write: 0, faulted: 0 };
     for (k, (line, presented)) in requests.iter().enumerate() {
         if line == "GET /health" {
             continue;
@@ -76,9 +78,10 @@ fn deaths_of<S>(
             deaths.faulted += 1;
             continue;
         }
+        let past = matches!(ends, Ends::TakeBack(_)) && write.is_some_and(|w| k > w);
         let on_end = match ends {
             Ends::Alike(on_end) => on_end,
-            Ends::TakeBack(after) if write.is_some_and(|w| k > w) => after,
+            Ends::TakeBack(after) if past => after,
             Ends::TakeBack(_) => OnEnd::Rerun,
         };
         let Err(Refusal::SessionEnded(Halt::Halt(face))) = &answer else {
@@ -91,6 +94,7 @@ fn deaths_of<S>(
         );
         assert_eq!(face.act, on_end.act(), "{cell}: the way on at {line} (#{n})");
         deaths.ended += 1;
+        deaths.past_the_write += usize::from(past);
     }
     assert!(deaths.ended + deaths.faulted > 0, "{cell}: the premise, a death staged");
     deaths
@@ -364,8 +368,10 @@ fn a_death_at_any_request_under_the_token_is_the_typed_session_end() {
         Ends::TakeBack(OnEnd::EarlierBack),
     );
     assert!(
-        earlier.ended > undoing.ended,
-        "the feed walk and the record's writes past the plain undo's"
+        earlier.past_the_write > undoing.past_the_write,
+        "the earlier merge's way on staged at each of the record's reads and writes past the one write, the earlier landing's record read beside the later's: {} against {}",
+        earlier.past_the_write,
+        undoing.past_the_write
     );
     let recorded =
         |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
@@ -435,8 +441,8 @@ fn a_death_at_any_request_under_the_token_is_the_typed_session_end() {
         rerun,
     );
     assert_eq!(
-        finding.ended, 3,
-        "the find, the record's link and the journal's `doc_metadata`"
+        finding.ended, 4,
+        "the find's two pages — the journal's, then the one past it — the record's link and the journal's `doc_metadata`"
     );
 }
 

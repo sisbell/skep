@@ -15,7 +15,8 @@
 //! over the daughter's base; and the fences — a side that changes while it
 //! is read refused, a draft's recorded base moved while it is read
 //! refused, a trunk member read as of a draft's named position, and a
-//! board serving no `arranged_at` refused at the first fence.
+//! board serving no `arranged_at` refused at the first fence; and the
+//! dedup's values read together through each side.
 
 use super::*;
 
@@ -24,8 +25,8 @@ use super::*;
 /// it (skep #1113), the head's OPENING FENCE — its `doc_metadata` — then
 /// the head's extent and image, the base's extent and image, the
 /// daughter's extent and image, the head's CLOSING FENCE, then the prior
-/// records by the links of the kind to each side — and nothing written,
-/// nothing read through `/op-at`. The daughter is a published version
+/// records by the links of the kind to the daughter — a record links every
+/// side but the head — and nothing written, nothing read through `/op-at`. The daughter is a published version
 /// below the head and takes no fence. The result is the race shape's M
 /// with its counts, key, cap and unlanded record, its `as_of` the position
 /// the head's fence stood at.
@@ -46,7 +47,6 @@ fn compose_reads_in_the_records_order_and_writes_nothing() {
             "retrieve_doc_v_span_set",
             "image",
             "doc_metadata",
-            "find_links_ftt",
             "find_links_ftt"
         ],
         "every read at the head, none rebuilding a past state"
@@ -290,7 +290,8 @@ fn imaged(dialer: &Scripted) -> Vec<String> {
 /// arrangement from before version 1, empty (`own_count` 0), reading
 /// nothing of it: the head's "the fox jumps"
 /// and the daughter's "the cat" are both additions at the one spot —
-/// their values read through the sides that hold them, the value rule
+/// their values read through the sides that hold them, one read each, the
+/// value rule
 /// finding no identical bytes — ONE unsettled `order` gap, the head's
 /// first by default, and "the fox" is kept (the mutant that takes the
 /// daughter's address composes over `D.1` and drops it, its removal by
@@ -314,7 +315,6 @@ fn a_version_begun_before_version_1_composes_over_the_documents_own_arrangement(
             "retrieve_v",
             "retrieve_v",
             "doc_metadata",
-            "find_links_ftt",
             "find_links_ftt"
         ],
         "the trunk's metadata, the daughter's for its recorded base, the head's fence, the head and the daughter and their values, the head's fence again — nothing of `D`, all at the head"
@@ -718,8 +718,10 @@ fn more_sides_than_one_byte_numbers_refuse_before_any_read() {
 /// its `source` — its opening fence — the head's opening fence, the
 /// head's extent and image, the base's extent and image — the base `D.1`,
 /// derived from the source and never named — the fork's extent and image,
-/// the fork's and the head's closing fences, the prior records. M is the race shape's
-/// "the big cat", the fork's role `fork`, the merge lands as the trunk's
+/// the fork's and the head's closing fences, the prior records by the links
+/// of the kind to the fork, a record linking every side but the head. M is
+/// the race shape's "the big cat", the fork's role `fork`, the merge lands
+/// as the trunk's
 /// next member, and `verify` recomputes its record against the source
 /// the board serves.
 #[test]
@@ -743,7 +745,6 @@ fn case_j_a_fork_of_a_published_version_merges_from_the_source_the_board_serves(
             "image",
             "doc_metadata",
             "doc_metadata",
-            "find_links_ftt",
             "find_links_ftt"
         ]
     );
@@ -1283,8 +1284,9 @@ fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
 /// `doc_metadata` is read for the base the board records for it — right
 /// after the trunk's, as a fork's is for its source, its opening fence —
 /// and the merge's base is derived from it, so the caller names none; the
-/// reads then run in the record's order, each at the head, and nothing is
-/// written. A base the caller names
+/// reads then run in the record's order, each at the head, the prior records
+/// by the links of the kind to the draft, and nothing is written. A base the
+/// caller names
 /// is checked, never trusted: one equal to the derived base is taken; a
 /// different one refuses `DraftBaseDisagrees`, naming both, before any
 /// `image`.
@@ -1309,7 +1311,6 @@ fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
             "image",
             "doc_metadata",
             "doc_metadata",
-            "find_links_ftt",
             "find_links_ftt"
         ]
     );
@@ -1614,4 +1615,62 @@ fn a_board_serving_no_arranged_at_is_refused_at_the_first_fence_and_composes_not
     assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the trunk's metadata, then the draft's opening fence, and nothing after");
     compose(&board, Some(&token()), &with_side(Side::Draft { at: a(S), position: Some(at) }))
         .expect("read as of the position named, no fence");
+}
+
+/// THE DEDUP'S VALUES ARE READ TOGETHER: a head and a daughter each adding
+/// a one-byte word at each of g spots raise g `order` gaps, whose groups
+/// the dedup compares, and the composition reads their values in two
+/// `retrieve_v` reads — one through each side — at g = 2 and at g = 8, never
+/// one a run. The composition is the one the core makes reading each run as
+/// it asks it: the matching words kept once, the gap settled by the rule,
+/// the others asked (the mutant reading one run at a time sends 2g reads).
+#[test]
+fn the_dedups_values_are_read_together_through_each_side() {
+    for g in [2u64, 8] {
+        let mut w = World::new();
+        let base_text: String = (0..=g).map(|k| char::from(b'a' + k as u8)).collect();
+        w.text(D, 1, &base_text);
+        let (mut head, mut daughter) = (Vec::new(), Vec::new());
+        let mut bytes: BTreeMap<u64, u8> = BTreeMap::new();
+        for (k, b) in base_text.bytes().enumerate() {
+            bytes.insert(1 + k as u64, b);
+        }
+        for k in 1..=g {
+            let (ours, theirs) = (100 + k, 200 + k);
+            let word = if k % 2 == 0 { "X" } else { "Y" };
+            let other = if k % 2 == 0 { "X" } else { "Z" };
+            w.text(D, ours, word);
+            w.text(D, theirs, other);
+            bytes.insert(ours, word.as_bytes()[0]);
+            bytes.insert(theirs, other.as_bytes()[0]);
+            head.extend([run(D, k, 1), run(D, ours, 1)]);
+            daughter.extend([run(D, k, 1), run(D, theirs, 1)]);
+        }
+        head.push(run(D, g + 1, 1));
+        daughter.push(run(D, g + 1, 1));
+        w.doc(D, true, ACCOUNT, head.clone());
+        w.member(&format!("{D}.1"), vec![run(D, 1, g + 1)], None);
+        w.member(&format!("{D}.2"), head.clone(), Some(g + 1));
+        w.member(&format!("{D}.1.1"), daughter.clone(), Some(g + 1));
+        w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+        let (dialer, board, _) = open(w);
+        let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
+        assert_eq!(
+            dialer.frames("retrieve_v").len(),
+            2,
+            "g = {g}: one read through each side: {:?}",
+            dialer.ops()
+        );
+        let values = |_: SideIx, r: &Run| Some((r.i_start..r.reach()).map(|p| vec![bytes[&p]]).collect::<Vec<Item>>());
+        let sides = [(SideIx(0), head), (SideIx(1), daughter)];
+        let one_at_a_time = compose_runs(&[run(D, 1, g + 1)], &a(D), &sides, None, &Options::default(), &values);
+        assert_eq!(merged.composed, one_at_a_time, "g = {g}: the composition read a run at a time");
+        let kept_once: Vec<GapId> = (1..=g as u32).filter(|k| k % 2 == 0).map(GapId).collect();
+        assert_eq!(merged.composed.values.applied, kept_once, "g = {g}: the matching words kept once");
+        assert_eq!(
+            merged.composed.gaps.iter().map(|gap| gap.settled).collect::<Vec<_>>(),
+            (1..=g).map(|k| k % 2 == 0).collect::<Vec<_>>(),
+            "g = {g}"
+        );
+    }
 }

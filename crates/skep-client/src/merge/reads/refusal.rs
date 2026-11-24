@@ -353,6 +353,22 @@ pub enum Refusal {
         /// [`SHOT_RUN_CAP`](super::SHOT_RUN_CAP).
         cap: usize,
     },
+    /// A shot's signed body would pass what one request may carry: refused
+    /// with its size before the send, never split (decision 13).
+    ///
+    /// The body spells every copied word of the list the shot places by
+    /// value — the document's own text and a draft side's words alike — each
+    /// beside its four-byte length, after the body's eight-byte count of
+    /// positions. So a list whose copied positions alone pass the budget so
+    /// counted is refused before any value is read, and one whose values'
+    /// bytes pass it once read is refused with the body's whole size.
+    BodyOverBudget {
+        /// The body's size in bytes, at least: its whole size where it was
+        /// composed, else the least its copied positions spell.
+        bytes: u64,
+        /// [`SHOT_BODY_BUDGET`](crate::merge::SHOT_BODY_BUDGET).
+        budget: usize,
+    },
     /// `signed_session_required`: the landing's session is bare.
     NeedsSignedSession,
     /// `not_owner` naming the DRAFT side: the draft the merge stages its fresh
@@ -700,6 +716,7 @@ impl fmt::Display for Refusal {
                 }
             }
             Refusal::OverCap { runs, cap } => write!(f, "the list is in more pieces than one write can carry — {runs}, where {cap} is the most; nothing was sent"),
+            Refusal::BodyOverBudget { bytes, budget } => write!(f, "the merged list is more than one publication can carry — its signed body would hold at least {bytes} bytes, where {budget} is the most; nothing was published"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
             Refusal::NotOwner { draft } => write!(f, "{draft} is another account's draft (not_owner): a merge is taken out of a draft by its owner alone; nothing was changed"),

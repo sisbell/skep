@@ -1035,8 +1035,8 @@ pub fn find_links_ftt_from(ty: &str, from: &str) -> Value {
 /// the doc 1 of an account the enumeration already holds"), and takes no
 /// permit. One naming an account walks every home under it, a class scan
 /// the board admits under its class-scan permits (wire.md §Link discovery
-/// reads): the merge journal's find, which reissues it while they are
-/// taken (the `merge::journal` module's doc).
+/// reads); the merge journal's find walks an account's homes windowed
+/// instead ([`window_four`]; the `merge::journal` module's doc).
 pub fn find_links_ftt_home(ty: &str, home: &str) -> Value {
     json!({"op": "find_links_ftt", "q": {"home": unit_span(home), "from": "any", "to": "any", "ty": unit_span(ty)}})
 }

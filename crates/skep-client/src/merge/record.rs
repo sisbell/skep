@@ -69,6 +69,8 @@
 //! JSON object `serde_json` renders; a reader that does not know a member
 //! treats it as absent.
 
+use std::collections::HashSet;
+
 use serde_json::{json, Value};
 use skep_address::{Address, Nat};
 
@@ -993,7 +995,7 @@ fn side_ix(v: &Value) -> Option<SideIx> {
 /// a reader finds the records of the journals it may read. Nor is one whose
 /// journal is not registered or is in more pieces than `image` answers,
 /// whose atom is not arranged, or whose bytes are no record of the kind
-/// (`read_record`); and the trunk's owner is unknown only where the trunk
+/// (`read_records`); and the trunk's owner is unknown only where the trunk
 /// is withheld or not registered. Every other refusal of a read is answered
 /// as itself, never as no record standing (SP-14). `None` where no readable
 /// record names the key.
@@ -1001,7 +1003,8 @@ fn side_ix(v: &Value) -> Option<SideIx> {
 /// Newest: the record whose link was minted last (`Found::age`), the
 /// owner's account's records preferred before any other's — an account's
 /// records being those whose links lie in it exactly, never in an account
-/// nested under it.
+/// nested under it. The owner's links are read first, and another
+/// account's only where none of the owner's records names the key.
 ///
 /// # Errors
 ///
@@ -1021,11 +1024,16 @@ pub fn current(
         Err(Refusal::Unreadable(_) | Refusal::NoSuchDocument(_)) => None,
         Err(e) => return Err(e),
     };
-    current_among(&reader, kind, key, owner.as_deref())
+    current_among(&reader, kind, key, owner.as_deref(), None)
 }
 
 /// Runs [`current`] over a reader, the trunk owner's account known where it
 /// is.
+///
+/// `head`, where the caller knows it, is the key's head side, whose links
+/// are not read: a record links its target and its sides besides the head
+/// (§4, "Its home"), so a link to the head is a record of the merge that
+/// minted it, never one of this key.
 ///
 /// # Errors
 ///
@@ -1035,12 +1043,19 @@ pub(super) fn current_among(
     kind: &Address,
     key: &RecordKey,
     owner: Option<&str>,
+    head: Option<&Address>,
 ) -> Result<Option<Record>, Refusal> {
-    let found = records_of(reader, kind, key, |k| k == key)?;
-    let (owned, others): (Vec<Found>, Vec<Found>) =
-        found.into_iter().partition(|f| owner.is_some_and(|owner| f.lies_in(owner)));
-    let pool = if owned.is_empty() { others } else { owned };
-    Ok(newest(pool).map(|f| f.record))
+    let links = record_links(reader, kind, key.sides.iter().filter(|s| Some(*s) != head))?;
+    let (owned, others): (Vec<Address>, Vec<Address>) = links
+        .into_iter()
+        .partition(|link| owner.is_some_and(|owner| owned_by(&link.to_string(), owner)));
+    for pool in [owned, others] {
+        let found = read_records(reader, &pool)?.into_iter().filter(|f| f.record.key() == *key);
+        if let Some(f) = newest(found) {
+            return Ok(Some(f.record));
+        }
+    }
+    Ok(None)
 }
 
 /// Returns `account`'s own record of a draft landing of `key`'s merge.
@@ -1050,8 +1065,9 @@ pub(super) fn current_among(
 /// read through its journal — but matched on `doc`, `base` and `sides` alone
 /// ([`RecordKey::stateless`]), so a record composed over a fork or a draft side
 /// whose text has changed since matches, and so does one written before the
-/// states were kept. Of the matches whose link lies in `account` exactly, it
-/// is the newest by the order their links were minted that names a draft
+/// states were kept. Only the links lying in `account` exactly are read,
+/// another account's passed over unread; of their matches, it is the newest
+/// by the order their links were minted that names a draft
 /// landing and that no take-back's record among them replaces
 /// (`taken_back_links`): a record stands for the landing it names until a
 /// take-back replaces it, whatever landing of the key was recorded since, so
@@ -1075,9 +1091,13 @@ pub fn landed_draft(
 ) -> Result<Option<Record>, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
     let stateless = key.stateless();
-    let own: Vec<Found> = records_of(&reader, kind, key, |k| k.stateless() == stateless)?
+    let links: Vec<Address> = record_links(&reader, kind, &key.sides)?
         .into_iter()
-        .filter(|f| f.lies_in(account))
+        .filter(|link| owned_by(&link.to_string(), account))
+        .collect();
+    let own: Vec<Found> = read_records(&reader, &links)?
+        .into_iter()
+        .filter(|f| f.record.key().stateless() == stateless)
         .collect();
     let taken_back = taken_back_links(&own);
     let standing = own.into_iter().filter(|f| {
@@ -1217,7 +1237,7 @@ pub fn standing_landing(
 /// sub-account's among them, is never read, never judged and never counts
 /// as replacing one of the account's own, and no refusal of its journal's
 /// reads stops the account's act. Each record kept is read through its
-/// journal ([`read_record`]), whatever its `landed` names — a landing's
+/// journal ([`read_records`]), whatever its `landed` names — a landing's
 /// record, or a take-back's, which names none (skep #870) — each with the
 /// link it was found through; a record whose journal the reader may not
 /// read is no candidate. A record's link runs to the draft it landed in, or
@@ -1231,7 +1251,7 @@ pub fn standing_landing(
 /// # Errors
 ///
 /// The link read's refusal at the draft, `withheld` and `doc_not_registered`
-/// naming it; then [`read_record`]'s.
+/// naming it; then [`read_records`]'.
 pub(super) fn linked_to(
     reader: &Reader<'_>,
     kind: &Address,
@@ -1243,12 +1263,12 @@ pub(super) fn linked_to(
         &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
         None,
     )?;
-    let mut found = Vec::new();
-    for link in answers::addrs(&v).into_iter().filter(|link| owned_by(link, account)) {
-        let Some(link) = parse_address(link) else { continue };
-        found.extend(read_record(reader, &link)?);
-    }
-    Ok(found)
+    let own: Vec<Address> = answers::addrs(&v)
+        .into_iter()
+        .filter(|link| owned_by(link, account))
+        .filter_map(parse_address)
+        .collect();
+    read_records(reader, &own)
 }
 
 /// Returns the record standing for `marker`'s landing in `draft`.
@@ -1350,12 +1370,6 @@ pub(super) struct Found {
 }
 
 impl Found {
-    /// Returns whether the record's link lies in `account` exactly — never
-    /// in an account nested under it.
-    pub(super) fn lies_in(&self, account: &str) -> bool {
-        owned_by(&self.link.to_string(), account)
-    }
-
     /// Returns where the record stands in the order its links were minted
     /// (§4, "Its currency": the latest one naming the key).
     ///
@@ -1375,96 +1389,162 @@ pub(super) fn newest(found: impl IntoIterator<Item = Found>) -> Option<Found> {
     found.into_iter().max_by_key(Found::age)
 }
 
-/// Returns every record naming `key` that the reader can read.
+/// Returns the links of `kind` to each of `to`, each link once, in the order
+/// the board answered them.
 ///
-/// Each comes with the link it was found through and that link's age, in
-/// the order the links were answered. They are found as [`current`] finds
-/// them: the links of `kind` to each side of the key, each link once, each
-/// record's atom read through its journal's arrangement and its key
-/// checked by `same` — equality for the key itself, or the states ignored
-/// ([`landed_draft`]).
+/// It is one `find_links_ftt` over `ty` and `to` the side, never a class
+/// scan, for each side: the links a reader finds records through (§4, "How
+/// a reader finds it").
 ///
 /// # Errors
 ///
-/// As [`current_among`]'s.
-pub(super) fn records_of(
+/// The finds' refusals as [`Reader::read`] answers them.
+pub(super) fn record_links<'a>(
     reader: &Reader<'_>,
     kind: &Address,
-    key: &RecordKey,
-    same: impl Fn(&RecordKey) -> bool,
-) -> Result<Vec<Found>, Refusal> {
-    let mut seen: Vec<String> = Vec::new();
-    let mut found: Vec<Found> = Vec::new();
-    for side in &key.sides {
+    to: impl IntoIterator<Item = &'a Address>,
+) -> Result<Vec<Address>, Refusal> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
+    for side in to {
         let v = reader.read(&frames::find_links_ftt(&kind.to_string(), &side.to_string()), None)?;
         for link in answers::addrs(&v) {
-            if seen.iter().any(|s| s == link) {
-                continue;
-            }
-            seen.push(link.to_string());
-            let Some(link_addr) = parse_address(link) else { continue };
-            if let Some(f) = read_record(reader, &link_addr)? {
-                if same(&f.record.key()) {
-                    found.push(f);
-                }
+            if seen.insert(link.to_string()) {
+                out.extend(parse_address(link));
             }
         }
     }
-    Ok(found)
+    Ok(out)
 }
 
-/// Returns the record a link of the kind names, with the link's age.
+/// One link of the kind, as read: its age and the atom its `from` names.
+struct Pointed {
+    /// The link's place among those asked, which the records keep.
+    order: usize,
+    link: Address,
+    at: Option<u64>,
+    atom: String,
+}
+
+/// Returns the records `links` name, in their order, each with its link
+/// and the link's age.
 ///
-/// It is the atom the link's `from` slot starts at, read through the
-/// journal's arrangement, and the position `read_link` answers for the
-/// link; `None` where the journal or its atom is not readable to this
-/// reader, where the journal is not registered or is in more pieces than
-/// `image` answers, where the atom is not arranged, or where its bytes are
-/// no record of the kind.
+/// Each link is read (`read_link`) for the atom its `from` slot starts at
+/// and the position it was minted at, and each journal those atoms lie in
+/// is read once for all of them: its extent, its image, then every atom's
+/// value by its V-ordinal in as few `retrieve_v` reads as the budgets allow
+/// ([`Reader::values_by_ordinal`]) — the atom read through the journal's
+/// arrangement, never by identity. Where that read meets an item no value
+/// is spelled from, the journal's atoms are read one by one, so such an atom
+/// names no record and its neighbours stand. A link names no record where
+/// its journal is not readable to this reader, is not registered or is in
+/// more pieces than `image` answers, where its atom is not arranged or is
+/// no composite value, and where the atom's bytes are no record of the
+/// kind. So `L` links in `J` journals cost `L + 3·J` reads.
 ///
 /// # Errors
 ///
-/// A refusal reading the link, the journal or the atom but those absences,
-/// as itself: a transport fault and the board's other refusals,
+/// A refusal reading a link, a journal or an atom but those absences, as
+/// itself: a transport fault and the board's other refusals,
 /// [`Refusal::Halt`]; the death signal under the token,
 /// [`Refusal::SessionEnded`].
-pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Found>, Refusal> {
-    let lv = reader.read(&frames::read_link(&link.to_string()), None)?;
-    let Some(Some(value)) = answers::link_value(&lv) else { return Ok(None) };
-    let Some(atom) = value.from.first().map(|span| span.start.as_str()) else { return Ok(None) };
-    let Some(journal) = document_of(atom).and_then(|j| parse_address(&j)) else { return Ok(None) };
-    let unreadable = |e: Refusal| match e {
+pub(super) fn read_records(reader: &Reader<'_>, links: &[Address]) -> Result<Vec<Found>, Refusal> {
+    let mut journals: Vec<(Address, Vec<Pointed>)> = Vec::new();
+    for (order, link) in links.iter().enumerate() {
+        let lv = reader.read(&frames::read_link(&link.to_string()), None)?;
+        let Some(Some(value)) = answers::link_value(&lv) else { continue };
+        let Some(atom) = value.from.first().map(|span| span.start.clone()) else { continue };
+        let Some(journal) = document_of(&atom).and_then(|j| parse_address(&j)) else { continue };
+        let pointed = Pointed { order, link: link.clone(), at: value.at, atom };
+        match journals.iter_mut().find(|(j, _)| *j == journal) {
+            Some((_, atoms)) => atoms.push(pointed),
+            None => journals.push((journal, vec![pointed])),
+        }
+    }
+    let mut found: Vec<(usize, Found)> = Vec::new();
+    for (journal, atoms) in journals {
+        let Some(bodies) = journal_atoms(reader, &journal, &atoms)? else { continue };
+        for (pointed, bytes) in atoms.into_iter().zip(bodies) {
+            let Some(body) = bytes.and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+                continue;
+            };
+            if let Some(mut record) = Record::from_value(&body) {
+                record.link = Some(pointed.link.clone());
+                found.push((pointed.order, Found { link: pointed.link, at: pointed.at, record }));
+            }
+        }
+    }
+    found.sort_by_key(|(order, _)| *order);
+    Ok(found.into_iter().map(|(_, f)| f).collect())
+}
+
+/// Returns the composite value at each of `atoms` in `journal`, in their
+/// order: `None` for an atom the journal does not arrange or whose value is
+/// no composite one.
+///
+/// `None` for the whole where the journal is not readable to this reader,
+/// is not registered, is in more pieces than `image` answers or holds no
+/// position. The values are read in one batch ([`Reader::values_by_ordinal`]),
+/// each atom one position; where the batch meets an item no value is spelled
+/// from, each atom is read alone, its value the delivery's first atom.
+///
+/// # Errors
+///
+/// As [`read_records`]'.
+fn journal_atoms(
+    reader: &Reader<'_>,
+    journal: &Address,
+    atoms: &[Pointed],
+) -> Result<Option<Vec<Option<Vec<u8>>>>, Refusal> {
+    let absent = |e: Refusal| match e {
         Refusal::Unreadable(_) | Refusal::NoSuchDocument(_) | Refusal::TooFragmented { .. } => {
             Ok(None)
         }
         e => Err(e),
     };
-    let extent = match reader.extent(&journal, None) {
-        Ok(e) => e,
-        Err(e) => return unreadable(e),
+    let extent = match reader.extent(journal, None) {
+        Ok(extent) => extent,
+        Err(e) => return absent(e),
     };
     if extent == 0 {
         return Ok(None);
     }
-    let runs = match reader.image(&journal, None, 1, extent) {
-        Ok(r) => r,
-        Err(e) => return unreadable(e),
+    let runs = match reader.image(journal, None, 1, extent) {
+        Ok(runs) => runs,
+        Err(e) => return absent(e),
     };
-    let Some(ordinal) = answers::ordinal_of(&runs, atom) else { return Ok(None) };
-    let v = match reader.answered(
-        &journal,
-        &frames::retrieve_v(&journal.to_string(), ordinal, 1),
-        None,
-    ) {
-        Ok(v) => v,
-        Err(e) => return unreadable(e),
-    };
-    let Some(bytes) = answers::first_atom(&v) else { return Ok(None) };
-    let Ok(body) = serde_json::from_slice::<Value>(&bytes) else { return Ok(None) };
-    Ok(Record::from_value(&body).map(|mut record| {
-        record.link = Some(link.clone());
-        Found { link: link.clone(), at: value.at, record }
-    }))
+    let ordinals: Vec<Option<u64>> =
+        atoms.iter().map(|p| answers::ordinal_of(&runs, &p.atom)).collect();
+    let spans: Vec<(u64, u64)> = ordinals.iter().flatten().map(|&ordinal| (ordinal, 1)).collect();
+    match reader.values_by_ordinal(journal, &spans) {
+        Ok(read) => {
+            let mut read = read.into_iter();
+            let values = ordinals
+                .iter()
+                .map(|ordinal| ordinal.and_then(|_| read.next()?.into_iter().next()))
+                .collect();
+            Ok(Some(values))
+        }
+        Err(e @ Refusal::SessionEnded(_)) => Err(e),
+        Err(_) => {
+            let mut values = Vec::with_capacity(atoms.len());
+            for ordinal in ordinals {
+                let Some(ordinal) = ordinal else {
+                    values.push(None);
+                    continue;
+                };
+                let frame = frames::retrieve_v(&journal.to_string(), ordinal, 1);
+                match reader.answered(journal, &frame, None) {
+                    Ok(v) => values.push(answers::first_atom(&v)),
+                    Err(e) => {
+                        absent(e)?;
+                        values.push(None);
+                    }
+                }
+            }
+            Ok(Some(values))
+        }
+    }
 }
 
 // ── verify ────────────────────────────────────────────────────────────────
@@ -1522,7 +1602,10 @@ pub enum Verdict {
 /// own, `merge::windows`'s `applied`), and compared with the landed
 /// member's image over its first `placed` positions, or the draft's whole
 /// image at the position recorded. A member is compared as the shot
-/// minted it, a draft side's fresh text re-minted under the trunk; a draft
+/// minted it, a draft side's fresh text re-minted under the trunk, which
+/// its addresses match by width alone: the member's words there and the
+/// draft side's own are read at the head and compared position by position,
+/// the first that differs answering `Differs`; a draft
 /// is compared by identity, every run of M as the sides hold it, since the
 /// one `set_arrangement` that landed it re-mints nothing. A draft side, and
 /// the base the board records for it, are read as of the position the
@@ -1719,13 +1802,24 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     let by_identity = matches!(record.landed, Some(RecordLanding::Draft { .. }));
     let answered = super::windows::applied(&readings.composed.runs, &readings.families, &record.doc, &record.answers);
     let expected: Vec<(Run, reads::Family)> = answered
-        .into_iter()
-        .map(|a| (a.run, if by_identity { reads::Family::Own } else { a.family }))
+        .iter()
+        .map(|a| (a.run.clone(), if by_identity { reads::Family::Own } else { a.family }))
         .collect();
-    Ok(match reads::first_difference(&expected, &actual, &record.doc) {
-        None => Verdict::Equal,
-        Some(at) => Verdict::Differs { at },
-    })
+    if let Some(at) = reads::first_difference(&expected, &actual, &record.doc) {
+        return Ok(Verdict::Differs { at });
+    }
+    // A member's re-minted words, matched above by their widths alone, are
+    // the draft side's own or the member holds another text.
+    if by_identity {
+        return Ok(Verdict::Equal);
+    }
+    let re_minted = super::windows::re_minted(&answered);
+    match reads::first_word_difference(&reader, &record.doc, &readings.maps, &target, &re_minted) {
+        Ok(None) => Ok(Verdict::Equal),
+        Ok(Some(at)) => Ok(Verdict::Differs { at }),
+        Err(Refusal::Unreadable(doc)) => Ok(Verdict::Unreadable(doc)),
+        Err(e) => Err(e),
+    }
 }
 
 /// Returns what a refused read answers where the record named its position.

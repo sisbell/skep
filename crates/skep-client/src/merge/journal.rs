@@ -18,12 +18,20 @@
 //! where its answer is lost (`send_write`), so one session mints one
 //! journal. The library never changes a journal's flag.
 //!
-//! **The find is a class scan.** The account's links of the kind are read by
-//! one `find_links_ftt` over `ty` and `home` the account, the read the
-//! client's design names for a caller with no index (A-47), and a `home`
-//! naming an account walks every home under it: the board admits it under
-//! its class-scan permits and refuses it `scan_busy` while every one is in
-//! use (wire.md §Link discovery reads). The find is reissued then, under the
+//! **The find is a class scan, walked a journal at a time.** The account's
+//! links of the kind are read over `ty` and `home` the account, the read the
+//! client's design names for a caller with no index (A-47), windowed:
+//! `window_ftt` pages of one link, ascending by address (wire.md §Link
+//! discovery reads). A home's lowest link is its earliest, so each page's
+//! link is its home's first, and the next page is asked past that home —
+//! the cursor `⟨home⟩.0.3`, above every link the home holds — and the walk
+//! ends at the first link of another account, every link of the account's
+//! own documents sorting before a sub-account's, or at a page that holds
+//! none. So the find costs one page per journal of the account's and one
+//! more, whatever number of records each holds, and no answer grows with
+//! them. A `home` naming an account walks every home under it: the board
+//! admits each page under its class-scan permits and refuses it `scan_busy`
+//! while every one is in use. A page is reissued then, under the
 //! publication's backoff and bound (`SCAN_BUSY_REISSUES`, the link-sets
 //! design §5.7), nothing written between; past the bound it is answered as
 //! the board's refusal, which an act's record step faces as the act standing
@@ -36,6 +44,7 @@ use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::{document_of, parse_address};
+use crate::board::frames::Slot;
 use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::publication::{is_busy, owned_by, SCAN_BUSY_REISSUES};
@@ -47,9 +56,9 @@ use super::reads::{comps, session_ended, OnEnd, Reader, Refusal};
 ///
 /// It is `journal` where the caller names one; else the account's default —
 /// the journal the account's first record went to: of the documents of the
-/// account's own that home a link of `kind`, found by `find_links_ftt` over
-/// `ty` and `home` the account, each read by its earliest such link, a
-/// document whose link's `from` lies outside it or whose type is not
+/// account's own that home a link of `kind`, found by the walk over `ty` and
+/// `home` the account (the module's doc), each read by its earliest such
+/// link, a document whose link's `from` lies outside it or whose type is not
 /// exactly `kind` is no journal, and the rest are taken in the order their
 /// earliest links were minted, the first whose `doc_metadata` names a
 /// private draft of the account's — a journal published, another
@@ -140,19 +149,7 @@ pub(super) fn found(
     }
     let account = merger.account;
     let kind_text = kind.to_string();
-    let v = find(board, merger, &frames::find_links_ftt_home(&kind_text, account), on_end)?;
-    // Each home of the account's own, by its earliest link of the kind: a
-    // link's ordinal within its home is the order it was minted in. A
-    // sub-account's home is another account's, never read.
-    let mut earliest: Vec<(String, Address)> = Vec::new();
-    for link in answers::addrs(&v).into_iter().filter(|l| owned_by(l, account)) {
-        let (Some(home), Some(link)) = (document_of(link), parse_address(link)) else { continue };
-        match earliest.iter_mut().find(|(h, _)| *h == home) {
-            Some((_, first)) if comps(&link) < comps(first) => *first = link,
-            Some(_) => {}
-            None => earliest.push((home, link)),
-        }
-    }
+    let earliest = earliest_links(board, merger, &kind_text, on_end)?;
     // A home is a journal where its earliest link is a record's: its `from`
     // inside the home, its type exactly the kind. The journals in the order
     // those links were minted — a link the board serves no position for is
@@ -205,8 +202,52 @@ pub(super) fn found(
     }
 }
 
-/// Returns the find's document: `frame`, the account's links of the kind,
-/// sent again while the board refuses it busy (the module's doc).
+/// Returns each home of the merger's account's own with a link of `kind`,
+/// beside its earliest such link, in address order (the module's doc).
+///
+/// A link's ordinal within its home is the order it was minted in, so a
+/// home's lowest link is its earliest, and the window answers links in
+/// ascending address order: each page of one link gives a home's first, and
+/// the next page is asked past the home (`⟨home⟩.0.3`). The walk ends at a
+/// page holding no link, or at the first link of another account's — a
+/// sub-account's home is another account's, never read, and every link of
+/// the account's own documents sorts before one of a sub-account's.
+///
+/// # Errors
+///
+/// As [`find`]'s; a page of a shape this client does not know, faced.
+fn earliest_links(
+    board: &Board,
+    merger: &Merger<'_>,
+    kind: &str,
+    on_end: OnEnd,
+) -> Result<Vec<(String, Address)>, Unfound> {
+    let home = frames::unit_span(merger.account).as_array().cloned().unwrap_or_default();
+    let ty = frames::unit_span(kind).as_array().cloned().unwrap_or_default();
+    let mut earliest: Vec<(String, Address)> = Vec::new();
+    let mut cur: Option<String> = None;
+    loop {
+        let (home, ty) = (Slot::Spans(&home), Slot::Spans(&ty));
+        let frame = frames::window_four(home, Slot::Any, Slot::Any, ty, cur.as_deref(), 1);
+        let v = find(board, merger, &frame, on_end)?;
+        let Some(page) = answers::link_page(&v) else {
+            return Err(shape("the find answered a shape this client does not know", &v).into());
+        };
+        let Some(link) = page.batch.first().filter(|link| owned_by(link, merger.account)) else {
+            return Ok(earliest);
+        };
+        match (document_of(link), parse_address(link)) {
+            (Some(home), Some(first)) => {
+                cur = Some(format!("{home}.0.3"));
+                earliest.push((home, first));
+            }
+            _ => cur = Some(link.clone()),
+        }
+    }
+}
+
+/// Returns the find's document: `frame`, a page of the account's links of
+/// the kind, sent again while the board refuses it busy (the module's doc).
 ///
 /// Each reissue waits 20 ms more than the last, nothing written between.
 ///

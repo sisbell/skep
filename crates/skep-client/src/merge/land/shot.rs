@@ -196,17 +196,24 @@ impl Writer<'_> {
     /// # Errors
     ///
     /// [`Refusal::OverCap`] over the list the kept places cut, nothing sent;
-    /// then the head's refusal and halts ([`Writer::signing_term`]), read
-    /// before the values, nothing sent, and read again after a claim,
-    /// nothing sent past it; the skip reads' refusals at the daughters;
-    /// [`Refusal::HeadHolds`] where no daughter is left and the head holds
-    /// the list, nothing sent; [`Refusal::WindowPartsOwed`] naming a part a
-    /// record names since its answer was given; the value reads' refusals;
-    /// the attest's fault; a body past [`SHOT_BODY_BUDGET`], a run with no
-    /// address and a window of width 0, as the library's own faults; the
-    /// death signal, [`Refusal::SessionEnded`]; a dial fault after the one
-    /// re-ask.
-    fn send_shot(&self, merged: &Merged, draft: Option<&Address>, shot: &ShotParts) -> Result<Value, Refusal> {
+    /// [`Refusal::BodyOverBudget`] where the copied positions alone pass
+    /// [`SHOT_BODY_BUDGET`] at four bytes each, nothing read; then the head's
+    /// refusal and halts ([`Writer::signing_term`]), read before the values,
+    /// nothing sent, and read again after a claim, nothing sent past it; the
+    /// skip reads' refusals at the daughters; [`Refusal::HeadHolds`] where no
+    /// daughter is left and the head holds the list, nothing sent;
+    /// [`Refusal::WindowPartsOwed`] naming a part a record names since its
+    /// answer was given; the value reads' refusals;
+    /// [`Refusal::BodyOverBudget`] where the composed body passes the budget,
+    /// nothing sent; the attest's fault; a run with no address and a window
+    /// of width 0, as the library's own faults; the death signal,
+    /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask.
+    fn send_shot(
+        &self,
+        merged: &Merged,
+        draft: Option<&Address>,
+        shot: &ShotParts,
+    ) -> Result<Value, Refusal> {
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
         // The list as sent: cut at the kept places of the draft side the shot
@@ -218,6 +225,23 @@ impl Writer<'_> {
         if sent.len() > merged.cap {
             return Err(Refusal::OverCap { runs: sent.len(), cap: merged.cap });
         }
+        // Every copied word costs the body its four-byte length at least,
+        // after the eight-byte count of positions: a list past the budget so
+        // counted is refused before any value is read.
+        let copied =
+            |placed: &AnsweredRun| matches!(placed.family, Family::Own | Family::DraftNative);
+        let least = sent
+            .iter()
+            .filter(|(placed, _)| copied(placed))
+            .fold(8u64, |least, (placed, _)| {
+                least.saturating_add(placed.run.width.saturating_mul(4))
+            });
+        if least > SHOT_BODY_BUDGET as u64 {
+            return Err(Refusal::BodyOverBudget {
+                bytes: least,
+                budget: SHOT_BODY_BUDGET,
+            });
+        }
         let term = self.signing_term()?;
         let supersede = self.daughters(merged)?;
         // A shot that supersedes nothing and places the head's own list
@@ -227,12 +251,12 @@ impl Writer<'_> {
         }
         // Every copied run's values, read at the head through the side that
         // holds it, each holder's runs in as few reads as the budgets allow.
-        let copied: Vec<(Option<usize>, &Run)> = sent
+        let through: Vec<(Option<usize>, &Run)> = sent
             .iter()
-            .filter(|(placed, _)| matches!(placed.family, Family::Own | Family::DraftNative))
+            .filter(|(placed, _)| copied(placed))
             .map(|(placed, _)| (placed.side.map(|s| s.0 as usize), &placed.through))
             .collect();
-        let mut values = values_of(&self.reader, doc, &merged.maps, &copied)?.into_iter();
+        let mut values = values_of(&self.reader, doc, &merged.maps, &through)?.into_iter();
         let mut runs = Vec::with_capacity(sent.len());
         let mut pieces = Vec::with_capacity(sent.len());
         let mut places = Vec::with_capacity(sent.len());
@@ -288,7 +312,11 @@ impl Writer<'_> {
         };
         let body = request.body();
         if body.as_bytes().len() > SHOT_BODY_BUDGET {
-            return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
+            let bytes = body.as_bytes().len() as u64;
+            return Err(Refusal::BodyOverBudget {
+                bytes,
+                budget: SHOT_BODY_BUDGET,
+            });
         }
         // The records read again just before the send: a part a record names
         // since its answer was given is refused again, nothing published.

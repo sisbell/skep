@@ -11,7 +11,8 @@
 //! numbers every choice beside a side's order names, a gap the order
 //! removes taking none and one it makes numbered after the report's last;
 //! the resolutions, one per unsettled kind, `keep_both` confirming what
-//! the dedup kept; three sides' moves folded in the order listed; the
+//! the dedup kept; three sides' moves folded in the order listed, and two
+//! reorders into one slot ordered in time quadratic in what they move; the
 //! record's re-statement of them as a law over every place a gap is moved
 //! to, of a holder's choice and of a move over a run the base places twice;
 //! the fences the module promises; and the laws as properties over
@@ -684,6 +685,33 @@ fn three_sides_moves_fold_in_the_order_listed() {
         vec![(GapKind::Moves, true), (GapKind::Moves, false)],
         "the gap chosen at alone settled"
     );
+}
+
+/// Two reorders into one slot compose in time quadratic in the survivors
+/// they move (§2 R4 (iii)).
+///
+/// Over `N` single positions apart, the head reverses the first `N − 1` and
+/// the daughter moves the last to the front: every moved survivor lands in
+/// the one slot before the first, in the reverse of the base's order, and M
+/// is the base reversed, with no gap. At `N` = 1500 that slot holds 1,499
+/// survivors, which the scores order in about 2.2e6 pair tests; the mutant
+/// that orders a slot by picking again and again the survivor that comes
+/// before every other one left makes about 5.6e8 there and passes the
+/// bound many times over in a debug build.
+#[test]
+fn two_reorders_into_one_slot_compose_in_quadratic_time() {
+    const N: usize = 1500;
+    let base: Vec<Run> = (0..N as u64).map(|i| rd(2 * i + 1, 1)).collect();
+    let mut head: Vec<Run> = base[..N - 1].iter().rev().cloned().collect();
+    head.push(base[N - 1].clone());
+    let mut daughter = vec![base[N - 1].clone()];
+    daughter.extend(base[..N - 1].iter().cloned());
+    let began = std::time::Instant::now();
+    let c = compose(&base, &two(head, daughter));
+    let took = began.elapsed();
+    assert_eq!(runs(&c), base.iter().rev().cloned().collect::<Vec<_>>(), "the base reversed");
+    assert_eq!(kinds(&c), vec![]);
+    assert!(took < std::time::Duration::from_secs(2), "composed in {took:?}");
 }
 
 /// `spine_hint` names the side whose order the spine takes: under B's

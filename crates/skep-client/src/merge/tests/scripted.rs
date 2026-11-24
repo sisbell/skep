@@ -724,7 +724,9 @@ impl World {
     /// Answers a `/changes` page: the rows past `since`, narrowed to
     /// `under` and, with `drafts=true`, to the rows naming a draft (the
     /// supplement's page, wire.md §The change feed); a
-    /// `set_arrangement` row carries its two terms.
+    /// `set_arrangement` row carries its two terms. A `limit` past the
+    /// wire's 4096, or of none, is refused `malformed_changes`, as the board
+    /// refuses an out-of-range one.
     fn changes(&self, path: &str) -> Response {
         let query = path.splitn(2, '?').nth(1).unwrap_or("");
         let (mut since, mut under, mut limit, mut drafts) = (0u64, None::<String>, 256usize, false);
@@ -736,6 +738,12 @@ impl World {
                 Some(("drafts", v)) => drafts = v == "true",
                 _ => panic!("an unknown `/changes` member: {pair}"),
             }
+        }
+        if !(1..=4096).contains(&limit) {
+            return reply(
+                400,
+                json!({"error": "malformed_changes", "detail": format!("limit {limit} is out of range")}),
+            );
         }
         let visible: Vec<&FeedRow> = self
             .rows
@@ -980,10 +988,32 @@ impl World {
                 }
                 Ok(reply(200, json!({"resp": "compare", "as_of": position, "pairs": pairs})))
             }
-            "find_links_ftt" => {
+            "find_links_ftt" | "window_ftt" => {
                 let q = &frame["q"];
                 let start = |slot: &Value| slot.as_array().and_then(|s| s.first()).and_then(|s| s["start"].as_str()).map(str::to_string);
-                let (ty, to, home, from) = (start(&q["ty"]), start(&q["to"]), start(&q["home"]), start(&q["from"]));
+                let (ty, to, home) = (start(&q["ty"]), start(&q["to"]), start(&q["home"]));
+                // The `from` slot's spans, each `(chain, first, width)`: a
+                // link's `from` touches the slot where one of its starts, its
+                // `width` positions on, overlaps one of them on its chain.
+                let from: Option<Vec<(String, u64, u64)>> = q["from"].as_array().map(|spans| {
+                    spans
+                        .iter()
+                        .filter_map(|span| {
+                            let (chain, first) = span["start"].as_str()?.rsplit_once('.')?;
+                            let width = span["width"].as_str()?.rsplit('.').next()?.parse().ok()?;
+                            Some((chain.to_string(), first.parse().ok()?, width))
+                        })
+                        .collect()
+                });
+                let touches = |l: &LinkRow, spans: &[(String, u64, u64)]| {
+                    l.from.iter().filter_map(|s| s.rsplit_once('.')).any(|(chain, first)| {
+                        first.parse::<u64>().is_ok_and(|first| {
+                            spans
+                                .iter()
+                                .any(|(c, f, w)| c == chain && first < f + w && *f < first + l.width)
+                        })
+                    })
+                };
                 assert!(to.is_some() || home.is_some() || from.is_some(), "a class scan: {q}");
                 // A `home` naming an account walks every home under it, a
                 // class scan under the board's permits; one naming a
@@ -991,16 +1021,49 @@ impl World {
                 let account_home = home.as_ref().is_some_and(|h| crate::address::document_of(h).as_deref() != Some(h.as_str()));
                 if account_home && self.scan_busy > 0 {
                     self.scan_busy -= 1;
-                    return Ok(reply(503, json!({"error": "scan_busy", "detail": "all class-scan permits are in use; retry shortly", "op": "find_links_ftt"})));
+                    return Ok(reply(
+                        503,
+                        json!({"error": "scan_busy", "detail": "all class-scan permits are in use; retry shortly", "op": op}),
+                    ));
                 }
                 let under = |l: &LinkRow, h: &str| l.home == h || l.home.starts_with(&format!("{h}."));
                 let addrs: Vec<&str> = self
                     .links
                     .iter()
-                    .filter(|l| ty.as_ref().is_none_or(|t| &l.ty == t) && to.as_ref().is_none_or(|t| l.to.contains(t)) && home.as_ref().is_none_or(|h| under(l, h)) && from.as_ref().is_none_or(|f| l.from.contains(f)))
+                    .filter(|l| {
+                        ty.as_ref().is_none_or(|t| &l.ty == t)
+                            && to.as_ref().is_none_or(|t| l.to.contains(t))
+                            && home.as_ref().is_none_or(|h| under(l, h))
+                            && from.as_ref().is_none_or(|spans| touches(l, spans))
+                    })
                     .map(|l| l.addr.as_str())
                     .collect();
-                Ok(reply(200, json!({"resp": "addrs", "as_of": position, "addrs": addrs})))
+                if op == "find_links_ftt" {
+                    return Ok(reply(200, json!({"resp": "addrs", "as_of": position, "addrs": addrs})));
+                }
+                // The window (wire.md §Link discovery reads): ascending by
+                // address, strictly past `cur`, at most `n`, `0` read as 1.
+                let key = |a: &str| {
+                    a.split('.')
+                        .map(|c| c.parse::<u64>().expect("a component"))
+                        .collect::<Vec<u64>>()
+                };
+                let cur = frame["cur"].as_str().map(key);
+                let n = frame["n"].as_u64().unwrap_or(1).max(1) as usize;
+                let mut past: Vec<&str> = addrs
+                    .into_iter()
+                    .filter(|a| cur.as_ref().is_none_or(|c| key(a) > *c))
+                    .collect();
+                past.sort_by_key(|a| key(a));
+                past.truncate(n);
+                let next = past
+                    .last()
+                    .map(|a| a.to_string())
+                    .or_else(|| frame["cur"].as_str().map(str::to_string));
+                Ok(reply(
+                    200,
+                    json!({"resp": "page", "as_of": position, "window": {"batch": past, "exhausted": past.len() < n, "next": next}}),
+                ))
             }
             "read_link" => {
                 let addr = frame["a"].as_str().unwrap();

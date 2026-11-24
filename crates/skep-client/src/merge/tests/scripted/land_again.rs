@@ -1164,8 +1164,8 @@ fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
             dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
         assert_eq!(
             (read, dialer.positions("doc_metadata")),
-            (vec![json!(t)], vec![]),
-            "the draft's marker read as it stands: {:?}",
+            (vec![json!(t), json!(t)], vec![]),
+            "the draft's marker read as it stands, and read again around its words, read at the head while it stands as its landing left it: {:?}",
             dialer.ops()
         );
     }

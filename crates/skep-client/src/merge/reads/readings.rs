@@ -5,11 +5,12 @@
 //! end, the head and the sides imaged, each side that can change fenced
 //! where a composition reads it at the head — and composes the lists through
 //! the core, the values read at the head through the sides that hold them
-//! ([`values_for`], [`values_of`]). The rules they keep are the `reads`
+//! ([`values_for`], [`values_of`]), the dedup's in one walk's reads
+//! together ([`compose_with_values`]). The rules they keep are the `reads`
 //! module's doc.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use skep_address::Address;
 
@@ -332,7 +333,8 @@ pub(in crate::merge) struct Readings {
 /// — the head's own image where the base is the head, the document's own
 /// arrangement where the base is the document, read only where its
 /// `own_count` is above 0; each side imaged; the composition with the
-/// values read through the sides ([`values_of`]).
+/// values read through the sides, the dedup's together
+/// ([`compose_with_values`]).
 ///
 /// Where they are made is `reading`'s (the `reads` module's doc). A
 /// composition whose sides name no position reads at the head and FENCES
@@ -580,20 +582,7 @@ pub(in crate::merge) fn read_shape(
     for (ix, m) in (0..=last).zip(&maps) {
         side_runs.push((SideIx(ix), runs_of(&m.runs)?));
     }
-    let fault: RefCell<Option<Refusal>> = RefCell::new(None);
-    let values = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
-        match values_for(reader, doc, &maps, Some(side.0 as usize), run) {
-            Ok(items) => Some(items),
-            Err(e) => {
-                fault.borrow_mut().get_or_insert(e);
-                None
-            }
-        }
-    };
-    let composed = compose_runs(&base_runs, doc, &side_runs, None, options, &values);
-    if let Some(e) = fault.into_inner() {
-        return Err(e);
-    }
+    let composed = compose_with_values(reader, doc, &maps, &base_runs, &side_runs, options)?;
     // The closing fences: each side that can change, read again after its
     // image and its values, must stand as it stood before them.
     for fenced in &fences {
@@ -619,6 +608,84 @@ pub(in crate::merge) fn read_shape(
         families,
         arranged,
     })
+}
+
+/// Composes `base` and `sides` through the core, the values the value rule
+/// compares read at the head through the sides that hold them ([`values_of`]).
+///
+/// With the retype off, the dedup alone reads values, and which runs it
+/// reads is the walk's and never the values': the gaps it compares and their
+/// groups are the same whatever bytes they hold, and so is every walk the
+/// core makes again under a chosen order. So the walk is made once answering
+/// every run with no items, noting the runs it asks; those runs are read
+/// together, each holder's in as few reads as the budgets allow, and the
+/// walk is made again answering from them — two reads for a merge of two
+/// sides whatever its shared spots, where a read a run would make one a run.
+/// A walk that asks no run is the composition. With the retype on, which
+/// runs the walk reads depends on the values read before them, so each run
+/// is read as the walk asks it, as it is where the reads together are
+/// refused.
+///
+/// # Errors
+///
+/// The value reads' first refusal in the order the walk asks them: the
+/// reads together refused, the runs are read again one at a time, so the
+/// refusal is that run's.
+fn compose_with_values(
+    reader: &Reader<'_>,
+    doc: &Address,
+    maps: &[Imaged],
+    base: &[Run],
+    sides: &[(SideIx, Vec<Run>)],
+    options: &Options,
+) -> Result<Composed, Refusal> {
+    let fault: RefCell<Option<Refusal>> = RefCell::new(None);
+    let one_at_a_time = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+        match values_for(reader, doc, maps, Some(side.0 as usize), run) {
+            Ok(items) => Some(items),
+            Err(e) => {
+                fault.borrow_mut().get_or_insert(e);
+                None
+            }
+        }
+    };
+    let composed = if options.dedup && !options.retype {
+        let asked: RefCell<Vec<(SideIx, Run)>> = RefCell::new(Vec::new());
+        let noting = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+            asked.borrow_mut().push((side, run.clone()));
+            Some(Vec::new())
+        };
+        let first = compose_runs(base, doc, sides, None, options, &noting);
+        let mut asked = asked.into_inner();
+        let mut seen = HashSet::new();
+        asked.retain(|key| seen.insert(key.clone()));
+        if asked.is_empty() {
+            first
+        } else {
+            let pairs: Vec<(Option<usize>, &Run)> = asked
+                .iter()
+                .map(|(side, run)| (Some(side.0 as usize), run))
+                .collect();
+            match values_of(reader, doc, maps, &pairs) {
+                Ok(read) => {
+                    let held: HashMap<(SideIx, Run), Vec<Item>> =
+                        asked.into_iter().zip(read).collect();
+                    let answered = |side: SideIx, run: &Run| match held.get(&(side, run.clone())) {
+                        Some(items) => Some(items.clone()),
+                        None => one_at_a_time(side, run),
+                    };
+                    compose_runs(base, doc, sides, None, options, &answered)
+                }
+                Err(_) => compose_runs(base, doc, sides, None, options, &one_at_a_time),
+            }
+        }
+    } else {
+        compose_runs(base, doc, sides, None, options, &one_at_a_time)
+    };
+    match fault.into_inner() {
+        Some(e) => Err(e),
+        None => Ok(composed),
+    }
 }
 
 /// Checks a shape's sides before any read.

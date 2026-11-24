@@ -11,8 +11,8 @@ use skep_address::Address;
 use crate::board::Board;
 use crate::merge::compose::Run;
 use crate::merge::reads::{
-    daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of, runs_of,
-    Family, Merged, OnEnd, Refusal,
+    daughter_of, first_difference, first_word_difference, is_trunk_member, next_trunk_member,
+    position_of, runs_of, Family, Merged, OnEnd, Refusal,
 };
 use crate::merge::record::RecordLanding;
 use crate::merge::windows::{self, ShotParts};
@@ -238,12 +238,19 @@ impl Writer<'_> {
     /// Returns whether `member` holds the answered list over its first
     /// `placed` positions.
     ///
+    /// A member whose `placed` is not the list's width holds another list,
+    /// and its image is not read. A member whose addresses match the list
+    /// holds it where its words at the draft side's re-minted runs are that
+    /// side's own (`first_word_difference`): the shot gave those words new
+    /// addresses, so a version of other words of the same widths is never
+    /// taken for this merge's landing.
+    ///
     /// # Errors
     ///
     /// The member's reads' refusals but `withheld`, a `doc_not_registered`
     /// on its metadata and a member too fragmented to image, which answer as
-    /// what it holds; an `image` run that is no content I-address; the feed
-    /// walk's halts.
+    /// what it holds; an `image` run that is no content I-address; the word
+    /// reads' refusals, each as itself; the feed walk's halts.
     fn holds(&self, merged: &Merged, shot: &ShotParts, member: &Address) -> Result<Holds, Refusal> {
         let meta = match self.reader.metadata(member, None) {
             Ok(m) => m,
@@ -252,6 +259,9 @@ impl Writer<'_> {
             Err(e) => return Err(e),
         };
         let Some(placed) = meta.placed else { return Ok(Holds::Other) };
+        if placed != shot.runs.iter().map(|a| a.run.width).sum::<u64>() {
+            return Ok(Holds::Other);
+        }
         let image = match self.reader.image(member, None, 1, placed) {
             Ok(runs) => runs,
             Err(Refusal::Unreadable(_)) | Err(Refusal::TooFragmented { .. }) => {
@@ -263,6 +273,11 @@ impl Writer<'_> {
         let expected: Vec<(Run, Family)> =
             shot.runs.iter().map(|a| (a.run.clone(), a.family)).collect();
         if first_difference(&expected, &actual, &merged.inputs.doc).is_some() {
+            return Ok(Holds::Other);
+        }
+        let re_minted = windows::re_minted(&shot.runs);
+        let doc = &merged.inputs.doc;
+        if first_word_difference(&self.reader, doc, &merged.maps, member, &re_minted)?.is_some() {
             return Ok(Holds::Other);
         }
         let at = position_of(&self.reader, member)?.unwrap_or_else(|| self.reader.as_of());

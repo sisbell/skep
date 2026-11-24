@@ -1030,7 +1030,8 @@ impl Shell {
     ///
     /// A floor the feed no longer answers below is read as moved: the side
     /// is then read at the marker's position, which the board answers or
-    /// refuses by name.
+    /// refuses by name. The page asked holds one row, the answer's whole
+    /// question being whether any row stands.
     ///
     /// # Errors
     ///
@@ -1038,7 +1039,7 @@ impl Shell {
     /// signal.
     fn moved_since(&self, session: &SessionEntry, draft: &Address, since: u64) -> Result<bool, Refusal> {
         let text = draft.to_string();
-        let mut limit = None;
+        let mut limit = Some(1);
         loop {
             match session.board.changes(Some(&session.token), &ChangesQuery { since, under: Some(&text), drafts: true, limit })? {
                 ChangesAnswer::Page(page) => return Ok(!page.changes.is_empty()),
@@ -1089,6 +1090,7 @@ impl Shell {
             R::PublishedJournal { journal } => other("published_journal", json!({"journal": s(&journal)})),
             R::AlreadyPublished { draft, member } => other("already_published", json!({"draft": s(&draft), "member": s(&member)})),
             R::HeadHolds { head } => other("head_holds", json!({"head": s(&head)})),
+            R::BodyOverBudget { bytes, budget } => other("body_over_budget", json!({"bytes": bytes, "budget": budget})),
             R::LandingBegun { draft, position } => other("landing_begun", json!({"draft": s(&draft), "position": position})),
             R::NothingToUndo { draft, why } => {
                 let mut detail = json!({"draft": s(&draft)});

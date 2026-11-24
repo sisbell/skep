@@ -2,8 +2,9 @@
 //!
 //! The suite checks that the one class scan the module sends is the
 //! journal's find, that `head_of` walks the feed to the last trunk
-//! publish, and that a composition and a landing read nothing at a
-//! position, so a busy history pool stops neither.
+//! publish, that a composition and a landing read nothing at a
+//! position, so a busy history pool stops neither, and that a walk of the
+//! drafts supplement asks the wire's whole page.
 
 use super::*;
 
@@ -46,15 +47,17 @@ fn a_composition_and_a_landing_read_nothing_at_a_position_and_a_busy_history_sto
     }
 }
 
-/// THE ONE CLASS SCAN IS THE JOURNAL'S FIND: of every `find_links_ftt`
-/// the module sends — composing, landing, looking a record up, finding
-/// the journal — the one that walks every home under an account is the
-/// default journal's find, `home` the merger's account and `ty` the
-/// kind, sent once for each record written with no journal named and
-/// once by `journal::of`; every other constrains `to` or `from`, or a
-/// `home` naming one document, and takes no permit (wire.md §Link
-/// discovery reads). A record written into a journal named sends no
-/// class scan. The frame constructors answer the same test.
+/// THE ONE CLASS SCAN IS THE JOURNAL'S FIND: of every link query the
+/// module sends — composing, landing, looking a record up, finding the
+/// journal — the ones that walk every home under an account are the
+/// default journal's find, `window_ftt` pages of one link with `home` the
+/// merger's account and `ty` the kind (the `journal` module's doc): one
+/// page for each record written with no journal named into an account
+/// holding none, and for `journal::of` one page past each journal and one
+/// more; every `find_links_ftt` constrains `to` or `from`, or a `home`
+/// naming one document, and takes no permit (wire.md §Link discovery
+/// reads). A record written into a journal named sends no class scan. The
+/// frame constructors answer the same test.
 #[test]
 fn the_one_class_scan_the_module_sends_is_the_journals_find() {
     let class_scan = |q: &Value| {
@@ -68,19 +71,42 @@ fn the_one_class_scan_the_module_sends_is_the_journals_find() {
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     land(&board, &merged, shot(&session, &signer)).expect("landed");
     current(&board, Some(&token()), &a(K), &merged.key).expect("the lookup");
-    journal::of(&board, &merger(&session, &signer), &a(K), None).expect("the journal");
+    let found = journal::of(&board, &merger(&session, &signer), &a(K), None).expect("the journal");
+    let journal = dialer.frames("insert")[0]["doc"]
+        .as_str()
+        .expect("the record's journal")
+        .to_string();
+    assert_eq!(
+        found.to_string(),
+        journal,
+        "the premise: `journal::of` finds the journal minted"
+    );
     let queries = dialer.frames("find_links_ftt");
-    assert!(queries.len() >= 5, "{}", queries.len());
-    let scans: Vec<&Value> =
-        queries.iter().map(|f| &f["q"]).filter(|q| class_scan(q)).collect();
-    assert_eq!(scans.len(), 2, "the landing's record and `journal::of`, once each: {scans:?}");
-    for q in scans {
+    assert!(!queries.is_empty(), "the premise: the lookups sent their reads");
+    assert!(
+        queries.iter().all(|f| !class_scan(&f["q"])),
+        "no class scan: {queries:?}"
+    );
+    let pages = dialer.frames("window_ftt");
+    for page in &pages {
+        let q = &page["q"];
+        assert!(class_scan(q), "{q}");
         assert_eq!(
-            (q["home"][0]["start"].as_str(), q["ty"][0]["start"].as_str()),
-            (Some(ACCOUNT), Some(K)),
-            "{q}"
+            (
+                q["home"][0]["start"].as_str(),
+                q["ty"][0]["start"].as_str(),
+                page["n"].as_u64()
+            ),
+            (Some(ACCOUNT), Some(K), Some(1)),
+            "{page}"
         );
     }
+    let cursors: Vec<&Value> = pages.iter().map(|page| &page["cur"]).collect();
+    assert_eq!(
+        cursors,
+        [&Value::Null, &Value::Null, &json!(format!("{journal}.0.3"))],
+        "the landing's record into an account holding none, then `journal::of` past the journal"
+    );
     // The record written into a journal named: no class scan.
     let (dialer, board, signer) = open(World::race());
     dialer.world().doc("1.0.1.0.68", false, ACCOUNT, Vec::new());
@@ -103,6 +129,11 @@ fn the_one_class_scan_the_module_sends_is_the_journals_find() {
         "no class scan: {:?}",
         dialer.frames("find_links_ftt")
     );
+    assert_eq!(
+        dialer.frames("window_ftt"),
+        Vec::<Value>::new(),
+        "no page of the account's homes"
+    );
     for frame in [
         frames::find_links_ftt(K, D),
         frames::find_links_ftt_from(K, D),
@@ -110,10 +141,19 @@ fn the_one_class_scan_the_module_sends_is_the_journals_find() {
     ] {
         assert!(!class_scan(&frame["q"]), "no class scan: {frame}");
     }
-    assert!(
-        class_scan(&frames::find_links_ftt_home(K, ACCOUNT)["q"]),
-        "an account's homes, walked"
+    let account = frames::unit_span(ACCOUNT).as_array().cloned().unwrap_or_default();
+    let kind = frames::unit_span(K).as_array().cloned().unwrap_or_default();
+    let walked = frames::window_four(
+        frames::Slot::Spans(&account),
+        frames::Slot::Any,
+        frames::Slot::Any,
+        frames::Slot::Spans(&kind),
+        None,
+        1,
     );
+    for frame in [frames::find_links_ftt_home(K, ACCOUNT), walked] {
+        assert!(class_scan(&frame["q"]), "an account's homes, walked: {frame}");
+    }
 }
 
 /// THE HEAD-MEMBER FALLBACK: `head_of` walks the document's feed rows
@@ -147,4 +187,39 @@ fn head_of_walks_the_feed_to_the_last_trunk_publish() {
         2,
         "{under:?}"
     );
+}
+
+/// A WALK OF THE DRAFTS SUPPLEMENT ASKS THE WIRE'S WHOLE PAGE: a draft's own
+/// rows carry no `attest`, so every walk over them asks 4096 rows a page, the
+/// wire's most, and the walk that judges a draft with no recorded base reads
+/// its 600 and its 1,200 plain rows in one `GET /changes` each (the mutant
+/// asking the default 256 a page reads three and five).
+#[test]
+fn a_walk_of_the_drafts_supplement_asks_the_wires_whole_page() {
+    for plain in [600, 1200] {
+        let mut w = World::window_and_draft();
+        for _ in 0..plain {
+            w.position += 1;
+            let at = w.position;
+            w.rows.push(FeedRow {
+                at,
+                op: "set_arrangement",
+                docs: vec![S.into()],
+                terms: Some((None, None)),
+            });
+        }
+        let (dialer, board, _) = open(w);
+        assert_eq!(
+            baseless_landing(&board, Some(&token()), &a(S)),
+            Ok(None),
+            "{plain} rows, no landing"
+        );
+        let pages: Vec<String> = dialer
+            .ops()
+            .into_iter()
+            .filter(|o| o.starts_with("GET /changes?"))
+            .collect();
+        assert_eq!(pages.len(), 1, "{plain} rows: {pages:?}");
+        assert!(pages[0].contains("limit=4096"), "{pages:?}");
+    }
 }

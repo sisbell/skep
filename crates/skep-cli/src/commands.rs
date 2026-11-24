@@ -599,6 +599,9 @@ fn journal_published(journal: &Address) -> String {
 /// `head_holds`, a `--publish` whose head already holds the merged list and
 /// whose daughter a claim of the merger's own already names, nothing
 /// published, so no second version identical to the head is minted;
+/// `payload_too_large`, a `--publish` whose signed body would pass what one
+/// request carries, its detail the body's size and the most, nothing
+/// published;
 /// and `landing_begun`, a `--new` landing that found this merge landed in a
 /// draft of the merger's with no record, nothing staged or written, its
 /// detail naming the draft, the position and the ways on (PUB-8.32).
@@ -630,6 +633,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::NotAPosition { .. } => "not_a_position",
         Refusal::SideMoved { .. } => "side_moved",
         Refusal::OverCap { .. } => "too_many_runs",
+        Refusal::BodyOverBudget { .. } => "payload_too_large",
         Refusal::NeedsSignedSession => "signed_session_required",
         Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
         Refusal::ForkBaseMoved { .. } => "fork_base_moved",
@@ -774,6 +778,19 @@ mod tests {
             );
             assert_eq!(finish(Err(refused(Refusal::PublishedJournal { journal: journal.clone() }, step))), 1);
         }
+    }
+
+    /// Checks that a shot too large for one request is the board's refusal
+    /// `payload_too_large`, exit 1, its detail the library's words naming
+    /// the body's size and the most — never a halt of this library's own.
+    #[test]
+    fn a_shot_too_large_for_one_request_is_payload_too_large() {
+        let refusal = Refusal::BodyOverBudget { bytes: 9 << 20, budget: 8 << 20 };
+        let words = refusal.to_string();
+        let Stop::Halt(Halt::Refused(r)) = refused(refusal.clone(), Step::Publish) else { panic!("the board's refusal") };
+        assert_eq!((r.code.as_str(), r.detail.as_deref()), ("payload_too_large", Some(words.as_str())));
+        assert!(words.contains("9437184 bytes") && words.contains("8388608"), "{words}");
+        assert_eq!(finish(Err(refused(refusal, Step::Publish))), 1);
     }
 
     /// Checks that the refusals of a side and of its line of recorded bases

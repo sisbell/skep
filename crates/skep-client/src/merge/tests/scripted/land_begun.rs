@@ -144,13 +144,12 @@ fn a_landing_cut_off_before_its_record_is_named_never_landed_twice() {
         "nothing staged or written: {ops:?}"
     );
     assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
-    let walk =
-        format!("GET /changes?since={}&under={ACCOUNT}&drafts=true", head_minted(&dialer));
+    let walk = format!("GET /changes?since={}&under={ACCOUNT}&drafts=true&limit=4096", head_minted(&dialer));
     let walks: Vec<&String> = ops.iter().filter(|o| o.starts_with("GET /changes?")).collect();
     assert_eq!(
         walks,
         [&walk, &walk, &walk],
-        "the merger's drafts walked past the head's mint, at each call"
+        "the merger's drafts walked past the head's mint, at each call, the wire's whole page asked"
     );
     let words = begun.to_string();
     for said in [

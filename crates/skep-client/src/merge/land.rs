@@ -353,7 +353,10 @@ pub(super) use writer::{send_write, Stem, Writer};
 /// It is the frame routes' request-body cap, 8 MiB (wire.md §HTTP status
 /// codes, `413 payload_too_large`), the parity the daemon holds a shot's
 /// body to. The body is composed through the publication's request
-/// builder and measured against it; a body past it is refused by name.
+/// builder and measured against it; a body past it is refused
+/// [`Refusal::BodyOverBudget`] with its size, and a list whose copied
+/// positions alone pass it, at four bytes each, is refused so before any
+/// value is read.
 pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 
 /// Lands a composed merge (the merge record's §7, `land`).
@@ -437,14 +440,18 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 /// - the reads' refusals for the draft's `doc_metadata`, read as it stands,
 ///   and a draft minted after the composition's position, faced;
 /// - at the shot, [`Refusal::OverCap`] over the list cut at a draft side's
-///   kept places, nothing sent;
+///   kept places, nothing sent, and [`Refusal::BodyOverBudget`] where its
+///   copied positions alone, four bytes each, pass [`SHOT_BODY_BUDGET`],
+///   no value read;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the shot, with nothing sent; and the `H.1` and `/health`
 ///   reads' halts (SP-14);
 /// - the shot's: the skip reads' refusals at the daughters, then
 ///   [`Refusal::HeadHolds`] where no daughter is left and the head holds the
 ///   answered list whole, nothing sent, then the value
-///   reads', [`Refusal::WindowPartsOwed`] naming a part a record names
+///   reads', [`Refusal::BodyOverBudget`] where the body their bytes compose
+///   passes [`SHOT_BODY_BUDGET`], nothing sent,
+///   [`Refusal::WindowPartsOwed`] naming a part a record names
 ///   since its answer was given (the re-read just before the send),
 ///   [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the

@@ -9,8 +9,9 @@
 //! list found by the read-first, never answered none by a resume, verified,
 //! held to the cap and named in the shot's id; a run the draft holds at two
 //! places sent at both, the list they cut held to the cap, a part answered
-//! by its counterpart at the draft's place; and a passage's words returned
-//! as text for the embedder to render.
+//! by its counterpart at the draft's place; a passage's words returned as
+//! text for the embedder to render; and a window origin's records read once,
+//! its parts' words together.
 
 use super::*;
 
@@ -542,4 +543,103 @@ fn a_passages_words_are_returned_as_text_for_the_embedder_to_render() {
     let err = land(&board, &merged, shot(&session, &signer)).expect_err("owed");
     let (parts, ..) = owed(err);
     assert_eq!(parts[0].words.as_deref(), Some("he l\u{1b}"), "the whitespace collapsed and the bytes as text: {parts:?}");
+}
+
+/// A WINDOW ORIGIN'S RECORDS ARE READ ONCE AND THE PARTS' WORDS TOGETHER:
+/// a fork whose owner wrote p one-byte words into the base at p spots gives
+/// M p windows onto it, and a shot answering them `--keep-private ⟨F⟩`
+/// reads the fork's records in one find homed in it at the step and one at
+/// the re-read before the send, and every part's first words in one
+/// `retrieve_i` through the fork, at p = 2 and at p = 6 alike — never a find
+/// a window run, nor a read a part. The parts answer each its own word, and
+/// the shot sends M as composed, each window kept private. Unanswered, the
+/// refusal names each part with its word and the merged text before it,
+/// read in one read through each holding side (the mutant reading a run's
+/// records alone sends 2p finds; the one reading a part's words alone, p
+/// reads).
+#[test]
+fn a_window_origins_records_are_read_once_and_its_parts_words_together() {
+    let f2 = "1.0.2.0.70";
+    for p in [2u64, 6] {
+        let fork_world = || {
+            let mut w = World::new();
+            w.text(D, 1, "0123456789x");
+            let base = vec![run(D, 1, 11)];
+            w.doc(D, true, ACCOUNT, base.clone());
+            w.member(&format!("{D}.1"), base.clone(), None);
+            w.member(&format!("{D}.2"), base, Some(11));
+            w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+            let words: String = (0..p).map(|k| char::from(b'A' + k as u8)).collect();
+            w.text(f2, 1, &words);
+            let mut fork = Vec::new();
+            for k in 1..=p {
+                fork.extend([run(D, k, 1), run(f2, k, 1)]);
+            }
+            fork.push(run(D, p + 1, 11 - p));
+            w.fork(f2, "1.0.2", &format!("{D}.1"), fork);
+            w
+        };
+        let words: Vec<String> = (0..p).map(|k| char::from(b'A' + k as u8).to_string()).collect();
+        let homed_in_f = |dialer: &Scripted| dialer.frames("find_links_ftt").iter().filter(|f| f["q"]["home"][0]["start"] == f2).count();
+        let inputs = Inputs {
+            sides: vec![Side::Fork(a(f2))],
+            ..race_inputs()
+        };
+        // Answered: the step and the re-read, one find each; the words, one
+        // read.
+        let (dialer, board, signer) = open(fork_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert_eq!(merged.families.iter().filter(|f| **f == Family::Window).count() as u64, p, "the premise: p windows");
+        dialer.clear();
+        let landed = land(
+            &board,
+            &merged,
+            answered(
+                &session,
+                &signer,
+                Answers {
+                    keep_private: vec![a(f2)],
+                    ..Answers::default()
+                },
+            ),
+        )
+        .expect("landed");
+        let Landed::Member { answers, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(
+            (homed_in_f(&dialer), dialer.frames("retrieve_i").len()),
+            (2, 1),
+            "p = {p}: a find at the step and at the re-read, one read of every part's words: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(
+            answers.iter().map(|part| part.words.clone()).collect::<Vec<_>>(),
+            words.iter().map(|w| Some(w.clone())).collect::<Vec<_>>(),
+            "p = {p}: each part its own word"
+        );
+        assert_eq!(
+            dialer.frames("publish")[0]["runs"],
+            json!(shot_runs(&m_runs(&merged))),
+            "p = {p}: M as composed, each window kept private"
+        );
+        // Unanswered: each part's word and the merged text before it.
+        let (dialer, board, signer) = open(fork_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        dialer.clear();
+        let (parts, _, _) = owed(land(&board, &merged, shot(&session, &signer)).expect_err("asked"));
+        let text: String = (1..=p).map(|k| format!("{}{}", k - 1, words[k as usize - 1])).collect();
+        assert_eq!(
+            parts.iter().map(|part| (part.words.clone(), part.after.clone())).collect::<Vec<_>>(),
+            (1..=p as usize).map(|k| (Some(words[k - 1].clone()), Some(text[..2 * k - 1].to_string()))).collect::<Vec<_>>(),
+            "p = {p}: each part's word, and the merged text before it"
+        );
+        assert_eq!(
+            (homed_in_f(&dialer), dialer.frames("retrieve_v").len(), dialer.frames("retrieve_i").len()),
+            (1, 1, 1),
+            "p = {p}: one find, and the words read through the head and the fork once each: {:?}",
+            dialer.ops()
+        );
+        nothing_sent(&dialer);
+    }
 }

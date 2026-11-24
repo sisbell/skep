@@ -16,7 +16,7 @@ use crate::halt::Halt;
 use crate::merge::journal::{self, Unfound};
 use crate::merge::reads::{feed_rows, Merged, Refusal, Role};
 use crate::merge::record::{
-    newest, records_of, taken_back_links, Found, PartAnswer, Record, RecordLanding,
+    newest, read_records, record_links, taken_back_links, Found, PartAnswer, Record, RecordLanding,
 };
 use crate::publication::{owned_by, SCAN_BUSY_REISSUES};
 
@@ -184,13 +184,15 @@ impl Writer<'_> {
     /// §1.5 (ii), read first as §1.3's step 7 reads; §4's currency, newest
     /// per key), read by the landing from the board. It is found as the
     /// composition's prior records are, by the links of the kind to each
-    /// side of the key, each homed in the journal holding its record, and
-    /// kept to the merger's own account, exactly: the newest of those by the
-    /// order their links were minted, in whichever of its journals, is the
-    /// record. A record of the key in another account's journal — a
+    /// side of the key but the head, which a record never links, each homed
+    /// in the journal holding its record, and kept to the merger's own
+    /// account, exactly, before any record is read: the newest of those by
+    /// the order their links were minted, in whichever of its journals, is
+    /// the record. A record of the key in another account's journal — a
     /// sub-account's among them — is never the merger's: its landing is
     /// another's, and a record names in `replaces` one of its own account's
-    /// (P20). It stands for a landing it names ([`Newest::naming`]); one
+    /// (P20), so its link is passed over unread. It stands for a landing it
+    /// names ([`Newest::naming`]); one
     /// naming no landing or another — an undo's or a withdrawal's, or a
     /// landing of the key elsewhere — replaced the record of this landing. A
     /// landing into a draft named spells its ids over the record it follows
@@ -208,12 +210,16 @@ impl Writer<'_> {
     /// A halt reading the links or a record.
     pub(super) fn newest_record(&self, merged: &Merged) -> Result<Newest, Refusal> {
         let stateless = merged.key.stateless();
-        let found: Vec<Found> = records_of(&self.reader, &merged.inputs.kind, &merged.key, |k| {
-            k.stateless() == stateless
-        })?
-        .into_iter()
-        .filter(|f| f.lies_in(self.merger.account))
-        .collect();
+        let head = &merged.inputs.head;
+        let sides = merged.key.sides.iter().filter(|side| *side != head);
+        let own: Vec<Address> = record_links(&self.reader, &merged.inputs.kind, sides)?
+            .into_iter()
+            .filter(|link| owned_by(&link.to_string(), self.merger.account))
+            .collect();
+        let found: Vec<Found> = read_records(&self.reader, &own)?
+            .into_iter()
+            .filter(|f| f.record.key().stateless() == stateless)
+            .collect();
         // A record stands for its draft's landing until a take-back's record,
         // which names no landing, replaces it.
         let taken_back = taken_back_links(&found);
@@ -294,7 +300,8 @@ impl Writer<'_> {
                 }
                 Err(e) => return Err(e),
             };
-            if self.holds_merge(merged, &recorded.draft, at)? {
+            let arranged_at = meta.arranged_at.position();
+            if self.holds_merge(merged, &recorded.draft, at, arranged_at)? {
                 return Ok(Some(recorded.found(at)));
             }
         }

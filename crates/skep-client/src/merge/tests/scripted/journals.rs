@@ -2,19 +2,21 @@
 //!
 //! The suite checks `journal::of` — the journal named answered with no
 //! read, the default found by the account's own links of the kind, or a
-//! private draft minted where none is found — and the find, a class scan,
-//! reissued while the board is busy.
+//! private draft minted where none is found — the find, a class scan,
+//! reissued while the board is busy, and walked a journal at a time, so its
+//! cost is the journals' count and never the records'.
 
 use super::*;
 
 /// `journal::of`: the journal named is answered with no read; the
-/// default is found by the account's own links of the kind — one
-/// `find_links_ftt` with `home` the account — each home read by its
-/// earliest link alone: a home whose link's `from` lies outside it is no
-/// journal, a sub-account's home is never read, and the journals are
-/// taken in the order their earliest links were minted, the first a
-/// private draft of the account's — a published one passed over — read
-/// before it is taken; with none, a PRIVATE draft is minted.
+/// default is found by the account's own links of the kind — `window_ftt`
+/// pages of one link with `home` the account, one past each home and one
+/// more — each home read by its earliest link alone: a home whose link's
+/// `from` lies outside it is no journal, a sub-account's home ends the walk
+/// and is never read, and the journals are taken in the order their
+/// earliest links were minted, the first a private draft of the account's
+/// — a published one passed over — read before it is taken; with none, a
+/// PRIVATE draft is minted.
 #[test]
 fn the_journal_is_named_found_or_minted() {
     let (dialer, board, signer) = open(World::race());
@@ -29,17 +31,20 @@ fn the_journal_is_named_found_or_minted() {
     let minted = journal::of(&board, &merger, &a(K), None).expect("minted");
     assert_eq!(minted, a("1.0.1.0.72"));
     assert_eq!(dialer.frames("create_new_document")[0]["published"], false);
-    assert_eq!(dialer.ops(), ["find_links_ftt", "create_new_document"]);
-    let q = &dialer.frames("find_links_ftt")[0]["q"];
+    assert_eq!(dialer.ops(), ["window_ftt", "create_new_document"]);
+    let page = &dialer.frames("window_ftt")[0];
+    let q = &page["q"];
     assert_eq!(
         (
             q["home"][0]["start"].as_str(),
             q["ty"][0]["start"].as_str(),
             q["from"].as_str(),
-            q["to"].as_str()
+            q["to"].as_str(),
+            &page["cur"],
+            page["n"].as_u64()
         ),
-        (Some(ACCOUNT), Some(K), Some("any"), Some("any")),
-        "the account's own links of the kind"
+        (Some(ACCOUNT), Some(K), Some("any"), Some("any"), &Value::Null, Some(1)),
+        "the account's own links of the kind, a page of one from the start"
     );
     let record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
     {
@@ -49,7 +54,12 @@ fn the_journal_is_named_found_or_minted() {
     }
     dialer.clear();
     assert_eq!(journal::of(&board, &merger, &a(K), None).expect("found"), a("1.0.1.0.68"));
-    assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "doc_metadata"]);
+    assert_eq!(dialer.ops(), ["window_ftt", "window_ftt", "read_link", "doc_metadata"]);
+    assert_eq!(
+        dialer.frames("window_ftt")[1]["cur"],
+        "1.0.1.0.68.0.3",
+        "the next page asked past the journal's every link"
+    );
     // A second journal, at a greater address, whose first record went
     // in earlier, holding two: its earliest link alone read, and it is
     // the journal the account's first record went to.
@@ -65,7 +75,10 @@ fn the_journal_is_named_found_or_minted() {
         a("1.0.1.0.74"),
         "the journal the first record went to"
     );
-    assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "read_link", "doc_metadata"]);
+    assert_eq!(
+        dialer.ops(),
+        ["window_ftt", "window_ftt", "window_ftt", "read_link", "read_link", "doc_metadata"]
+    );
     assert_eq!(
         dialer.frames("read_link").iter().map(|f| f["a"].clone()).collect::<Vec<_>>(),
         [json!("1.0.1.0.68.0.2.1"), json!("1.0.1.0.74.0.2.1")],
@@ -82,12 +95,20 @@ fn the_journal_is_named_found_or_minted() {
     );
     assert_eq!(
         dialer.ops(),
-        ["find_links_ftt", "read_link", "read_link", "doc_metadata", "doc_metadata"]
+        [
+            "window_ftt",
+            "window_ftt",
+            "window_ftt",
+            "read_link",
+            "read_link",
+            "doc_metadata",
+            "doc_metadata"
+        ]
     );
     // A link of the kind homed in doc 1, its `from` in a journal, and a
     // sub-account's record: no journal of the account's own, so doc 1's
-    // link is read and passed over, the sub-account's never read, and a
-    // journal minted.
+    // link is read and passed over, the sub-account's ends the walk and is
+    // never read, and a journal minted.
     {
         let mut w = dialer.world();
         w.links.clear();
@@ -108,7 +129,7 @@ fn the_journal_is_named_found_or_minted() {
         a("1.0.1.0.72"),
         "the mint's id answered by the board's memo"
     );
-    assert_eq!(dialer.ops(), ["find_links_ftt", "read_link", "create_new_document"]);
+    assert_eq!(dialer.ops(), ["window_ftt", "window_ftt", "read_link", "create_new_document"]);
     assert_eq!(
         dialer.frames("read_link")[0]["a"],
         format!("{DOC1}.0.2.1"),
@@ -128,7 +149,7 @@ fn the_journals_find_is_reissued_while_the_board_is_busy() {
     let reissues = crate::publication::SCAN_BUSY_REISSUES as usize;
     let account_finds = |dialer: &Scripted| {
         dialer
-            .frames("find_links_ftt")
+            .frames("window_ftt")
             .iter()
             .filter(|f| f["q"]["home"][0]["start"] == ACCOUNT)
             .count()
@@ -178,4 +199,65 @@ fn the_journals_find_is_reissued_while_the_board_is_busy() {
         matches!(&err, Refusal::Halt(Halt::Refused(r)) if r.code == "scan_busy" && r.status == 503),
         "{err:?}"
     );
+}
+
+/// THE FIND COSTS A PAGE A JOURNAL, WHATEVER THE RECORDS: `journal::of`
+/// over an account with R records in one journal, one in another and three
+/// in a sub-account's journal answers the journal the first record went to
+/// with three `window_ftt` pages of one link at R = 2 and at R = 40 alike —
+/// a page per journal of the account's own and the page whose link is the
+/// sub-account's, which ends the walk — and reads each journal's earliest
+/// link alone, the sub-account's never. So no answer of the find grows with
+/// the records an account holds (the mutant reading every record link in
+/// one `find_links_ftt` sends no page; the one resuming past the link and
+/// not past its home pages through every record).
+#[test]
+fn the_journals_find_costs_a_page_a_journal_whatever_the_records() {
+    for records in [2u64, 40] {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merger = merger(&session, &signer);
+        let record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
+        {
+            let mut w = dialer.world();
+            w.doc("1.0.1.0.68", false, ACCOUNT, Vec::new());
+            w.doc("1.0.1.0.74", false, ACCOUNT, Vec::new());
+            for k in 0..records {
+                file(&mut w, "1.0.1.0.68", &record, &[&format!("{D}.1.1")], Some(10 + k));
+            }
+            file(&mut w, "1.0.1.0.74", &record, &[&format!("{D}.1.1")], Some(100));
+            for k in 0..3 {
+                file(&mut w, "1.0.1.1.0.5", &record, &[&format!("{D}.1.1")], Some(1 + k));
+            }
+        }
+        dialer.clear();
+        assert_eq!(
+            journal::of(&board, &merger, &a(K), None).expect("found"),
+            a("1.0.1.0.68"),
+            "R = {records}: the journal the account's first record went to"
+        );
+        assert_eq!(
+            dialer.ops(),
+            ["window_ftt", "window_ftt", "window_ftt", "read_link", "read_link", "doc_metadata"],
+            "R = {records}"
+        );
+        let pages = dialer.frames("window_ftt");
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| (page["cur"].clone(), page["n"].clone()))
+                .collect::<Vec<_>>(),
+            [
+                (Value::Null, json!(1)),
+                (json!("1.0.1.0.68.0.3"), json!(1)),
+                (json!("1.0.1.0.74.0.3"), json!(1))
+            ],
+            "R = {records}: one page past each journal, a link a page"
+        );
+        assert_eq!(
+            dialer.frames("read_link").iter().map(|f| f["a"].clone()).collect::<Vec<_>>(),
+            [json!("1.0.1.0.68.0.2.1"), json!("1.0.1.0.74.0.2.1")],
+            "R = {records}: each journal's earliest link, the sub-account's never"
+        );
+    }
 }

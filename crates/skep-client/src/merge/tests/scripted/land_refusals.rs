@@ -3,7 +3,9 @@
 //! The suite checks every refusal the shot and the draft landing's one
 //! write can answer, a `withheld` naming the words refused, those the head
 //! carries never among them at the shot, and one naming no document the
-//! board's refusal verbatim; a draft word a record names, sent
+//! board's refusal verbatim; a shot too large for one request refused with
+//! its size, before any value is read where its positions alone pass the
+//! budget; a draft word a record names, sent
 //! by reference, a
 //! retry keeping its ids, and `already_published` at the shot read again
 //! and sent once more, never a second member or atom; a draft the merger
@@ -235,6 +237,55 @@ fn the_shots_withheld_names_the_words_the_head_does_not_carry() {
             "{site}"
         );
     }
+}
+
+/// A SHOT TOO LARGE FOR ONE REQUEST IS REFUSED WITH ITS SIZE (decision 13),
+/// never as this library's fault. Every copied word costs the signed body
+/// its four-byte length at least, past the body's eight-byte count, so a
+/// draft side whose words alone pass `SHOT_BODY_BUDGET` so counted is
+/// refused that least size before any value is read — no `retrieve_v`, no
+/// `retrieve_i`, nothing sent; and one whose three atoms, three mebibytes
+/// each, pass it once read is refused with the body's whole size, nothing
+/// sent. The mutant that reads first meets the scripted board's panic at a
+/// value never planted; the one that keeps the library's own fault answers
+/// the second as a halt.
+#[test]
+fn a_shot_too_large_for_one_request_is_refused_with_its_size() {
+    let wide = (SHOT_BODY_BUDGET as u64 - 8) / 4 + 1;
+    let mut w = draft_landing_world();
+    w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, wide)]);
+    w.staged(S, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    dialer.clear();
+    let least = 8 + 4 * (4 + 4 + 7 + wide);
+    assert_eq!(
+        land(&board, &merged, shot(&session, &signer)),
+        Err(Refusal::BodyOverBudget {
+            bytes: least,
+            budget: SHOT_BODY_BUDGET
+        })
+    );
+    let read = dialer.names();
+    assert!(
+        !read.iter().any(|o| ["retrieve_v", "retrieve_i", "publish"].contains(&o.as_str())),
+        "{read:?}"
+    );
+    let mut w = draft_landing_world();
+    for k in 1..=3 {
+        w.values.insert((S.to_string(), k), Val::Atom("x".repeat(3 << 20)));
+    }
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    dialer.clear();
+    let err = land(&board, &merged, shot(&session, &signer)).expect_err("too large");
+    assert!(
+        matches!(err, Refusal::BodyOverBudget { bytes, budget } if bytes > 9 << 20 && budget == SHOT_BODY_BUDGET),
+        "{err:?}"
+    );
+    assert!(dialer.frames("publish").is_empty(), "nothing sent: {:?}", dialer.ops());
 }
 
 /// Returns the answer the record keeps for "!!!", by reference to `to`.
@@ -566,8 +617,8 @@ fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
     );
     assert_eq!(
         dialer.ops(),
-        ["find_links_ftt", "find_links_ftt", "doc_metadata"],
-        "the merger's newest record for the key, then the one read of X, as it stands"
+        ["find_links_ftt", "doc_metadata"],
+        "the merger's newest record for the key, by the links of the kind to the daughter, the one side but the head, then the one read of X, as it stands"
     );
     nothing_sent("a landing into X");
     dialer.clear();

@@ -175,7 +175,7 @@ pub(super) use addresses::{
 pub use correspondence::{mapped, mapped_image};
 pub(crate) use correspondence::{owners_records, records_of};
 pub use inputs::{Family, Inputs, Merged, Role, Side};
-pub(super) use join::{check_join, first_difference};
+pub(super) use join::{check_join, first_difference, first_word_difference};
 pub(crate) use reader::{session_ended, OnEnd, Reader};
 pub(super) use readings::{check_shape, fence, read_shape, values_for, values_of, Reading};
 pub(super) use refusal::stretches;
@@ -300,9 +300,11 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
     // The key is the record's own, so the two never disagree.
     let key = record.key();
     // Step 7: the prior records, the trunk owner's account's current over
-    // another's — the journal's reads, at the head: they raise the reader's
-    // running `as_of` past P, which nothing below reads.
-    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner))?;
+    // another's, found through the sides but the head — the journal's reads,
+    // at the head: they raise the reader's running `as_of` past P, which
+    // nothing below reads.
+    let head = Some(&inputs.head);
+    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner), head)?;
     record.replaces = prior.as_ref().and_then(|p| p.link.clone());
     Ok(Merged {
         inputs: inputs.clone(),
@@ -386,6 +388,14 @@ pub(super) fn position_of(reader: &Reader<'_>, member: &Address) -> Result<Optio
     Ok(at)
 }
 
+/// The rows a walk of the drafts supplement asks each page for.
+///
+/// It is the wire's most (wire.md §The change feed, Paging: `limit`'s
+/// maximum 4096). A draft's own rows carry no `attest`, so a page of them
+/// stays far inside the page byte budget; a page that would pass it is
+/// refused with the `limit` that fits, which the walk asks again at.
+const DRAFTS_PAGE: u64 = 1 << 12;
+
 /// Walks every row of the feed under `under` past `since`, oldest first.
 ///
 /// The walk runs from `since` to the head, 0 walking from the floor: the
@@ -393,9 +403,10 @@ pub(super) fn position_of(reader: &Reader<'_>, member: &Address) -> Result<Optio
 /// budget is re-asked at the limit that fits. With `drafts` the walk is the
 /// supplement's, `drafts=true` — the rows naming a draft the token's class
 /// may read, which is where a draft's own `set_arrangement` rows are
-/// (wire.md §The change feed, Narrowings); without it the published
-/// stream's, the member rows a head or a mint position is read off. The
-/// pages are read through `reader`'s board under its token.
+/// (wire.md §The change feed, Narrowings) — asked [`DRAFTS_PAGE`] rows a
+/// page; without it the published stream's, the member rows a head or a
+/// mint position is read off, whose signed rows the wire's default page
+/// holds. The pages are read through `reader`'s board under its token.
 ///
 /// # Errors
 ///
@@ -410,7 +421,7 @@ pub(super) fn feed_rows(
     mut since: u64,
     mut each: impl FnMut(&Value),
 ) -> Result<(), Refusal> {
-    let mut limit = None;
+    let mut limit = drafts.then_some(DRAFTS_PAGE);
     loop {
         let query = ChangesQuery { since, under: Some(under), drafts, limit };
         match reader.board.changes(reader.token, &query)? {

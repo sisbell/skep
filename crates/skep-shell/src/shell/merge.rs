@@ -268,8 +268,10 @@
 //! draft as it stands, the row's own or the page's keyed on another marker,
 //! else the panel's selection as the draft arranges it, in the draft's
 //! order (`selected_image`) — some of each listed side's words still there,
-//! in the listed order, none of a side left out or omitted, and at a gap
-//! with spots the words within the spot of the side named; one the draft
+//! in the listed order, a word two sides placed alike read once, under the
+//! first side listed, none of a side left out or omitted but the words a
+//! listed side lays, and at a gap with spots the words within the spot of
+//! the side named, in that side's order; one the draft
 //! does not hold is refused `malformed_args` naming `resolutions`, nothing
 //! sent, the way on an edit of the draft to the choice first. A checked
 //! choice stands with the composition for the calls after it — a
@@ -2304,27 +2306,36 @@ fn settle_resolutions(merged: &mut lib::Merged, chosen: &BTreeMap<usize, Placeme
 ///
 /// A run stands where the image holds any of its words, an edit inside them
 /// included, and is gone where it holds none; standing runs are ordered by
-/// their first ordinals (`first_ordinal`). An order of sides holds where
-/// every run of a listed side stands, their first ordinals rising side by
-/// side in the listed order, each side's runs in the gap's order, and every
-/// run of a side left out is gone; an omission where every run of the gap
-/// is gone; a placement `after` or `before` the gap's own anchor, which
-/// lays the runs as the landing did, where every run stands, in the gap's
-/// order. At a `moves` gap with spots (CM-I33) the order of one holder
-/// holds where every run of that holder's stands and the words lie within
-/// its spot (`spot_holds`), and an omission never, the library leaving the
-/// words where a holder placed them. At a spine's `moves` gap nothing
-/// holds: its runs are only the base material each side moved, and no
-/// reading of them off the draft tells one side's order of the spine from
-/// another's.
+/// their first ordinals (`first_ordinal`). The library lays a word two sides
+/// placed alike once, where the first side laid takes it, and lists it under
+/// each side that keeps it (`Gap::runs`): so each listed side's runs are read
+/// less the words a side listed before it lays (`Run::without`). An order of
+/// sides holds where every such run of a listed side stands, their first
+/// ordinals rising side by side in the listed order, each side's runs in the
+/// gap's order, and every run of a side left out is gone, save the words a
+/// listed side lays; an omission where every run of the gap is gone; a
+/// placement `after` or `before` the gap's own anchor, which lays the runs
+/// as the landing did, where every run stands, in the gap's order. At a
+/// `moves` gap with spots (CM-I33) the order of one holder holds where
+/// every run of that holder's stands, in that holder's order, and the words
+/// lie within its spot (`spot_holds`), and an omission never, the library
+/// leaving the words where a holder placed them. At a spine's `moves` gap
+/// nothing holds: its runs are only the base material each side moved, and
+/// no reading of them off the draft tells one side's order of the spine
+/// from another's.
 pub(super) fn draft_holds(gap: &Gap, placed: &Placement, image: &[SelectionRun]) -> bool {
     if !gap.spots.is_empty() {
         let Placement::Order(sides) = placed else { return false };
         let [side] = sides.as_slice() else { return false };
         let Some(spot) = gap.spots.iter().find(|s| s.side == *side) else { return false };
-        let mut words: Option<(u64, u64)> = None;
+        let (mut words, mut prev): (Option<(u64, u64)>, Option<u64>) = (None, None);
         for (_, run) in gap.runs.iter().filter(|(s, _)| s == side) {
             let Some((first, last)) = held_ordinals(image, run) else { return false };
+            // The holder's runs come in its own order (`Gap::runs`).
+            if prev.is_some_and(|p| p >= first) {
+                return false;
+            }
+            prev = Some(first);
             words = Some(words.map_or((first, last), |(lo, hi)| (lo.min(first), hi.max(last))));
         }
         return words.is_some_and(|words| spot_holds(image, spot, words));
@@ -2342,8 +2353,16 @@ pub(super) fn draft_holds(gap: &Gap, placed: &Placement, image: &[SelectionRun])
         Placement::Omitted => gap.runs.iter().all(|(_, run)| gone(run)),
         Placement::After | Placement::Before => rising(gap.runs.iter().map(|(_, run)| run).collect()),
         Placement::Order(sides) => {
-            let listed = sides.iter().flat_map(|s| gap.runs.iter().filter(move |(side, _)| side == s).map(|(_, run)| run)).collect();
-            rising(listed) && gap.runs.iter().filter(|(side, _)| !sides.contains(side)).all(|(_, run)| gone(run))
+            // Each listed side's runs less the words a side before it lays:
+            // the library lays a word once (`Run::without`).
+            let (mut laid, mut listed): (Vec<&Run>, Vec<Run>) = (Vec::new(), Vec::new());
+            for s in sides {
+                let own: Vec<&Run> = gap.runs.iter().filter(|(side, _)| side == s).map(|(_, run)| run).collect();
+                listed.extend(own.iter().flat_map(|run| run.without(laid.iter().copied())));
+                laid.extend(own);
+            }
+            let mut left_out = gap.runs.iter().filter(|(side, _)| !sides.contains(side)).flat_map(|(_, run)| run.without(laid.iter().copied()));
+            rising(listed.iter().collect()) && left_out.all(|run| gone(&run))
         }
     }
 }
@@ -2513,34 +2532,47 @@ pub(super) fn spots_edited(gaps: &[Gap], chosen: &BTreeMap<usize, Placement>, wh
 /// `None` where the default still holds or the image holds none of the
 /// gap's choices (the module doc, THE RE-OPEN).
 ///
-/// The one candidate is read off the runs as a landing's choice is
+/// The candidates are read off the runs as a landing's choice is
 /// (`first_ordinal`): the omission where every run of the gap is gone, else
 /// the order of the sides with a run standing, each side placed by the
-/// lowest first ordinal among its runs. It is the gap's choice only where
-/// the image holds it (`draft_holds`) — every run of a listed side
-/// standing, the listed sides' runs rising side after side, and every run
-/// of a side left out gone — so an edit that interleaves two sides' runs,
-/// reorders one side's own, or leaves some of a side's runs and not others
-/// holds none. At a gap of one side placed `after` or `before`, its runs
-/// standing in order hold the default, so the one choice read there is the
-/// omission. A `moves` gap is read by none: one with spots by where its
-/// words stand (`moved_to`), which the re-open composes again, and a
-/// spine's by nothing the draft holds (`draft_holds`).
+/// lowest first ordinal among the words it alone lists — a word two sides
+/// placed alike is listed under each that keeps it (`Gap::runs`) — or among
+/// its runs where it lists none alone; then each side alone, which is the
+/// reading where the sides list the same words in two orders. The first
+/// candidate the image holds is the gap's choice (`draft_holds`) — every run
+/// of a listed side standing, the listed sides' runs rising side after side,
+/// and every run of a side left out gone, save the words a listed side lays —
+/// so an edit that interleaves two sides' runs, reorders one side's own, or
+/// leaves some of a side's runs and not others holds none. At a gap of one
+/// side placed `after` or `before`, its runs standing in order hold the
+/// default, so the one choice read there is the omission. A `moves` gap is
+/// read by none: one with spots by where its words stand (`moved_to`),
+/// which the re-open composes again, and a spine's by nothing the draft
+/// holds (`draft_holds`). The shell composes the head and one side, so a gap
+/// holds two sides at most and at most three candidates are read.
 pub(super) fn edit_choice(gap: &Gap, image: &[SelectionRun]) -> Option<Placement> {
     if gap.kind == GapKind::Moves || draft_holds(gap, &gap.placed, image) {
         return None;
     }
-    let mut standing: Vec<(SideIx, u64)> = Vec::new();
-    for (side, run) in &gap.runs {
-        let Some(first) = first_ordinal(image, run) else { continue };
-        match standing.iter_mut().find(|(s, _)| s == side) {
-            Some((_, lowest)) => *lowest = (*lowest).min(first),
-            None => standing.push((*side, first)),
+    let mut sides: Vec<SideIx> = Vec::new();
+    for (side, _) in &gap.runs {
+        if !sides.contains(side) {
+            sides.push(*side);
         }
     }
+    // A side's lowest first ordinal, among the words it alone lists where it
+    // lists any.
+    let lowest = |s: SideIx| -> Option<u64> {
+        let others: Vec<&Run> = gap.runs.iter().filter(|(side, _)| *side != s).map(|(_, run)| run).collect();
+        let own: Vec<&Run> = gap.runs.iter().filter(|(side, _)| *side == s).map(|(_, run)| run).collect();
+        let alone: Vec<Run> = own.iter().flat_map(|run| run.without(others.iter().copied())).collect();
+        let read: Vec<&Run> = if alone.is_empty() { own } else { alone.iter().collect() };
+        read.into_iter().filter_map(|run| first_ordinal(image, run)).min()
+    };
+    let mut standing: Vec<(SideIx, u64)> = sides.iter().filter_map(|&s| Some((s, lowest(s)?))).collect();
     standing.sort_by_key(|&(_, first)| first);
-    let candidate = if standing.is_empty() { Placement::Omitted } else { Placement::Order(standing.into_iter().map(|(side, _)| side).collect()) };
-    draft_holds(gap, &candidate, image).then_some(candidate)
+    let read = if standing.is_empty() { Placement::Omitted } else { Placement::Order(standing.into_iter().map(|(side, _)| side).collect()) };
+    std::iter::once(read).chain(sides.into_iter().map(|s| Placement::Order(vec![s]))).find(|candidate| draft_holds(gap, candidate, image))
 }
 
 /// Settles each gap the rules left unsettled where `image` holds another

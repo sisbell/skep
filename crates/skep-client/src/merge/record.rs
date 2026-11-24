@@ -104,15 +104,18 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// number the report composed with no resolution gives it, the order chosen
 /// at a spine's `moves` gap included (skep #1155). An identity several
 /// sides hold at one spot is kept where it breaks no holder's own order,
-/// whichever side is listed first, and asks where none can be found; the
-/// sides' reorders fold in the order listed, each applied where it composes
-/// with those applied before it and a `moves` gap where it does not, a
-/// choice at one such gap settling that gap alone; a move takes the
-/// placement of a run placed twice nearest the gap's composed place; and
-/// `KeepBoth` confirms a gap's placement as composed, never putting back a
-/// copy the dedup dropped. [`verify`] composes under this build's rules
-/// whatever version a record names, so a record written under an earlier
-/// set can verify `Differs` where the sets part.
+/// whichever side is listed first, and asks where none can be found, or
+/// where a holder orders the words it shares otherwise or sets words of
+/// its own beside them, each such holder keeping its copy at the gap and M
+/// laying it once; the sides' reorders fold in the order listed, each
+/// applied where it composes with those applied before it and a `moves` gap
+/// where it does not, a choice at one such gap settling that gap alone, the
+/// last naming it standing; a move takes the placement of a run placed
+/// twice nearest the gap's composed place, and moves no gap the rules
+/// settled; and `KeepBoth` confirms a gap's placement as composed, never
+/// putting back a copy the dedup dropped. [`verify`] composes under this
+/// build's rules whatever version a record names, so a record written under
+/// an earlier set can verify `Differs` where the sets part.
 pub const RULES: &str = "merge-rules-4";
 
 /// Returns the `by` member: this library's crate and version.
@@ -798,12 +801,14 @@ impl Record {
     ///
     /// They are the gaps `values.applied` names (§4, `values`; §5, case
     /// (g)), each read off the gap alone: `kept` its `placed` order and
-    /// `dropped` its runs of every other side, in the gap's order. A gap is
-    /// read only where the dedup's placement stands — an `order` gap placed
-    /// by sides and settled by the rule, or left unsettled where the dedup
-    /// kept two or more sides' copies of three or more — so an id naming no
-    /// gap, a gap of another kind or placement, one a person, an agent or an
-    /// answer resolved, and one with no side left out name no place.
+    /// `dropped` its runs of every other side, in the gap's order, less the
+    /// words a kept side lists too, which M holds ([`Run::without`]). A gap
+    /// is read only where the dedup's placement stands — an `order` gap
+    /// placed by sides and settled by the rule, or left unsettled where the
+    /// dedup kept two or more sides' copies of three or more — so an id
+    /// naming no gap, a gap of another kind or placement, one a person, an
+    /// agent or an answer resolved, and one where no word is left out name
+    /// no place.
     pub fn deduped(&self) -> Vec<Deduped> {
         let mut ids = self.values.applied.clone();
         ids.sort();
@@ -817,8 +822,22 @@ impl Record {
                     None => kept.len() >= 2,
                     Some(_) => false,
                 };
-                let dropped: Vec<(SideIx, Run)> =
-                    gap.runs.iter().filter(|(side, _)| !kept.contains(side)).cloned().collect();
+                let held: Vec<&Run> = gap
+                    .runs
+                    .iter()
+                    .filter(|(side, _)| kept.contains(side))
+                    .map(|(_, run)| run)
+                    .collect();
+                let dropped: Vec<(SideIx, Run)> = gap
+                    .runs
+                    .iter()
+                    .filter(|(side, _)| !kept.contains(side))
+                    .flat_map(|(side, run)| {
+                        run.without(held.iter().copied())
+                            .into_iter()
+                            .map(move |piece| (*side, piece))
+                    })
+                    .collect();
                 if !by_the_dedup || dropped.is_empty() {
                     return None;
                 }
@@ -839,7 +858,8 @@ pub struct Deduped {
     pub gap: GapId,
     /// The sides whose copy M holds, in M's order: the gap's `placed`.
     pub kept: Vec<SideIx>,
-    /// Every other side's runs at the gap, in the gap's order.
+    /// Every other side's runs at the gap, in the gap's order, less the
+    /// words a kept side lists too.
     pub dropped: Vec<(SideIx, Run)>,
 }
 

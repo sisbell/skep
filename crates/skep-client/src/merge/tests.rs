@@ -11,7 +11,12 @@
 //! numbers every choice beside a side's order names, a gap the order
 //! removes taking none and one it makes numbered after the report's last;
 //! the resolutions, one per unsettled kind, `keep_both` confirming what
-//! the dedup kept; three sides' moves folded in the order listed, and two
+//! the dedup kept, a move at a gap the rules settled moving nothing and the
+//! last of two choices at a spine's `moves` gap standing; a word both
+//! groups at a place kept once list no copy the dedup dropped; words two
+//! sides added at one spot, over every order of them, asking exactly where
+//! neither side's words hold the other's in order and laid once; three
+//! sides' moves folded in the order listed, and two
 //! reorders into one slot ordered in time quadratic in what they move; the
 //! record's re-statement of them as a law over every place a gap is moved
 //! to, of a holder's choice and of a move over a run the base places twice;
@@ -20,7 +25,9 @@
 //! once wherever it keeps both sides' orders and asked alike whichever side
 //! is listed first; a move is no touch; the dedup settling exactly the
 //! equal groups; a choice moving its gap alone and a record re-stating it,
-//! over a base that places a run twice among them; `base_of` over §1.2's
+//! over a base that places a run twice among them; three sides keeping
+//! every addition once and, where every gap is settled, composing as the
+//! fold of two-sided merges; `base_of` over §1.2's
 //! address forms; `script` over three pairs.
 //! No board: every value read is a closure over a table the test writes.
 //!
@@ -369,6 +376,34 @@ fn case_g_the_record_names_the_place_kept_once_and_the_run_it_dropped() {
     resolved.gaps[0].placed = Placement::Order(vec![SideIx(1)]);
     resolved.gaps[0].resolved_by = Some(ResolvedBy::Person);
     assert_eq!(resolved.deduped(), vec![], "a person's choice is no dedup's");
+}
+
+/// A word both sides placed alike beside the copies the dedup keeps once is
+/// no copy dropped (§5, case (g); `Run::without`).
+///
+/// Both sides place one fresh "cat " (`D·30–33`, one identity) after "the "
+/// and add "big " after it, each its own identity: both groups list the quote
+/// (`Gap::runs`), the dedup keeps the head's group, and the record's
+/// `deduped` names B's "big " alone, the quote standing in M (the mutant that
+/// drops every run of a side left out names the quote dropped too).
+#[test]
+fn a_word_both_groups_list_is_no_copy_the_dedup_dropped() {
+    let values = text(&[(1, "the cat sat"), (12, "big "), (16, "big "), (30, "cat ")]);
+    let a = vec![rd(1, 4), rd(30, 4), rd(12, 4), rd(5, 7)];
+    let b = vec![rd(1, 4), rd(30, 4), rd(16, 4), rd(5, 7)];
+    let c = compose_runs(&base(), &d(), &two(a, b), None, &Options::default(), &values);
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(30, 4), rd(12, 4), rd(5, 7)], "the cat big cat sat");
+    assert_eq!(kinds(&c), vec![(GapKind::Order, true)], "kept once, settled by the dedup");
+    assert_eq!(
+        gap_runs(&c),
+        vec![vec![(0, rd(30, 4)), (0, rd(12, 4)), (1, rd(30, 4)), (1, rd(16, 4))]],
+        "the quote under both sides"
+    );
+    let dropped = vec![(SideIx(1), rd(16, 4))];
+    assert_eq!(
+        recorded(&c).deduped(),
+        vec![Deduped { gap: GapId(1), kept: vec![SideIx(0)], dropped }]
+    );
 }
 
 /// (h) a window deleted under: A's "hello" from `Z` at `D·4|D·5`, B
@@ -732,6 +767,136 @@ fn a_fresh_identity_two_sides_hold_is_placed_once() {
     let c = compose(&base(), &two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(12, 4), rd(5, 7)]));
     assert_eq!(runs(&c), vec![rd(1, 4), rd(12, 4), rd(5, 7)]);
     assert_eq!(kinds(&c), vec![]);
+}
+
+/// Every ordering of a choice of `pool`'s words, the empty one first.
+fn arrangements(pool: &[u64]) -> Vec<Vec<u64>> {
+    let mut out: Vec<Vec<u64>> = vec![Vec::new()];
+    let mut grown: Vec<Vec<u64>> = vec![Vec::new()];
+    while !grown.is_empty() {
+        let mut next = Vec::new();
+        for words in &grown {
+            for &w in pool.iter().filter(|w| !words.contains(*w)) {
+                let mut more = words.clone();
+                more.push(w);
+                next.push(more);
+            }
+        }
+        out.extend(next.iter().cloned());
+        grown = next;
+    }
+    out
+}
+
+/// Whether `part` stands in `whole` in its own order.
+fn in_order_part(part: &[u64], whole: &[u64]) -> bool {
+    let mut rest = whole.iter();
+    part.iter().all(|w| rest.any(|v| v == w))
+}
+
+/// The base `p q` (`D·1–2`) with `words`, each a position of `D`, between
+/// the two, as `image` delivers it.
+fn between_p_and_q(words: &[u64]) -> Vec<Run> {
+    let positions = std::iter::once(1).chain(words.iter().copied()).chain([2]);
+    positions.fold(Vec::new(), |mut out: Vec<Run>, w| {
+        match out.last_mut() {
+            Some(last) if last.reach() == w => last.width += 1,
+            _ => out.push(rd(w, 1)),
+        }
+        out
+    })
+}
+
+/// The words M lays between `p` and `q`, in M's order.
+fn between_in(c: &Composed) -> Vec<u64> {
+    expand(&runs(c)).into_iter().map(|(_, w)| w).filter(|w| *w != 1 && *w != 2).collect()
+}
+
+/// WORDS BOTH SIDES PLACED ALIKE AT ONE SPOT, exhaustively (merge record §2,
+/// the one rule; R1): over the base `p q` (`D·1–2`), each side places
+/// between `p` and `q` an ordered choice of the words y (`D·20`) and S
+/// (`D·30`), which a side placing them shares with the other, and a word of
+/// its own (A's `D·12`, B's `D·16`) — sixteen a side, every pair composed
+/// listed both ways. The spot asks exactly where neither side's words are an
+/// in-order part of the other's; the default M is the same whichever side is
+/// listed first and holds every word once; where nothing asks, each side's
+/// words stand in M in its own order; and where the spot asks, keeping one
+/// side alone lays exactly the words it placed, in its order, and putting it
+/// first lays them first and the other side's after (the mutants that strip
+/// a shared word from a side that orders it otherwise, strip it from a side
+/// with a word of its own beside it, order two groups whose first word is
+/// one by the side listed first, or lay a word two sides list twice each
+/// break one of these).
+#[test]
+fn shared_words_at_one_spot_ask_unless_one_sides_words_hold_the_others() {
+    let base = [rd(1, 2)];
+    let (mut asked_spots, mut kept_alone) = (0, 0);
+    for words_a in arrangements(&[20, 30, 12]) {
+        for words_b in arrangements(&[20, 30, 16]) {
+            let (a, b) = (between_p_and_q(&words_a), between_p_and_q(&words_b));
+            let say = format!("A {words_a:?}, B {words_b:?}");
+            let asks = !in_order_part(&words_a, &words_b) && !in_order_part(&words_b, &words_a);
+            let listings = [(two(a.clone(), b.clone()), 0, 1), (two(b.clone(), a.clone()), 1, 0)];
+            let composed: Vec<Composed> =
+                listings.iter().map(|(sides, _, _)| compose(&base, sides)).collect();
+            for (c, name) in composed.iter().zip(["A first", "B first"]) {
+                let unsettled: Vec<&Gap> = c.gaps.iter().filter(|g| !g.settled).collect();
+                assert_eq!(!unsettled.is_empty(), asks, "{say}, {name}: gaps {:?}", c.gaps);
+                assert!(
+                    unsettled.len() <= 1,
+                    "{say}, {name}: one spot, one question: {:?}",
+                    c.gaps
+                );
+            }
+            assert_eq!(
+                runs(&composed[1]),
+                runs(&composed[0]),
+                "{say}: the default, listed the other way round"
+            );
+            let mut every: Vec<u64> = words_a.iter().chain(&words_b).copied().collect();
+            every.sort_unstable();
+            every.dedup();
+            let mut laid = between_in(&composed[0]);
+            laid.sort_unstable();
+            assert_eq!(laid, every, "{say}: every word once");
+            if !asks {
+                for (name, side) in [("A", &a), ("B", &b)] {
+                    assert!(keeps_order(&runs(&composed[0]), side), "{say}: {name}'s order broken");
+                }
+                continue;
+            }
+            asked_spots += 1;
+            for ((sides, a_at, b_at), c) in listings.iter().zip(&composed) {
+                let gap = c.gaps.iter().find(|g| !g.settled).expect("the spot asks");
+                let listed: BTreeSet<u8> = gap.runs.iter().map(|(s, _)| s.0).collect();
+                assert_eq!(
+                    listed,
+                    BTreeSet::from([0, 1]),
+                    "{say}: both sides at the gap: {:?}",
+                    gap.runs
+                );
+                let (a_ix, b_ix) = (SideIx(*a_at), SideIx(*b_at));
+                for (mine, theirs, s, t) in
+                    [(&words_a, &words_b, a_ix, b_ix), (&words_b, &words_a, b_ix, a_ix)]
+                {
+                    let with = |choice: Choice| {
+                        compose_runs(&base, &d(), sides, None, &resolve(gap.id.0, choice), &unread)
+                    };
+                    let alone = with(Choice::KeepOnly(s));
+                    assert_eq!(&between_in(&alone), mine, "{say}: side {} kept alone", s.0);
+                    let first = with(Choice::Order(vec![s, t]));
+                    let mut expected = mine.clone();
+                    expected.extend(theirs.iter().filter(|w| !mine.contains(w)));
+                    assert_eq!(between_in(&first), expected, "{say}: side {} put first", s.0);
+                    kept_alone += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        asked_spots > 100 && kept_alone > 400,
+        "{asked_spots} spots asked, {kept_alone} choices"
+    );
 }
 
 // ── one identity at two spots (CM-I33) ───────────────────────────────────
@@ -1302,6 +1467,12 @@ fn a_corner_takes_omit_and_a_placement() {
 
 /// A `moves` gap resolved `Order([B])` re-walks under B's order and marks
 /// the gap settled by the chooser.
+///
+/// Of two choices at it, the later stands, as at every gap: `Order([B])`
+/// then `Order([A])` gives A's order, settled by the second, the first in
+/// `ignored`; the two the other way round give B's (the mutant that walks
+/// again under the first choice of B whatever follows it gives B's order
+/// with A's choice ignored).
 #[test]
 fn a_moves_gap_takes_the_other_sides_order() {
     let sides = two(vec![rd(2, 1), rd(1, 1), rd(3, 1)], vec![rd(1, 1), rd(3, 1), rd(2, 1)]);
@@ -1316,10 +1487,35 @@ fn a_moves_gap_takes_the_other_sides_order() {
     assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1)]));
     assert_eq!(c.gaps[0].resolved_by, Some(by));
     assert!(c.ignored.is_empty());
+    let order = |side: u8, by: ResolvedBy| Resolution {
+        gap: GapId(1),
+        choice: Choice::Order(vec![SideIx(side)]),
+        by,
+    };
+    let a_order = vec![rd(2, 1), rd(1, 1), rd(3, 1)];
+    let b_order = vec![rd(1, 1), rd(3, 1), rd(2, 1)];
+    for (first, last, m) in [(1, 0, a_order), (0, 1, b_order)] {
+        let given = vec![order(first, ResolvedBy::Person), order(last, ResolvedBy::Agent)];
+        let options = Options { resolutions: given.clone(), ..Options::default() };
+        let c = compose_runs(&[rd(1, 3)], &d(), &sides, None, &options, &unread);
+        assert_eq!(runs(&c), m, "the later of {given:?} stands");
+        assert_eq!(
+            (c.gaps[0].placed.clone(), c.gaps[0].settled, c.gaps[0].resolved_by.clone()),
+            (Placement::Order(vec![SideIx(last)]), true, Some(ResolvedBy::Agent)),
+            "{given:?}"
+        );
+        assert_eq!(c.ignored, vec![given[0].clone()], "the earlier of {given:?} not applied");
+    }
 }
 
 /// A resolution naming a gap the rules settled, a gap not in the report,
 /// or a choice the gap cannot take is ignored and returned untouched.
+///
+/// A move is as little a choice at a gap the rules settled as any other: at
+/// (f)'s `anchor` and at (g)'s `order` gap the dedup settled, `After(D·11)`
+/// and `Before(D·1)` leave M and the gaps as composed and stand in `ignored`
+/// (the mutant whose moves skip the rule's test moves the gap and reports
+/// the move ignored, which a record re-states nowhere).
 #[test]
 fn a_resolution_on_a_settled_gap_is_ignored_and_reported() {
     let sides = two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 7), rd(15, 1), rd(8, 4)]);
@@ -1331,6 +1527,26 @@ fn a_resolution_on_a_settled_gap_is_ignored_and_reported() {
     assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
     assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Rule));
     assert_eq!(c.ignored, vec![on_settled, unknown]);
+    let same = text(&[(1, "the cat sat"), (12, "big "), (16, "big ")]);
+    let dedup = two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]);
+    for (name, sides, values) in [
+        ("(f)", &sides, &unread as &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>),
+        ("(g)", &dedup, &same),
+    ] {
+        let composed = compose_runs(&base(), &d(), sides, None, &Options::default(), values);
+        assert!(composed.gaps[0].settled, "{name}: the rules settle gap 1");
+        for choice in [Choice::After(d_at(11)), Choice::Before(d_at(1))] {
+            let res = Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person };
+            let options = Options { resolutions: vec![res.clone()], ..Options::default() };
+            let moved = compose_runs(&base(), &d(), sides, None, &options, values);
+            assert_eq!(
+                (runs(&moved), &moved.gaps),
+                (runs(&composed), &composed.gaps),
+                "{name}: {choice:?} moved a settled gap"
+            );
+            assert_eq!(moved.ignored, vec![res], "{name}: {choice:?}");
+        }
+    }
     // A choice the kind cannot take: `KeepBoth` at a one-sided corner.
     let sides = two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)]);
     let c = compose_runs(&base(), &d(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
@@ -1663,11 +1879,15 @@ struct Side {
     /// Each insert: the base position it follows (0 the start), its fresh
     /// start and width.
     inserts: Vec<(u64, u64, u64)>,
+    /// The base positions in the side's own order: the base's, save where
+    /// the side moved a stretch (`Side::move_one`).
+    order: Vec<u64>,
 }
 
 impl Side {
     fn draw(rng: &mut Rng, n: u64, fresh_from: u64) -> Side {
-        let mut side = Side { removed: BTreeSet::new(), inserts: Vec::new() };
+        let order = (1..=n).collect();
+        let mut side = Side { removed: BTreeSet::new(), inserts: Vec::new(), order };
         for k in 0..rng.below(3) {
             if rng.below(2) == 0 {
                 let from = 1 + rng.below(n);
@@ -1701,15 +1921,20 @@ impl Side {
         self.runs_over(n, |p| p)
     }
 
-    /// The side's run list over a base whose position `p` holds the
-    /// document's ordinal `ordinal(p)`.
+    /// The side's run list over a base of `n` positions whose position `p`
+    /// holds the document's ordinal `ordinal(p)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the side's order holds the `n` positions.
     fn runs_over(&self, n: u64, ordinal: impl Fn(u64) -> u64) -> Vec<Run> {
+        assert_eq!(self.order.len() as u64, n, "the side was drawn over {n} positions");
         let mut out: Vec<Run> = Vec::new();
         let mut push = |run: Run| match out.last_mut() {
             Some(last) if last.reach() == run.i_start => last.width += run.width,
             _ => out.push(run),
         };
-        for p in 0..=n {
+        for p in self.walk() {
             if p >= 1 && !self.removed.contains(&p) {
                 push(rd(ordinal(p), 1));
             }
@@ -1720,6 +1945,27 @@ impl Side {
         out
     }
 
+    /// The places an insert can follow, in the side's own order: the start,
+    /// then each base position.
+    fn walk(&self) -> Vec<u64> {
+        std::iter::once(0).chain(self.order.iter().copied()).collect()
+    }
+
+    /// Moves one stretch of one to three base positions elsewhere in the
+    /// side's own order (§2 R4: a single-sided move, which the spine takes).
+    fn move_one(&mut self, rng: &mut Rng) {
+        let from = rng.below(self.order.len() as u64) as usize;
+        let width = (1 + rng.below(3) as usize).min(self.order.len() - from);
+        let moved: Vec<u64> = self.order.drain(from..from + width).collect();
+        let to = rng.below(self.order.len() as u64 + 1) as usize;
+        self.order.splice(to..to, moved);
+    }
+
+    /// Whether the side moved base material.
+    fn moved(&self) -> bool {
+        self.order.windows(2).any(|w| w[0] > w[1])
+    }
+
     /// The stretch holding the insert from `start`: its spot, and the fresh
     /// starts of the side's other inserts in it, before that one and after
     /// it in the side's own order.
@@ -1728,10 +1974,31 @@ impl Side {
         let me = self.inserts.iter().position(|i| i.1 == start).expect("the side holds the insert");
         let mut members: Vec<usize> =
             (0..self.inserts.len()).filter(|&k| spots[k] == spots[me]).collect();
-        members.sort_by_key(|&k| (self.inserts[k].0, k));
+        let walk = self.walk();
+        let rank = |after: u64| walk.iter().position(|&p| p == after);
+        members.sort_by_key(|&k| (rank(self.inserts[k].0), k));
         let at = members.iter().position(|&k| k == me).expect("the insert is in its stretch");
         let starts = |ks: &[usize]| ks.iter().map(|&k| self.inserts[k].1).collect();
         (spots[me], starts(&members[..at]), starts(&members[at + 1..]))
+    }
+
+    /// The positions of the side's stretch holding the insert from `start`,
+    /// in the side's own order: every word it placed at that spot.
+    fn stretch_words(&self, n: u64, start: u64) -> Vec<u64> {
+        let (_, before, after) = self.around(n, start);
+        let width = |s: u64| self.inserts.iter().find(|i| i.1 == s).map_or(0, |i| i.2);
+        let starts = before.into_iter().chain([start]).chain(after);
+        starts.flat_map(|s| s..s + width(s)).collect()
+    }
+
+    /// The spot of a place after `after` in the side's own order, read by the
+    /// base positions `kept` keeps: 0 and `n + 1` at the ends.
+    fn common_spot(&self, after: u64, n: u64, kept: impl Fn(&u64) -> bool) -> (u64, u64) {
+        let walk = self.walk();
+        let at = walk.iter().position(|&p| p == after).expect("a place after a position");
+        let x = walk[..=at].iter().rev().copied().find(|&p| p >= 1 && kept(&p)).unwrap_or(0);
+        let y = walk[at + 1..].iter().copied().find(|p| kept(p)).unwrap_or(n + 1);
+        (x, y)
     }
 
     /// Whether the side holds a stretch whose spot lies strictly between
@@ -1743,14 +2010,8 @@ impl Side {
     /// Each insert's spot in the side's own sequence: the surviving base
     /// positions before and after it, 0 and `n + 1` at the ends.
     fn spots(&self, n: u64) -> Vec<(u64, u64)> {
-        self.inserts
-            .iter()
-            .map(|&(after, _, _)| {
-                let x = (1..=after).rev().find(|p| !self.removed.contains(p)).unwrap_or(0);
-                let y = (after + 1..=n).find(|p| !self.removed.contains(p)).unwrap_or(n + 1);
-                (x, y)
-            })
-            .collect()
+        let kept = |p: &u64| !self.removed.contains(p);
+        self.inserts.iter().map(|&(after, _, _)| self.common_spot(after, n, kept)).collect()
     }
 
     fn fresh(&self) -> Vec<u64> {
@@ -1792,21 +2053,24 @@ fn asked(c: &Composed) -> Vec<(GapKind, Option<Address>, Option<Address>)> {
     out
 }
 
-/// Each `moves` gap with spots as the places its holders put the words,
-/// sorted, whichever side holds which (CM-I33).
-fn placed_apart(c: &Composed) -> Vec<Vec<(Option<Address>, Option<Address>)>> {
-    let mut out: Vec<Vec<_>> = c
-        .gaps
-        .iter()
-        .filter(|g| !g.spots.is_empty())
-        .map(|g| {
-            let mut places: Vec<_> =
-                g.spots.iter().map(|s| (s.after.clone(), s.before.clone())).collect();
-            places.sort();
-            places
-        })
-        .collect();
+/// Each word a `moves` gap with spots contests, with the places its holders
+/// put it, sorted, whichever side holds which (CM-I33).
+///
+/// It is read word by word: the gaps group contested words that stand
+/// together in their earliest holder's sequence, which the order the sides
+/// are listed in decides.
+fn placed_apart(c: &Composed) -> Vec<(u64, Vec<(Option<Address>, Option<Address>)>)> {
+    let mut out: Vec<(u64, Vec<_>)> = Vec::new();
+    for g in c.gaps.iter().filter(|g| !g.spots.is_empty()) {
+        let mut places: Vec<_> =
+            g.spots.iter().map(|s| (s.after.clone(), s.before.clone())).collect();
+        places.sort();
+        for (_, run) in &g.runs {
+            out.extend((run.i_start..run.reach()).map(|p| (p, places.clone())));
+        }
+    }
     out.sort();
+    out.dedup();
     out
 }
 
@@ -1817,39 +2081,67 @@ fn placed_apart(c: &Composed) -> Vec<Vec<(Option<Address>, Option<Address>)>> {
 /// unsettled; and in either case M holds the base less both removals and
 /// every addition, each once. Half the cases give both sides one fresh run
 /// S, the same identity, each after a base position of its own and at a
-/// place drawn among that side's other inserts there: its two spots, read
-/// by the base positions both sides keep, differing is a touch of the same
-/// material (CM-I33). At one spot, S is an identical addition, kept once:
-/// where either side added nothing beside it and neither holds material
-/// laid between the two stretches holding it, the sides touched the same
-/// material exactly where their own inserts did. Wherever every gap is
-/// settled, each side's positions stand in M in that side's own order. The
-/// sides listed the other way round ask the same and, settled, give the
-/// same M — save where S stands at two spots, whose default is the earliest
-/// holder's placement (CM-I33), which raises the gaps its place raises:
-/// there both listings ask about S at the same two places. The same inputs
-/// give the same composition (the mutants that keep S by the first side
-/// listed, lay a side's runs out of its own order, or keep a removed
-/// position each break one of these). Four thousand cases, both arms
-/// reached, S at one spot and at two among them.
+/// place drawn among that side's other inserts there; half of those give
+/// them a second, S2, after the positions S follows half the time, so the
+/// sides can order S and S2 apart at one spot. A shared run's two spots,
+/// read by the base positions both sides keep, differing is a touch of the
+/// same material (CM-I33), and so is S and S2 ordered apart at one spot. At
+/// one spot, S is an identical addition, kept once: where either side added
+/// nothing of its own beside it and neither holds material laid between the
+/// two stretches holding it, the sides touched the same material exactly
+/// where their own inserts did or they ordered S and S2 apart. At every
+/// unsettled gap holding S or S2, keeping one side alone, or putting it
+/// first, lays every word that side placed in that word's stretch, in that
+/// side's order. Half the cases let the first side move a stretch of the
+/// base besides, which the spine takes: there a cut — an insert whose two
+/// surviving anchors the spine's order parts — asks too. Wherever every gap
+/// is settled, each side's positions stand in M in that side's own order,
+/// the mover's alone where one moved. The sides listed the other way round
+/// ask the same and, settled, give the same M — save where a shared run
+/// stands at two spots, whose default is the earliest holder's placement
+/// (CM-I33), which raises the gaps its place raises: there both listings
+/// ask about it at the same two places. The same inputs give the same
+/// composition (the mutants that keep S by the first side listed, lay a
+/// side's runs out of its own order, keep a removed position, strip a
+/// shared word from a side that orders it otherwise, or list it under one
+/// side alone each break one of these). Six thousand cases, every arm
+/// reached.
 #[test]
 fn the_one_rule_holds_over_generated_inputs() {
     let mut rng = Rng(0x5EED_2026_10_15);
     let (mut safe, mut conflicts, mut together, mut apart, mut beside) = (0, 0, 0, 0, 0);
-    for case in 0..4000 {
+    let (mut crossed_cases, mut movers, mut cuts, mut laid_alone) = (0, 0, 0, 0);
+    for case in 0..6000 {
         let n = 4 + rng.below(7);
         let (mut a, mut b) = (Side::draw(&mut rng, n, 100), Side::draw(&mut rng, n, 200));
-        // Each side without S: the material the oracle reads as its own.
+        if rng.below(2) == 0 {
+            a.move_one(&mut rng);
+        }
+        let mover = a.moved();
+        // Each side without S and S2: the material the oracle reads as its own.
         let (own_a, own_b) = (a.clone(), b.clone());
         let shared =
             (rng.below(2) == 0).then(|| (rng.below(n + 1), rng.below(n + 1), 1 + rng.below(3)));
-        if let Some((after_a, after_b, width)) = shared {
-            a.place(&mut rng, (after_a, 300, width));
-            b.place(&mut rng, (after_b, 300, width));
+        let mut second = None;
+        if let Some((after_a, after_b, _)) = shared {
+            if rng.below(2) == 0 {
+                let width = 1 + rng.below(3);
+                second = Some(if rng.below(2) == 0 {
+                    (after_a, after_b, width)
+                } else {
+                    (rng.below(n + 1), rng.below(n + 1), width)
+                });
+            }
+        }
+        for (word, placed) in [(300, shared), (310, second)] {
+            if let Some((after_a, after_b, width)) = placed {
+                a.place(&mut rng, (after_a, word, width));
+                b.place(&mut rng, (after_b, word, width));
+            }
         }
         let say = format!(
-            "case {case}: n {n}; A {:?} {:?}; B {:?} {:?}",
-            a.removed, a.inserts, b.removed, b.inserts
+            "case {case}: n {n}; A {:?} {:?} {:?}; B {:?} {:?}",
+            a.order, a.removed, a.inserts, b.removed, b.inserts
         );
         let c = compose(&[rd(1, n)], &two(a.runs(n), b.runs(n)));
         assert_eq!(
@@ -1859,27 +2151,68 @@ fn the_one_rule_holds_over_generated_inputs() {
         );
         let unsettled = c.gaps.iter().any(|g| !g.settled);
         let kept = |p: &u64| !a.removed.contains(p) && !b.removed.contains(p);
-        let spot = |after: u64| ((1..=after).rev().find(kept).unwrap_or(0), (after + 1..=n).find(kept).unwrap_or(n + 1));
-        let moved = shared.is_some_and(|(after_a, after_b, _)| spot(after_a) != spot(after_b));
+        let at_two_spots = |placed: Option<(u64, u64, u64)>| {
+            placed.is_some_and(|(after_a, after_b, _)| {
+                a.common_spot(after_a, n, kept) != b.common_spot(after_b, n, kept)
+            })
+        };
+        let moved = at_two_spots(shared) || at_two_spots(second);
+        // S and S2 in one stretch on each side, in two orders.
+        let with_s = |side: &Side| {
+            let (_, before, after) = side.around(n, 300);
+            (before.contains(&310) || after.contains(&310), before.contains(&310))
+        };
+        let crossed = second.is_some() && !moved && {
+            let ((a_with, a_first), (b_with, b_first)) = (with_s(&a), with_s(&b));
+            a_with && b_with && a_first != b_first
+        };
+        crossed_cases += usize::from(crossed);
+        // A cut: an insert of a side's own whose two anchors both survive and
+        // stand apart in the spine, the mover's order of the survivors.
+        let spine: Vec<u64> = a.order.iter().copied().filter(kept).collect();
+        let survives = |p: u64| p == 0 || p == n + 1 || kept(&p);
+        let together_in_spine = |(x, y): (u64, u64)| match (x, y) {
+            (0, y) if y == n + 1 => spine.is_empty(),
+            (0, y) => spine.first() == Some(&y),
+            (x, y) if y == n + 1 => spine.last() == Some(&x),
+            (x, y) => spine.windows(2).any(|w| w == [x, y]),
+        };
+        let cut = [&own_a, &own_b].iter().any(|side| {
+            side.spots(n)
+                .into_iter()
+                .any(|(x, y)| survives(x) && survives(y) && !together_in_spine((x, y)))
+        });
+        movers += usize::from(mover);
+        cuts += usize::from(cut);
         let touched = touched_the_same(&own_a, &own_b, n);
-        if touched || moved {
+        if touched || moved || crossed || cut {
             assert!(unsettled, "{say}: a touch asks nothing; gaps {:?}", c.gaps);
         }
         match shared {
-            None => assert_eq!(unsettled, touched, "{say}; gaps {:?}", c.gaps),
+            None if !mover => assert_eq!(unsettled, touched, "{say}; gaps {:?}", c.gaps),
+            None => {}
             Some(_) if moved => apart += 1,
             Some(_) => {
                 together += 1;
                 let ((ka, a_before, a_after), (kb, b_before, b_after)) =
                     (a.around(n, 300), b.around(n, 300));
                 let (lo, hi) = (ka.min(kb), ka.max(kb));
-                let clear = !a.between(n, lo, hi) && !b.between(n, lo, hi);
+                let clear = !mover && !a.between(n, lo, hi) && !b.between(n, lo, hi);
+                // Beside S, the words a side placed of its own: S2 is shared.
+                let of_its_own = |words: &Vec<u64>| words.iter().any(|&s| s != 310);
                 let alone =
-                    |before: &Vec<u64>, after: &Vec<u64>| before.is_empty() && after.is_empty();
-                if clear && (alone(&a_before, &a_after) || alone(&b_before, &b_after)) {
+                    |before: &Vec<u64>, after: &Vec<u64>| !of_its_own(before) && !of_its_own(after);
+                let s2_with_s = second.is_none() || (with_s(&a).0 && with_s(&b).0);
+                if clear && s2_with_s && (alone(&a_before, &a_after) || alone(&b_before, &b_after))
+                {
                     beside +=
                         usize::from(!alone(&a_before, &a_after) || !alone(&b_before, &b_after));
-                    assert_eq!(unsettled, touched, "{say}: S kept once; gaps {:?}", c.gaps);
+                    assert_eq!(
+                        unsettled,
+                        touched || crossed,
+                        "{say}: S kept once; gaps {:?}",
+                        c.gaps
+                    );
                 }
             }
         }
@@ -1887,9 +2220,11 @@ fn the_one_rule_holds_over_generated_inputs() {
             conflicts += 1;
         } else {
             safe += 1;
-            for (name, side) in [("A", a.runs(n)), ("B", b.runs(n))] {
+            let named: &[(&str, &Side)] =
+                if mover { &[("A", &a)] } else { &[("A", &a), ("B", &b)] };
+            for (name, side) in named {
                 assert!(
-                    keeps_order(&runs(&c), &side),
+                    keeps_order(&runs(&c), &side.runs(n)),
                     "{say}: {name}'s order broken in M {:?}",
                     runs(&c)
                 );
@@ -1897,12 +2232,77 @@ fn the_one_rule_holds_over_generated_inputs() {
         }
         let mut expected: Vec<u64> =
             (1..=n).filter(kept).chain(own_a.fresh()).chain(own_b.fresh()).collect();
-        expected.extend(shared.map(|(_, _, width)| 300..300 + width).into_iter().flatten());
+        for (word, placed) in [(300, shared), (310, second)] {
+            expected.extend(placed.map(|(_, _, width)| word..word + width).into_iter().flatten());
+        }
         expected.sort_unstable();
         let mut got: Vec<u64> = c.runs.iter().flat_map(|p| p.run.i_start..p.run.reach()).collect();
         got.sort_unstable();
         assert_eq!(got, expected, "{say}");
         assert_eq!(c.counts.m, c.runs.len());
+        // Each side kept alone, or put first, at an unsettled gap holding a
+        // shared run at one spot: every word it placed in that run's stretch,
+        // in order, for each side whose runs there hold it.
+        for (word, placed) in [(300, shared), (310, second)] {
+            if placed.is_none() || at_two_spots(placed) {
+                continue;
+            }
+            let holding = |side: &SideIx, g: &Gap| {
+                g.runs.iter().any(|(s, r)| s == side && r.i_start <= word && word < r.reach())
+            };
+            let holds = |g: &&Gap| {
+                !g.settled && g.kind != GapKind::Moves && g.runs.iter().any(|(s, _)| holding(s, g))
+            };
+            let Some(gap) = c.gaps.iter().find(holds) else { continue };
+            let mut sides_at: Vec<SideIx> = Vec::new();
+            for (side, _) in &gap.runs {
+                if !sides_at.contains(side) {
+                    sides_at.push(*side);
+                }
+            }
+            // A run at two spots is the claim's, laid where its holder put it.
+            let claimed = |w: &u64| {
+                [(300, shared), (310, second)].into_iter().any(|(start, placed)| {
+                    at_two_spots(placed)
+                        && placed.is_some_and(|(_, _, width)| (start..start + width).contains(w))
+                })
+            };
+            for &s in sides_at.iter().filter(|s| holding(s, gap)) {
+                let side = if s.0 == 0 { &a } else { &b };
+                let words: Vec<u64> =
+                    side.stretch_words(n, word).into_iter().filter(|w| !claimed(w)).collect();
+                let mut choices = vec![Choice::KeepOnly(s)];
+                choices.extend(
+                    sides_at.iter().filter(|t| **t != s).map(|t| Choice::Order(vec![s, *t])),
+                );
+                for choice in choices {
+                    let one = compose_runs(
+                        &[rd(1, n)],
+                        &d(),
+                        &two(a.runs(n), b.runs(n)),
+                        None,
+                        &resolve(gap.id.0, choice.clone()),
+                        &unread,
+                    );
+                    assert!(
+                        one.ignored.is_empty(),
+                        "{say}: {choice:?} at gap {:?} not applied",
+                        gap.id
+                    );
+                    let m = expand(&runs(&one));
+                    let at: Option<Vec<usize>> =
+                        words.iter().map(|w| m.iter().position(|p| *p == (d(), *w))).collect();
+                    assert!(
+                        at.is_some_and(|at| at.windows(2).all(|w| w[0] < w[1])),
+                        "{say}: {choice:?} at gap {:?} lays {words:?} out of side {}'s order: M {:?}",
+                        gap.id,
+                        s.0,
+                        runs(&one)
+                    );
+                    laid_alone += 1;
+                }
+            }
+        }
         let swapped = compose(&[rd(1, n)], &two(b.runs(n), a.runs(n)));
         if moved {
             assert_eq!(
@@ -1925,6 +2325,10 @@ fn the_one_rule_holds_over_generated_inputs() {
     assert!(
         together > 100 && apart > 500 && beside > 50,
         "S at one spot {together} times, beside another insert {beside}, at two {apart}"
+    );
+    assert!(
+        crossed_cases > 20 && movers > 1000 && cuts > 200 && laid_alone > 500,
+        "S and S2 crossed {crossed_cases} times, {movers} movers, {cuts} cuts, {laid_alone} choices laid"
     );
 }
 
@@ -2081,19 +2485,27 @@ fn the_dedup_settles_an_order_gap_exactly_where_its_groups_bytes_are_equal() {
 /// A CHOICE MOVES ITS GAP ALONE, AND A RECORD RE-STATES IT, as a property
 /// over the one rule's inputs — half of them over a base that places one
 /// run twice (skep #763). Resolving every unsettled gap at its default
-/// leaves M and every gap's number, kind and runs as they were; each single
+/// leaves M and every gap's number, kind and runs as they were. Each single
 /// choice at an unsettled gap that is no `moves` gap — each order of its
 /// sides, each side kept alone, the omission, and a move after or before
-/// every anchor any gap names — leaves every gap's number, kind and runs as
-/// they were; and the record of each composition re-states it, its options
-/// composing again to the same M and the same gaps (§1.4 step 7, §4; the
-/// mutants that renumber a gap on a choice, or re-state a move by the first
-/// placement of a run placed twice, break one of these). Fifteen hundred
-/// cases, more than two thousand choices among them.
+/// every anchor any gap names — leaves every other gap whole as it was,
+/// its number, kind, runs, anchors and placement, and M as it was once the
+/// chosen gap's words are taken out of both. Each choice at a gap the rules
+/// settled leaves M and every gap as they were, and stands in `ignored`.
+/// Each holder chosen at a `moves` gap with spots settles that gap at the
+/// holder's placement, and every other gap keeps its number with its kind
+/// and its runs besides the moved words, or no gap holds its number, any
+/// gap the moved words make numbered past the report's last (CM-I33). And
+/// the record of each composition re-states it, its options composing again
+/// to the same M and the same gaps (§1.4 step 7, §4; the mutants that
+/// renumber a gap on a choice, move a gap beside the chosen one, move a gap
+/// the rules settled, or re-state a move by the first placement of a run
+/// placed twice, break one of these). Fifteen hundred cases, more than two
+/// thousand choices among them.
 #[test]
 fn a_choice_moves_its_gap_alone_and_a_record_restates_it() {
     let mut rng = Rng(0x5EED_C40C);
-    let (mut choices_made, mut doubled_made) = (0, 0);
+    let (mut choices_made, mut doubled_made, mut on_settled, mut holders_chosen) = (0, 0, 0, 0);
     for case in 0..1500 {
         let doubled = rng.below(2) == 0;
         let (base, n, half) = if doubled {
@@ -2116,6 +2528,18 @@ fn a_choice_moves_its_gap_alone_and_a_record_restates_it() {
         let c = with(&Options::default());
         let named = |c: &Composed| {
             c.gaps.iter().map(|g| (g.id, g.kind, g.runs.clone())).collect::<Vec<_>>()
+        };
+        let one = |gap: &Gap, choice: &Choice| {
+            let res = Resolution { gap: gap.id, choice: choice.clone(), by: ResolvedBy::Person };
+            (with(&Options { resolutions: vec![res.clone()], ..Options::default() }), res)
+        };
+        let restated = |one: &Composed, what: &str| {
+            let again = with(&recorded(one).options());
+            assert_eq!(
+                (runs(&again), &again.gaps),
+                (runs(one), &one.gaps),
+                "{say}: {what}, re-stated"
+            );
         };
         // Each unsettled gap resolved as it stands: its order, or the one
         // side it holds, or nothing where it holds none.
@@ -2145,20 +2569,68 @@ fn a_choice_moves_its_gap_alone_and_a_record_restates_it() {
             "{say}: {:?}",
             at_defaults
         );
-        let again = with(&recorded(&at_defaults).options());
-        assert_eq!(
-            (runs(&again), &again.gaps),
-            (runs(&at_defaults), &at_defaults.gaps),
-            "{say}: the defaults, re-stated"
-        );
+        restated(&at_defaults, "the defaults");
         let anchors: Vec<Address> =
             c.gaps.iter().flat_map(|g| g.after.iter().chain(&g.before)).cloned().collect();
-        for gap in c.gaps.iter().filter(|g| !g.settled && g.kind != GapKind::Moves) {
+        let last = c.gaps.iter().map(|g| g.id).max();
+        for gap in c.gaps.iter().filter(|g| !(g.kind == GapKind::Moves && g.spots.is_empty())) {
             let mut sides_at: Vec<SideIx> = Vec::new();
             for (side, _) in &gap.runs {
                 if !sides_at.contains(side) {
                     sides_at.push(*side);
                 }
+            }
+            if !gap.spots.is_empty() {
+                if gap.settled {
+                    continue;
+                }
+                // A holder chosen: its placement, every other gap's number kept.
+                let moved: BTreeSet<u64> =
+                    gap.runs.iter().flat_map(|(_, r)| r.i_start..r.reach()).collect();
+                // A gap's words by side besides the moved ones: the moved
+                // words leaving a group can change which group R1 lays first.
+                let besides = |g: &Gap| -> BTreeSet<(u8, u64)> {
+                    let positions = g
+                        .runs
+                        .iter()
+                        .flat_map(|(s, r)| (r.i_start..r.reach()).map(move |p| (s.0, p)));
+                    positions.filter(|(_, p)| !moved.contains(p)).collect()
+                };
+                for holder in &sides_at {
+                    let (chosen, _) = one(gap, &Choice::Order(vec![*holder]));
+                    let at =
+                        chosen.gaps.iter().find(|g| g.id == gap.id).expect("the gap chosen at");
+                    assert_eq!(
+                        (at.placed.clone(), at.settled),
+                        (Placement::Order(vec![*holder]), true),
+                        "{say}: holder {} at gap {:?}",
+                        holder.0,
+                        gap.id
+                    );
+                    for other in c.gaps.iter().filter(|g| g.id != gap.id) {
+                        if let Some(now) = chosen.gaps.iter().find(|g| g.id == other.id) {
+                            assert_eq!(
+                                (now.kind, besides(now)),
+                                (other.kind, besides(other)),
+                                "{say}: holder {} at gap {:?} renumbered gap {:?}",
+                                holder.0,
+                                gap.id,
+                                other.id
+                            );
+                        }
+                    }
+                    for made in chosen.gaps.iter().filter(|g| !c.gaps.iter().any(|o| o.id == g.id))
+                    {
+                        assert!(
+                            Some(made.id) > last,
+                            "{say}: a gap the holder makes numbered {:?}",
+                            made.id
+                        );
+                    }
+                    restated(&chosen, &format!("holder {} at gap {:?}", holder.0, gap.id));
+                    holders_chosen += 1;
+                }
+                continue;
             }
             let mut choices = vec![Choice::Omit];
             choices.extend(sides_at.iter().map(|s| Choice::KeepOnly(*s)));
@@ -2168,31 +2640,143 @@ fn a_choice_moves_its_gap_alone_and_a_record_restates_it() {
             choices.extend(
                 anchors.iter().flat_map(|a| [Choice::After(a.clone()), Choice::Before(a.clone())]),
             );
+            let words: BTreeSet<(Address, u64)> =
+                expand(&gap.runs.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>())
+                    .into_iter()
+                    .collect();
+            let besides_gap = |c: &Composed| -> Vec<(Address, u64)> {
+                expand(&runs(c)).into_iter().filter(|p| !words.contains(p)).collect()
+            };
             for choice in choices {
-                let one = with(&Options {
-                    resolutions: vec![Resolution {
-                        gap: gap.id,
-                        choice: choice.clone(),
-                        by: ResolvedBy::Person,
-                    }],
-                    ..Options::default()
-                });
+                let (one, res) = one(gap, &choice);
+                if gap.settled {
+                    // A gap the rules settled takes no choice, a move among them.
+                    assert_eq!(
+                        (runs(&one), &one.gaps, &one.ignored),
+                        (runs(&c), &c.gaps, &vec![res]),
+                        "{say}: {choice:?} at settled gap {:?}",
+                        gap.id
+                    );
+                    on_settled += 1;
+                    continue;
+                }
                 assert_eq!(named(&one), named(&c), "{say}: {choice:?} at gap {:?}", gap.id);
-                let again = with(&recorded(&one).options());
+                for (now, was) in one.gaps.iter().zip(&c.gaps).filter(|(g, _)| g.id != gap.id) {
+                    assert_eq!(
+                        now, was,
+                        "{say}: {choice:?} at gap {:?} moved gap {:?}",
+                        gap.id, was.id
+                    );
+                }
                 assert_eq!(
-                    (runs(&again), &again.gaps),
-                    (runs(&one), &one.gaps),
-                    "{say}: {choice:?} at gap {:?}, re-stated",
+                    besides_gap(&one),
+                    besides_gap(&c),
+                    "{say}: {choice:?} at gap {:?} moved words beside it",
                     gap.id
                 );
+                restated(&one, &format!("{choice:?} at gap {:?}", gap.id));
                 choices_made += 1;
                 doubled_made += usize::from(doubled);
             }
         }
     }
     assert!(
-        choices_made > 2000 && doubled_made > 500,
-        "{choices_made} choices, {doubled_made} over a run placed twice"
+        choices_made > 2000 && doubled_made > 500 && on_settled > 500 && holders_chosen > 100,
+        "{choices_made} choices, {doubled_made} over a run placed twice, {on_settled} at settled gaps, {holders_chosen} holders chosen"
+    );
+}
+
+/// THREE SIDES, as a property (§1.2's fold; the one rule): three sides of
+/// removals and inserts, half the cases with one fresh run S two of them
+/// hold, each after a base position of its own. The same inputs give the
+/// same composition; M holds the base less every removal and every addition
+/// once, S once; a touch between any two of the sides asks, and so does S
+/// at two spots (CM-I33); and where nothing asks, the head's and the first
+/// daughter's merge, folded with the second daughter, asks nothing either
+/// and gives the same M, as does the three-way merge with the daughters
+/// listed the other way round (the mutants that drop a third side's
+/// additions, lay S twice, or settle a pair's touch beside a third side's
+/// changes each break one of these). Two thousand cases, both arms
+/// reached.
+#[test]
+fn three_sides_keep_every_addition_once_and_fold_as_two() {
+    let mut rng = Rng(0x005E_ED35_1DE5);
+    let (mut settled, mut asked, mut with_s) = (0, 0, 0);
+    for case in 0..2000 {
+        let n = 4 + rng.below(7);
+        let mut sides: Vec<Side> =
+            (0..3u64).map(|k| Side::draw(&mut rng, n, 100 * (k + 1))).collect();
+        let owns = sides.clone();
+        let shared = (rng.below(2) == 0).then(|| {
+            let x = rng.below(3) as usize;
+            let y = (x + 1 + rng.below(2) as usize) % 3;
+            ((x, y), (rng.below(n + 1), rng.below(n + 1)), 1 + rng.below(3))
+        });
+        if let Some(((x, y), (after_x, after_y), width)) = shared {
+            sides[x].place(&mut rng, (after_x, 400, width));
+            sides[y].place(&mut rng, (after_y, 400, width));
+            with_s += 1;
+        }
+        let lists: Vec<(SideIx, Vec<Run>)> =
+            sides.iter().enumerate().map(|(k, side)| (SideIx(k as u8), side.runs(n))).collect();
+        let say = format!(
+            "case {case}: n {n}; {}",
+            sides
+                .iter()
+                .map(|s| format!("{:?} {:?}", s.removed, s.inserts))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        let base = [rd(1, n)];
+        let c = compose(&base, &lists);
+        assert_eq!(c, compose(&base, &lists), "{say}: the same inputs, another composition");
+        let kept = |p: &u64| sides.iter().all(|side| !side.removed.contains(p));
+        let mut expected: Vec<u64> =
+            (1..=n).filter(kept).chain(owns.iter().flat_map(Side::fresh)).collect();
+        expected.extend(shared.map(|(_, _, width)| 400..400 + width).into_iter().flatten());
+        expected.sort_unstable();
+        let mut got: Vec<u64> = c.runs.iter().flat_map(|p| p.run.i_start..p.run.reach()).collect();
+        got.sort_unstable();
+        assert_eq!(got, expected, "{say}: every addition once, no removal");
+        let unsettled = c.gaps.iter().any(|g| !g.settled);
+        // S at two spots: read by the base positions its two holders keep.
+        let apart = shared.is_some_and(|((x, y), (after_x, after_y), _)| {
+            let both = |p: &u64| !sides[x].removed.contains(p) && !sides[y].removed.contains(p);
+            sides[x].common_spot(after_x, n, both) != sides[y].common_spot(after_y, n, both)
+        });
+        let pairs = [(0, 1), (0, 2), (1, 2)];
+        let touched = pairs.iter().any(|&(i, j)| touched_the_same(&owns[i], &owns[j], n));
+        if touched || apart {
+            assert!(unsettled, "{say}: a touch asks nothing; gaps {:?}", c.gaps);
+        }
+        if unsettled {
+            asked += 1;
+            continue;
+        }
+        settled += 1;
+        let first_two = compose(&base, &lists[..2]);
+        let folded = compose(&base, &two(runs(&first_two), lists[2].1.clone()));
+        assert!(
+            first_two.gaps.iter().chain(&folded.gaps).all(|g| g.settled),
+            "{say}: the fold asks where the three do not: {:?} then {:?}",
+            first_two.gaps,
+            folded.gaps
+        );
+        assert_eq!(runs(&folded), runs(&c), "{say}: the fold, another M");
+        let swapped = vec![
+            lists[0].clone(),
+            (SideIx(1), lists[2].1.clone()),
+            (SideIx(2), lists[1].1.clone()),
+        ];
+        assert_eq!(
+            runs(&compose(&base, &swapped)),
+            runs(&c),
+            "{say}: the daughters swapped, another M"
+        );
+    }
+    assert!(
+        settled > 200 && asked > 500 && with_s > 500,
+        "{settled} settled, {asked} asked, {with_s} with S"
     );
 }
 

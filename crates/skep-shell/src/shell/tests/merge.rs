@@ -61,10 +61,12 @@
 //! re-statement carried, read again at the next call — nothing sent, the
 //! landing's reading of a choice off an image checked by its runs, their
 //! order and a gap with spots' spot, a choice the draft holds recorded as
-//! named and verifying `Equal` (skep #1147); `keep_both` at a gap of one
-//! side, or of none, recorded as the merge record re-states it; the
-//! landing on the trunk through the publication family's shot with the
-//! claim, then the record; with no person present, the landing's undo and
+//! named and verifying `Equal` (skep #1147), a word two sides placed
+//! alike read once, under the first side listed, and each side alone read
+//! off where the sides list the same words in two orders; `keep_both` at a
+//! gap of one side, or of none, recorded as the merge record re-states it;
+//! the landing on the trunk through the publication family's shot with
+//! the claim, then the record; with no person present, the landing's undo and
 //! the withdrawal's typed at that write's own position and refused past the
 //! agent's own burst, nothing wiped, and a gap the agent settles, by an edit
 //! or a resolution, recorded `agent`; the draft side composed and landed
@@ -2649,6 +2651,72 @@ fn an_edits_choice_is_read_off_the_draft_only_where_it_holds_one_of_the_gaps() {
     for image in [vec![(&e, 1, 7)], vec![(&e, 3, 5), (&e, 1, 2)], vec![], vec![(&e, 1, 8), (&z, 1, 5)]] {
         assert_eq!((read(&spine, &image), read(&spots, &image)), (None, None), "a moves gap over {image:?}");
     }
+}
+
+/// Checks the reading of a gap whose words two sides placed alike, with no
+/// daemon behind it (the merge record §2; `Gap::runs`).
+///
+/// At an `order` gap where both sides placed the quote `q` and each a word
+/// of its own after it — the head's `a`, the side's `b` — the library lists
+/// `q` under both sides and lays it once. Over `[q, a, b]` the default holds;
+/// over `[q, b]` the side alone holds and the head alone does not, the
+/// quote standing under the side; over `[q, b, a]` the side first. Where the
+/// sides placed two shared words `y` and `q` in two orders and nothing of
+/// their own, each order is that side alone, read off the draft by trying
+/// each side. At a `moves` gap with spots a holder's two runs must stand in
+/// its own order within its spot (the mutants that read a word two sides
+/// list twice, require a word a listed side lays gone under the side left
+/// out, read no side alone, or read a holder's words by their spot alone).
+#[test]
+fn a_word_two_sides_placed_alike_is_read_once() {
+    use skep_client::merge::{Gap, GapId, GapKind, Placement, Run, SideIx, Spot};
+    use skep_client::publication::Run as Held;
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, q, d, s, y) = (a("1.0.1.0.1"), a("1.0.1.0.4"), a("1.0.1.0.2"), a("1.0.1.0.3"), a("1.0.1.0.5"));
+    let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
+    let order = |sides: &[u8]| Placement::Order(sides.iter().map(|&s| SideIx(s)).collect());
+    let image = |cells: &[(&Address, u64, u64)]| -> Vec<Held> { cells.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect() };
+    let holds = |gap: &Gap, placed: &Placement, cells: &[(&Address, u64, u64)]| super::super::merge::draft_holds(gap, placed, &image(cells));
+    let read = |gap: &Gap, cells: &[(&Address, u64, u64)]| super::super::merge::edit_choice(gap, &image(cells));
+    let gap = |runs: Vec<(u8, Run)>| Gap {
+        id: GapId(1),
+        kind: GapKind::Order,
+        after: Some(at(7)),
+        before: None,
+        runs: runs.into_iter().map(|(side, run)| (SideIx(side), run)).collect(),
+        placed: order(&[0, 1]),
+        settled: false,
+        resolved_by: None,
+        spots: vec![],
+    };
+    let base = (&e, 1, 7);
+    let (rq, ra, rb) = ((&q, 1, 3), (&d, 1, 5), (&s, 1, 4));
+    let quoted = gap(vec![(0, Run::new(q.clone(), 1, 3)), (0, Run::new(d.clone(), 1, 5)), (1, Run::new(q.clone(), 1, 3)), (1, Run::new(s.clone(), 1, 4))]);
+    assert!(holds(&quoted, &order(&[0, 1]), &[base, rq, ra, rb]), "[q, a, b]: the default, q read once");
+    assert_eq!(read(&quoted, &[base, rq, ra, rb]), None, "[q, a, b]: no choice read");
+    assert!(holds(&quoted, &order(&[1]), &[base, rq, rb]), "[q, b]: the side alone, q its word too");
+    assert!(!holds(&quoted, &order(&[0]), &[base, rq, rb]), "[q, b]: not the head alone");
+    assert_eq!(read(&quoted, &[base, rq, rb]), Some(order(&[1])), "[q, b]: the side alone read");
+    assert_eq!(read(&quoted, &[base, rq, rb, ra]), Some(order(&[1, 0])), "[q, b, a]: the side first");
+    assert_eq!(read(&quoted, &[base, rq, ra]), Some(order(&[0])), "[q, a]: the head alone");
+    assert_eq!(read(&quoted, &[base]), Some(Placement::Omitted), "[]: the omission");
+    // Two shared words in two orders, nothing of either side's own.
+    let (ry, rq) = ((&y, 1, 2), (&q, 1, 3));
+    let crossed = gap(vec![(0, Run::new(y.clone(), 1, 2)), (0, Run::new(q.clone(), 1, 3)), (1, Run::new(q.clone(), 1, 3)), (1, Run::new(y.clone(), 1, 2))]);
+    assert_eq!(read(&crossed, &[base, ry, rq]), None, "[y, q]: the default");
+    assert_eq!(read(&crossed, &[base, rq, ry]), Some(order(&[1])), "[q, y]: the side's order");
+    assert!(holds(&crossed, &order(&[1, 0]), &[base, rq, ry]), "[q, y]: the side first lays all");
+    // A holder's two runs at a gap with spots, in its own order.
+    let spots = Gap {
+        kind: GapKind::Moves,
+        after: None,
+        runs: vec![(SideIx(0), Run::new(y.clone(), 1, 2)), (SideIx(0), Run::new(q.clone(), 1, 3)), (SideIx(1), Run::new(y.clone(), 1, 2)), (SideIx(1), Run::new(q.clone(), 1, 3))],
+        placed: order(&[0]),
+        spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(7)), before: None }],
+        ..gap(vec![])
+    };
+    assert!(holds(&spots, &order(&[0]), &[(&e, 1, 4), ry, rq, (&e, 5, 3)]), "y then q at the head's spot");
+    assert!(!holds(&spots, &order(&[0]), &[(&e, 1, 4), rq, ry, (&e, 5, 3)]), "q then y: not the head's order");
 }
 
 /// Checks the landing's reading of a `moves` gap with spots over the whole

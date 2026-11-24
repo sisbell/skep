@@ -108,7 +108,10 @@
 //!   naming each placement, the default the earliest holder's, numbered
 //!   before every other gap (CM-I33). The same identity at one spot is kept
 //!   once, where it breaks no side's own order, whichever side is listed
-//!   first.
+//!   first: with no gap where one side's words there are an in-order part
+//!   of another's, and at an `order` gap where the sides order the words
+//!   they share otherwise or each set words of their own beside them, each
+//!   such side's group listing every word it placed and M laying each once.
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's

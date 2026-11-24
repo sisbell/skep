@@ -107,10 +107,11 @@ fn cut_off_before_the_record(
 /// landing's position, and `resume` and `land` with no draft named each
 /// answer `Refusal::LandingBegun` naming `L` and the landing's position,
 /// nothing staged or written — a landing naming a published journal too,
-/// the landing begun answered before the journal is checked — the
-/// merger's drafts' rows walked on the supplement past the head's mint,
-/// never past the composition's position (the mutant that walks past
-/// `as_of` stages a second draft), the refusal's words naming the ways
+/// the landing begun answered before the journal is checked — the rows of
+/// the merger's own drafts walked on the supplement, `under` the account's
+/// `.0`, past the head's mint, never past the composition's position (the
+/// mutant that walks past `as_of` stages a second draft), the refusal's
+/// words naming the ways
 /// on. Landed naming `L`, the
 /// composition made again runs every check again — one `set_arrangement`
 /// typed at its own position and one record, nothing staged — and a
@@ -146,12 +147,15 @@ fn a_landing_cut_off_before_its_record_is_named_never_landed_twice() {
         "nothing staged or written: {ops:?}"
     );
     assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
-    let walk = format!("GET /changes?since={}&under={ACCOUNT}&drafts=true&limit=4096", head_minted(&dialer));
+    let walk = format!(
+        "GET /changes?since={}&under={ACCOUNT}.0&drafts=true&limit=4096",
+        head_minted(&dialer)
+    );
     let walks: Vec<&String> = ops.iter().filter(|o| o.starts_with("GET /changes?")).collect();
     assert_eq!(
         walks,
         [&walk, &walk, &walk],
-        "the merger's drafts walked past the head's mint, at each call, the wire's whole page asked"
+        "the merger's own drafts walked past the head's mint, at each call, the wire's whole page asked"
     );
     let words = begun.to_string();
     for said in [
@@ -394,40 +398,58 @@ fn a_landing_begun_whose_list_cannot_be_read_back_is_named_never_recorded() {
     assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
 }
 
-/// A landing begun in another account's draft is not the merger's.
+/// A landing begun in another account's draft is not the merger's, and
+/// its rows are never walked.
 ///
-/// A draft of a sub-account of the merger's, which the merger's
-/// supplement carries beside its own account's, holds this merge's
-/// landing, marked with its head and sides, and no record names it. A
-/// fresh landing of the merge keeps the rows of drafts of the merger's
-/// own account, exactly, so that draft is never read and the landing
-/// stages a draft of its own (the mutant that keeps every row under the
-/// account's prefix answers `LandingBegun` naming it).
+/// A draft of a sub-account of the merger's holds this merge's landing,
+/// marked with its head and sides, no record naming it, and `n` rows more
+/// of the sub-account's writes in it since. A fresh landing of the merge
+/// walks the supplement `under` the merger's account's own documents, so
+/// none of that draft's rows is served: that draft is never read, the
+/// landing stages a draft of its own, and the walk is one page at `n` =
+/// 100 and at `n` = 9,000 (the mutant that walks `under` the account
+/// itself names the account in its query, and at 9,000 reads three pages,
+/// every row of the sub-account's served).
 #[test]
 fn a_landing_begun_in_another_accounts_draft_is_not_the_mergers() {
     const THEIRS: &str = "1.0.1.1.0.5";
-    let head = format!("{D}.2");
-    let mut w = minted_head_world();
-    w.doc(THEIRS, false, "1.0.1.1", draft_m());
-    w.docs.get_mut(THEIRS).unwrap().staged.insert(0, (head.clone(), 15));
-    let at = w.commit_records("set_arrangement", vec![THEIRS.to_string()], 3);
-    let marker = Marker { sides: vec![S.to_string()], head: head.clone(), head_copied: 15, at };
-    let d = w.docs.get_mut(THEIRS).unwrap();
-    d.history.insert(at, draft_m());
-    d.markers.insert(at, Some(marker.clone()));
-    d.stamped.push(marker);
-    w.rows.last_mut().unwrap().terms =
-        Some((Some(head.clone()), Some(json!({"sides": [S], "head": head}))));
-    let (dialer, board, signer) = open(w);
-    let session = sign_in(&board, &signer);
-    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
-    dialer.clear();
-    let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
-    let Landed::Draft { into, staged, .. } = &landed else { panic!("{landed:?}") };
-    assert!(*staged && into.to_string() != THEIRS, "a draft of its own: {landed:?}");
-    let read: Vec<Value> =
-        dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
-    assert!(!read.contains(&json!(THEIRS)), "the sub-account's draft never read: {read:?}");
+    for n in [100, 9_000] {
+        let head = format!("{D}.2");
+        let mut w = minted_head_world();
+        w.doc(THEIRS, false, "1.0.1.1", draft_m());
+        w.docs.get_mut(THEIRS).unwrap().staged.insert(0, (head.clone(), 15));
+        let at = w.commit_records("set_arrangement", vec![THEIRS.to_string()], 3);
+        let marker = Marker { sides: vec![S.to_string()], head: head.clone(), head_copied: 15, at };
+        let d = w.docs.get_mut(THEIRS).unwrap();
+        d.history.insert(at, draft_m());
+        d.markers.insert(at, Some(marker.clone()));
+        d.stamped.push(marker);
+        w.rows.last_mut().unwrap().terms =
+            Some((Some(head.clone()), Some(json!({"sides": [S], "head": head}))));
+        for _ in 0..n {
+            w.commit("insert", vec![THEIRS.to_string()]);
+        }
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        dialer.clear();
+        let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+        let Landed::Draft { into, staged, .. } = &landed else { panic!("{landed:?}") };
+        assert!(*staged && into.to_string() != THEIRS, "n = {n}: a draft of its own: {landed:?}");
+        let read: Vec<Value> =
+            dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
+        assert!(
+            !read.contains(&json!(THEIRS)),
+            "n = {n}: the sub-account's draft never read: {read:?}"
+        );
+        let ops = dialer.ops();
+        let walks: Vec<&String> = ops.iter().filter(|o| o.starts_with("GET /changes?")).collect();
+        assert_eq!(walks.len(), 1, "n = {n}: one page: {walks:?}");
+        assert!(
+            walks[0].contains(&format!("&under={ACCOUNT}.0&")),
+            "n = {n}: under the account's own documents: {walks:?}"
+        );
+    }
 }
 
 /// A landing recorded in another state is no landing begun.

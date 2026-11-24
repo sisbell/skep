@@ -1761,6 +1761,69 @@ fn a_line_edge_reads_the_base_text_in_one_read_through_the_head() {
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
 }
 
+/// THE LINE RULE READS WHAT DECIDES IT, WHATEVER THE DOCUMENT'S LENGTH
+/// (skep #1173): over the base `D.1`, "abcdefgh\n" `L` times (`N` = 9L), the
+/// head `D.2` adds "X" after `D·2` and the daughter `D.1.1` "Y" after
+/// `D·(N−3)`, two additions a document apart, inside two lines. The merge
+/// asks nothing, M is the two additions in their places, the composition
+/// is the one the core makes reading each run as it asks it, and the
+/// positions read through the head sum to at most `LINE_READ` + 2, at
+/// `L` = 1,000 and at `L` = 10,000 (the mutant reading the whole text
+/// between them reads `N` − 4).
+#[test]
+fn the_line_rule_reads_what_decides_it_whatever_the_documents_length() {
+    for l in [1_000u64, 10_000] {
+        let n = 9 * l;
+        let base_text = "abcdefgh\n".repeat(l as usize);
+        let mut w = World::new();
+        w.text(D, 1, &base_text);
+        w.text(D, n + 1, "X");
+        w.text(D, n + 2, "Y");
+        let head = vec![run(D, 1, 2), run(D, n + 1, 1), run(D, 3, n - 2)];
+        let daughter = vec![run(D, 1, n - 3), run(D, n + 2, 1), run(D, n - 2, 3)];
+        w.doc(D, true, ACCOUNT, head.clone());
+        w.member(&format!("{D}.1"), vec![run(D, 1, n)], None);
+        w.member(&format!("{D}.2"), head.clone(), Some(n));
+        w.member(&format!("{D}.1.1"), daughter.clone(), Some(n));
+        w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+        let (dialer, board, _) = open(w);
+        let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
+        assert!(merged.composed.gaps.is_empty(), "L = {l}: {:?}", merged.composed.gaps);
+        assert_eq!(
+            m_runs(&merged),
+            vec![
+                run(D, 1, 2),
+                run(D, n + 1, 1),
+                run(D, 3, n - 5),
+                run(D, n + 2, 1),
+                run(D, n - 2, 3)
+            ],
+            "L = {l}: M"
+        );
+        let mut bytes = base_text.into_bytes();
+        bytes.extend(b"XY");
+        let values = |_: SideIx, r: &Run| {
+            Some((r.i_start..r.reach()).map(|p| vec![bytes[p as usize - 1]]).collect::<Vec<Item>>())
+        };
+        let sides = [(SideIx(0), head), (SideIx(1), daughter)];
+        let one_at_a_time =
+            compose_runs(&[run(D, 1, n)], &a(D), &sides, None, &Options::default(), &values);
+        assert_eq!(merged.composed, one_at_a_time, "L = {l}: the composition read a run at a time");
+        let through_head: u64 = dialer
+            .frames("retrieve_v")
+            .iter()
+            .flat_map(|f| f["specs"].as_array().cloned().unwrap_or_default())
+            .filter(|s| s["doc"].as_str() == Some(format!("{D}.2").as_str()))
+            .map(|s| span(&s["span"]).1)
+            .sum();
+        assert!(
+            through_head <= crate::merge::compose::LINE_READ + 2,
+            "L = {l}: {through_head} positions read through the head: {:?}",
+            dialer.ops()
+        );
+    }
+}
+
 /// THE LINE RULE READS WHATEVER THE SWITCHES, SO A WITHHELD WINDOW BETWEEN
 /// TWO ADDITIONS REFUSES: the base `D.1` "ab" `W`'s "c\n" "de\n" — a window
 /// onto another account's draft ending line 1 — the head adding "X" after
@@ -1821,6 +1884,63 @@ fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
             Some("retrieve_v"),
             "the masked value read is the last: {:?}",
             dialer.ops()
+        );
+    }
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
+    // Past the first read: `m` = `LINE_READ` + 10 "a"s of `D`, `W`'s "cc",
+    // then "de\n"; the head adds "X" after `D·1`, the daughter "Y" after
+    // the "d". The text between them ends in "d" and the first stands
+    // inside a line, so the rule's first reads decide it and the two ask
+    // nothing; still the first position of `W`'s run is among those reads,
+    // so `W` withheld refuses the composition and withholds the verdict
+    // (the mutant that reads no later run's first position composes).
+    let m = crate::merge::compose::LINE_READ + 10;
+    let mut w = World::new();
+    w.text(D, 1, &"a".repeat(m as usize));
+    w.text(D, m + 1, "de\n");
+    w.text(D, m + 10, "X");
+    w.text(D, m + 20, "Y");
+    w.text(W, 1, "cc");
+    w.doc(W, false, "1.0.2", vec![run(W, 1, 2)]);
+    let base = vec![run(D, 1, m), run(W, 1, 2), run(D, m + 1, 3)];
+    let head =
+        vec![run(D, 1, 1), run(D, m + 10, 1), run(D, 2, m - 1), run(W, 1, 2), run(D, m + 1, 3)];
+    let daughter =
+        vec![run(D, 1, m), run(W, 1, 2), run(D, m + 1, 1), run(D, m + 20, 1), run(D, m + 2, 2)];
+    let merged_list = vec![
+        run(D, 1, 1),
+        run(D, m + 10, 1),
+        run(D, 2, m - 1),
+        run(W, 1, 2),
+        run(D, m + 1, 1),
+        run(D, m + 20, 1),
+        run(D, m + 2, 2),
+    ];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), base, None);
+    w.member(&format!("{D}.2"), head, Some(m + 5));
+    w.member(&format!("{D}.1.1"), daughter, Some(m + 5));
+    w.member(&format!("{D}.3"), merged_list.clone(), Some(m + 6));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    let (dialer, board, _) = open(w);
+    let merged =
+        compose(&board, Some(&token()), &off).expect("composed past the first read, W readable");
+    assert_eq!(m_runs(&merged), merged_list, "the premise: M");
+    assert!(
+        merged.composed.gaps.is_empty(),
+        "the premise: nothing asked: {:?}",
+        merged.composed.gaps
+    );
+    let mut record = merged.record.clone();
+    record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 0 });
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+    dialer.world().withheld.insert(W.to_string());
+    for inputs in [&off, &race_inputs()] {
+        assert_eq!(
+            compose(&board, Some(&token()), inputs),
+            Err(Refusal::Unreadable(a(W))),
+            "past the first read: {:?}",
+            inputs.options
         );
     }
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));

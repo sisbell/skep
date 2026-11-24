@@ -49,6 +49,7 @@ use skep_address::Address;
 
 use crate::address::parse_address;
 
+use super::compose::LINE_READ;
 use super::*;
 
 // ── the notation ─────────────────────────────────────────────────────────
@@ -750,6 +751,27 @@ fn two_reorders_into_one_slot_compose_in_quadratic_time() {
     let c = compose(&base, &two(head, daughter));
     let took = began.elapsed();
     assert_eq!(runs(&c), base.iter().rev().cloned().collect::<Vec<_>>(), "the base reversed");
+    assert_eq!(kinds(&c), vec![]);
+    assert!(took < std::time::Duration::from_secs(2), "composed in {took:?}");
+}
+
+/// A quote both sides hold at one spot composes in time about linear in
+/// its words: both sides place the same 6,000 one-position runs of `Z`
+/// between `D·1` and `D·2`, and the quote is kept once with no gap, in a
+/// debug build well inside 2 s. What each shared word's keeping reads of
+/// its stretches and its spot is read once for them all (the mutant that
+/// asks again, for every word, whether each holder orders the spot's words
+/// otherwise, and where in its stretch the word stands, reads every word
+/// once more per word, past the bound).
+#[test]
+fn a_quote_both_sides_hold_at_one_spot_composes_in_linear_time() {
+    const W: u64 = 6000;
+    let quote = (0..W).map(|i| Run::new(z(), 2 * i + 1, 1));
+    let side: Vec<Run> = std::iter::once(rd(1, 1)).chain(quote).chain([rd(2, 1)]).collect();
+    let began = std::time::Instant::now();
+    let c = compose(&[rd(1, 2)], &two(side.clone(), side.clone()));
+    let took = began.elapsed();
+    assert_eq!(runs(&c), side, "the quote kept once");
     assert_eq!(kinds(&c), vec![]);
     assert!(took < std::time::Duration::from_secs(2), "composed in {took:?}");
 }
@@ -1898,6 +1920,175 @@ fn the_line_rule_holds_over_generated_lines() {
         asked += usize::from(meets);
     }
     assert!(asked > 100, "the line rule fired in {asked} cases");
+}
+
+/// Composes over a base of `bytes` at `D·1…`, one side adding "x" right
+/// after `D·i` and the other "y" right after `D·j`, `0` the document's
+/// start, reading every value through a closure that counts the positions
+/// asked; answers the composition and that count.
+fn compose_over_bytes(bytes: &[u8], i: u64, j: u64) -> (Composed, u64) {
+    let n = bytes.len() as u64;
+    let (x, y) = (n + 10, n + 20);
+    let asked = std::cell::Cell::new(0u64);
+    let values = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+        asked.set(asked.get() + run.width);
+        (run.i_start..run.reach())
+            .map(|p| match p {
+                p if p == x => Some(vec![b'x']),
+                p if p == y => Some(vec![b'y']),
+                p if (1..=n).contains(&p) => Some(vec![bytes[p as usize - 1]]),
+                _ => None,
+            })
+            .collect()
+    };
+    let at = |k: u64, fresh: u64| {
+        let mut side = Vec::new();
+        if k > 0 {
+            side.push(rd(1, k));
+        }
+        side.push(rd(fresh, 1));
+        if k < n {
+            side.push(rd(k + 1, n - k));
+        }
+        side
+    };
+    let sides = two(at(i, x), at(j, y));
+    let c = compose_runs(&[rd(1, n)], &d(), &sides, None, &Options::default(), &values);
+    (c, asked.get())
+}
+
+/// Whether additions right after `D·i` and `D·j` of `bytes` meet at a
+/// line's edge, the rule read off the whole text between them.
+fn meets_directly(bytes: &[u8], i: u64, j: u64) -> bool {
+    let (lo, hi) = (i.min(j) as usize, i.max(j) as usize);
+    let between = &bytes[lo..hi];
+    let start = lo == 0 || bytes[lo - 1] == b'\n';
+    let breaks = between.iter().filter(|b| **b == b'\n').count();
+    (breaks == 1 && between.last() == Some(&b'\n') && !start) || (breaks == 0 && start)
+}
+
+/// A line longer than the first read is read on to its end: inside a line
+/// of `LINE_READ` + 10 bytes, its last its break, an addition after `D·1`
+/// and another right after that break are two `line` gaps, the whole text
+/// between them read; a break `LINE_READ` + 5 into that text, found by the
+/// reads on, asks nothing; one 10 into it, found by the first reads, asks
+/// nothing and reads no further (the mutant that never reads past the
+/// first reads asks nothing in the first cell).
+#[test]
+fn a_line_longer_than_the_first_read_is_read_on_to_its_end() {
+    let width = LINE_READ + 10;
+    let lined = |breaks: &[u64]| {
+        let mut bytes = vec![b'a'];
+        let mut text = vec![b'b'; width as usize];
+        text[width as usize - 1] = b'\n';
+        for &k in breaks {
+            text[k as usize] = b'\n';
+        }
+        bytes.extend(text);
+        bytes.push(b'c');
+        bytes
+    };
+    let (c, asked) = compose_over_bytes(&lined(&[]), 1, 1 + width);
+    assert_eq!(kinds(&c), vec![(GapKind::Line, false), (GapKind::Line, false)]);
+    assert_eq!(asked, 1 + width, "the position before and the whole text");
+    let (c, _) = compose_over_bytes(&lined(&[LINE_READ + 5]), 1, 1 + width);
+    assert_eq!(kinds(&c), vec![], "a break the reads on find");
+    let (c, asked) = compose_over_bytes(&lined(&[10]), 1, 1 + width);
+    assert_eq!(kinds(&c), vec![], "a break the first reads find");
+    assert_eq!(asked, 1 + LINE_READ + 1, "the first reads alone");
+}
+
+/// The line rule reads what decides it: over ten times `LINE_READ`
+/// positions of short lines, additions at the document's two ends, or
+/// inside its first and last lines, are asked at most `LINE_READ` + 2
+/// positions, and ask nothing (the mutant that reads the whole text asks
+/// for every position).
+#[test]
+fn the_line_rule_reads_what_decides_it_whatever_the_texts_length() {
+    let bytes: Vec<u8> = b"ab\n".iter().copied().cycle().take(10 * LINE_READ as usize).collect();
+    let n = bytes.len() as u64;
+    for (i, j) in [(0, n), (1, n - 1)] {
+        let (c, asked) = compose_over_bytes(&bytes, i, j);
+        assert_eq!(kinds(&c), vec![], "after D·{i} and D·{j}");
+        assert!(asked <= LINE_READ + 2, "after D·{i} and D·{j}: {asked} positions asked");
+    }
+}
+
+/// The line rule as a property over texts about `LINE_READ` long and
+/// longer: whatever the text's width — drawn at the edges of the first
+/// read and of the reads on, or at random up to four times it — its breaks
+/// at those edges or at random, its last byte a break or not, and the
+/// first addition at the document's start, after a break or inside a
+/// line, the two are `line` gaps exactly where the rule read off the whole
+/// text says; no read asks more than the text and the position before it;
+/// an answer the first reads decide is read no further; and a meet is read
+/// whole, since only the whole text says no break stands before its last
+/// byte.
+#[test]
+fn the_line_rule_reads_on_exactly_as_far_as_its_answer_needs() {
+    let lr = LINE_READ;
+    let edges = [
+        1,
+        2,
+        3,
+        lr - 1,
+        lr,
+        lr + 1,
+        lr + 2,
+        3 * lr - 1,
+        3 * lr,
+        3 * lr + 1,
+        3 * lr + 2,
+        7 * lr + 1,
+    ];
+    let mut rng = Rng(0x00C0_FFEE);
+    let mut met = 0;
+    for case in 0..600 {
+        let w = if case % 2 == 0 {
+            edges[rng.below(edges.len() as u64) as usize]
+        } else {
+            1 + rng.below(4 * lr)
+        };
+        let mut text = vec![b'a'; w as usize];
+        for _ in 0..rng.below(3) {
+            let at = match rng.below(3) {
+                0 => rng.below(w),
+                _ => [lr - 1, lr, lr + 1, 3 * lr - 1, 3 * lr][rng.below(5) as usize].min(w - 1),
+            };
+            text[at as usize] = b'\n';
+        }
+        if rng.below(2) == 0 {
+            text[w as usize - 1] = b'\n';
+        }
+        let prefix: &[u8] = [&b""[..], &b"\n"[..], &b"a"[..]][rng.below(3) as usize];
+        let mut bytes = prefix.to_vec();
+        bytes.extend(&text);
+        bytes.push(b'z');
+        let (i, j) = (prefix.len() as u64, prefix.len() as u64 + w);
+        let (c, asked) = compose_over_bytes(&bytes, i, j);
+        let breaks: Vec<usize> =
+            text.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(k, _)| k).collect();
+        let say = format!("case {case}: width {w}, prefix {prefix:?}, breaks at {breaks:?}");
+        let meets = meets_directly(&bytes, i, j);
+        let expected =
+            if meets { vec![(GapKind::Line, false), (GapKind::Line, false)] } else { vec![] };
+        assert_eq!(kinds(&c), expected, "{say}");
+        let before = u64::from(!prefix.is_empty());
+        assert!(asked <= before + w, "{say}: {asked} positions asked");
+        let start = prefix != b"a";
+        let first_break = breaks.first().map(|&k| k as u64).filter(|&k| k + 1 < w);
+        if (text[w as usize - 1] == b'\n') == start || first_break.is_some_and(|k| k < lr) {
+            assert!(
+                asked <= before + lr.min(w - 1) + 1,
+                "{say}: decided by the first reads, {asked} positions asked"
+            );
+        }
+        if meets {
+            assert_eq!(asked, before + w, "{say}: a meet reads the whole text");
+            met += 1;
+        }
+    }
+    assert!(met > 50, "the rule met in {met} cases");
 }
 
 // ── the record's re-statement ────────────────────────────────────────────

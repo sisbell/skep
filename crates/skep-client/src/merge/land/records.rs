@@ -347,11 +347,14 @@ impl Writer<'_> {
     /// It is the read a fresh landing makes before its stage, the mint a
     /// cut-off landing would make twice (PUB-8.32, resume-by-read): the
     /// merger's drafts' `set_arrangement` rows on the supplement (wire.md
-    /// §The change feed), `under` the merger's account with `drafts=true`,
-    /// walked past the position the head was minted at — its `doc_metadata`'s
-    /// `at`, read at the board's head, the walk from the floor where the
-    /// board serves none — since every landing on the head was made after
-    /// it, whatever position the composition was read at. A row is kept
+    /// §The change feed), `drafts=true`, walked past the position the head
+    /// was minted at — its `doc_metadata`'s `at`, read at the board's head,
+    /// the walk from the floor where the board serves none — since every
+    /// landing on the head was made after it, whatever position the
+    /// composition was read at. The walk is `under` `⟨account⟩.0`, the
+    /// tumbler every document of the merger's account's own lies under and
+    /// no sub-account's does, so the board serves none of a sub-account's
+    /// rows, an agent's among them. A row is kept
     /// where its draft is the merger's account's own, exactly, never a
     /// sub-account's, and its `merge` names the head and the sides a landing
     /// there marks ([`marked_sides`]), and where the draft is no side of the
@@ -381,8 +384,9 @@ impl Writer<'_> {
         let head = merged.inputs.head.to_string();
         let minted = self.reader.metadata(&merged.inputs.head, None)?.at.unwrap_or(0);
         let account = self.merger.account;
+        let own_documents = format!("{account}.0");
         let mut drafts: Vec<Address> = Vec::new();
-        feed_rows(&self.reader, account, true, minted, |row| {
+        feed_rows(&self.reader, &own_documents, true, minted, |row| {
             if row["op"].as_str() != Some("set_arrangement") {
                 return;
             }

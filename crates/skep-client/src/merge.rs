@@ -117,10 +117,13 @@
 //!   such side's group listing every word it placed and M laying each once.
 //! * `line` — one side's addition whose anchors stand together, next in M
 //!   to another side's at a line's edge, only surviving base text between
-//!   them: unsettled, the default its own place. The line rule reads that
-//!   text, a line break the byte `\n`, through the first side listed; two
-//!   additions inside one line, or a whole line or more apart, ask nothing,
-//!   and words two or more sides added at one spot stay an `order` gap.
+//!   them: unsettled, the default its own place. The line rule reads as
+//!   much of that text as decides it, a line break the byte `\n`, through
+//!   the first side listed — its last byte, the position before the first
+//!   addition and the text's first 4,096 positions, more only where a
+//!   longer line leaves it open; two additions inside one line, or a whole
+//!   line or more apart, ask nothing, and words two or more sides added at
+//!   one spot stay an `order` gap.
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
@@ -131,10 +134,10 @@
 //! keeps the retyping side's identity unless the caller asks the base's
 //! back, and the record then lists each retyped run M no longer holds under
 //! `values.retyped`, with its side. The rule reads the values of the runs it
-//! compares, and the line rule reads the base text between two sides'
-//! neighbouring additions whatever the value rule's switches, a run a side
-//! windows from another document among either; where the reader may not
-//! read that document the composition refuses naming it
+//! compares, and the line rule reads a position of every run of the base
+//! text between two sides' neighbouring additions whatever the value rule's
+//! switches, a run a side windows from another document among either; where
+//! the reader may not read that document the composition refuses naming it
 //! ([`Refusal::Unreadable`]; [`verify`] answers [`Verdict::Unreadable`]),
 //! and no switch keeps the line rule from that read.
 

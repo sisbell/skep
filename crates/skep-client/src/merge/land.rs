@@ -198,10 +198,11 @@
 //! none stands, a landing of the merge begun in a draft of the merger's and
 //! never recorded — the one write landed, the record cut off — is found
 //! before the stage, the mint a landing cut off would make twice (PUB-8.32,
-//! resume-by-read): the merger's drafts' rows on the supplement past the
-//! head's mint, each draft but the merge's own sides whose `set_arrangement`
-//! row names the head and the sides, and that no record of the merger's own
-//! of the merge stands for, read for the board's mark
+//! resume-by-read): the rows of the merger's account's own drafts on the
+//! supplement past the head's mint — the walk `under` `⟨account⟩.0`, so no
+//! sub-account's row is served — each draft but the merge's own sides whose
+//! `set_arrangement` row names the head and the sides, and that no record
+//! of the merger's own of the merge stands for, read for the board's mark
 //! ([`Writer::landing_begun`]). One the board still marks is refused
 //! [`Refusal::LandingBegun`], at a landing and a resume alike, nothing
 //! staged or written: the merge never lands twice, and the landing begun is

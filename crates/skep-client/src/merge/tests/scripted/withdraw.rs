@@ -227,7 +227,9 @@ fn a_re_run_of_either_take_back_writes_nothing_twice() {
 /// B3-S11, D6 BM-36: after a landing and its withdrawal, the landing's
 /// position named as a
 /// withdrawal is refused `NoWithdrawal`, nothing sent; the withdrawal's
-/// position takes it back — ONE `set_arrangement` of the draft's words,
+/// position takes it back — the draft's rows walked from the withdrawal,
+/// never from the floor (the mutant walking from 0 asks `since=0`), then
+/// ONE `set_arrangement` of the draft's words,
 /// its base re-sent, the head pair and the marker's sides with the
 /// landing's own `at`, typed against the withdrawal — and the draft's
 /// base and marker stand as the landing left them, the landing's record
@@ -255,7 +257,18 @@ fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_land
         "the landing's position is no withdrawal"
     );
     assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
+    dialer.clear();
     let unwithdrawn = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+    let walks: Vec<String> = dialer
+        .ops()
+        .into_iter()
+        .filter(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={S}&")))
+        .collect();
+    assert!(
+        !walks.is_empty()
+            && walks.iter().all(|o| o.contains(&format!("?since={}&", withdrawn.position - 1))),
+        "the draft's rows walked from the withdrawal, never from the floor: {walks:?}"
+    );
     let sent = dialer.frames("set_arrangement");
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
     assert_eq!(sent[0]["merge"], json!({"sides": [], "at": marker.at}), "the marker's sides and its own position: {}", sent[0]);

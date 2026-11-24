@@ -5,9 +5,9 @@
 //! end, the head and the sides imaged, each side that can change fenced
 //! where a composition reads it at the head — and composes the lists through
 //! the core, the values read at the head through the sides that hold them
-//! ([`values_for`], [`values_of`]), the dedup's and the line rule's in one
-//! walk's reads together ([`compose_with_values`]). The rules they keep are
-//! the `reads` module's doc.
+//! ([`values_for`], [`values_of`]), the dedup's and the line rule's first
+//! reads in one walk's reads together ([`compose_with_values`]). The rules
+//! they keep are the `reads` module's doc.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -617,19 +617,23 @@ pub(in crate::merge) fn read_shape(
 /// head through the sides that hold them ([`values_of`]).
 ///
 /// With the retype off, the dedup and the line rule alone read values,
-/// whatever the dedup's switch, and which runs each reads is the walk's and
-/// never the values': the gaps the dedup compares and their groups are the
-/// same whatever bytes they hold, the neighbouring additions the line rule
-/// reads between are all found before it marks any, and every walk the core
+/// whatever the dedup's switch, and which runs each first reads is the
+/// walk's and never the values': the gaps the dedup compares and their
+/// groups are the same whatever bytes they hold, the neighbouring additions
+/// the line rule reads between are all found before it marks any, each
+/// pair's first reads asked before any is weighed, and every walk the core
 /// makes again under a chosen order or at a holder's defaults reads alike.
 /// So the walk is made once answering every run with no items, noting the
 /// runs it asks; those runs are read together, each holder's in as few
 /// reads as the budgets allow, and the walk is made again answering from
 /// them — two reads for a merge of two sides whatever its shared spots and
-/// its line edges, where a read a run would make one a run. A walk that
-/// asks no run is the composition. With the retype on, which runs the walk
-/// reads depends on the values read before them, so each run is read as
-/// the walk asks it, as it is where the reads together are refused.
+/// its line edges, where a read a run would make one a run. A run the
+/// second walk asks and the first did not — the line rule reading on along
+/// a line longer than its first reads, which a walk answered no items never
+/// does — is read as it is asked. A walk that asks no run is the
+/// composition. With the retype on, which runs the walk reads depends on
+/// the values read before them, so each run is read as the walk asks it,
+/// as it is where the reads together are refused.
 ///
 /// # Errors
 ///

@@ -20,11 +20,12 @@
 //! the head imaged whole, then the base, derived from where those lines
 //! end — the head's own image where the base is the head, else imaged
 //! whole; each side imaged whole; the shared material joined by the core
-//! over the lists; the values where the value rule has work, and the base
-//! text between two sides' neighbouring additions the line rule reads
-//! whatever the switches (skep #1173), read through the side that holds
-//! them; and the prior records for the key, so a standing record is known
-//! before anything is written (§3, idempotence).
+//! over the lists; the values where the value rule has work, and as much of
+//! the base text between two sides' neighbouring additions as the line rule
+//! needs — a position of every run of it among them — whatever the switches
+//! (skep #1173), read through the side that holds them; and the prior
+//! records for the key, so a standing record is known before anything is
+//! written (§3, idempotence).
 //! Every `image` past the run budget is re-asked in halves and the parts
 //! re-joined by I-adjacency (§8: "a region past the budget can be asked in
 //! parts"), every value read past the delivery budget or the dialer's

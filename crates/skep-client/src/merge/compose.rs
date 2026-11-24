@@ -18,10 +18,10 @@
 //! walk. §2's rules decide each gap's kind and its default — the sides'
 //! reorders folded into the spine in the order listed (`fold`), and two
 //! sides' neighbouring additions met at a line's edge, which `line_edges`
-//! reads off the base text between them inside `gaps` whatever the
-//! switches (skep #1173); §5's value rule reads bytes at a shared gap (the
-//! dedup) and, switched on, before the walk (the retype), logging each run
-//! either takes out of M.
+//! decides inside `gaps`, whatever the switches, off as much of the base
+//! text between them as the answer needs (skep #1173); §5's value rule
+//! reads bytes at a shared gap (the dedup) and, switched on, before the
+//! walk (the retype), logging each run either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms —
 //! the record on the trunk, where every member was minted against the one
@@ -324,8 +324,9 @@ pub enum GapKind {
     /// `\n`. Each of the two held by one side alone is a `line` gap, and
     /// words two or more sides added at one spot stay an `order` gap. Two
     /// additions inside one line ask nothing, nor do two a whole line or
-    /// more apart, nor two whose base text between them `values` does not
-    /// answer, nor an addition whose anchors do not both stand together.
+    /// more apart, nor two the reads of whose base text between them
+    /// `values` does not answer one item a position, nor an addition whose
+    /// anchors do not both stand together.
     Line,
 }
 
@@ -533,8 +534,11 @@ pub enum InPlaceOp {
 /// `moves` gap, its reorder not applied, so one overlapping pair voids
 /// neither the other sides' reorders nor its earlier side's. `values`
 /// answers a side's run with its items: the value rule compares them, and
-/// the line rule reads through the first side listed the surviving base
-/// text between two sides' neighbouring additions ([`GapKind::Line`]),
+/// the line rule reads through the first side listed as much of the
+/// surviving base text between two sides' neighbouring additions as its
+/// answer needs ([`GapKind::Line`]) — the position before the first, the
+/// text's last byte, its first 4,096 positions and the first of each run
+/// past them, more only where a longer line leaves the answer open —
 /// whatever the value rule's switches; a run asked may be a part of a run
 /// the side holds; `None` leaves the rule that asked unfired there. The
 /// composition writes nothing and dials nothing (merge record §1.4, §7).
@@ -1378,76 +1382,115 @@ impl Kept {
         for share in shares {
             by_spot.entry(share.spot).or_default().push(share.frag);
         }
+        // What a share's keeping reads that depends on its stretches, its
+        // spot or its candidate alone, each read once whatever the shares:
+        // a stretch's first and last fragment a side does not hold, by
+        // (stretch, side); whether one holder orders a spot's shared words
+        // otherwise than another, by (spot, holder, keeper); whether a
+        // keeper's removal between a candidate's anchors overlaps another's,
+        // by (keeper, anchors).
+        let mut unheld_in: HashMap<(usize, usize), Option<(usize, usize)>> = HashMap::new();
+        let mut crossed_at: HashMap<(Anchors, usize, usize), bool> = HashMap::new();
+        let mut collides: HashMap<(usize, Anchors), bool> = HashMap::new();
         for share in shares {
-            let stretch = |t: usize| &stretches[holding[&(t, share.frag)]];
+            let stretch_of = |t: usize| holding[&(t, share.frag)];
             let words = &by_spot[&share.spot];
+            let mut unheld = |s: usize, k: usize| -> Option<(usize, usize)> {
+                *unheld_in.entry((s, k)).or_insert_with(|| {
+                    let frags = &stretches[s].frags;
+                    let first = frags.iter().position(|&g| presence[k][g].is_none())?;
+                    let last = frags.iter().rposition(|&g| presence[k][g].is_none())?;
+                    Some((first, last))
+                })
+            };
+            let mut crossing = |t: usize, k: usize| -> bool {
+                *crossed_at
+                    .entry((share.spot, t, k))
+                    .or_insert_with(|| crosses(words, t, k, &presence))
+            };
             // Every holder's stretch the same words in one order: the earliest
             // holder's, carried to the common spot, is any holder's.
-            let pure = share.holders.iter().all(|&t| {
-                let frags = &stretch(t).frags;
-                frags.iter().all(|&g| share.holders.iter().all(|&h| presence[h][g].is_some()))
-                    && !crosses(words, t, share.holders[0], &presence)
-            });
-            let mut candidates: Vec<(usize, Anchors, bool)> =
-                share.holders.iter().map(|&k| (k, (stretch(k).x, stretch(k).y), false)).collect();
+            let mut pure = true;
+            for &t in &share.holders {
+                let s = stretch_of(t);
+                pure = pure
+                    && share.holders.iter().all(|&h| unheld(s, h).is_none())
+                    && !crossing(t, share.holders[0]);
+            }
+            let mut candidates: Vec<(usize, Anchors, bool)> = share
+                .holders
+                .iter()
+                .map(|&k| {
+                    let own = &stretches[stretch_of(k)];
+                    (k, (own.x, own.y), false)
+                })
+                .collect();
             if pure {
                 candidates.push((share.holders[0], share.spot, true));
             }
-            let keeping = candidates
-                .into_iter()
-                .map(|(k, anchors, at_spot)| {
-                    let key = stretch_key(anchors.0, anchors.1);
-                    let (mut breaks, mut asking) = (Vec::new(), Vec::new());
-                    for &t in share.holders.iter().filter(|&&t| at_spot || t != k) {
-                        let own = stretch(t);
-                        let own_key = stretch_key(own.x, own.y);
-                        let at = own
-                            .frags
-                            .iter()
-                            .position(|&g| g == share.frag)
-                            .expect("a stretch holds its fragment");
-                        let theirs = |g: &usize| *g != share.frag && presence[k][*g].is_none();
-                        let (before, after) = (
-                            own.frags[..at].iter().any(theirs),
-                            own.frags[at + 1..].iter().any(theirs),
-                        );
-                        let crossed = crosses(words, t, k, &presence);
-                        if own_key == key {
-                            if crossed || (!at_spot && (before || after)) {
-                                asking.push(t);
-                            }
-                            continue;
+            // The first candidate of the least rank.
+            let mut keeping: Option<Keeping> = None;
+            for (k, anchors, at_spot) in candidates {
+                let key = stretch_key(anchors.0, anchors.1);
+                let (mut breaks, mut asking) = (Vec::new(), Vec::new());
+                for &t in share.holders.iter().filter(|&&t| at_spot || t != k) {
+                    let s = stretch_of(t);
+                    let own = &stretches[s];
+                    let own_key = stretch_key(own.x, own.y);
+                    // The fragment's place in its stretch, which is the run
+                    // of its side's sequence from `own.at`.
+                    let at = presence[t][share.frag].expect("a holder holds its fragment") - own.at;
+                    let (before, after) = unheld(s, k)
+                        .map_or((false, false), |(first, last)| (first < at, last > at));
+                    let crossed = crossing(t, k);
+                    if own_key == key {
+                        if crossed || (!at_spot && (before || after)) {
+                            asking.push(t);
                         }
-                        let (lo, hi) = (own_key.min(key), own_key.max(key));
-                        let between = stretches.iter().any(|s| {
-                            s.side == t && lo < stretch_key(s.x, s.y) && stretch_key(s.x, s.y) < hi
-                        });
-                        let apart = (own_key < key && after) || (own_key > key && before);
-                        if crossed || between || apart {
-                            breaks.push(t);
-                        }
+                        continue;
                     }
+                    let (lo, hi) = (own_key.min(key), own_key.max(key));
+                    let between = stretches.iter().any(|s| {
+                        s.side == t && lo < stretch_key(s.x, s.y) && stretch_key(s.x, s.y) < hi
+                    });
+                    let apart = (own_key < key && after) || (own_key > key && before);
+                    if crossed || between || apart {
+                        breaks.push(t);
+                    }
+                }
+                let collision = *collides.entry((k, anchors)).or_insert_with(|| {
                     let (lo, hi) =
                         (anchors.0.map_or(0, |x| x + 1), anchors.1.unwrap_or(r.base.len()));
-                    let gone = |bi: Option<usize>| bi.is_some_and(|bi| removed[bi]);
-                    let collision = (lo..hi).any(|bi| {
+                    (lo..hi).any(|bi| {
                         removed_by[k][bi]
                             && (0..removed_by.len()).any(|t| t != k && removed_by[t][bi])
-                    });
-                    let asks = asking.len()
-                        + usize::from((gone(anchors.0) && gone(anchors.1)) || collision);
-                    let at = (k, stretch(k).x, stretch(k).y);
-                    Keeping { side: k, at, anchors, at_spot, breaks, asking, asks }
-                })
-                .min_by_key(Keeping::rank)
-                .expect("a share has holders");
+                    })
+                });
+                let gone = |bi: Option<usize>| bi.is_some_and(|bi| removed[bi]);
+                let asks =
+                    asking.len() + usize::from((gone(anchors.0) && gone(anchors.1)) || collision);
+                let own = &stretches[stretch_of(k)];
+                let candidate = Keeping {
+                    side: k,
+                    at: (k, own.x, own.y),
+                    anchors,
+                    at_spot,
+                    breaks,
+                    asking,
+                    asks,
+                };
+                if keeping.as_ref().is_none_or(|best| candidate.rank() < best.rank()) {
+                    keeping = Some(candidate);
+                }
+            }
+            let keeping = keeping.expect("a share has holders");
             // A holder that asks, or is broken, keeps its copy at the gap; so
             // does one placed elsewhere than the keeper where a side holding
             // none of the words placed words of its own beside it, which its
             // copy is asked against there (R1).
             let place = stretch_key(keeping.anchors.0, keeping.anchors.1);
             let contested = |t: usize| {
-                let own = stretch(t);
+                let own = &stretches[stretch_of(t)];
                 let at = stretch_key(own.x, own.y);
                 at != place
                     && stretches
@@ -1467,18 +1510,17 @@ impl Kept {
             // order, those that would come out of order join the keeper's
             // gap: of several keepers' gaps, the one placed first, whatever
             // order the shares are met in.
-            let key = stretch_key(keeping.anchors.0, keeping.anchors.1);
             for &t in &keeping.breaks {
-                let own = stretch(t);
+                let own = &stretches[stretch_of(t)];
                 let own_key = stretch_key(own.x, own.y);
-                let (lo, hi) = (own_key.min(key), own_key.max(key));
+                let (lo, hi) = (own_key.min(place), own_key.max(place));
                 for s in
                     stretches.iter().filter(|s| s.side == t && (s.side, s.x, s.y) != keeping.at)
                 {
                     let at = stretch_key(s.x, s.y);
-                    let first = joins.get(&(t, s.x, s.y)).is_none_or(|&(_, k)| key < k);
+                    let first = joins.get(&(t, s.x, s.y)).is_none_or(|&(_, k)| place < k);
                     if (at == own_key || (lo < at && at < hi)) && first {
-                        joins.insert((t, s.x, s.y), (keeping.at, key));
+                        joins.insert((t, s.x, s.y), (keeping.at, place));
                     }
                 }
             }
@@ -2242,6 +2284,15 @@ fn gaps(
     (entries, applied)
 }
 
+/// How far into the text between two additions the line rule first reads.
+///
+/// A read of this many positions finds the break of any line shorter than
+/// it. The rule's first reads over two additions ask at most this many
+/// positions of the text between them, the first of each later run of it
+/// and two more, whatever the text's length; it reads on only where a line
+/// longer than this leaves its answer open (`meet_at_a_line_edge`).
+pub(super) const LINE_READ: u64 = 4096;
+
 /// Marks each addition another side's meets at a line's edge a `line` gap
 /// (skep #1173).
 ///
@@ -2250,32 +2301,31 @@ fn gaps(
 /// surviving base text stands between them in M, neither has a kind, their
 /// groups are of two sides or more, and one at least is held by one side
 /// alone — two held by several sides are `order` gaps whatever the text.
-/// For each pair `lines` reads, through the first side listed, which holds
-/// every surviving base position, the base text M lays between the two and
-/// the base position just before the first: the first stands at a line's
-/// start where that position is a line break, or where it lies at the
-/// document's start. The pair meets at a line's edge where that text holds
-/// one line break, its last byte, and the first does not stand at a line's
-/// start — one inside a line, the other right after its break — or where
-/// the text holds none and the first does — one at a line's start, the
-/// other inside that line. Each of the two held by one side alone is then a
-/// `line` gap.
+/// The first of a pair stands at a line's start where the base position
+/// just before it is a line break, or where it lies at the document's
+/// start. The pair meets at a line's edge where the base text M lays
+/// between the two holds one line break, its last byte, and the first does
+/// not stand at a line's start — one inside a line, the other right after
+/// its break — or where that text holds none and the first does — one at a
+/// line's start, the other inside that line. Each of the two held by one
+/// side alone is then a `line` gap. `lines` reads what decides it through
+/// the first side listed, which holds every surviving base position
+/// (`meet_at_a_line_edge`).
 ///
-/// Which runs are read is the entries' alone, never the values': every
-/// pair is found on the kinds `placement` gave, the marks made once every
-/// pair is weighed, and both of a pair's reads are asked before either is
-/// weighed. A pair whose reads do not answer one item a position decides
-/// nothing, so a reader answering no run, or every run with no items,
-/// marks no gap.
+/// Which runs a pair's first reads ask is the entries' alone, never the
+/// values': every pair is found on the kinds `placement` gave, the marks
+/// made once every pair is weighed, and every first read of a pair asked
+/// before any is weighed. A pair reads on past them only where they
+/// answered one item a position and left it undecided, so a reader
+/// answering no run, or every run with no items, marks no gap and is asked
+/// no further read.
 fn line_edges(
     r: &Refinement,
     spine: &[usize],
     entries: &mut [Entry],
     lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) {
-    let is_break = |item: &Item| item.as_slice() == b"\n";
     let alone = |e: &Entry| e.groups.len() == 1;
-    let last = |at: usize| r.last_position(r.base[spine[at]]);
     let laying: Vec<usize> =
         (0..entries.len()).filter(|&i| !entries[i].groups.is_empty()).collect();
     let mut marked: Vec<usize> = Vec::new();
@@ -2286,32 +2336,102 @@ fn line_edges(
         if !apart || held.len() < 2 || !(alone(p) || alone(q)) {
             continue;
         }
-        let between = &spine[p.home..q.home];
-        let before = p.home.checked_sub(1).map(|at| lines(r.side_ix[0], &last(at)));
-        let text = r.bytes(0, between.iter().map(|&bi| r.base[bi]), lines);
-        let start = match before {
-            None => Some(true),
-            Some(Some(items)) if items.len() == 1 => Some(is_break(&items[0])),
-            Some(_) => None,
-        };
-        let width =
-            between.iter().map(|&bi| r.frags[r.base[bi]].width).fold(0, u64::saturating_add);
-        let (Some(start), Some(text)) = (start, text) else { continue };
-        if text.len() as u64 != width {
-            continue;
-        }
-        let meets = match text.iter().filter(|item| is_break(item)).count() {
-            0 => start,
-            1 => !start && text.last().is_some_and(is_break),
-            _ => false,
-        };
-        if meets {
+        let before = p.home.checked_sub(1).map(|at| r.last_position(r.base[spine[at]]));
+        let text = r.coalesce(spine[p.home..q.home].iter().map(|&bi| r.base[bi]));
+        if meet_at_a_line_edge(r.side_ix[0], before, &text, lines) {
             marked.extend(pair.iter().copied().filter(|&i| alone(&entries[i])));
         }
     }
     for i in marked {
         entries[i].kind = Some(GapKind::Line);
     }
+}
+
+/// Returns whether two additions meet at a line's edge (`line_edges`).
+///
+/// `text` is the base text M lays between them, as runs, and `before` the
+/// base position just before the first, none at the document's start;
+/// `lines` reads them through `head`. The answer is decided by three
+/// facts: whether the first stands at a line's start — `before` a line
+/// break, or none — whether the text's last byte is a break, and whether a
+/// break stands before that last byte; the two meet where the first two
+/// facts differ and no such break stands, so the text is read whole only
+/// where they meet. The first reads, asked together, are `before`, the
+/// text's first `LINE_READ` positions, the first position of each later
+/// run of it — so every origin the text holds is read — and its last byte;
+/// where those leave the answer open, the text is read on from them, each
+/// read twice as long as the one before, until a break or the last byte. A
+/// read answering anything but one item a position, or none, decides
+/// nothing: the answer is `false`.
+fn meet_at_a_line_edge(
+    head: SideIx,
+    before: Option<Run>,
+    text: &[Run],
+    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+) -> bool {
+    let is_break = |item: &Item| item.as_slice() == b"\n";
+    // Every run asked, stopping at a read that answers none; the items, or
+    // none where a run answers another count than its width.
+    let read = |runs: &[Run]| -> Option<Vec<Item>> {
+        let mut answers = Vec::with_capacity(runs.len());
+        for run in runs {
+            answers.push(lines(head, run)?);
+        }
+        let fits = runs.iter().zip(&answers).all(|(run, items)| items.len() as u64 == run.width);
+        fits.then(|| answers.concat())
+    };
+    let width = text.iter().map(|run| run.width).fold(0, u64::saturating_add);
+    let Some(last) = width.checked_sub(1) else { return false };
+    let opening = last.min(LINE_READ);
+    let mut probes = Vec::new();
+    let mut at = 0u64;
+    for run in text {
+        if (opening..last).contains(&at) {
+            probes.push(Run::new(run.origin.clone(), run.i_start, 1));
+        }
+        at = at.saturating_add(run.width);
+    }
+    // The first reads, in the text's order, every one asked before any is
+    // weighed.
+    let start = before.map(|run| read(&[run]));
+    let opened = read(&runs_over(text, 0, opening));
+    let probed = read(&probes);
+    let ending = read(&runs_over(text, last, width));
+    let start = match start {
+        None => true,
+        Some(Some(items)) => is_break(&items[0]),
+        Some(None) => return false,
+    };
+    let (Some(opened), Some(probed), Some(ending)) = (opened, probed, ending) else {
+        return false;
+    };
+    if is_break(&ending[0]) == start || opened.iter().chain(&probed).any(is_break) {
+        return false;
+    }
+    let (mut read_to, mut asked) = (opening, LINE_READ);
+    while read_to < last {
+        asked = asked.saturating_mul(2);
+        let to = read_to.saturating_add(asked).min(last);
+        match read(&runs_over(text, read_to, to)) {
+            Some(items) if !items.iter().any(is_break) => read_to = to,
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Returns the runs holding positions `from..to` of `text`, counted from 0.
+fn runs_over(text: &[Run], from: u64, to: u64) -> Vec<Run> {
+    let mut out = Vec::new();
+    let mut at = 0u64;
+    for run in text {
+        let (lo, hi) = (from.max(at), to.min(at.saturating_add(run.width)));
+        if lo < hi {
+            out.push(Run::new(run.origin.clone(), run.i_start + (lo - at), hi - lo));
+        }
+        at = at.saturating_add(run.width);
+    }
+    out
 }
 
 /// A gap's groups by side, each its fragments in the side's order, the

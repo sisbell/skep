@@ -1114,7 +1114,9 @@ struct WithdrawalRows {
 /// `cleared` is the `at` of the marker the withdrawal cleared, as the state
 /// before it carried it; a put-back is a row past the withdrawal whose
 /// `merge` names it, `None` naming none. It walks the supplement under the
-/// draft (`drafts=true`), as [`latest_ending_row`] does.
+/// draft (`drafts=true`), as [`latest_ending_row`] does, from the position
+/// just below the withdrawal, so its pages hold the rows at the withdrawal
+/// and past it alone, whatever the draft was written before.
 ///
 /// # Errors
 ///
@@ -1126,7 +1128,8 @@ fn withdrawal_rows(
     cleared: Option<u64>,
 ) -> Result<WithdrawalRows, Refusal> {
     let mut rows = WithdrawalRows { withdrew: false, put_back: false, published: None };
-    feed_rows(reader, &draft.to_string(), true, 0, |row| {
+    let since = withdrawal.saturating_sub(1);
+    feed_rows(reader, &draft.to_string(), true, since, |row| {
         let Some(at) = row["at"].as_u64() else { return };
         match row["op"].as_str() {
             Some("set_arrangement") if at == withdrawal => {

@@ -43,10 +43,11 @@
 //! `head_holds`, exit 1, no second version identical to the head minted; a
 //! stop after the composition at `--publish` says the run that finds a
 //! version the shot may have landed, `--head` naming the head this merge was
-//! composed on; with `--into` it lands the
-//! merged list in a draft as one `set_arrangement` typed against that
-//! position — refused whole where the draft changed since, the draft's base
-//! re-recorded on the head and the merge marked beside it where the board
+//! composed on; with `--into` it sets a draft's whole text to the merged list
+//! as one `set_arrangement` typed against that position — what the draft held
+//! replaced, which `--undo` puts back while nothing else is written there;
+//! refused whole where the draft changed since; the draft's base re-recorded
+//! on the head and the merge marked beside it where the board
 //! records a base for it; with `--new` it stages a fresh draft from the head
 //! and lands there — or, where the merger's own landing of this composition
 //! already stands in a draft a record of theirs of the key names, whatever
@@ -116,7 +117,10 @@
 //! position, the replacing record's link and the case, the undo's with the
 //! base restored and the marker the draft carries again; where there is
 //! nothing to undo or take out the library's reason is the refusal, exit 1,
-//! and nothing was sent.
+//! and nothing was sent — an inherited marker's said naming `--withdraw`,
+//! which takes it out, and a withdrawal's of a draft carrying no marker
+//! naming `--undo`, which takes back a landing in a draft with no recorded
+//! base, a draft that never carries one.
 //!
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
@@ -125,8 +129,17 @@
 //! token cannot sign. The record and its link go into the merger's private
 //! journal, unsigned. The library's refusals come to their stops through
 //! the renderer the commands share (`commands.rs`'s `refused`, under a
-//! `Step`), the take-backs' `history_reclaimed` worded here
-//! ([`refused_taking_out`]).
+//! `Step`), save those whose library words name an act this command has
+//! none of — a `resume`, a draft discarded, a fork made afresh — worded
+//! here naming its own flags (SP-10): `landing_begun`, `head_holds` and
+//! `fork_base_moved` at a landing ([`refused_landing`]), an inherited
+//! marker's `nothing_to_undo` and a withdrawal's `no_merge` at a take-back,
+//! beside the take-backs' `history_reclaimed` ([`refused_taking_out`]). A
+//! landing stopped by a halt or the session's end says the run that takes
+//! it on where its write stands with its record unwritten: at `--publish`
+//! the `--head` the merge composed on, at a landing into a draft named or
+//! over the merger's earlier one `--into` that draft, and at a fresh one
+//! `--new`, which names the draft the landing stands in.
 //!
 //! **A daughter is reported, never retried (decision 17).** Where the head
 //! moved under the merge the shot lands as the head's daughter, the report
@@ -154,7 +167,11 @@
 //! landing's `landed` carries the draft, the write's `position`, the
 //! `record`, `head_moved` (the newer head told, else null) and `fresh`
 //! (whether this run staged the draft, as the library's landing answers it:
-//! false for `--into` and for a landing found standing) — and, where the
+//! false for `--into` and for a landing found standing) — a landing found
+//! standing, made before this run's composition with nothing written now,
+//! is said in the talk as found and never as made: at `--new` a `landed`
+//! with `fresh` false and no `replaced`, at `--publish` one whose `position`
+//! is at or below `as_of` — and, where the
 //! landing goes over the merger's own landing of the merge with a moved
 //! side, `replaced`: each stretch of the draft as it stood at the
 //! composition's position that the landing replaced, `{ordinal, width,
@@ -180,8 +197,8 @@ use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
     compose, head_of, journal, land, landed_draft, replaced, standing_landing, undo, unwithdraw,
     withdraw, Answers, Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
-    Merger, Misfit, Options, Placement, Record, RecordLanding, Refusal, Replaced, Resolution,
-    ResolvedBy, Side, SideIx, SideState, Undone, Unwithdrawn, WindowPart, Withdrawn,
+    Merger, Misfit, NoUndo, Options, Placement, Record, RecordLanding, Refusal, Replaced,
+    Resolution, ResolvedBy, Side, SideIx, SideState, Undone, Unwithdrawn, WindowPart, Withdrawn,
 };
 use skep_client::publication::OriginAnswer;
 use skep_client::sheet::render_inert;
@@ -413,30 +430,52 @@ fn run(
             .map(|draft| replaced(board, Some(token), draft, &merged))
             .transpose()
             .map_err(|r| refused(r, step))?;
-        let publishing = matches!(landing, Land::Publish(_));
+        // The fresh landing — no draft named, none of the merger's to land
+        // over — whose answer unstaged is a landing found standing.
+        let fresh = into.is_none() && !matches!(landing, Land::Publish(_));
+        // The way on from a stop that may follow the landing's write, in this
+        // command's own flags: the library's face names its own acts (SP-10).
+        // At the shot, the run that finds the version names the head this
+        // merge was composed on, since the feed's head is then the version
+        // itself, which holds the merge.
+        let way_on = match (landing, &into) {
+            (Land::Publish(_), _) => format!(
+                "where this merge was published before the stop, run this again with --head {}: it finds the version and writes its record, publishing nothing twice",
+                merged.inputs.head
+            ),
+            (_, Some(draft)) => format!(
+                "where the stop came after the landing's write, the merge stands in {draft} with its record unwritten: run this again with --into {draft}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since"
+            ),
+            (_, None) => "where the stop came after the landing's write, the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft, which lands the merged list there again and writes its record".to_string(),
+        };
         let landing = match landing {
             Land::Publish(answers) => Landing::Shot { merger, draft: None, answers: (**answers).clone(), journal },
             Land::Into(_) | Land::New => Landing::Draft { merger, into, journal },
         };
         let landed = land(board, &merged, landing).map_err(|r| {
-            // A stop that may follow the shot: the run that finds the version
-            // names the head this merge was composed on, since the feed's
-            // head is then the version itself, which holds the merge.
-            if publishing && matches!(r, Refusal::Halt(_) | Refusal::SessionEnded(_)) {
-                talk(format!(
-                    "where this merge was published before the stop, run this again with --head {}: it finds the version and writes its record, publishing nothing twice",
-                    merged.inputs.head
-                ));
+            if matches!(r, Refusal::Halt(_) | Refusal::SessionEnded(_)) {
+                talk(&way_on);
             }
             match r {
                 // The command's own refusal, in its words: the board was
                 // never asked, and the parts' words are this command's to
                 // say (SP-10).
-                Refusal::WindowPartsOwed { parts, misfits, given } => Stop::Refusal(owed_block(&merged, &parts, &misfits, &given)),
-                other => refused(other, step),
+                Refusal::WindowPartsOwed { parts, misfits, given } => {
+                    Stop::Refusal(owed_block(&merged, &parts, &misfits, &given))
+                }
+                other => refused_landing(other, step),
             }
         })?;
-        say_landed(&merged, &landed, stretches.as_deref(), &asked.kind);
+        // A landing made before this run's composition, found and not made:
+        // at a fresh draft landing one answered unstaged, at the shot a
+        // member minted at or before the position the merge was composed at.
+        let found = match &landed {
+            Landed::Draft { staged, .. } => fresh && !staged,
+            Landed::Member { position, .. } | Landed::AsDaughter { position, .. } => {
+                *position <= merged.as_of
+            }
+        };
+        say_landed(&merged, &landed, found, stretches.as_deref(), &asked.kind);
         report["landed"] = landed_value(&merged, &landed, stretches.as_deref());
     }
     data_verbatim(report.to_string().as_bytes())?;
@@ -616,26 +655,103 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
     }
 }
 
+/// Returns the board's refusal under `code`, its detail `detail`.
+///
+/// It is the stop [`refused`] makes of a typed refusal, §2.3's exit 1, its
+/// detail in this command's own words where the library's would name an
+/// act this command has none of (SP-10).
+fn said(code: &str, detail: String) -> Stop {
+    Stop::Halt(Halt::Refused(Refused {
+        status: 200,
+        code: code.to_string(),
+        detail: Some(detail),
+        op: None,
+        body: Value::Null,
+    }))
+}
+
+/// Returns the stop a landing's refusal comes to (§2.3's exit 1).
+///
+/// It is [`refused`]'s, but three refusals whose library words name acts
+/// this command has none of — a `resume`, a draft discarded, a fork made
+/// afresh — are said naming its own flags (SP-10): `landing_begun`, a
+/// `--new` landing that found this merge landed in a draft of the merger's
+/// with no record, names `--into` that draft, which lands the merged list
+/// there again and writes its record, replacing any edit made in it since,
+/// `--undo` and, where the draft records a base, `--withdraw`; `head_holds`,
+/// a `--publish` whose head holds the merged list, names the `--head` an
+/// earlier run of the merge composed on — the version before the head,
+/// which no merge's shot minted where the head is version 1, so none is
+/// named there — which finds the head and writes its record; and
+/// `fork_base_moved`, a fork landed into itself on another head than its
+/// source, names `--new`, which stages a fresh draft from the head and
+/// lands the merge there. `step` is the landing's, [`Step::Publish`] or
+/// [`Step::Draft`].
+fn refused_landing(r: Refusal, step: Step) -> Stop {
+    match r {
+        Refusal::LandingBegun { draft, position } => said(
+            "landing_begun",
+            format!(
+                "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written now, so the merge does not land twice; to keep it, run this again with --into {draft}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since; to give it up, --undo {draft} puts {draft} back as it stood before the merge (refused where it was edited since), or, where {draft} records a base, --withdraw {draft} takes the merge out and keeps the words"
+            ),
+        ),
+        Refusal::HeadHolds { head } => {
+            let earlier = version_before(&head).map(|before| format!("; where an earlier run of this merge published {head} and its record is not written, run this again with --head {before}, the head that run composed on: it finds {head} and writes its record, publishing nothing")).unwrap_or_default();
+            said(
+                "head_holds",
+                format!("{head} already holds this merge, and the merge supersedes no daughter left: publishing it would mint a version identical to {head} — nothing was published{earlier}"),
+            )
+        }
+        Refusal::ForkBaseMoved { fork, source, head } => said(
+            "fork_base_moved",
+            format!(
+                "{fork} was forked from {source}, and this merge was composed on {head} — nothing was merged; run this again with --new in place of --into {fork}: it stages a fresh draft of yours from {head} and lands the merge there"
+            ),
+        ),
+        other => refused(other, step),
+    }
+}
+
+/// Returns the trunk member before the trunk member `member`: its version
+/// less one, `None` at version 1.
+fn version_before(member: &Address) -> Option<String> {
+    let text = member.to_string();
+    let (doc, version) = text.rsplit_once('.')?;
+    let version = version.parse::<u64>().ok().filter(|v| *v > 1)?;
+    Some(format!("{doc}.{}", version - 1))
+}
+
 /// Returns the stop a take-back's refusal comes to (§2.3's exit 1).
 ///
 /// It is [`refused`]'s, but a pre-landing position the board has reclaimed
 /// — `history_reclaimed` at the undo's read of the state before the merge —
 /// whose detail says what it means here: the state before the merge is no
 /// longer on this board, and nothing was sent; the library's own words
-/// advise composing again, which is no act of the undo's. `step` is the
-/// take-back's, [`Step::Undo`] or [`Step::Withdraw`].
+/// advise composing again, which is no act of the undo's. And two whose
+/// library words name no act of this command's, said naming its own flags
+/// (SP-10): an inherited marker's `nothing_to_undo`, which `--withdraw`
+/// takes out keeping the words; and at a withdrawal `no_merge`, a draft with
+/// no marker — which a draft with no recorded base never carries, a merge
+/// landed in it or not — where `--undo` takes such a landing back by the
+/// draft's rows. `step` is the take-back's, [`Step::Undo`] or
+/// [`Step::Withdraw`].
 fn refused_taking_out(draft: &Address, r: Refusal, step: Step) -> Stop {
     match r {
-        Refusal::HistoryReclaimed { at, floor } => Stop::Halt(Halt::Refused(Refused {
-            status: 200,
-            code: "history_reclaimed".to_string(),
-            detail: Some(format!(
+        Refusal::HistoryReclaimed { at, floor } => said(
+            "history_reclaimed",
+            format!(
                 "the state before the merge is no longer on this board: {draft} as of position {at} is reclaimed{} — nothing was sent; the merge stays as it is, or take it out and keep the words with --withdraw",
                 floor.map(|f| format!(" (the oldest position it answers is {f})")).unwrap_or_default()
-            )),
-            op: None,
-            body: Value::Null,
-        })),
+            ),
+        ),
+        Refusal::NothingToUndo { draft: named, why: NoUndo::Inherited } => said(
+            "nothing_to_undo",
+            format!("nothing to undo: {named} inherited the merge when it was staged, and no merge landed in it — nothing was taken back; --withdraw {named} takes that merge out and keeps the words"),
+        ),
+        Refusal::NoMerge { draft: named } if matches!(step, Step::Withdraw) => said(
+            "no_merge",
+            format!("{named} carries no merge marker, so this withdrawal has nothing to take out — nothing was taken out; a draft with no recorded base carries none even where a merge landed in it, and --undo {named} takes such a landing back"),
+        ),
         other => refused(other, step),
     }
 }
@@ -778,8 +894,9 @@ fn withdrawn_value(withdrawn: &Withdrawn) -> Value {
 ///
 /// It names the base and the counts, each place the merge kept once
 /// ([`dedup_lines`]), each unsettled gap in the copy's register ("⟨n⟩
-/// places need a choice"), the resolutions not applied, and the cap where
-/// the list passes it.
+/// places need a choice"), where it stands and its default
+/// ([`choice_named`]), the resolutions not applied, and the cap where the
+/// list passes it.
 fn say_composed(merged: &Merged) {
     let counts = merged.composed.counts;
     let gaps = &merged.composed.gaps;
@@ -797,10 +914,7 @@ fn say_composed(merged: &Merged) {
         talk(line);
     }
     if !unsettled.is_empty() {
-        let named: Vec<String> = unsettled
-            .iter()
-            .map(|g| format!("gap {} ({}, default {})", g.id.0, kind_name(g.kind), default_of(g)))
-            .collect();
+        let named: Vec<String> = unsettled.iter().map(|g| choice_named(g)).collect();
         talk(format!(
             "{} place{} a choice: {} — resolve each with --resolve <gap>=<choice>, or land nothing and the alternative stands",
             unsettled.len(),
@@ -812,7 +926,7 @@ fn say_composed(merged: &Merged) {
         let ids: Vec<String> =
             merged.composed.ignored.iter().map(|r| r.gap.0.to_string()).collect();
         talk(format!(
-            "not applied: the resolution of gap {} — it names no gap of this report, a gap the rules settled, or a choice its kind cannot take",
+            "not applied: the resolution of gap {} — it names no gap of this report, a gap the rules settled, a choice its kind cannot take, or a gap the order chosen at a moves gap removes",
             ids.join(", ")
         ));
     }
@@ -835,11 +949,24 @@ fn say_composed(merged: &Merged) {
 /// head it composed on, so a merge composed again includes it; and, where
 /// the landing went over the merger's earlier landing of the merge, the
 /// stretches it replaced, `stretches`, and the `--undo` under `kind` that
-/// puts them back.
-fn say_landed(merged: &Merged, landed: &Landed, stretches: Option<&[Replaced]>, kind: &Address) {
+/// puts them back. A landing `found` — made before this run's composition
+/// and found standing, nothing written now — is said as found: the version
+/// that already holds the merge, or the draft it already stands in.
+fn say_landed(
+    merged: &Merged,
+    landed: &Landed,
+    found: bool,
+    stretches: Option<&[Replaced]>,
+    kind: &Address,
+) {
+    let doc = &merged.inputs.doc;
     match landed {
         Landed::Member { address, position, claims, record, answers, .. } => {
-            talk(published_line(merged, address, claims.len()));
+            talk(if found {
+                format!("version {} of {doc} already holds this merge — it was published at position {position}, before this run; nothing was published now", version_name(&doc.to_string(), address))
+            } else {
+                published_line(merged, address, claims.len())
+            });
             for part in answers {
                 talk(answered_line(part));
             }
@@ -847,29 +974,48 @@ fn say_landed(merged: &Merged, landed: &Landed, stretches: Option<&[Replaced]>, 
                 talk(line);
             }
             talk("no links were published with this version — the links on its words stay where they were made".to_string());
-            talk(format!(
-                "published {address} at position {position}, the next version of {}; the record's link is {record}{}",
-                merged.inputs.doc,
-                if claims.is_empty() { String::new() } else { format!("; the claim{} marking the side{} superseded by it: {}", if claims.len() == 1 { "" } else { "s" }, if claims.len() == 1 { "" } else { "s" }, claims.len()) }
-            ));
+            let claimed = if claims.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; the claim{} marking the side{} superseded by it: {}",
+                    if claims.len() == 1 { "" } else { "s" },
+                    if claims.len() == 1 { "" } else { "s" },
+                    claims.len()
+                )
+            };
+            talk(if found {
+                format!("found {address} holding this merge at position {position}; the record's link is {record}{claimed}")
+            } else {
+                format!("published {address} at position {position}, the next version of {doc}; the record's link is {record}{claimed}")
+            });
         }
         Landed::AsDaughter { address, position } => {
-            talk(format!(
-                "the head of {} moved under the merge: the shot landed as the daughter {address} at position {position}, and no record was \
-                 written. Nothing is retried here — run this again with --retries {} to merge against the new head",
-                merged.inputs.doc,
-                merged.inputs.options.retries + 1
-            ));
+            let retries = merged.inputs.options.retries + 1;
+            talk(if found {
+                format!(
+                    "{address}, a daughter of {}, already holds this merge — it was published at position {position}, before this run, when the head of {doc} had moved under it; nothing was published now and no record was written. Nothing is retried here — run this again with --retries {retries} to merge against the new head",
+                    merged.inputs.head
+                )
+            } else {
+                format!(
+                    "the head of {doc} moved under the merge: the shot landed as the daughter {address} at position {position}, and no record was written. Nothing is retried here — run this again with --retries {retries} to merge against the new head"
+                )
+            });
         }
         Landed::Draft { into, position, record, head_moved, staged } => {
-            talk(format!(
-                "landed in the draft {into} at position {position}{}; the record's link is {record}",
-                if *staged {
-                    format!(", a fresh draft staged from {}", merged.inputs.head)
-                } else {
-                    String::new()
-                }
-            ));
+            talk(if found {
+                format!("this merge already stands in the draft {into} — it landed at position {position}, before this run; nothing was staged or written now; the record's link is {record}")
+            } else {
+                format!(
+                    "landed in the draft {into} at position {position}{}; the record's link is {record}",
+                    if *staged {
+                        format!(", a fresh draft staged from {}", merged.inputs.head)
+                    } else {
+                        String::new()
+                    }
+                )
+            });
             if let Some(newer) = head_moved {
                 talk(format!(
                     "a newer version of {} was published since this merge was composed: {newer} — the merge landed against {}, the head it was composed on; merge again to include {newer}",
@@ -1160,19 +1306,51 @@ fn default_lines(merged: &Merged) -> Vec<String> {
     merged.composed.gaps.iter().filter(|g| !g.settled).map(default_line).collect()
 }
 
-/// Returns the line naming one gap's default: its kind, where, as placed.
+/// Returns the line naming one gap's default: its kind, where it stands
+/// ([`place_of`]), as placed.
+fn default_line(g: &Gap) -> String {
+    format!(
+        "left at its default: gap {} ({}) {}, placed {}",
+        g.id.0,
+        kind_name(g.kind),
+        place_of(g),
+        default_of(g)
+    )
+}
+
+/// Returns one gap needing a choice as the composition's talk names it.
+///
+/// It is its number, its kind, where it stands ([`place_of`]) and its
+/// default in `--resolve`'s spelling — at a gap with spots, beside them the
+/// choices that take one side's place instead (CM-I33).
+fn choice_named(g: &Gap) -> String {
+    let takes = if g.spots.is_empty() {
+        ""
+    } else {
+        " — order:<side> or keep:<side> takes that side's place"
+    };
+    format!(
+        "gap {} ({}) {}, default {}{takes}",
+        g.id.0,
+        kind_name(g.kind),
+        place_of(g),
+        default_of(g)
+    )
+}
+
+/// Returns where a gap stands, as the talk says it.
 ///
 /// A gap is where its anchors put it; a `moves` gap has none. One with
 /// spots — one set of words two sides placed at two places (CM-I33) — is
 /// at each side's place, and a spine's is no place but the side's order the
 /// spine took.
-fn default_line(g: &Gap) -> String {
+fn place_of(g: &Gap) -> String {
     let at = |after: &Option<Address>, before: &Option<Address>| match (after, before) {
         (Some(after), _) => format!("after {after}"),
         (None, Some(before)) => format!("before {before}"),
         (None, None) => "at the document's start".to_string(),
     };
-    let place = match (g.kind, &g.placed) {
+    match (g.kind, &g.placed) {
         _ if !g.spots.is_empty() => {
             g.spots.iter().map(|s| format!("side {} {}", s.side.0, at(&s.after, &s.before))).collect::<Vec<_>>().join(", ")
         }
@@ -1181,8 +1359,7 @@ fn default_line(g: &Gap) -> String {
             format!("in side {}'s order", sides.join(","))
         }
         _ => at(&g.after, &g.before),
-    };
-    format!("left at its default: gap {} ({}) {place}, placed {}", g.id.0, kind_name(g.kind), default_of(g))
+    }
 }
 
 /// Returns the lines naming each place the merge kept once (the merge
@@ -1358,201 +1535,4 @@ fn family_name(family: Family) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_client::merge::{Flag, Spot};
-
-    use super::*;
-
-    /// One window part, its words and pair as a test names them.
-    fn part(version: Option<&str>, named_since: bool) -> WindowPart {
-        let span = skep_client::publication::ISpan { chain: "1.0.1.0.69.0.1".to_string(), first: 1, width: 5 };
-        WindowPart {
-            key: skep_client::publication::PartKey { run: 1, part: 0 },
-            words: Some("quote".to_string()),
-            after: Some("the cat".to_string()),
-            ordinal: 8,
-            origin: parse_address("1.0.1.0.69").expect("an address"),
-            owner: None,
-            span,
-            record: version.map(|_| parse_address("1.0.1.0.69.0.2.1").expect("an address")),
-            counterpart: None,
-            version: version.map(|v| parse_address(v).expect("an address")),
-            sides: Vec::new(),
-            admits: Vec::new(),
-            answer: None,
-            named_since,
-        }
-    }
-
-    /// A part a record named after its answer was given says the version
-    /// that published it and the two answers it takes (§6); the wording the
-    /// run cannot stage over a real daemon, a record landing between one
-    /// process's two reads.
-    #[test]
-    fn a_part_named_since_its_answer_says_the_version_that_published_it() {
-        let line = named_since_line(&part(Some("1.0.1.0.64.1"), true));
-        assert_eq!(line, "nothing was published — 1.0.1.0.69’s words were published in 1.0.1.0.64.1 after you answered; answer for them again: --window 1.0.1.0.64.1 or --leave-out 1.0.1.0.64.1");
-    }
-
-    /// A passage's words are rendered one line and inert before a line
-    /// quotes them (SP-15): a newline or an escape in a document's words
-    /// cannot forge a line of the terminal's.
-    #[test]
-    fn a_quoted_passage_cannot_forge_a_line() {
-        assert_eq!(quoted(Some("a\nb\x1b[31m"), "unread"), "“a<U+000A>b<U+001B>[31m”");
-        assert_eq!(quoted(None, "a passage you cannot read"), "a passage you cannot read");
-    }
-
-    /// A default's line says where the gap stands (§1.5): a `moves` gap
-    /// with spots at each side's place for the one set of words, a spine's
-    /// `moves` gap in the order of the side the spine took and never "at
-    /// the document's start", and every other gap by its anchor (the
-    /// mutants that keep the anchors' line for a `moves` gap say the start).
-    #[test]
-    fn a_default_line_names_each_sides_place_and_no_place_for_the_spines_order() {
-        let a = |s: &str| parse_address(s).expect("an address");
-        let gap = |kind: GapKind, after: Option<Address>, placed: Placement, spots: Vec<Spot>| Gap {
-            id: GapId(2),
-            kind,
-            after,
-            before: None,
-            runs: vec![(SideIx(0), skep_client::merge::Run::new(a("1.0.1.0.1"), 20, 3))],
-            placed,
-            settled: false,
-            resolved_by: None,
-            spots,
-        };
-        let spots = vec![
-            Spot { side: SideIx(0), after: Some(a("1.0.1.0.1.0.1.4")), before: Some(a("1.0.1.0.1.0.1.5")) },
-            Spot { side: SideIx(1), after: None, before: Some(a("1.0.1.0.1.0.1.1")) },
-        ];
-        assert_eq!(
-            default_line(&gap(GapKind::Moves, None, Placement::Order(vec![SideIx(0)]), spots)),
-            "left at its default: gap 2 (moves) side 0 after 1.0.1.0.1.0.1.4, side 1 before 1.0.1.0.1.0.1.1, placed order:0"
-        );
-        assert_eq!(
-            default_line(&gap(GapKind::Moves, None, Placement::Order(vec![SideIx(1)]), Vec::new())),
-            "left at its default: gap 2 (moves) in side 1's order, placed order:1"
-        );
-        assert_eq!(
-            default_line(&gap(GapKind::Cut, Some(a("1.0.1.0.1.0.1.4")), Placement::After, Vec::new())),
-            "left at its default: gap 2 (cut) after 1.0.1.0.1.0.1.4, placed after:1.0.1.0.1.0.1.4"
-        );
-        assert_eq!(
-            default_line(&gap(GapKind::Corner, None, Placement::After, Vec::new())),
-            "left at its default: gap 2 (corner) at the document's start, placed order:0"
-        );
-    }
-
-    /// A gap that holds no runs — a collision no side filled — at an end of
-    /// M is spelled by its other anchor, the same place, and with no anchor
-    /// at all as `omit`: every default is a choice `--resolve` takes back
-    /// (the mutant that keeps the order of the gap's sides spells `order:`,
-    /// which the grammar refuses).
-    #[test]
-    fn a_default_of_a_gap_holding_no_runs_is_a_choice_the_command_takes_back() {
-        let a = |s: &str| parse_address(s).expect("an address");
-        let gap = |after: Option<Address>, before: Option<Address>| Gap {
-            id: GapId(1),
-            kind: GapKind::Collision,
-            after,
-            before,
-            runs: Vec::new(),
-            placed: Placement::After,
-            settled: false,
-            resolved_by: None,
-            spots: Vec::new(),
-        };
-        let spelled = |g: &Gap| {
-            let default = default_of(g);
-            let parsed = resolution(&format!("1={default}"), &ResolvedBy::Person)
-                .expect("a choice the command takes");
-            (default, parsed.choice)
-        };
-        assert_eq!(
-            spelled(&gap(None, Some(a("1.0.1.0.1.0.1.5")))),
-            ("before:1.0.1.0.1.0.1.5".to_string(), Choice::Before(a("1.0.1.0.1.0.1.5")))
-        );
-        assert_eq!(spelled(&gap(None, None)), ("omit".to_string(), Choice::Omit));
-        assert_eq!(
-            spelled(&gap(Some(a("1.0.1.0.1.0.1.4")), None)),
-            ("after:1.0.1.0.1.0.1.4".to_string(), Choice::After(a("1.0.1.0.1.0.1.4")))
-        );
-    }
-
-    /// A place the merge kept once is said and reported (§5, case (g)): the
-    /// gap, the head whose copy M holds, and the side's address, where its
-    /// copy and any link on it stay; `deduped` spells the dropped run as the
-    /// record spells a gap's; a record whose dedup kept nothing once says
-    /// and reports nothing (the mutants that name the wrong side or leave
-    /// the place unsaid).
-    #[test]
-    fn a_place_kept_once_names_the_copy_kept_and_where_the_other_stays() {
-        use skep_client::merge::{Role, Run, RunCounts, SideAt, ValueLog};
-        let a = |s: &str| parse_address(s).expect("an address");
-        let doc = a("1.0.1.0.1");
-        let gap = Gap {
-            id: GapId(2),
-            kind: GapKind::Order,
-            after: Some(a("1.0.1.0.1.0.1.7")),
-            before: None,
-            runs: vec![
-                (SideIx(0), Run::new(doc.clone(), 8, 6)),
-                (SideIx(1), Run::new(doc.clone(), 17, 6)),
-            ],
-            placed: Placement::Order(vec![SideIx(0)]),
-            settled: true,
-            resolved_by: Some(ResolvedBy::Rule),
-            spots: Vec::new(),
-        };
-        let mut record = Record {
-            doc: doc.clone(),
-            base: a("1.0.1.0.1.1"),
-            sides: vec![
-                SideAt::Member { at: a("1.0.1.0.1.2"), role: Role::Head },
-                SideAt::Member { at: a("1.0.1.0.1.1.1"), role: Role::Alternative },
-            ],
-            landed: None,
-            claims: Vec::new(),
-            runs: RunCounts { a: 2, b: 3, m: 3 },
-            retries: 0,
-            gaps: vec![gap],
-            values: ValueLog {
-                dedup: true,
-                retype: false,
-                applied: vec![GapId(2)],
-                retyped: Vec::new(),
-            },
-            answers: Vec::new(),
-            replaces: None,
-            by: "skep-client".into(),
-            link: None,
-        };
-        assert_eq!(
-            dedup_lines(&record),
-            ["gap 2: matching words were added on both sides — kept once, as the head has them; the side's copy stays in 1.0.1.0.1.1.1, and any links on it stay there, not carried into the merge"]
-        );
-        assert_eq!(
-            deduped_value(&record),
-            json!([{"gap": 2, "kept": [0], "dropped": [{"side": 1, "i_start": "1.0.1.0.1.0.1.17", "width": "6"}]}])
-        );
-        record.values.applied.clear();
-        assert_eq!(
-            (dedup_lines(&record), deduped_value(&record)),
-            (Vec::<String>::new(), json!([]))
-        );
-    }
-
-    /// Each misfit keeps its command's words (§6): an answer that fits
-    /// nothing, one naming words already published, one naming words a
-    /// second answer also names.
-    #[test]
-    fn a_misfit_says_which_answer_fits_nothing_or_names_the_same_words_twice() {
-        let key = parse_address("1.0.1.0.64.1").expect("an address");
-        let origin = parse_address("1.0.1.0.69").expect("an address");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::Window, key: key.clone(), published_in: vec![] }), "--window 1.0.1.0.64.1 answers nothing here — no words in this merge are published in 1.0.1.0.64.1");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::KeepPrivate, key: origin.clone(), published_in: vec![key.clone()] }), "--keep-private 1.0.1.0.69 answers nothing here — 1.0.1.0.69’s words in this merge are already published in 1.0.1.0.64.1; answer --window 1.0.1.0.64.1 or --leave-out 1.0.1.0.64.1");
-        assert_eq!(misfit_line(&Misfit::FitsNothing { flag: Flag::LeaveOut, key: origin.clone(), published_in: vec![] }), "--leave-out 1.0.1.0.69 answers nothing here — this merge asks nothing about 1.0.1.0.69’s words");
-        assert_eq!(misfit_line(&Misfit::TwoAnswers { first: Flag::Window, second: Flag::LeaveOut, key: key.clone() }), "--window 1.0.1.0.64.1 and --leave-out 1.0.1.0.64.1 both answer the same words — give one");
-    }
-}
+mod tests;

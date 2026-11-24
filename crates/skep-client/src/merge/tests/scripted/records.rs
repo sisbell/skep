@@ -111,14 +111,15 @@ fn current_prefers_the_trunk_owners_home_then_the_newest() {
         ops.contains(&"image".to_string()) && ops.contains(&"retrieve_v".to_string()),
         "read through the arrangement: {ops:?}"
     );
-    // A later compose carries the current record as prior and names it
-    // as what the next record replaces.
+    // A later compose carries the current record as its prior, beside the
+    // record and never in its `replaces`, which the landing fills from its
+    // own read (the mutant that copies the prior's link names it there).
     let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
     assert_eq!(
         merged.prior.as_ref().and_then(|p| p.link.as_ref()).map(ToString::to_string),
         Some(later_link.clone())
     );
-    assert_eq!(merged.record.replaces.as_ref().map(ToString::to_string), Some(later_link));
+    assert_eq!(merged.record.replaces, None, "the composition's record replaces nothing yet");
     // The owner's journal unreadable: the other account's record stands.
     dialer.world().withheld.insert("1.0.1.0.67".into());
     let found = current(&board, Some(&token()), &a(K), &merged.key)

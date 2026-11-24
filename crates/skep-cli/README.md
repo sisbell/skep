@@ -13,7 +13,18 @@ exit 1, naming every part where one is owed, publishing nothing), a
 `--draft` side's own words taken from the draft in the same commit so it
 reads them as published, its base unchanged, so a later merge from it
 composes against the base it was staged from (a draft changed since the
-composition refused with nothing published), `--into` lands it in a draft, the record kept only
+composition refused with nothing published), `--into` sets a draft's whole
+text to it in one write, what the draft held replaced, `--new` lands it in
+a fresh draft staged from the head or finds this composition's landing
+standing in a draft of yours and says so, `--resolve ⟨gap⟩=⟨choice⟩`
+settles a gap the rules left open by its number in the report, `--undo
+⟨S⟩` puts a draft back as it stood before the merge landed in it (with
+`--withdrawal ⟨P⟩` a withdrawal taken back) and `--withdraw ⟨S⟩` takes the
+merge out keeping the words — a `--publish` whose head already holds the
+merged list refused `head_holds` and a landing of this merge begun in a
+draft and never recorded refused `landing_begun`, each exit 1, nothing
+written, its words naming this command's own way on, and a landing
+stopped with its record unwritten naming the run that writes it — the record kept only
 in a private document
 — a published `--journal` said by the composition's talk and refused
 before any write, exit 1 — a daughter is reported and never retried,

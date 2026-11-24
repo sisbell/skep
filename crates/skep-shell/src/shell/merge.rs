@@ -102,7 +102,10 @@
 //! was edited in it since — by the library's `resume` naming `into` — a
 //! record-only completion, no
 //! write of the landing's sent again — so a landing cut off before its
-//! record is recorded once when its draft is named; a fork landed in
+//! record is recorded once when its draft is named: among them a landing
+//! a `merge.compose` made whose record could not be written after its
+//! write, which that call answered as the library's halt naming the draft,
+//! or as `session_died`, leaving no composition standing; a fork landed in
 //! itself, composed as it stands on the base its landing moved to the head,
 //! is no longer the composition that landed, and nothing of it is recorded
 //! there. The merger is the one
@@ -237,7 +240,10 @@
 //! the member and position the board acknowledged, the claims read back at
 //! the daughter, the window parts' answers beside it, written once in the
 //! account's merge journal with its link beside it, or the standing one
-//! answered — never a second shot. The answer is the landing with the
+//! answered — never a second shot; a record that cannot be written after
+//! the acknowledgment leaves the member standing, answered with `record`
+//! null, `unrecorded` the refusal and `claims` empty, the claims the shot
+//! filed standing all the same. The answer is the landing with the
 //! acknowledgment's data, the answers as given, each private row OFF named
 //! with its count, each gap left at its default, each place the merge kept
 //! once (**Kept once**), the panel's

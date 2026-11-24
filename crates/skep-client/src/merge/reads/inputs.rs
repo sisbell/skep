@@ -265,12 +265,12 @@ pub struct Merged {
     pub cap: usize,
     /// The record the landing will write, unlanded.
     ///
-    /// Its `landed` is none, its `claims` none, its `replaces` the prior
-    /// record's link where one stands, its draft side at `as_of`, the
-    /// position the draft stood at as it was read, and its fork and draft
-    /// sides with their states as of it. The landing fills `landed` and
-    /// `claims`, and sets `replaces` from its own read of the merger's
-    /// newest record for the key (the `land` module's doc; P20).
+    /// Its `landed`, its `claims` and its `replaces` are none, its draft
+    /// side at `as_of`, the position the draft stood at as it was read, and
+    /// its fork and draft sides with their states as of it. The landing
+    /// fills all three: `replaces` from its own read of the merger's newest
+    /// record for the key (the `land` module's doc; P20), never from
+    /// `prior`, which can be another account's record.
     pub record: Record,
     /// The one position the composition stands at, P.
     ///

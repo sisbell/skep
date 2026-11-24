@@ -2505,7 +2505,11 @@ fn a_landings_record_replaces_the_mergers_newest_record_as_it_lands() {
         file(&mut w, "1.0.2.0.67", &theirs, &[F, &daughter], None)
     };
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed after it");
-    assert_eq!(merged.record.replaces.as_ref().map(ToString::to_string), Some(planted), "the premise: the composition names another home's record");
+    assert_eq!(
+        (merged.prior.as_ref().and_then(|p| p.link.as_ref()).map(ToString::to_string), merged.record.replaces.clone()),
+        (Some(planted), None),
+        "the premise: the composition's prior another home's record, its own record replacing nothing"
+    );
     dialer.clear();
     let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
     assert!(matches!(landed, Landed::Member { .. }), "{landed:?}");

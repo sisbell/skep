@@ -515,10 +515,12 @@ pub enum Refusal {
     /// its one write and its record. Nothing is staged and nothing is written,
     /// so the merge never lands twice, and the landing is never finished
     /// unasked (PUB-8.32). The ways on are the merger's: the merge composed
-    /// again and landed naming `draft`, every check run again and its record
-    /// written; `resume` naming `draft`, the record alone, written where the
-    /// landing placed this composition's list, whatever was edited in `draft`
-    /// since; or the landing taken back by `undo` naming `draft`.
+    /// again and landed naming `draft`, every check run again, the merged
+    /// list set as `draft`'s whole text again — any edit made in `draft`
+    /// since replaced — and its record written; `resume` naming `draft`, the
+    /// record alone, written where the landing placed this composition's
+    /// list, whatever was edited in `draft` since; or the landing taken back
+    /// by `undo` naming `draft`.
     ///
     /// [`land`]: fn@crate::merge::land
     /// [`resume`]: crate::merge::resume
@@ -740,7 +742,7 @@ impl fmt::Display for Refusal {
             },
             Refusal::AlreadyPublished { draft, member } => write!(f, "the words of {draft} were published as {member} while this merge was being sent (already_published) — nothing was published; run the merge again, which sends words already published by reference"),
             Refusal::HeadHolds { head } => write!(f, "{head} already holds this merge, and the merge supersedes no daughter left: publishing it would mint a version identical to {head} — nothing was published; a merge already published whose record is not written is resumed on the head it was composed on"),
-            Refusal::LandingBegun { draft, position } => write!(f, "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written, so the merge does not land twice; to go on, compose the merge again and land it naming {draft} (the command's --into {draft}), which runs every check again and writes its record, or resume naming {draft}, which writes the record alone, keeping any edit made in {draft} since; to give it up, undo it naming {draft} (the command's --undo {draft}), or discard {draft}"),
+            Refusal::LandingBegun { draft, position } => write!(f, "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written, so the merge does not land twice; to go on, compose the merge again and land it naming {draft} (the command's --into {draft}), which runs every check again, sets the merged list as {draft}'s whole text again, replacing any edit made in {draft} since, and writes its record, or resume naming {draft}, which writes the record alone, keeping any edit made in {draft} since; to give it up, undo it naming {draft} (the command's --undo {draft}), or discard {draft}"),
             Refusal::WindowPartsOwed { parts, misfits, .. } => {
                 write!(f, "nothing was published: {} window part{} of this merge need{} an answer", parts.len(), if parts.len() == 1 { "" } else { "s" }, if parts.len() == 1 { "s" } else { "" })?;
                 if !misfits.is_empty() {

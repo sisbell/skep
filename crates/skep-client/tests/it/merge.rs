@@ -511,7 +511,10 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
     // A second compose reports the prior; a second land writes nothing.
     let again = compose(&board, Some(&token), &inputs).expect("composed again");
     assert_eq!(again.prior.as_ref().map(|p| p.landed.clone()), Some(record.landed.clone()));
-    assert_eq!(again.record.replaces, Some(link.clone()), "a later record names what it replaces");
+    assert_eq!(
+        again.record.replaces, None,
+        "the landing, not the composition, names what its record replaces"
+    );
     let position_before = board.health().unwrap().log_position();
     let second = land(&board, &merged, Landing::Shot { merger, draft: None, answers: Answers::default(), journal: None })
         .expect("landed again");

@@ -155,7 +155,7 @@ fn a_landing_cut_off_before_its_record_is_named_never_landed_twice() {
     for said in [
         format!("this merge already landed in {l} at position {at}, and its record is not written"),
         "nothing was staged or written, so the merge does not land twice".to_string(),
-        format!("land it naming {l} (the command's --into {l}), which runs every check again and writes its record"),
+        format!("land it naming {l} (the command's --into {l}), which runs every check again, sets the merged list as {l}'s whole text again, replacing any edit made in {l} since, and writes its record"),
         format!("resume naming {l}, which writes the record alone"),
         format!("undo it naming {l} (the command's --undo {l})"),
     ] {

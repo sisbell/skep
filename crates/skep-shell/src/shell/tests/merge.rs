@@ -106,7 +106,10 @@
 //! trunk refused `not_owner`; the merged arm
 //! naming the member and writing a missing record once; a landing cut off
 //! before its record refused `landing_begun` with no `into`, recorded once
-//! by its re-open and taken back by the undo (skep #1103); another account's
+//! by its re-open and taken back by the undo (skep #1103); a landing whose
+//! record cannot be written — the journal's find refused busy — answered
+//! as the library's halt naming its draft, never a report, no composition
+//! standing, and recorded by the draft's re-open; another account's
 //! record of the kind, read as the composition's `prior`, never deciding
 //! where the merge lands — its own draft carrying the merge never
 //! re-opened, a draft of the person's it names never landed into — and the
@@ -4364,6 +4367,53 @@ fn a_landing_cut_off_before_its_record_is_named_and_its_re_open_records_it() {
     assert_eq!(g.text(&l, 13), "the fox jumps", "E.2's words");
     let taken = current(&entry.board, Some(&entry.token), &kind, &merged.key).expect("the lookup").expect("the undo's record");
     assert_eq!((taken.landed, taken.replaces, taken.link.map(|l| l.to_string())), (None, record.link, undone["record"].as_str().map(str::to_string)), "the undo's record replaces the re-open's");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a landing whose record cannot be written is the halt naming
+/// its draft, and that the draft's re-open records it.
+///
+/// Against the daemon, as `MergeReport` declares it: every class-scan
+/// permit held, the journal's find — the one class scan a landing sends —
+/// is refused busy past its reissues, so `merge.compose` naming L lands the
+/// merge of E.2 with E.1.1 in L and answers the library's halt naming L,
+/// never a report: L marked, no record of the person's naming the landing,
+/// no composition standing — `merge.land` answers `no_merge` naming the
+/// session. The permits let go, `merge.compose` naming L re-opens it and
+/// writes the record at the landing's position.
+#[test]
+fn a_landing_whose_record_cannot_be_written_is_the_halt_and_its_re_open_records_it() {
+    use skep_client::merge::landed_draft;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let merged = composed(&g, &f);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let compose = || g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l}));
+    let permits: Vec<_> = std::iter::from_fn(|| sd.daemon().try_hold_scan_permit()).collect();
+    assert!(!permits.is_empty(), "the premise: the board's class-scan permits held");
+    let before = g.position();
+    let stopped = compose().unwrap_err();
+    let v = stopped.to_value();
+    assert_eq!((stopped.name(), v["kind"].as_str()), ("halt", Some("halt")), "the library's halt, never a report: {v}");
+    assert!(v["state"].as_str().is_some_and(|s| s.contains(&format!("the merge stands at {l}, and its record is not written"))), "{v}");
+    assert!(g.position() > before, "the landing's write stands");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let marker = g.op(frames::doc_metadata(&l))["merge"].clone();
+    assert_eq!((marker["sides"].clone(), marker["head"].as_str()), (json!([f.e11]), Some(f.e2.as_str())), "L marked: {marker}");
+    let kind = parse_address(KIND).unwrap();
+    assert_eq!(landed_draft(&entry.board, Some(&entry.token), &kind, &merged.key, "1.0.1").expect("the lookup"), None, "no record written");
+    let land = g.call("merge.land", json!({"session": g.session})).unwrap_err();
+    assert_eq!((land.name(), land.to_value()["session"].as_str()), ("no_merge", Some(g.session.as_str())), "no composition standing: {}", land.to_value());
+    drop(permits);
+    let reopened = compose().unwrap_or_else(|r| panic!("{r}"));
+    assert_report_declared(&reopened);
+    let at = marker["at"].as_u64().expect("the landing's position");
+    assert_eq!((reopened["outcome"].as_str(), reopened["into"].as_str(), reopened["position"].as_u64()), (Some("reopened"), Some(l.as_str()), Some(at)), "{reopened}");
+    let record = landed_draft(&entry.board, Some(&entry.token), &kind, &merged.key, "1.0.1").expect("the lookup").expect("the landing's record, written at the re-open");
+    assert_eq!(record.landed, Some(RecordLanding::Draft { draft: parse_address(&l).unwrap(), position: at }), "{record:?}");
     g.shell.shutdown();
     sd.shutdown();
 }

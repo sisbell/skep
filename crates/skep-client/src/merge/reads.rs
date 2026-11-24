@@ -282,7 +282,7 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
             .zip(arranged)
             .map(|(side, arranged_at)| SideAt::of(side, at, arranged_at)),
     );
-    let mut record = Record {
+    let record = Record {
         doc: inputs.doc.clone(),
         base,
         sides,
@@ -302,10 +302,12 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
     // Step 7: the prior records, the trunk owner's account's current over
     // another's, found through the sides but the head — the journal's reads,
     // at the head: they raise the reader's running `as_of` past P, which
-    // nothing below reads.
+    // nothing below reads. The prior stands beside the record, never in its
+    // `replaces`: it can be another account's record, which no landing of
+    // the merger's replaces, and the landing names what its record replaces
+    // from its own read (P20).
     let head = Some(&inputs.head);
     let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner), head)?;
-    record.replaces = prior.as_ref().and_then(|p| p.link.clone());
     Ok(Merged {
         inputs: inputs.clone(),
         composed,

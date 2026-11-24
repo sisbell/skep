@@ -416,9 +416,10 @@ pub struct Composed {
     pub values: ValueLog,
     /// The resolutions not applied.
     ///
-    /// Each named no gap of this report, a gap the rules had settled, or a
-    /// choice the gap cannot take; each stands here untouched, so the caller
-    /// sees what was not applied.
+    /// Each named no gap of this report, a gap the rules had settled, a
+    /// choice the gap cannot take, or a gap the order chosen at a spine's
+    /// `moves` gap removes (skep #1155); each stands here untouched, so the
+    /// caller sees what was not applied.
     pub ignored: Vec<Resolution>,
 }
 

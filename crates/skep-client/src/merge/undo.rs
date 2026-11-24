@@ -848,7 +848,9 @@ fn put_back_of(
 /// - the draft's `doc_metadata` read's refusals — [`Refusal::Unreadable`],
 ///   [`Refusal::NoSuchDocument`] — and [`Refusal::Published`] for a
 ///   published document;
-/// - [`Refusal::NoMerge`] where the draft carries no marker, nothing sent;
+/// - [`Refusal::NoMerge`] where the draft carries no marker, nothing sent —
+///   a draft with no recorded base carries none even where a merge landed
+///   in it, a landing [`undo`] takes back by the draft's rows;
 /// - the image read's refusals at the read's position, and an image whose
 ///   positions reach the largest ordinal, the board's fault, faced;
 /// - [`Refusal::OverCap`] where the image is in more runs than one write

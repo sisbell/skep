@@ -65,7 +65,15 @@
 //! draft's rows, a restore since leaving it standing (skep #914) — naming
 //! what it replaced and the `--undo` that puts it back, the landings there
 //! undone one at a time, and a landing of another merge or of the same key
-//! naming nothing.
+//! naming nothing; and A LANDING STOPPED with its record unwritten — every
+//! class-scan permit held, the journal's find refused busy — exit 3 and
+//! naming this command's own way on, never a `resume`: `--into` the draft,
+//! `--head` the head the shot composed on, `--new` naming the fresh draft
+//! `landing_begun` and `--into` it landing it with its record, each run
+//! that takes it on saying what it found and never that it landed or
+//! published now; and a `--withdraw` of a draft with no recorded base,
+//! which carries no marker, naming the `--undo` that takes its landing
+//! back.
 
 use std::path::{Path, PathBuf};
 
@@ -625,9 +633,15 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["prior"]["link"].as_str(), Some(link.as_str()), "the standing record: {}", v["prior"]);
     assert_eq!(v["prior"]["landed"]["member"].as_str(), Some(member.as_str()));
     assert_eq!(v["prior"]["key"]["sides"], json!([daughter_s, head_s]), "the key's sides in address order");
-    assert_eq!(v["record"]["replaces"].as_str(), Some(link.as_str()), "a later record names what it replaces");
+    assert!(v["record"]["replaces"].is_null(), "the composition's record replaces nothing: the landing names what its record replaces: {}", v["record"]);
     assert_eq!(position(), before, "nothing landed twice");
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
+    assert!(
+        r.err.contains(&format!("version 3 of {d} already holds this merge — it was published at position {}, before this run; nothing was published now", v["landed"]["position"])),
+        "the version found, said as found: {}",
+        r.err
+    );
+    assert!(r.err.contains(&format!("found {member} holding this merge")) && !r.err.contains("published version"), "never said as published now: {}", r.err);
 
     // THE SAME PUBLISH AGAIN, no head named: the feed's head is the merge,
     // which holds the list, and the daughter is claimed already, so the
@@ -638,6 +652,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains("head_holds"), "{}", r.err);
     assert!(r.err.contains(&format!("{member} already holds this merge")), "{}", r.err);
+    assert!(r.err.contains(&format!("run this again with --head {head}, the head that run composed on")) && !r.err.contains("resume"), "the way on in this command's flags: {}", r.err);
     assert_eq!(position(), before, "nothing landed");
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
 
@@ -684,7 +699,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(gap["default"].as_str(), Some("order:0,1"), "the default in --resolve's spelling");
     assert_eq!((gap["after"].as_str(), gap["before"].as_str()), (Some(format!("{d2}.0.1.4").as_str()), Some(format!("{d2}.0.1.5").as_str())));
     assert_eq!(gap["runs"].as_array().map(Vec::len), Some(2));
-    assert!(r.err.contains("1 place needs a choice: gap 1 (order, default order:0,1)"), "{}", r.err);
+    assert!(r.err.contains(&format!("1 place needs a choice: gap 1 (order) after {d2}.0.1.4, default order:0,1")), "the gap named where it stands: {}", r.err);
     assert!(r.err.contains("--resolve <gap>=<choice>"), "{}", r.err);
 
     // RESOLVED the other way round and published: the merger is the AGENT
@@ -757,8 +772,12 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["landed"]["draft"].as_str(), Some(fresh.to_string().as_str()), "the standing landing: {}", v["landed"]);
     assert_eq!((v["landed"]["fresh"].clone(), v["landed"]["position"].as_u64(), v["landed"]["head_moved"].is_null()), (json!(false), Some(at), true), "{}", v["landed"]);
     assert_eq!(position(), before, "nothing staged, nothing written");
-    assert!(r.err.contains(&format!("landed in the draft {fresh} at position {at};")), "{}", r.err);
-    assert!(!r.err.contains("fresh draft"), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("this merge already stands in the draft {fresh} — it landed at position {at}, before this run; nothing was staged or written now")),
+        "found, said as found: {}",
+        r.err
+    );
+    assert!(!r.err.contains("landed in the draft") && !r.err.contains("fresh draft"), "never said as landed now: {}", r.err);
     // --NEW WITH THE OTHER ORDER: the same key, which holds no choice, and
     // another list, so the landing above is no landing of this run's: a draft
     // of its own staged, holding the resolved order. The default order run
@@ -886,6 +905,153 @@ fn a_moved_head_is_refused_with_the_head_to_run_again_on_and_never_retried() {
     assert_eq!(v["gaps"], json!([]), "the head's two words between surviving anchors that stand together: no gap");
     assert_eq!(rig.image(&token, &addr(&format!("{d}.4")), 15), runs_of(&v));
     assert_eq!(rig.publishes_under(&token, &d), publishes + 1);
+    session.close().expect("close");
+}
+
+/// A landing stopped with its record unwritten names this command's own way
+/// on, and the run that takes it on finds the landing and says so (SP-10).
+///
+/// Every class-scan permit held, the journal's find — the one class scan a
+/// landing sends — is refused busy past its reissues, so the landing's
+/// write stands with its record unwritten, exit 3. `--into S`: the talk
+/// names `--into S`, S marked, no record linked to it; let go, `--into S`
+/// again lands the merged list there and writes its record. `--publish`:
+/// the talk names `--head` the head it composed on; run again with no
+/// `--head`, refused `head_holds` naming that head, never a `resume`; with
+/// it, the version found and its record written, nothing published, the
+/// talk saying the version already holds the merge (the mutants that drop
+/// either talk line, word `head_holds` in the library's `resume`, or say a
+/// version found as published fail it).
+#[test]
+fn a_stopped_landing_names_this_commands_way_on_and_the_run_that_takes_it_on_says_what_it_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, base, head, daughter) = rig.race(&session);
+    let s = rig.stage(&base);
+    let (d_s, s_s, daughter_s, head_s) = (d.to_string(), s.to_string(), daughter.to_string(), head.to_string());
+    let into = ["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--into", &s_s];
+    let hold = || {
+        let permits: Vec<_> = std::iter::from_fn(|| rig._daemon.daemon().try_hold_scan_permit()).collect();
+        assert!(!permits.is_empty(), "the premise: the board's class-scan permits held");
+        permits
+    };
+
+    // --INTO S, its record step stopped: the merge stands in S, unrecorded.
+    let permits = hold();
+    let r = rig.merge(&into);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(
+        r.err.contains(&format!("the merge stands in {s} with its record unwritten: run this again with --into {s}, which lands the merged list there again and writes its record")),
+        "the way on in this command's flags: {}",
+        r.err
+    );
+    let meta = rig.read(&token, &frames::doc_metadata(&s_s));
+    assert_eq!((meta["merge"]["sides"].clone(), meta["merge"]["head"].as_str()), (json!([daughter_s]), Some(head_s.as_str())), "the landing's write stands, S marked: {meta}");
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind_s, &s_s))["addrs"], json!([]), "no record linked to S");
+    drop(permits);
+    let v = report(&rig.merge(&into));
+    assert_eq!(v["landed"]["draft"].as_str(), Some(s_s.as_str()), "{}", v["landed"]);
+    let link = v["landed"]["record"].as_str().expect("the record, written now").to_string();
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind_s, &s_s))["addrs"], json!([link]), "the record linked to S");
+
+    // --PUBLISH, its record step stopped: the version stands, unrecorded.
+    let permits = hold();
+    let publishes = rig.publishes_under(&token, &d);
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--publish"]);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains(&format!("where this merge was published before the stop, run this again with --head {head}")), "{}", r.err);
+    assert_eq!(rig.publishes_under(&token, &d), publishes + 1, "the shot stands");
+    drop(permits);
+    // No --head: the feed's head is the version, which holds the merge.
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--publish"]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("head_holds") && r.err.contains(&format!("{d}.3 already holds this merge")), "{}", r.err);
+    assert!(r.err.contains(&format!("run this again with --head {head}, the head that run composed on: it finds {d}.3 and writes its record")) && !r.err.contains("resume"), "{}", r.err);
+    // --head named: the version found and its record written.
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--head", &head_s, "--publish"]);
+    let v = report(&r);
+    assert_eq!(v["landed"]["member"].as_str(), Some(format!("{d}.3").as_str()), "{}", v["landed"]);
+    let member_record = v["landed"]["record"].as_str().expect("the record, written now").to_string();
+    assert!(
+        rig.read(&token, &frames::find_links_ftt(&kind_s, &daughter_s))["addrs"].as_array().is_some_and(|links| links.iter().any(|l| l.as_str() == Some(member_record.as_str()))),
+        "the record found from the daughter"
+    );
+    assert_eq!(rig.publishes_under(&token, &d), publishes + 1, "nothing published twice");
+    assert!(r.err.contains(&format!("version 3 of {d} already holds this merge")) && r.err.contains("nothing was published now"), "found, said as found: {}", r.err);
+    assert!(!r.err.contains("published version"), "never said as published now: {}", r.err);
+    session.close().expect("close");
+}
+
+/// A fresh landing stopped before its record is named by the next `--new`,
+/// and `--into` that draft lands it with its record (PUB-8.32; SP-10).
+///
+/// Every class-scan permit held, `--new` stages a fresh draft F from the
+/// head and lands the merge there, the journal's find refused busy past its
+/// reissues: exit 3, the talk naming `--new` and `landing_begun`, the face
+/// naming F, F marked and no record linked to it. Let go, `--new` again
+/// stages nothing, refused `landing_begun` naming F and `--into F`, exit 1,
+/// never a `resume`; `--into F` then lands the merged list there again and
+/// writes its record; and `--new` once more finds that landing and says so
+/// (the mutants that drop the `--new` talk line, or word `landing_begun` in
+/// the library's `resume`, fail it).
+#[test]
+fn a_fresh_landing_stopped_before_its_record_is_named_by_new_and_landed_again_by_into() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, _base, head, daughter) = rig.race(&session);
+    let (d_s, daughter_s, head_s) = (d.to_string(), daughter.to_string(), head.to_string());
+    let new = ["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--new"];
+    let position = || rig.board.health().unwrap().log_position();
+
+    // --NEW, its record step stopped: the merge stands in a fresh draft F.
+    let permits: Vec<_> = std::iter::from_fn(|| rig._daemon.daemon().try_hold_scan_permit()).collect();
+    assert!(!permits.is_empty(), "the premise: the board's class-scan permits held");
+    let r = rig.merge(&new);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(
+        r.err.contains("the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft"),
+        "the way on in this command's flags: {}",
+        r.err
+    );
+    let f_s = r.err.split("the merge stands at ").nth(1).and_then(|rest| rest.split(',').next()).expect("the face names the fresh draft").to_string();
+    let meta = rig.read(&token, &frames::doc_metadata(&f_s));
+    assert_eq!((meta["merge"]["sides"].clone(), meta["merge"]["head"].as_str()), (json!([daughter_s]), Some(head_s.as_str())), "the landing's write stands, F marked: {meta}");
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind_s, &f_s))["addrs"], json!([]), "no record linked to F");
+    drop(permits);
+
+    // --NEW AGAIN: the landing begun named, nothing staged or written.
+    let before = position();
+    let r = rig.merge(&new);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(r.err.contains(&format!("the board refused: landing_begun:this merge already landed in {f_s} at position")), "{}", r.err);
+    assert!(r.err.contains(&format!("run this again with --into {f_s}, which lands the merged list there again and writes its record, replacing any edit made in {f_s} since")), "{}", r.err);
+    assert!(!r.err.contains("resume") && !r.err.contains("discard"), "no act this command lacks: {}", r.err);
+    assert_eq!(position(), before, "nothing staged, nothing written");
+
+    // --INTO F: the merged list landed there again, its record written.
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--into", &f_s]);
+    let v = report(&r);
+    assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(f_s.as_str()), json!(false)), "{}", v["landed"]);
+    let link = v["landed"]["record"].as_str().expect("the record, written now").to_string();
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind_s, &f_s))["addrs"], json!([link]), "the record linked to F");
+    let at = v["landed"]["position"].as_u64().expect("the write's position");
+
+    // --NEW ONCE MORE: that landing found standing and said as found.
+    let before = position();
+    let r = rig.merge(&new);
+    let v = report(&r);
+    assert_eq!(v["landed"], json!({"draft": f_s, "position": at, "record": link, "head_moved": null, "fresh": false}), "found standing");
+    assert!(r.err.contains(&format!("this merge already stands in the draft {f_s} — it landed at position {at}, before this run; nothing was staged or written now")), "{}", r.err);
+    assert_eq!(position(), before, "nothing staged, nothing written");
     session.close().expect("close");
 }
 
@@ -1220,6 +1386,51 @@ fn a_landing_restored_in_a_draft_with_no_recorded_base_still_stands() {
     let content = set["set"].as_array().expect("the span set").iter().find(|s| s["start"].as_str() == Some("1.1"));
     let width = content.map_or(0, |s| s["width"].as_str().and_then(|w| w.strip_prefix("0.")).and_then(|w| w.parse::<u64>().ok()).expect("a content width"));
     assert_eq!(width, 0, "A as it stood before the merge, empty: {set}");
+    session.close().expect("close");
+}
+
+/// A withdrawal of a draft with no recorded base names the undo that takes
+/// its landing back.
+///
+/// The race's daughter merged `--into F`, F minted by `create_new_document`,
+/// which carries no base and so no marker (N4), though the merge stands in
+/// it by its row (skep #914): `--withdraw F` has no marker to take out,
+/// exit 1, nothing on stdout and nothing written, its words naming `--undo
+/// F` and never "nothing to undo"; `--undo F` then takes the landing back,
+/// F empty as minted (the mutant that says the library's `no_merge` words
+/// fails it).
+#[test]
+fn a_withdrawal_of_a_draft_with_no_recorded_base_names_the_undo_that_takes_its_landing_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, _base, _head, daughter) = rig.race(&session);
+    let f = rig.draft();
+    let (d_s, f_s, daughter_s) = (d.to_string(), f.to_string(), daughter.to_string());
+    let position = || rig.board.health().unwrap().log_position();
+    let v = report(&rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--into", &f_s]));
+    assert_eq!(rig.image(&token, &f, 11), runs_of(&v), "the premise: F holds M");
+    let meta = rig.read(&token, &frames::doc_metadata(&f_s));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "the premise: no base, no marker: {meta}");
+    let before = position();
+    let r = rig.merge(&["--withdraw", &f_s, "--kind", &kind_s]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(
+        r.err.contains(&format!("the board refused: no_merge:{f} carries no merge marker, so this withdrawal has nothing to take out — nothing was taken out; a draft with no recorded base carries none even where a merge landed in it, and --undo {f} takes such a landing back")),
+        "{}",
+        r.err
+    );
+    assert!(!r.err.contains("nothing to undo"), "a merge stands in F: {}", r.err);
+    assert_eq!(position(), before, "nothing written");
+    let undone = report(&rig.merge(&["--undo", &f_s, "--kind", &kind_s]));
+    assert_eq!((undone["draft"].as_str(), undone["case"].as_str()), (Some(f_s.as_str()), Some("feed")), "taken back by its row: {undone}");
+    let set = rig.read(&token, &frames::span_set(&f_s));
+    let content = set["set"].as_array().expect("the span set").iter().find(|s| s["start"].as_str() == Some("1.1"));
+    let width = content.map_or(0, |s| s["width"].as_str().and_then(|w| w.strip_prefix("0.")).and_then(|w| w.parse::<u64>().ok()).expect("a content width"));
+    assert_eq!(width, 0, "F as minted, empty: {set}");
     session.close().expect("close");
 }
 
@@ -1718,7 +1929,7 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     let r = rig.merge(&["--withdraw", &t_s, "--kind", &kind_s]);
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
-    assert!(r.err.contains(&format!("the board refused: no_merge:{t} carries no merge: nothing to undo, nothing to take out")), "{}", r.err);
+    assert!(r.err.contains(&format!("the board refused: no_merge:{t} carries no merge marker, so this withdrawal has nothing to take out — nothing was taken out")), "{}", r.err);
     assert_eq!(position(), before, "nothing written");
 
     // THE WITHDRAWAL TAKEN BACK (skep #870): `--undo T --withdrawal P` puts
@@ -1788,7 +1999,15 @@ fn an_undo_of_a_merge_landed_twice_puts_the_first_landing_back_and_says_so() {
     let before = rig.board.health().unwrap().log_position();
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--new", "--kind", &kind_s]);
     assert_eq!(report(&r)["landed"], json!({"draft": s_s, "position": second["position"], "record": first["record"], "head_moved": null, "fresh": false}), "found standing at the second write");
-    assert!(r.err.contains(&format!("landed in the draft {s} at position {}; the record's link is {}", second["position"], first["record"].as_str().unwrap())), "{}", r.err);
+    assert!(
+        r.err.contains(&format!(
+            "this merge already stands in the draft {s} — it landed at position {}, before this run; nothing was staged or written now; the record's link is {}",
+            second["position"],
+            first["record"].as_str().unwrap()
+        )),
+        "found, said as found: {}",
+        r.err
+    );
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
     let r = rig.merge(&["--undo", &s_s, "--kind", &kind_s]);
     let v = report(&r);
@@ -1948,8 +2167,12 @@ fn a_landing_found_standing_for_another_accounts_prior_is_reported_with_nothing_
     assert_eq!(v["prior"]["landed"]["draft"].as_str(), Some(owners.as_str()), "the prior still the claimant's: {}", v["prior"]);
     assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["position"].as_u64(), v["landed"]["fresh"].clone()), (Some(theirs.as_str()), Some(at), json!(false)), "{}", v["landed"]);
     assert_eq!(position(), before, "nothing staged, nothing written");
-    assert!(r.err.contains(&format!("landed in the draft {theirs} at position {at};")), "{}", r.err);
-    assert!(!r.err.contains("fresh draft"), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("this merge already stands in the draft {theirs} — it landed at position {at}, before this run; nothing was staged or written now")),
+        "found, said as found: {}",
+        r.err
+    );
+    assert!(!r.err.contains("landed in the draft") && !r.err.contains("fresh draft"), "never said as landed now: {}", r.err);
     session.close().expect("close");
 }
 

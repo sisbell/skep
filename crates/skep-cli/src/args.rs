@@ -564,16 +564,19 @@ usage: skep <command> [flags]
                list and its gaps composed under the rules and reported as
                one JSON document on stdout; --publish lands it as the next
                version with its record, asking first at every window part
-               of the merged text (no answer given for you), --into lands
-               it in a draft in one
-               write (refused whole where the draft changed since), --new
-               in a fresh draft staged from the head, or in the draft your
-               landing of this merge stands in; a newer version
-               published since is told; --undo puts a draft back as it
-               stood before a merge landed in it (with --withdrawal it
-               puts back the merge a withdrawal took out), --withdraw
-               takes the merge out of a draft and keeps the words; a side
-               of another account is refused; no person door
+               of the merged text (no answer given for you), --into sets
+               a draft's whole text to the merged text in one write —
+               what the draft held is replaced, and --undo <draft> puts it
+               back while nothing else is written there (refused whole
+               where the draft changed since) — --new in a fresh draft
+               staged from the head, or in the draft your landing of this
+               merge stands in; a newer version published since is told;
+               --undo puts a draft back as it stood before a merge landed
+               in it (with --withdrawal it puts back the merge a
+               withdrawal took out), --withdraw takes the merge out of a
+               draft and keeps the words; a draft of another account is
+               refused (another account's fork goes as --fork); no person
+               door
   share        share a draft (--doc <D>) or your whole account
                (--whole-account) with ONE account (--to <account>); or
                --privash one draft: open it to every account on this
@@ -779,7 +782,10 @@ flags (a flag beats its env variable; a variable set empty is unset):
             choice: order:<side>,<side>...  after:<address>
             before:<address>  keep:<side>  both  omit; a side is its
             index as the report numbers it)  [--no-dedup]  [--retype]
-            [--retries <n>]  [--publish, or --into <draft>, or --new];
+            [--retries <n>]  [--publish, or --into <draft> (the draft's
+            whole text set to the merged text, what it held replaced:
+            --undo <draft> puts it back while nothing else is written
+            there), or --new];
             with none it composes and prints; at --publish each window
             part of the merged text is answered by name, none for you
             (the refusal lists them and exits 1, publishing nothing):

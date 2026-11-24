@@ -238,11 +238,12 @@
 //! the act stands all the same. A re-run after either act writes nothing
 //! for it (**The guarantees**) — so where the record is not written after
 //! the act's write, for a lost acknowledgment at its writes, a board too
-//! busy to answer the find of the account's journal, or a journal the
-//! record's step finds unable to take it, the landing's record stands
-//! alone, which the halt says; the act's own write unanswered past its
-//! re-ask and its row's read (**The lost answer**), the dialer's halt,
-//! leaves it alone too. A `resume` of the landing
+//! busy to answer the find of the account's journal, a journal the
+//! record's step finds unable to take it, or any other refusal of the
+//! step's reads and writes, the landing's record stands alone, which the
+//! face says: every one of them is faced as the act standing with its
+//! record unwritten, the refusal its cause. The act's own write unconfirmed
+//! (**The lost answer**) leaves it alone too. A `resume` of the landing
 //! after either act finds nothing to resume of the write taken back,
 //! whether or not either record was written: it goes by the marker, which
 //! the act cleared, or put back as the earlier landing left it — the
@@ -270,42 +271,57 @@
 //! board whose head is owed as on any other.
 //!
 //! **The lost answer.** Each of the act's writes is asked again once under
-//! its id where its answer is lost (the `land` module's `send_write`), and
-//! the board answers an id it has acknowledged in the session with that
-//! acknowledgment, so the write lands once and the act goes on to its
-//! record. Where the re-ask's answer is lost too, the one write is looked
-//! for on the draft's own rows past the position it was typed against: the
-//! first row there to change the draft's arrangement is the write's where
-//! it is a `set_arrangement` row carrying the frame's base and merge terms
-//! and the draft as of it holds the frame's runs, and the act answers that
-//! row's position and writes its record. Else it is the dialer's halt, the
-//! write unconfirmed — never landed, or not landed yet, which no read tells
-//! apart — and a run again reads the draft as it stands: where the write
-//! landed after all, the take-back is done, and a run again of an undo
-//! takes back the landing beneath it, where one stands, as a step of its
-//! own. So the write a lost answer stopped is finished by the act itself
-//! wherever the board shows it, never sent again over the state it made.
+//! its id where the transport lost its answer (the `land` module's
+//! `send_write`), and the board answers an id it has acknowledged in the
+//! session with that acknowledgment, so the write lands once and the act
+//! goes on to its record. The one write's answer is lost all the same where
+//! the re-ask's is lost too; where the re-ask meets the death signal — a
+//! daemon restarted between the two asks kills every token, its memo with
+//! them (wire.md §Sessions), after the first ask may have committed; and
+//! where the board answers `500 internal_panic`, which is no verdict on a
+//! write: it may have committed, its acknowledgment never memoized (wire.md
+//! §HTTP status codes). Then the one write is looked for on the draft's own
+//! rows past the position it was typed against: the first row there to
+//! change the draft's arrangement is the write's where it is a
+//! `set_arrangement` row carrying the frame's base and merge terms and the
+//! draft as of it holds the frame's runs, and the act answers that row's
+//! position and writes its record. Else the write is unconfirmed — never
+//! landed, not landed yet, or landed with its row's testimony lost to a
+//! panic (wire.md §The change feed, a bare row), which no read tells apart
+//! — and the act answers so, its record unwritten either way: a face where
+//! the session stands, [`Refusal::SessionEnded`] where it ended
+//! ([`OnEnd::Unconfirmed`]), and a read of the rows that fails is answered
+//! so too, never as its own halt. Its way on says what the draft shows
+//! where the write landed and what a run again then does: an undo's takes
+//! back the landing beneath it, where one stands, as a step of its own; a
+//! withdrawal's, or its undo's, refuses. So the write a lost answer stopped
+//! is finished by the act itself wherever the board shows it, never sent
+//! again over the state it made, and one it cannot confirm is named as
+//! such.
 //!
 //! **The session's end.** The death signal under the merger's token is
-//! [`Refusal::SessionEnded`]: up to and at the one write the act is run
-//! again, nothing having changed; at the record, after the write, the act
-//! stands with its record unwritten, as a journal that cannot take the
-//! record leaves it there.
+//! [`Refusal::SessionEnded`]: up to and at the one write's first ask the
+//! act is run again, nothing having changed; at its re-ask or its read back
+//! after a lost answer, the write is unconfirmed (**The lost answer**); at
+//! the record, after the write, the act stands with its record unwritten,
+//! as a journal that cannot take the record leaves it there.
 
 use serde_json::Value;
 use skep_address::{content_subspace, document_of, Address};
 
 use crate::address::parse_address;
 use crate::board::answers::Metadata;
-use crate::board::{acked_at, frames, Board, Image, Rejection};
+use crate::board::{acked_at, frames, Answer, Board, Image, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::publication;
 
-use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
+use super::land::{
+    own_fault, own_fault_face, send_write, shape_face, Asked, Merger, Unrecorded, Unwritten, Writer,
+};
 use super::landings::{arranged_at, before, Before, Landings};
 use super::reads::{
-    feed_rows, mapped_image, owners_records, runs_of, stretches, NoUndo, OnEnd, Reader, Refusal,
-    SHOT_RUN_CAP,
+    feed_rows, mapped_image, owners_records, runs_of, session_ended, stretches, LostTakeBack,
+    NoUndo, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
 };
 use super::record::{self, linked_to, standing_for, taken_back, Record};
 use crate::board::answers::MergeMarker;
@@ -464,23 +480,28 @@ pub struct Unwithdrawn {
 ///   `base_extent_too_large` and the runs' refusals as the library's own
 ///   faults, since it sends only the base, the marker and the runs it read,
 ///   mapped through the records the board served; a lost acknowledgment
-///   asked again once under its id, and where the re-ask's is lost too, the
-///   read of the draft's rows past the typed position and of the draft at
-///   the write's row (**The lost answer**), each refusal as itself, then the
-///   dialer's halt where no row shows the write;
-/// - the record's reads' refusals; a journal the record's step finds unable
-///   to take it, as [`Refusal::Halt`] saying the merge is out of the draft
-///   — and an earlier landing's merge back in it, where one stands again —
-///   and the record is not written, nothing of the record written; then the
-///   record's writes' as `Writer::write_record` answers them, the act
-///   standing.
+///   asked again once under its id, and where the write's answer stays lost
+///   — the re-ask's lost too, the death signal at the re-ask, or the board's
+///   `500 internal_panic` — the read of the draft's rows past the typed
+///   position and of the draft at the write's row (**The lost answer**), then
+///   the write unconfirmed where no row shows it or the read fails, as
+///   [`Refusal::Halt`] with a face saying it may have landed, how the
+///   draft tells, and that an undo run again where it landed takes the
+///   landing beneath it back too;
+/// - the record's step's every refusal — its reads, a journal it finds
+///   unable to take the record, its writes — as [`Refusal::Halt`] with a
+///   face saying the merge is out of the draft — and an earlier landing's
+///   merge back in it, where one stands again — and the record is not
+///   written, the refusal its cause, the act standing.
 ///
 /// The death signal under the merger's token, met at any step, is
-/// [`Refusal::SessionEnded`]: up to and at the one write its face says to
-/// run the undo again, nothing changed; at the record's, that the merge is
-/// out of the draft with its record unwritten — an earlier landing's merge
-/// back in it, where one stands again, which an undo run again takes back
-/// too — and nothing more is written.
+/// [`Refusal::SessionEnded`]: up to and at the one write's first ask its
+/// face says to run the undo again, nothing changed; at the write's re-ask
+/// or its read back after a lost answer, that the write may have landed and
+/// how the draft tells; at the record's, that the merge is out of the draft
+/// with its record unwritten — an earlier landing's merge back in it, where
+/// one stands again, which an undo run again takes back too — and nothing
+/// more is written.
 ///
 /// [`baseless_landing`]: super::baseless_landing
 pub fn undo(
@@ -566,8 +587,8 @@ pub fn undo(
         Some(&format!("{stem}.arrangement")),
     );
     writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
-    let restores = earlier.is_some();
-    let act = Act::Undo { landing, put_back, own_ack: own_ack.is_some(), restores };
+    let restores = earlier.as_ref().map(|e| e.at);
+    let act = Act::Undo { landing, put_back, own_ack: own_ack.is_some(), earlier: restores };
     let position = send(&writer, &frame, draft, as_of, act)?;
     // The record is judged by the landing taken back and the one standing
     // again (**The record.**).
@@ -960,9 +981,9 @@ pub fn withdraw(
 ///   changed since the merge was taken out, or since the caller's last
 ///   write past it — and `marker_not_restorable`, the draft published since
 ///   it was read, as [`Refusal::Halt`] saying nothing was changed;
-/// - the record's reads' refusals; a journal the record's step finds unable
-///   to take it, as [`Refusal::Halt`] saying the merge is back in the draft
-///   and the record is not written; then the record's writes'.
+/// - the record's step's every refusal, as [`Refusal::Halt`] saying the
+///   merge is back in the draft and the record is not written, the refusal
+///   its cause.
 ///
 /// The death signal under the merger's token is [`Refusal::SessionEnded`],
 /// faced as [`undo`]'s up to and at the one write, and at the record's
@@ -1050,7 +1071,7 @@ pub fn unwithdraw(
         Some(&format!("{stem}.arrangement")),
     );
     writer.check_journal(journal, &format!("the merge cannot be put back into {draft}"))?;
-    let act = Act::Unwithdraw { withdrawal, own_ack: own_ack.is_some() };
+    let act = Act::Unwithdraw { withdrawal, own_ack: own_ack.is_some(), marker: cleared.at };
     let position = send(&writer, &frame, draft, as_of, act)?;
     let record = restore_record(board, merger, kind, draft, &cleared, &stem, journal)?;
     Ok(Unwithdrawn { draft: draft.clone(), position, record })
@@ -1104,8 +1125,9 @@ fn withdrawal_rows(reader: &Reader<'_>, draft: &Address, withdrawal: u64) -> Res
 #[derive(Clone, Copy)]
 pub(crate) enum Act {
     /// An undo: its landing's position, the latest write that put the
-    /// landing's marker back since, whether `own_ack` was given, and whether
-    /// the write puts the earlier marker back.
+    /// landing's marker back since, whether `own_ack` was given, and the
+    /// position of the earlier marker the write puts back, where it puts one
+    /// back.
     ///
     /// Its words name `landing` where the write was typed past it, and the
     /// put-back where one stands. With `own_ack` false the write is typed
@@ -1117,16 +1139,17 @@ pub(crate) enum Act {
         landing: u64,
         put_back: Option<PutBack>,
         own_ack: bool,
-        restores: bool,
+        earlier: Option<u64>,
     },
     Withdraw,
     /// A withdrawal's undo, its words as an undo's are.
     ///
-    /// It carries the withdrawal's position and whether `own_ack` was
-    /// given.
+    /// It carries the withdrawal's position, whether `own_ack` was given,
+    /// and the position of the marker the write puts back.
     Unwithdraw {
         withdrawal: u64,
         own_ack: bool,
+        marker: u64,
     },
     /// The `history` module's restore.
     ///
@@ -1145,6 +1168,26 @@ impl Act {
             Act::Withdraw => "the withdrawal",
             Act::Unwithdraw { .. } => "the withdrawal's undo",
             Act::Restore => "the restore",
+        }
+    }
+
+    /// The act's one write, as a step a session's end can meet.
+    fn during(self) -> &'static str {
+        match self {
+            Act::Undo { .. } => "taking the merge back out of the draft",
+            Act::Withdraw => "taking the merge out of the draft",
+            Act::Unwithdraw { .. } => "putting the merge back into the draft",
+            Act::Restore => "restoring the draft",
+        }
+    }
+
+    /// The act whose one write's answer was lost, as its way on names it.
+    fn lost(self) -> LostTakeBack {
+        match self {
+            Act::Undo { landing, earlier, .. } => LostTakeBack::Undo { landing, earlier },
+            Act::Withdraw => LostTakeBack::Withdraw,
+            Act::Unwithdraw { marker, .. } => LostTakeBack::Unwithdraw { at: marker },
+            Act::Restore => LostTakeBack::Restore,
         }
     }
 }
@@ -1255,29 +1298,58 @@ fn capped_runs(sent: &Image) -> Result<Vec<Value>, Refusal> {
 ///
 /// The frame goes under the merger's token, unsigned — a draft's
 /// `set_arrangement` takes no `attest`, so no head is read — through
-/// [`Writer::answered_write`], which asks it again once under its id where
-/// its answer is lost, and its answer is judged by [`judge`]. Where the
-/// re-ask's answer is lost too, the draft's own rows past `as_of` are read
-/// for the write's (`landed_at`; the module's doc, **The lost answer**).
+/// [`send_write`], which asks it again once under its id where its answer
+/// is lost, and its answer is judged by [`judge`]. Where the write's answer
+/// is lost — every answer of the re-ask but a document, and the board's
+/// `500 internal_panic`, which is no verdict on a write (wire.md §HTTP
+/// status codes) — the draft's own rows past `as_of` are read for the
+/// write's (`landed_at`; the module's doc, **The lost answer**), and a
+/// write no row confirms is answered unconfirmed ([`OnEnd::Unconfirmed`]).
 ///
 /// # Errors
 ///
 /// As [`undo`]'s one write's.
 fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
-    let during = match act {
-        Act::Undo { .. } => "taking the merge back out of the draft",
-        Act::Withdraw => "taking the merge out of the draft",
-        Act::Unwithdraw { .. } => "putting the merge back into the draft",
-        Act::Restore => "restoring the draft",
-    };
-    let v = match writer.answered_write(frame, during) {
-        Err(Refusal::Halt(Halt::Dial(lost))) => {
-            return landed_at(&writer.reader, draft, as_of, frame)?
-                .ok_or(Refusal::Halt(Halt::Dial(lost)));
+    let during = act.during();
+    let unconfirmed = OnEnd::Unconfirmed(act.lost());
+    let Asked { answer, again } = send_write(writer.board, writer.merger.token, frame);
+    let lost = match answer {
+        Ok(Answer::Document(v)) => return judge(&v, frame, draft, as_of, act),
+        // A dead token's write runs as a guest's: the first ask landed
+        // nothing, its re-ask may follow one that did.
+        Ok(Answer::Closed) if !again => {
+            return Err(session_ended(during, writer.reader.on_end()))
         }
-        answer => answer?,
+        Ok(Answer::Closed) => return Err(session_ended(during, unconfirmed)),
+        Err(h) if again || answer_lost(&h) => h,
+        Err(h) => return Err(h.into()),
     };
-    judge(&v, frame, draft, as_of, act)
+    let read_back = landed_at(&writer.reader, draft, as_of, frame);
+    let cause = match read_back {
+        Ok(Some(at)) => return Ok(at),
+        Ok(None) => format!("{lost}; and no row of the draft's past the position the write was typed against, {as_of}, is the write's"),
+        Err(Refusal::SessionEnded(_)) => return Err(session_ended(during, unconfirmed)),
+        Err(e) => format!("{lost}; and the read of the draft's rows back: {e}"),
+    };
+    Err(Halt::face(
+        format!("the write may have landed, and its record is not written: its answer was lost while {during}"),
+        cause,
+        act.lost().way_on(),
+    )
+    .into())
+}
+
+/// Returns whether `h` leaves a write's answer lost, whatever it did.
+///
+/// It is a dial fault, and the board's `500 internal_panic`: the write may
+/// have committed before the panic, its acknowledgment never memoized
+/// (wire.md §HTTP status codes; §Correlation and idempotency).
+fn answer_lost(h: &Halt) -> bool {
+    match h {
+        Halt::Dial(_) => true,
+        Halt::Refused(r) => r.status == 500 && r.code == "internal_panic",
+        Halt::Halt(_) | Halt::Blocked(_) => false,
+    }
 }
 
 /// Returns the position a take-back's write landed at, its answers lost.
@@ -1416,7 +1488,7 @@ pub(crate) fn judge(
         // last moved: the withdrawal's undo, or an undo putting the earlier
         // marker back, read the draft unpublished and a publication of it
         // landed before the write (skep #870, #964).
-        "marker_not_restorable" if matches!(act, Act::Unwithdraw { .. } | Act::Undo { restores: true, .. }) => Refusal::Halt(Halt::Refused(Refused {
+        "marker_not_restorable" if matches!(act, Act::Unwithdraw { .. } | Act::Undo { earlier: Some(_), .. }) => Refusal::Halt(Halt::Refused(Refused {
             status: 200,
             code: r.code().to_string(),
             detail: Some(format!("{draft} was published since it was read, and a publication of the draft ends the merge it carried — nothing was changed; nothing to undo: a version stands, and the way back is to publish the older text again")),
@@ -1560,12 +1632,15 @@ struct Markers<'a> {
 /// for the step after the act's one write: a session's end at any of its
 /// reads or writes leaves the act standing with its record unwritten
 /// ([`OnEnd::TakenOut`], or [`OnEnd::EarlierBack`] where an earlier landing
-/// stands again).
+/// stands again), and so does every other refusal of the step, faced so.
 ///
 /// # Errors
 ///
-/// The record's read's refusals ([`linked_to`]), then its writes'
-/// (`Writer::write_record`).
+/// Every refusal of the step — the read of the merger's records
+/// ([`linked_to`]) and the record's writes (`Writer::write_record`) — faced
+/// as the act standing with its record unwritten, the refusal its cause
+/// ([`Unrecorded::faced`]); the session's end, [`Refusal::SessionEnded`],
+/// faced for the step after the act's write.
 #[allow(clippy::too_many_arguments)]
 fn replace_record(
     board: &Board,
@@ -1580,7 +1655,21 @@ fn replace_record(
     let Markers { taken, landing, earlier } = markers;
     let on_end = if earlier.is_some() { OnEnd::EarlierBack } else { OnEnd::TakenOut };
     let writer = Writer::new(board, merger, on_end);
-    let own = linked_to(&writer.reader, kind, draft, merger.account)?;
+    let owed = |why: Unwritten, cause: String| {
+        let out = match earlier {
+            Some(_) => {
+                format!("the merge is out of {draft}, the merge landed before it standing again")
+            }
+            None => format!("the merge is out of {draft}"),
+        };
+        Halt::face(
+            format!("{out}, and the record of {} is not written: {}", act.name(), why.reason()),
+            cause,
+            on_end.act(),
+        )
+    };
+    let own = linked_to(&writer.reader, kind, draft, merger.account)
+        .map_err(|e| Unrecorded::from(e).faced(&owed))?;
     let Some(current) = standing_for(&own, draft, taken, landing) else { return Ok(None) };
     let standing = earlier.and_then(|(marker, at)| standing_for(&own, draft, marker, at));
     if standing.is_some_and(|standing| standing.link == current.link) {
@@ -1595,20 +1684,10 @@ fn replace_record(
         link: None,
         ..current
     };
-    let owed = |why: Unwritten, cause: String| {
-        let out = match earlier {
-            Some(_) => {
-                format!("the merge is out of {draft}, the merge landed before it standing again")
-            }
-            None => format!("the merge is out of {draft}"),
-        };
-        Halt::face(
-            format!("{out}, and the record of {} is not written: {}", act.name(), why.reason()),
-            cause,
-            on_end.act(),
-        )
-    };
-    writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
+    writer
+        .write_record(kind, &record, draft, stem, journal, &owed)
+        .map(Some)
+        .map_err(|e| e.faced(&owed))
 }
 
 /// Writes the record of a withdrawal's undo (skep #870; the module's doc).
@@ -1620,12 +1699,12 @@ fn replace_record(
 /// written is that landing's record again, `replaces` the take-back's link,
 /// under `stem`. `None` where either is missing, nothing written. It reads
 /// and writes through a writer of its own built for the step after the
-/// act's one write ([`OnEnd::PutBack`]).
+/// act's one write ([`OnEnd::PutBack`]), every refusal of the step leaving
+/// the act standing with its record unwritten.
 ///
 /// # Errors
 ///
-/// The records' reads' refusals ([`linked_to`]), then the record's writes'
-/// (`Writer::write_record`).
+/// As [`replace_record`]'s, faced for the merge put back.
 fn restore_record(
     board: &Board,
     merger: Merger<'_>,
@@ -1636,12 +1715,6 @@ fn restore_record(
     journal: Option<&Address>,
 ) -> Result<Option<Address>, Refusal> {
     let writer = Writer::new(board, merger, OnEnd::PutBack);
-    let own = linked_to(&writer.reader, kind, draft, merger.account)?;
-    let Some((landing, take_back)) = taken_back(&own, draft, &cleared.marker, cleared.at) else {
-        return Ok(None);
-    };
-    let record =
-        Record { replaces: Some(take_back.link), by: record::by(), link: None, ..landing.record };
     let owed = |why: Unwritten, cause: String| {
         Halt::face(
             format!("the merge is back in {draft}, and the record of the withdrawal's undo is not written: {}", why.reason()),
@@ -1649,5 +1722,15 @@ fn restore_record(
             OnEnd::PutBack.act(),
         )
     };
-    writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)
+    let own = linked_to(&writer.reader, kind, draft, merger.account)
+        .map_err(|e| Unrecorded::from(e).faced(&owed))?;
+    let Some((landing, take_back)) = taken_back(&own, draft, &cleared.marker, cleared.at) else {
+        return Ok(None);
+    };
+    let record =
+        Record { replaces: Some(take_back.link), by: record::by(), link: None, ..landing.record };
+    writer
+        .write_record(kind, &record, draft, stem, journal, &owed)
+        .map(Some)
+        .map_err(|e| e.faced(&owed))
 }

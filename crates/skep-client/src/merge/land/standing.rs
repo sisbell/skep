@@ -32,7 +32,12 @@ use super::writer::{Stem, Writer};
 /// reads every document M windows ([`Writer::windows_readable`]) before the
 /// stage. A journal named is checked once, after the read-first steps and
 /// before the landing's first write ([`Writer::check_journal`]); a landing
-/// found standing writes nothing before its record and checks none.
+/// found standing writes nothing before its record and checks none. The
+/// record a draft landing made now answers by is the newest record of the
+/// key where it names the draft (skep #790; `Newest::naming`); a landing
+/// the residue walk finds in the draft named answers by the record of the
+/// key standing for it there (`Newest::standing_in`), whatever the newest
+/// names, and is recorded only where none stands.
 ///
 /// # Errors
 ///
@@ -157,7 +162,15 @@ pub(super) fn walk(
                 return Ok(None);
             };
             let landed = RecordLanding::Draft { draft: into.clone(), position };
-            let record = match newest.naming(&landed) {
+            // A write made now is the record's where the newest record names
+            // its draft (#790); a landing the walk found is the record's that
+            // stands for it in its draft, whatever the newest names.
+            let standing = if shoot {
+                newest.naming(&landed)
+            } else {
+                newest.standing_in(&into, position)
+            };
+            let record = match standing {
                 Some(link) => link.clone(),
                 None => {
                     let journal = landing.journal();

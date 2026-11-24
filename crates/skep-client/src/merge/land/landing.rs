@@ -164,12 +164,14 @@ pub enum Landed {
         /// Where the landing was found standing, it is the position the
         /// board marks it at — the draft's marker, or on a draft with no
         /// recorded base its `set_arrangement` row — the draft as of it
-        /// holding M, for a `resume` naming the draft, and for a fresh
-        /// landing a draft the merger's records of the key name, marking the
-        /// merge at or past the position its record names; such a
-        /// fresh landing whose draft cannot be judged, the walk of its rows
-        /// needing a past state the board has reclaimed, answers the
-        /// record's position. A landing into the
+        /// holding M, or with that position reclaimed and the draft edited
+        /// since a record of the key standing for it, for a `resume` naming
+        /// the draft, and for a fresh landing a draft the merger's records of
+        /// the key name, marking the merge at or past the position its record
+        /// names, the draft as of it holding M or that position reclaimed
+        /// and the draft edited since; such a fresh landing whose draft's
+        /// mark cannot be read, the walk of its rows needing a past state the
+        /// board has reclaimed, answers the record's position. A landing into the
         /// draft the standing record names is the same landing (skep #790):
         /// `position` is this write's, and the record's own is the first
         /// landing's.

@@ -1139,6 +1139,40 @@ fn a_compose_naming_no_into_re_opens_the_landing_an_undo_elsewhere_left_standing
     sd.shutdown();
 }
 
+/// Checks that a re-open of a draft whose landing a record stands for
+/// writes no record, whatever landed since in another draft.
+///
+/// Against the daemon: E.1.1's merge lands in T, then in U, each named as
+/// `into`, U's record replacing T's as the newest of the key while both
+/// landings stand (skep #914). Composed again naming T, the merge re-opens
+/// there at T's marker, T's record answering its landing; naming U, the
+/// same — the board's position unmoved at each (the mutant that judges the
+/// library's residue walk by the newest record of the key alone writes a
+/// record at each re-open, the newest flipping between the two drafts).
+#[test]
+fn a_re_open_of_a_draft_whose_landing_a_record_stands_for_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let (t, u) = (g.addr(frames::stage(&f.e2, None)), g.addr(frames::stage(&f.e2, None)));
+    let in_t = merged_into(&g, &f, &f.e11, &t)["position"].as_u64().expect("T's landing");
+    let in_u = merged_into(&g, &f, &f.e11, &u)["position"].as_u64().expect("U's landing");
+    for (draft, at) in [(&t, in_t), (&u, in_u)] {
+        let before = g.position();
+        let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": draft})).unwrap_or_else(|r| panic!("{r}"));
+        assert_report_declared(&report);
+        assert_eq!(
+            (report["outcome"].as_str(), report["into"].as_str(), report["position"].as_u64()),
+            (Some("reopened"), Some(draft.as_str()), Some(at)),
+            "{report}"
+        );
+        assert_eq!(g.position(), before, "{draft}: nothing written");
+    }
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// What another hand did to L after the composition landed in it.
 #[derive(Debug, Clone, Copy)]
 enum SinceTheCompose {

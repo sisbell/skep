@@ -2305,3 +2305,47 @@ fn a_landing_found_standing_is_read_at_the_head_while_its_draft_is_unchanged() {
         dialer.ops()
     );
 }
+
+/// A landing whose list cannot be read back is never made a second time.
+///
+/// The draft landing's merge lands in a fresh draft `N`, its record
+/// written; `N` is edited and the board reclaims its history past the
+/// landing. The list the landing placed cannot be read back, and `N` as it
+/// stands holds other words, which tell nothing of it. (a) A fresh landing
+/// of the same composition answers that landing at its mark, and so does a
+/// `resume` naming no draft; (b) a `resume` naming `N` answers it with its
+/// record — each nothing staged or written (the `land` module's doc, **A
+/// fresh landing found standing**). The mutant that reads `N` as it stands
+/// in the reclaimed state's place stages a second draft at (a) and answers
+/// no landing at (b).
+#[test]
+fn a_landing_whose_list_cannot_be_read_back_is_never_made_a_second_time() {
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+    let Landed::Draft { into, position, .. } = &landed else { panic!("{landed:?}") };
+    {
+        let mut w = dialer.world();
+        let edited = w.change(&into.to_string(), vec![run(D, 1, 4), run(D, 12, 4)]);
+        w.floor = Some(edited);
+    }
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let fresh = || draft_landing(&session, &signer, None);
+    assert_eq!(land(&board, &merged, fresh()), Ok(as_found(&landed)), "(a): the landing");
+    assert_eq!(resume(&board, &merged, fresh()), Ok(Some(as_found(&landed))), "(a): resumed");
+    assert_eq!(
+        resume(&board, &merged, draft_landing(&session, &signer, Some(into.clone()))),
+        Ok(Some(as_found(&landed))),
+        "(b): resumed naming N"
+    );
+    let ops = dialer.ops();
+    assert!(ops.iter().all(|o| !writes.contains(&o.as_str())), "nothing staged or written: {ops:?}");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    assert!(
+        dialer.positions("retrieve_doc_v_span_set").contains(position),
+        "the premise: N asked as of the landing, and refused: {ops:?}"
+    );
+}

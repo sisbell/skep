@@ -39,6 +39,9 @@ pub(in crate::merge) enum Unwritten {
     Busy,
     /// The journal cannot take the record, for the check it fails.
     Journal(Address, Unfit),
+    /// Any other refusal or fault stopped the record's step: one of its
+    /// reads or writes unanswered or refused, which the face's cause names.
+    Stopped,
 }
 
 impl Unwritten {
@@ -49,6 +52,9 @@ impl Unwritten {
                 "the board was too busy to find the account's merge journal".to_string()
             }
             Unwritten::Journal(journal, unfit) => unfit.reason(journal),
+            Unwritten::Stopped => {
+                "a read or a write of the record went unanswered, or was refused".to_string()
+            }
         }
     }
 
@@ -59,6 +65,7 @@ impl Unwritten {
             Unwritten::Journal(..) => {
                 "with a journal this account can write, or with none for its own"
             }
+            Unwritten::Stopped => "once the board answers the record's reads and writes",
         }
     }
 }

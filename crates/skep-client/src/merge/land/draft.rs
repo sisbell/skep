@@ -18,7 +18,6 @@ use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
 use crate::merge::landings::Landings;
 use crate::merge::reads::{first_difference, runs_of, stretches, Family, Merged, Refusal, Side};
-use crate::merge::record::RecordLanding;
 
 use super::faults::{own_fault, own_fault_face, shape_face};
 use super::records::Newest;
@@ -97,7 +96,12 @@ impl Writer<'_> {
     /// edit made in the draft since changes nothing; or `None` where the board
     /// marks no landing of this merge — a take-back cleared it, none was made,
     /// or the draft's marker is the one its stage copied from the draft it was
-    /// staged from — or the landing it marks placed another list.
+    /// staged from — or the landing it marks placed another list. Where the
+    /// list it placed cannot be read back, the board having reclaimed the
+    /// mark's position since the draft was edited, it answers the mark where a
+    /// record of the merger's own of the key stands for it
+    /// ([`Newest::standing_in`]), and `None` where none does: a landing no
+    /// record names is recorded only where it can be judged (#914 F16).
     ///
     /// # Errors
     ///
@@ -105,8 +109,8 @@ impl Writer<'_> {
     /// [`Refusal::NoSuchDocument`] naming the draft where the board does not
     /// register it, the reads of its rows and past states, with `shoot` off,
     /// on a draft with no recorded base ([`Writer::marked_landing`]), and its
-    /// image as of the landing's position, [`Refusal::HistoryBusy`] past the
-    /// bounded retries among them — and a
+    /// image as of the landing's position but a reclaimed one,
+    /// [`Refusal::HistoryBusy`] past the bounded retries among them — and a
     /// draft minted after `as_of`, faced, naming the way out; the board's
     /// `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
     /// `Refused` re-said in [`Writer::moved_words`]'s words — this merge's
@@ -148,8 +152,16 @@ impl Writer<'_> {
             let Some(at) = self.marked_landing(merged, into, &meta)? else {
                 return Ok(None);
             };
-            let held = self.holds_merge(merged, into, at, meta.arranged_at.position())?;
-            return Ok(held.then_some((at, None)));
+            return match self.holds_merge(merged, into, at, meta.arranged_at.position()) {
+                Ok(held) => Ok(held.then_some((at, None))),
+                // The list it placed cannot be read back: the landing a
+                // record of the key stands for is answered, one no record
+                // names judged by nothing and recorded never (#914 F16).
+                Err(Refusal::HistoryReclaimed { .. }) => {
+                    Ok(newest.standing_in(into, at).map(|_| (at, None)))
+                }
+                Err(e) => Err(e),
+            };
         }
         let target: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
         // The base to record: the head's pair, only where the board records
@@ -285,13 +297,19 @@ impl Writer<'_> {
     /// landed between the two reads, `into` is read as of `at` through
     /// `/op-at`. Where the board has reclaimed that position, `into` is read
     /// as it stands instead: holding M whole there, it holds this
-    /// composition's landing.
+    /// composition's landing; holding anything else, it tells nothing of the
+    /// list the landing placed, which the draft's edits since may have
+    /// changed, and the landing is answered as one that cannot be judged.
     ///
     /// # Errors
     ///
-    /// The draft's `image` reads' refusals but a position reclaimed, and the
-    /// `doc_metadata` read's after a head image; [`Refusal::HistoryBusy`]
-    /// past the bounded retries; an `image` run that is no content I-address.
+    /// [`Refusal::HistoryReclaimed`] where the board has reclaimed `at` and
+    /// the draft as it stands does not hold M whole: the list the landing
+    /// placed cannot be read back, and whether it is this composition's
+    /// is the caller's to answer. The draft's `image` reads' other refusals,
+    /// and the `doc_metadata` read's after a head image;
+    /// [`Refusal::HistoryBusy`] past the bounded retries; an `image` run that
+    /// is no content I-address.
     pub(super) fn holds_merge(
         &self,
         merged: &Merged,
@@ -299,6 +317,12 @@ impl Writer<'_> {
         at: u64,
         arranged_at: Option<u64>,
     ) -> Result<bool, Refusal> {
+        let target: Vec<(Run, Family)> =
+            merged.composed.runs.iter().map(|p| (p.run.clone(), Family::Own)).collect();
+        let holds = |runs: &[answers::IRun]| -> Result<bool, Refusal> {
+            let current = runs_of(runs)?;
+            Ok(first_difference(&target, &current, &merged.inputs.doc).is_none())
+        };
         let unchanged = if arranged_at == Some(at) {
             let imaged = self.reader.imaged(into, None)?;
             let still = self.reader.metadata(into, None)?.arranged_at.position() == Some(at);
@@ -306,17 +330,19 @@ impl Writer<'_> {
         } else {
             None
         };
-        let imaged = match unchanged {
-            Some(imaged) => imaged,
+        match unchanged {
+            Some(imaged) => holds(&imaged.runs),
             None => match self.reader.imaged(into, Some(at)) {
-                Err(Refusal::HistoryReclaimed { .. }) => self.reader.imaged(into, None)?,
-                imaged => imaged?,
+                Err(reclaimed @ Refusal::HistoryReclaimed { .. }) => {
+                    if holds(&self.reader.imaged(into, None)?.runs)? {
+                        Ok(true)
+                    } else {
+                        Err(reclaimed)
+                    }
+                }
+                imaged => holds(&imaged?.runs),
             },
-        };
-        let current = runs_of(&imaged.runs)?;
-        let target: Vec<(Run, Family)> =
-            merged.composed.runs.iter().map(|p| (p.run.clone(), Family::Own)).collect();
-        Ok(first_difference(&target, &current, &merged.inputs.doc).is_none())
+        }
     }
 
     /// Checks that the merger may read every document M windows, before a
@@ -443,23 +469,26 @@ impl Writer<'_> {
     /// the refusal names it. Where this merge's own landing stands
     /// ([`Writer::marked_landing`]) at a position past `as_of` — met by a
     /// composition landed again in a session that holds no memo of its
-    /// write — the words name it and its record, `newest` where it names
-    /// `into` as landed in, else unwritten, and what that landing placed: M,
-    /// whatever was edited in `into` since, and `resume` is the way on, which
-    /// answers that landing and writes a record it lacks; another list — a
-    /// composition of the same head and sides with other choices — and
-    /// nothing to resume. Else the words name the change and that nothing
-    /// was merged, and what a merge run again does with it: it reads `into`
-    /// as it stands where `into` is a side of the merge, and where it is
-    /// none, it never reads the change, so landing there again replaces it
-    /// with the merged list.
+    /// write — the words name it and its record, the record of the key
+    /// standing for it ([`Newest::standing_in`]), else unwritten, and what
+    /// that landing placed: M, whatever was edited in `into` since, and
+    /// `resume` is the way on, which answers that landing and writes a
+    /// record it lacks; another list — a composition of the same head and
+    /// sides with other choices — and nothing to resume; or a list that
+    /// cannot be read back, the board having reclaimed its position, and
+    /// `resume` the way on only where its record is written. Else the words
+    /// name the change and that nothing was merged, and what a merge run
+    /// again does with it: it reads `into` as it stands where `into` is a
+    /// side of the merge, and where it is none, it never reads the change,
+    /// so landing there again replaces it with the merged list.
     ///
     /// # Errors
     ///
     /// The reads' refusals, each as itself (SP-14): the draft's
     /// `doc_metadata` as it stands, on a draft with no recorded base the
     /// reads of its rows and past states ([`Writer::marked_landing`]) and,
-    /// where a landing stands, the draft's `image` as of it.
+    /// where a landing stands, the draft's `image` as of it, but a reclaimed
+    /// one.
     fn moved_words(
         &self,
         merged: &Merged,
@@ -470,21 +499,27 @@ impl Writer<'_> {
     ) -> Result<String, Refusal> {
         let meta = self.reader.metadata(into, None)?;
         if let Some(at) = self.marked_landing(merged, into, &meta)?.filter(|at| *at > as_of) {
-            let landing = RecordLanding::Draft { draft: into.clone(), position: at };
-            let link = newest.naming(&landing);
+            let link = newest.standing_in(into, at);
             let record = match link {
                 Some(link) => format!("its record is {link}"),
                 None => "its record is not written".to_string(),
             };
-            if !self.holds_merge(merged, into, at, meta.arranged_at.position())? {
-                return Ok(format!(
-                    "this merge landed in {into} at position {at}, after it was composed at position {as_of}, and {record}, placing another list than this composition's — nothing was written"
-                ));
-            }
-            let writes = if link.is_some() { "" } else { " and writes its record" };
-            return Ok(format!(
-                "{into} already holds this merge: it landed there at position {at}, after the merge was composed at position {as_of}, and {record} — nothing was written now; resume answers that landing{writes}"
-            ));
+            let landed = format!("it landed there at position {at}, after the merge was composed at position {as_of}, and {record}");
+            return Ok(match self.holds_merge(merged, into, at, meta.arranged_at.position()) {
+                Ok(true) => {
+                    let writes = if link.is_some() { "" } else { " and writes its record" };
+                    format!("{into} already holds this merge: {landed} — nothing was written now; resume answers that landing{writes}")
+                }
+                Ok(false) => format!("this merge landed in {into} at position {at}, after it was composed at position {as_of}, and {record}, placing another list than this composition's — nothing was written"),
+                Err(Refusal::HistoryReclaimed { .. }) => {
+                    let way_on = match link {
+                        Some(_) => "; resume answers that landing",
+                        None => ", so no resume records it",
+                    };
+                    format!("{into} holds a landing of this merge: {landed}; the list that landing placed cannot be read back, the board having reclaimed position {at} — nothing was written now{way_on}")
+                }
+                Err(e) => return Err(e),
+            });
         }
         let since = match current {
             Some(c) => format!(" (composed at position {as_of}, the draft changed at {c})"),

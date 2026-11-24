@@ -62,9 +62,9 @@ impl RecordedLanding {
 /// merger's own records of the key stand for, each draft's newest record of
 /// the key naming it as landed in that no take-back's record replaces,
 /// newest first, which a fresh landing looks for its own landing among
-/// ([`Writer::found_standing`]); the merger's own records of the key's
-/// composition read in another state — the key the same but for the fork's
-/// or the draft side's state — which name a member a shot minted once
+/// ([`Writer::found_standing`]) and a landing found in a draft named is
+/// answered by ([`Newest::standing_in`]); every record of the merger's own
+/// of the merge, its states ignored, which name a member a shot minted once
 /// ([`Newest::recording`]); and every draft a record of the merger's own of
 /// the merge names as landed in, whatever its state, and no take-back's
 /// record replaces, which no landing begun stands in
@@ -74,8 +74,8 @@ pub(super) struct Newest {
     newest: Option<(Address, Record)>,
     /// The draft landings the records of the key stand for, newest first.
     drafts: Vec<RecordedLanding>,
-    /// The merger's own records whose key is this one's with other states.
-    other_states: Vec<Found>,
+    /// The merger's own records of the merge, its states ignored.
+    of_the_merge: Vec<Found>,
     /// The drafts the merger's own standing records of the merge name.
     landed_in: Vec<Address>,
 }
@@ -104,17 +104,38 @@ impl Newest {
 
     /// Returns the link of the merger's newest record naming `member`.
     ///
-    /// The record names it as landed in, its key this one's with other states.
-    /// A member is minted once and never rearranged, so a record naming it is
-    /// its landing's whatever state a later composition read: the merge
-    /// composed again after its own shot re-windowed its draft side, which
-    /// moves the draft's state, finds its member through it and writes no
-    /// second record. `None` where no such record names the member.
+    /// The record is of the merge, its states ignored, and names `member`
+    /// as landed in, the newest record of the key or not. A member is
+    /// minted once and never rearranged, so a record naming it is its
+    /// landing's whatever record of the key was written since and whatever
+    /// state a later composition read: the merge composed again after its
+    /// own shot re-windowed its draft side, which moves the draft's state,
+    /// finds its member through it and writes no second record, and so does
+    /// a residue walk over a shot whose composition landed in a draft since.
+    /// `None` where no such record names the member.
     pub(super) fn recording(&self, member: &Address) -> Option<&Address> {
-        let naming = self.other_states.iter().filter(|f| {
+        let naming = self.of_the_merge.iter().filter(|f| {
             matches!(&f.record.landed, Some(RecordLanding::Member { member: m, .. }) if m == member)
         });
         naming.max_by_key(|f| f.age()).map(|f| &f.link)
+    }
+
+    /// Returns the link of the record of the key standing for a landing in
+    /// `draft` at `at`.
+    ///
+    /// It is the draft's newest record of the key naming it as landed in
+    /// that no take-back's record replaces, where it names a position at or
+    /// before `at`: the record of that landing, or of the same landing made
+    /// earlier (skep #790). A record stands for its landing until a
+    /// take-back of it is recorded, whatever landing of the key was recorded
+    /// since in another draft, so it answers a landing in `draft` however
+    /// the newest record of the key names another. `None` where none stands,
+    /// and where the draft's record names a later position: that record's
+    /// landing no longer marks the draft, taken back with its take-back's
+    /// record unwritten.
+    pub(super) fn standing_in(&self, draft: &Address, at: u64) -> Option<&Address> {
+        let recorded = self.drafts.iter().find(|d| d.draft == *draft)?;
+        (recorded.position <= at).then_some(&recorded.link)
     }
 
     /// Returns the record a landing into `draft` follows, which its ids name.
@@ -162,6 +183,12 @@ impl Newest {
     /// ([`Writer::found_standing`]). A merge composed again after a
     /// fork or a draft side moved has another key, so no newest record of
     /// it names the draft, and its landing there writes a record of its own.
+    ///
+    /// It answers for a write made now. A landing the residue walk finds in
+    /// a draft named was made before the call, and a landing of the key in
+    /// another draft since makes another record the newest, so that landing
+    /// answers by the record standing for it in its own draft
+    /// ([`Newest::standing_in`]), never by this.
     pub(super) fn naming(&self, landed: &RecordLanding) -> Option<&Address> {
         let (link, record) = self.newest.as_ref()?;
         let same = match (record.landed.as_ref()?, landed) {
@@ -200,10 +227,11 @@ impl Writer<'_> {
     /// key is the key with its states ignored kept: those of the key itself
     /// give the newest and the draft landings they stand for — each draft's
     /// newest record naming it as landed in that no take-back's record
-    /// replaces, newest first ([`Writer::found_standing`]) — the others name
-    /// a member a shot minted once ([`Newest::recording`]), and the drafts all
-    /// of them name as landed in, but those a take-back's record replaced,
-    /// stand for no landing begun ([`Newest::recorded_in`]).
+    /// replaces, newest first ([`Writer::found_standing`],
+    /// [`Newest::standing_in`]) — all of them name a member a shot minted
+    /// once ([`Newest::recording`]), and the drafts all of them name as
+    /// landed in, but those a take-back's record replaced, stand for no
+    /// landing begun ([`Newest::recorded_in`]).
     ///
     /// # Errors
     ///
@@ -231,8 +259,8 @@ impl Writer<'_> {
                 _ => None,
             })
             .collect();
-        let (mut exact, other_states): (Vec<Found>, Vec<Found>) =
-            found.into_iter().partition(|f| f.record.key() == merged.key);
+        let mut exact: Vec<Found> =
+            found.iter().filter(|f| f.record.key() == merged.key).cloned().collect();
         exact.sort_by_key(|f| std::cmp::Reverse(f.age()));
         let mut drafts: Vec<RecordedLanding> = Vec::new();
         for f in exact.iter().filter(|f| !taken_back.contains(&f.link)) {
@@ -248,7 +276,7 @@ impl Writer<'_> {
             }
         }
         let newest = newest(exact).map(|f| (f.link, f.record));
-        Ok(Newest { newest, drafts, other_states, landed_in })
+        Ok(Newest { newest, drafts, of_the_merge: found, landed_in })
     }
 
     /// Returns the landing of the composition standing in a recorded draft.
@@ -273,18 +301,20 @@ impl Writer<'_> {
     /// leaves no landing standing, whatever the record names. A mark whose
     /// landing placed another list than M is another composition's of the
     /// same key — the key holds no choice — and is no landing of this one,
-    /// whose merger's choices it would drop unsaid. A draft whose mark
-    /// cannot be read, the walk of its rows needing a past state the board
-    /// has reclaimed, is answered at the position its record names: a
-    /// landing that cannot be judged is never made a second time. `None`
+    /// whose merger's choices it would drop unsaid. A landing that cannot
+    /// be judged is never made a second time: a draft whose mark cannot be
+    /// read, the walk of its rows needing a past state the board has
+    /// reclaimed, is answered at the position its record names, and one
+    /// whose mark's list cannot be read back — the board having reclaimed
+    /// the mark's position, the draft edited since — at its mark. `None`
     /// where no draft so judged holds this composition's landing.
     ///
     /// # Errors
     ///
-    /// Each draft's reads' but [`Refusal::HistoryReclaimed`] at its mark —
-    /// its `doc_metadata`, its rows and past states, and its `image` as of
-    /// the mark, [`Refusal::HistoryBusy`] past the bounded retries among them
-    /// — each as itself (SP-14).
+    /// Each draft's reads' but [`Refusal::HistoryReclaimed`] at its mark
+    /// and at its `image` as of the mark — its `doc_metadata`, its rows and
+    /// past states, and that `image`, [`Refusal::HistoryBusy`] past the
+    /// bounded retries among them — each as itself (SP-14).
     pub(super) fn found_standing(
         &self,
         merged: &Merged,
@@ -301,8 +331,12 @@ impl Writer<'_> {
                 Err(e) => return Err(e),
             };
             let arranged_at = meta.arranged_at.position();
-            if self.holds_merge(merged, &recorded.draft, at, arranged_at)? {
-                return Ok(Some(recorded.found(at)));
+            match self.holds_merge(merged, &recorded.draft, at, arranged_at) {
+                Ok(true) | Err(Refusal::HistoryReclaimed { .. }) => {
+                    return Ok(Some(recorded.found(at)))
+                }
+                Ok(false) => {}
+                Err(e) => return Err(e),
             }
         }
         Ok(None)
@@ -410,6 +444,7 @@ impl Writer<'_> {
         record.replaces = newest.link().cloned();
         let owed = |why: Unwritten, cause: String| record_owed(&landed, &why, cause);
         self.write_record(&merged.inputs.kind, &record, &target, stem.as_str(), journal, &owed)
+            .map_err(Refusal::from)
     }
 
     /// Writes `record` under `kind`, answering its link's address.
@@ -431,6 +466,7 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
+    /// Each answered as an [`Unrecorded`]: faced by `owed`, or as itself.
     /// The find of the account's journal refused busy past its reissues,
     /// faced by `owed` with nothing of the record sent; the journal's other
     /// refusals ([`journal::of`]); a journal this merger may not read or this
@@ -451,15 +487,15 @@ impl Writer<'_> {
         stem: &str,
         journal: Option<&Address>,
         owed: &dyn Fn(Unwritten, String) -> Halt,
-    ) -> Result<Address, Refusal> {
+    ) -> Result<Address, Unrecorded> {
         let named = journal.is_some();
         let on_end = self.reader.on_end();
         let journal = match journal::found(self.board, &self.merger, kind, journal.cloned(), on_end) {
             Ok(journal) => journal,
             Err(Unfound::Busy(r)) => {
-                return Err(owed(Unwritten::Busy, format!("{}: the board refused the find of the account's merge journal, a class scan, on its first send and its {SCAN_BUSY_REISSUES} reissues — every class-scan permit was in use — so no write of the record was sent", r.code)).into())
+                return Err(Unrecorded::Owed(owed(Unwritten::Busy, format!("{}: the board refused the find of the account's merge journal, a class scan, on its first send and its {SCAN_BUSY_REISSUES} reissues — every class-scan permit was in use — so no write of the record was sent", r.code))))
             }
-            Err(Unfound::Other(r)) => return Err(r),
+            Err(Unfound::Other(r)) => return Err(r.into()),
         };
         let text = record.to_value().to_string();
         // The journal's read at the record, after the act it records: a
@@ -469,9 +505,9 @@ impl Writer<'_> {
             let unfit = match e {
                 Refusal::Unreadable(_) => Unfit::Withheld,
                 Refusal::NoSuchDocument(_) => Unfit::Unregistered,
-                e => return e,
+                e => return Unrecorded::Refused(e),
             };
-            Refusal::from(owed(Unwritten::Journal(journal.clone(), unfit), format!("the board refused the read of {journal}'s extent, the end the record's atom is appended at, so no write of the record was sent")))
+            Unrecorded::Owed(owed(Unwritten::Journal(journal.clone(), unfit), format!("the board refused the read of {journal}'s extent, the end the record's atom is appended at, so no write of the record was sent")))
         })?;
         let ordinal = extent.checked_add(1).ok_or_else(|| {
             own_fault_face(
@@ -500,15 +536,15 @@ impl Writer<'_> {
                 // A journal the caller named is the caller's: the act stands
                 // with its record unwritten. The account's own is this
                 // library's choice, so its refusal is the library's fault.
-                let refused = |unfit: Unfit| -> Refusal {
-                    owed(Unwritten::Journal(journal.clone(), unfit), format!("{}: the board refused the record's atom into {journal}, so nothing of the record was written", r.token())).into()
+                let refused = |unfit: Unfit| -> Unrecorded {
+                    Unrecorded::Owed(owed(Unwritten::Journal(journal.clone(), unfit), format!("{}: the board refused the record's atom into {journal}, so nothing of the record was written", r.token())))
                 };
                 return Err(match r.key() {
                     "published_target" if named => refused(Unfit::Published),
                     "not_owner" if named => refused(Unfit::Foreign),
-                    "published_target" => own_fault_face("the journal is not a draft", format!("{}: the merge journal {journal} is published, and a record is appended as a plain insert into a draft", r.token())),
-                    "not_owner" => own_fault_face("the journal is not this account's", format!("{}: {journal} is owned by another account", r.token())),
-                    _ => Refusal::Halt(r.refused(&v)),
+                    "published_target" => own_fault_face("the journal is not a draft", format!("{}: the merge journal {journal} is published, and a record is appended as a plain insert into a draft", r.token())).into(),
+                    "not_owner" => own_fault_face("the journal is not this account's", format!("{}: {journal} is owned by another account", r.token())).into(),
+                    _ => Refusal::Halt(r.refused(&v)).into(),
                 });
             }
         };
@@ -546,6 +582,55 @@ impl Writer<'_> {
             ),
             "signed_session_required" => Refusal::NeedsSignedSession,
             _ => Refusal::Halt(r.refused(&v)),
-        })
+        }
+        .into())
+    }
+}
+
+/// Why a record's step wrote no record ([`Writer::write_record`]).
+///
+/// A landing answers either as its refusal; a take-back faces the second
+/// as well, every refusal of its record's step leaving its one write
+/// standing with the record unwritten ([`Unrecorded::faced`]).
+pub(in crate::merge) enum Unrecorded {
+    /// Faced by the step's `owed`: the act stands with its record unwritten.
+    Owed(Halt),
+    /// Every other refusal of the step, as itself.
+    Refused(Refusal),
+}
+
+impl Unrecorded {
+    /// Returns the refusal an act whose one write stands answers: the
+    /// step's every refusal but the session's end faced by `owed` as the act
+    /// standing with its record unwritten ([`Unwritten::Stopped`]), the
+    /// refusal named as its cause; the session's end is faced already, for
+    /// the act's writer.
+    pub(in crate::merge) fn faced(self, owed: &dyn Fn(Unwritten, String) -> Halt) -> Refusal {
+        match self {
+            Unrecorded::Owed(h) => Refusal::Halt(h),
+            Unrecorded::Refused(e @ Refusal::SessionEnded(_)) => e,
+            Unrecorded::Refused(e) => Refusal::Halt(owed(Unwritten::Stopped, e.to_string())),
+        }
+    }
+}
+
+impl From<Refusal> for Unrecorded {
+    fn from(e: Refusal) -> Unrecorded {
+        Unrecorded::Refused(e)
+    }
+}
+
+impl From<Halt> for Unrecorded {
+    fn from(h: Halt) -> Unrecorded {
+        Unrecorded::Refused(Refusal::Halt(h))
+    }
+}
+
+impl From<Unrecorded> for Refusal {
+    fn from(e: Unrecorded) -> Refusal {
+        match e {
+            Unrecorded::Owed(h) => Refusal::Halt(h),
+            Unrecorded::Refused(e) => e,
+        }
     }
 }

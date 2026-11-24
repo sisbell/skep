@@ -188,7 +188,7 @@ pub(super) fn found(
     }
     let id = format!("merge.journal:{account}");
     let v = document(
-        send_write(board, merger.token, &frames::create_document(account, false, Some(&id)))?,
+        send_write(board, merger.token, &frames::create_document(account, false, Some(&id))).answer?,
         "minting the merge journal",
         on_end,
     )?;

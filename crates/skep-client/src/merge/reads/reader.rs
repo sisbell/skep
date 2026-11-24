@@ -711,7 +711,10 @@ fn address_at(spans: &[(&str, u64, u64)], part: &[Asking], k: usize) -> String {
 ///
 /// No write the death signal met landed — the board runs a dead token's
 /// frame as a guest's (wire.md §Sessions) — so what stands is what the act
-/// wrote before it, and the act's kind says what takes it up.
+/// wrote before it, and the act's kind says what takes it up. The one write
+/// that may stand all the same is a take-back's whose first answer was lost
+/// before the signal met its re-ask or the read of its rows back
+/// ([`OnEnd::Unconfirmed`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnEnd {
     /// The act is run again: a composition, a verification or a lookup,
@@ -739,6 +742,48 @@ pub(crate) enum OnEnd {
     /// Nothing more is written, a re-run finding the merge put back and
     /// writing none.
     PutBack,
+    /// A take-back's one write, its first answer lost and the signal met at
+    /// its re-ask or at the read of the draft's rows back: the write may
+    /// have landed, its record unwritten either way, and only the draft
+    /// tells which (the `undo` module's doc, **The lost answer**).
+    Unconfirmed(LostTakeBack),
+}
+
+/// A take-back whose one write's answer was lost, as its way on names it
+/// ([`OnEnd::Unconfirmed`]): what the draft shows where the write landed,
+/// and what a re-run of the act then does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LostTakeBack {
+    /// An undo of the landing at `landing`.
+    ///
+    /// Where it landed, that landing no longer stands in the draft, and the
+    /// merge marked at `earlier` stands there again where the write puts
+    /// that marker back (skep #964): a re-run then takes that merge back
+    /// too, or on a draft with no recorded base the landing beneath it,
+    /// where one stands.
+    Undo { landing: u64, earlier: Option<u64> },
+    /// A withdrawal: where it landed, the draft carries no merge, and a
+    /// re-run takes nothing out.
+    Withdraw,
+    /// A withdrawal's undo: where it landed, the draft carries the merge
+    /// marked at `at` again, and a re-run puts nothing back.
+    Unwithdraw { at: u64 },
+    /// A restore: where it landed, the draft holds the state restored.
+    Restore,
+}
+
+impl LostTakeBack {
+    /// Returns the way on: how the draft tells whether the write landed,
+    /// and what running the act again does either way.
+    pub(crate) fn way_on(self) -> String {
+        match self {
+            LostTakeBack::Undo { landing, earlier: Some(earlier) } => format!("read the draft's merge before running this again: where it is the merge marked at position {earlier}, this undo landed and its record is not written, and a re-run takes that merge back too, so run it only to take that merge out; where it is still the merge marked at position {landing}, the undo never landed, and a re-run takes it out"),
+            LostTakeBack::Undo { landing, earlier: None } => format!("read the draft before running this again: where the merge landed in it at position {landing} no longer stands, this undo landed and its record is not written, and a re-run takes back the merge landed before it, where one stands; where it still stands, the undo never landed, and a re-run takes it out"),
+            LostTakeBack::Withdraw => "read the draft before running this again: where it carries no merge, this withdrawal landed and its record is not written, and a re-run takes nothing out; where it still carries the merge, the withdrawal never landed, and a re-run takes it out".to_string(),
+            LostTakeBack::Unwithdraw { at } => format!("read the draft before running this again: where it carries the merge marked at position {at}, this undo of the withdrawal landed and its record is not written, and a re-run puts nothing back; where it carries no merge, the undo never landed, and a re-run puts the merge back"),
+            LostTakeBack::Restore => "read the draft before restoring again: where it holds the state restored, the restore landed; else it never landed, and a restore typed at a fresh read lands it".to_string(),
+        }
+    }
 }
 
 impl OnEnd {
@@ -755,17 +800,21 @@ impl OnEnd {
             OnEnd::PutBack => format!(
                 "the merge is back in the draft, and its record is not written: the session ended while {during}"
             ),
+            OnEnd::Unconfirmed(_) => format!(
+                "the write may have landed, and its record is not written: its answer was lost, and the session ended while {during}"
+            ),
         }
     }
 
     /// Returns the face's act: the one way on.
-    pub(crate) fn act(self) -> &'static str {
+    pub(crate) fn act(self) -> String {
         match self {
-            OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes",
-            OnEnd::Resume => "open a session again and resume: it reads what of the landing stands and writes nothing twice, and a fresh draft the merge landed in before its record is named, for resume naming that draft to write the record",
-            OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
-            OnEnd::EarlierBack => "nothing more is written: the draft stands as the act left it, carrying the merge landed in it before; a re-run takes that merge back too, as a step of its own, so run it only to take that merge out; the landing's record stands alone in the journal",
-            OnEnd::PutBack => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding the merge put back; the withdrawal's record stands alone in the journal",
+            OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes".to_string(),
+            OnEnd::Resume => "open a session again and resume: it reads what of the landing stands and writes nothing twice, and a fresh draft the merge landed in before its record is named, for resume naming that draft to write the record".to_string(),
+            OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal".to_string(),
+            OnEnd::EarlierBack => "nothing more is written: the draft stands as the act left it, carrying the merge landed in it before; a re-run takes that merge back too, as a step of its own, so run it only to take that merge out; the landing's record stands alone in the journal".to_string(),
+            OnEnd::PutBack => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding the merge put back; the withdrawal's record stands alone in the journal".to_string(),
+            OnEnd::Unconfirmed(lost) => format!("open a session again and {}", lost.way_on()),
         }
     }
 }

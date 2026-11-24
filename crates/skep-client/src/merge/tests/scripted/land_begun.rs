@@ -1,7 +1,9 @@
 //! A landing begun and never recorded, over the scripted board (skep #1103).
 //!
 //! The suite checks that a landing cut off before its record is named,
-//! never landed twice, and recorded by a `resume` naming its draft; that
+//! never landed twice, and recorded by a `resume` naming its draft — save
+//! where the list it placed cannot be read back, which no `resume`
+//! records; that
 //! one begun before a take-back elsewhere, in a draft its record's
 //! take-back left, or in a draft with no recorded base re-arranged since,
 //! is named, and one undone since stages afresh; and that
@@ -350,6 +352,46 @@ fn a_landing_cut_off_before_its_record_is_completed_by_resume_after_an_edit() {
         Ok(resumed),
         "found standing"
     );
+}
+
+/// A landing begun whose list cannot be read back is named, never recorded.
+///
+/// After the cut-off the person edits `L`, the marker standing, and the
+/// board reclaims its history past the landing: the list the landing placed
+/// cannot be read back, and no record names it. The merge composed again
+/// and resumed naming `L` answers none, nothing written — a landing no
+/// record names is recorded only where it can be judged (#914 F16) — and a
+/// landing with no draft named still refuses it `LandingBegun`, nothing
+/// staged (the mutant that answers every reclaimed landing as standing
+/// writes a record at the resume).
+#[test]
+fn a_landing_begun_whose_list_cannot_be_read_back_is_named_never_recorded() {
+    let (dialer, board, signer, l, at) =
+        cut_off_before_the_record(minted_head_world, &draft_inputs(), None);
+    {
+        let mut w = dialer.world();
+        let edited = w.change(&l.to_string(), vec![run(D, 1, 4), run(D, 12, 4)]);
+        w.floor = Some(edited);
+    }
+    let session = sign_in(&board, &signer);
+    let again =
+        compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &again, draft_landing(&session, &signer, Some(l.clone()))),
+        Ok(None),
+        "no record of a landing that cannot be judged"
+    );
+    assert_eq!(
+        land(&board, &again, draft_landing(&session, &signer, None)),
+        Err(Refusal::LandingBegun { draft: l, position: at }),
+        "the landing begun named"
+    );
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    let ops = dialer.ops();
+    assert!(ops.iter().all(|o| !writes.contains(&o.as_str())), "nothing written: {ops:?}");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
 }
 
 /// A landing begun in another account's draft is not the merger's.

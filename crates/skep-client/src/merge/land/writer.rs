@@ -7,7 +7,9 @@
 //! module's doc), and [`send_write`] sends every write of a merge — the
 //! journal's mint among them — asking it again once under its id where the
 //! transport lost its answer, so a lost acknowledgment within a session is
-//! answered by the board's memo and nothing applies twice.
+//! answered by the board's memo and nothing applies twice; it tells its
+//! caller whether the answer is the re-ask's ([`Asked`]), which a
+//! take-back reads its write back after.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -60,20 +62,30 @@ impl Stem {
 /// and idempotency), so the second ask lands nothing twice: it gets the
 /// write's acknowledgment where the first ask applied it, and applies it
 /// where the first ask never reached the board. A frame naming no id is
-/// sent once.
-///
-/// # Errors
-///
-/// [`Board::op`]'s, a dial fault past the one re-ask among them.
-pub(in crate::merge) fn send_write(
-    board: &Board,
-    token: &Token,
-    frame: &Value,
-) -> Result<Answer, Halt> {
+/// sent once. The answer says whether it is the re-ask's ([`Asked`]).
+pub(in crate::merge) fn send_write(board: &Board, token: &Token, frame: &Value) -> Asked {
     match board.op(Some(token), frame) {
-        Err(Halt::Dial(_)) if frame.get("id").is_some() => board.op(Some(token), frame),
-        answer => answer,
+        Err(Halt::Dial(_)) if frame.get("id").is_some() => {
+            Asked { answer: board.op(Some(token), frame), again: true }
+        }
+        answer => Asked { answer, again: false },
     }
+}
+
+/// What [`send_write`] answered.
+pub(in crate::merge) struct Asked {
+    /// The last ask's answer, or the halt it met: [`Board::op`]'s, a dial
+    /// fault past the one re-ask among them.
+    pub(in crate::merge) answer: Result<Answer, Halt>,
+    /// Whether the first ask's answer was lost at the transport, `answer`
+    /// being the re-ask's.
+    ///
+    /// A document the re-ask answers is the write's verdict, its
+    /// acknowledgment answered from the board's memo where the first ask
+    /// committed; any other answer of the re-ask leaves the write
+    /// unconfirmed, since the first ask may have committed before its answer
+    /// was lost and the memo does not outlive a restart.
+    pub(in crate::merge) again: bool,
 }
 
 /// The landing's writer: the merger and a reader under its token.
@@ -108,7 +120,7 @@ impl Writer<'_> {
     /// the write `during` names, faced for the writer's act; otherwise
     /// [`send_write`]'s, a dial fault past the one re-ask among them.
     pub(in crate::merge) fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
-        match send_write(self.board, self.merger.token, frame)? {
+        match send_write(self.board, self.merger.token, frame).answer? {
             Answer::Closed => Err(session_ended(during, self.reader.on_end())),
             Answer::Document(v) => Ok(v),
         }

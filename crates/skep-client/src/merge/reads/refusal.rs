@@ -554,9 +554,12 @@ pub enum Refusal {
     /// land, the board running a dead token's frame as a guest's. The face
     /// carried is the one the act owes its person: the step the signal met,
     /// and the way on — at a landing [`resume`](crate::merge::resume), at a
-    /// take-back's record the act standing with its record unwritten, at
-    /// every other step the act run again, which reads what stands before
-    /// it writes. An embedder that holds the session ends it on this arm.
+    /// take-back's record the act standing with its record unwritten, at a
+    /// take-back's write whose first answer was lost before the signal met
+    /// its re-ask or its read back the write unconfirmed, how the draft
+    /// tells and what a re-run then does, at every other step the act run
+    /// again, which reads what stands before it writes. An embedder that
+    /// holds the session ends it on this arm.
     SessionEnded(Halt),
     /// The library's own fault named (A-288's own-bug class).
     ///

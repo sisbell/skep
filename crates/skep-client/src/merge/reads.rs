@@ -141,12 +141,14 @@
 //! answers [`Refusal::SessionEnded`] (wire.md §Sessions), carrying the face
 //! that names the step it met and the way on that the act it stopped
 //! leaves — a landing resumed, a take-back whose write stands left as it
-//! is, every other act run again — so an embedder ends its session on the
-//! arm, never on the words. The reader and the writer are each built for
-//! one act's way on (`OnEnd`), and the one constructor composes the face
-//! (`session_ended`). A read that presented no token cannot meet the
-//! signal: one that does is the board's or the transport's fault,
-//! [`Refusal::Halt`], as [`Board`] faces it.
+//! is, a take-back whose write's answer was lost before the signal named
+//! unconfirmed with how the draft tells, every other act run again — so
+//! an embedder ends its session on the arm, never on the words. The
+//! reader and the writer are each built for one act's way on (`OnEnd`),
+//! and the one constructor composes the face (`session_ended`). A read
+//! that presented no token cannot meet the signal: one that does is the
+//! board's or the transport's fault, [`Refusal::Halt`], as [`Board`]
+//! faces it.
 
 use serde_json::Value;
 use skep_address::Address;
@@ -176,7 +178,7 @@ pub use correspondence::{mapped, mapped_image};
 pub(crate) use correspondence::{owners_records, records_of};
 pub use inputs::{Family, Inputs, Merged, Role, Side};
 pub(super) use join::{check_join, first_difference, first_word_difference};
-pub(crate) use reader::{session_ended, OnEnd, Reader};
+pub(crate) use reader::{session_ended, LostTakeBack, OnEnd, Reader};
 pub(super) use readings::{check_shape, fence, read_shape, values_for, values_of, Reading};
 pub(super) use refusal::stretches;
 pub use refusal::{NoUndo, Refusal};

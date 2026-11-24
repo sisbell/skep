@@ -38,7 +38,7 @@ use crate::dial::{
 };
 use crate::halt::Halt;
 use crate::merge::land::Stem;
-use crate::merge::reads::{session_ended, OnEnd, MAX_SIDES};
+use crate::merge::reads::{session_ended, LostTakeBack, OnEnd, MAX_SIDES};
 use crate::merge::*;
 use crate::origin::Origin;
 use crate::publication::OriginAnswer;
@@ -372,6 +372,10 @@ struct World {
     /// The next N writes of this op are lost at the transport before they
     /// are applied: nothing committed and no acknowledgment.
     lose_before: Option<(&'static str, usize)>,
+    /// The next write of this op is applied, then answered `500
+    /// internal_panic`, its acknowledgment never memoized (wire.md §HTTP
+    /// status codes: no verdict on a write, only its lost answer).
+    panic_after: Option<&'static str>,
     /// The merger's enrolled key.
     key: Option<PublicKey>,
     /// The session dies before the N-th frame the dialer serves is
@@ -1092,8 +1096,9 @@ impl World {
     /// check — a publish-class write carrying no `attest` refused on a
     /// claimed board serving `H.1`, the next signed write refused where
     /// `refuse_signed` holds — else the write applied and its
-    /// acknowledgment kept; the next `drop_acks` acknowledgments lost at
-    /// the transport.
+    /// acknowledgment kept, or where `panic_after` names its op answered
+    /// `500 internal_panic`, its acknowledgment never kept; the next
+    /// `drop_acks` acknowledgments lost at the transport.
     fn write(&mut self, frame: &Value) -> Result<Response, DialError> {
         if let Some((op, n)) = self.lose_before.filter(|(op, _)| frame["op"] == *op) {
             self.lose_before = (n > 1).then_some((op, n - 1));
@@ -1126,6 +1131,12 @@ impl World {
                     }
                 }
                 let ack = self.apply(frame);
+                // A handler panicking past the commit: the write stands, its
+                // acknowledgment never reaching the memo.
+                if ack["resp"] != "rejected" && self.panic_after.is_some_and(|op| frame["op"] == op) {
+                    self.panic_after = None;
+                    return Ok(reply(500, json!({"error": "internal_panic"})));
+                }
                 if let (Some(id), true) = (&id, ack["resp"] != "rejected") {
                     self.memo.insert(id.clone(), ack.clone());
                 }

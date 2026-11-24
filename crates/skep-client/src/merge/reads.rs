@@ -20,9 +20,11 @@
 //! the head imaged whole, then the base, derived from where those lines
 //! end — the head's own image where the base is the head, else imaged
 //! whole; each side imaged whole; the shared material joined by the core
-//! over the lists; the values where the value rule has work, read through
-//! the side that holds them; and the prior records for the key, so a
-//! standing record is known before anything is written (§3, idempotence).
+//! over the lists; the values where the value rule has work, and the base
+//! text between two sides' neighbouring additions the line rule reads
+//! whatever the switches (skep #1173), read through the side that holds
+//! them; and the prior records for the key, so a standing record is known
+//! before anything is written (§3, idempotence).
 //! Every `image` past the run budget is re-asked in halves and the parts
 //! re-joined by I-adjacency (§8: "a region past the budget can be asked in
 //! parts"), every value read past the delivery budget or the dialer's
@@ -123,12 +125,14 @@
 //! predicate, "a delivery masks per run") and a read by identity of a
 //! draft's or a fork's words refuses it whole (`retrieve_i`), each naming
 //! that document, so it refuses where a value is read
-//! ([`Refusal::Unreadable`]); the value rule switched off reads no value of
-//! it. A `withheld` or a `doc_not_registered` at a read of several
-//! documents — the join's `compare`, the read by identity — names the
-//! document the board's `site.addr` names, and one naming none this client
-//! parses is the board's refusal verbatim, [`Refusal::Halt`], never one of
-//! the read's documents in its place (SP-18).
+//! ([`Refusal::Unreadable`]): where the value rule compares it, and where it
+//! stands in the base text between two sides' neighbouring additions, which
+//! the line rule reads whatever the value rule's switches. A `withheld` or
+//! a `doc_not_registered` at a read of several documents — the join's
+//! `compare`, the read by identity — names the document the board's
+//! `site.addr` names, and one naming none this client parses is the
+//! board's refusal verbatim, [`Refusal::Halt`], never one of the read's
+//! documents in its place (SP-18).
 //!
 //! The reads go through [`Board::op`] under the caller's token, or with no
 //! token where none is given, and through [`Board::op_at`] for a read as of

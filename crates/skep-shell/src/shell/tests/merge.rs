@@ -2959,9 +2959,12 @@ fn a_selections_words_read_in_the_drafts_order_cut_to_what_it_holds() {
 /// both places, against the daemon (CM-I33).
 ///
 /// S also writes "so " at its start, so M at the default is no head's
-/// text. Composed into L and published as it landed, the landing's one
+/// text. Composed into L and published as it landed, the landing's first
 /// default is gap 1 with its spots, as the report named them, E.3 holding
-/// the head's place, and its record verifies `Equal`.
+/// the head's place, and its record verifies `Equal`. S's "so " at the
+/// start of the one line and the head's quote inside it meet at the line's
+/// edge, so gaps 2 and 3 are `line` defaults at their own places (skep
+/// #1173), each as `MergeDefault` declares it.
 #[test]
 fn a_quote_two_sides_place_apart_lands_at_its_default_naming_both_places() {
     use skep_client::merge::{current, verify, Record, Verdict};
@@ -2977,8 +2980,17 @@ fn a_quote_two_sides_place_apart_lands_at_its_default_naming_both_places() {
     let e3 = format!("{}.3", a.edition);
     assert_eq!((published["outcome"].as_str(), published["member"].as_str()), (Some("landed"), Some(e3.as_str())), "{published}");
     let defaults = published["defaults"].as_array().unwrap();
-    assert_eq!(defaults.len(), 1, "{published}");
-    crate::shapes::assert_declared("MergeDefault", &defaults[0]);
+    let kinds: Vec<(Option<u64>, Option<&str>)> = defaults.iter().map(|d| (d["id"].as_u64(), d["kind"].as_str())).collect();
+    assert_eq!(kinds, [(Some(1), Some("moves")), (Some(2), Some("line")), (Some(3), Some("line"))], "{published}");
+    for default in defaults {
+        crate::shapes::assert_declared("MergeDefault", default);
+    }
+    let anchor = |n: u64| Value::from(format!("{}.0.1.{n}", a.edition));
+    assert_eq!(
+        (&defaults[1]["after"], &defaults[1]["before"], &defaults[2]["after"], &defaults[2]["before"]),
+        (&Value::Null, &anchor(1), &anchor(4), &anchor(5)),
+        "S's \"so \" at the start, the head's quote after \"the \": {published}"
+    );
     for spot in defaults[0]["spots"].as_array().unwrap_or_else(|| panic!("the spots: {published}")) {
         crate::shapes::assert_declared("GapSpot", spot);
     }

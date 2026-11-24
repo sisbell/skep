@@ -82,7 +82,10 @@
 //! material or the same spot — "same material" known exactly by run
 //! identity, so a move is not a touch and an identical addition at one spot
 //! is not a difference, while one identity two sides placed at two spots
-//! is (CM-I33). Six kinds of gap carry it, and the rules settle one:
+//! is (CM-I33) — or met at one line's edge, an addition inside a line and
+//! another side's right after its break, or one at a line's start and
+//! another side's inside that line (the owner's ruling of 2026-11-24; skep
+//! #1173). Seven kinds of gap carry it, and the rules settle one:
 //!
 //! * `order` — two or more sides added at one spot: unsettled, the commit
 //!   order shown as the default, each side's runs together.
@@ -112,6 +115,12 @@
 //!   of another's, and at an `order` gap where the sides order the words
 //!   they share otherwise or each set words of their own beside them, each
 //!   such side's group listing every word it placed and M laying each once.
+//! * `line` — one side's addition whose anchors stand together, next in M
+//!   to another side's at a line's edge, only surviving base text between
+//!   them: unsettled, the default its own place. The line rule reads that
+//!   text, a line break the byte `\n`, through the first side listed; two
+//!   additions inside one line, or a whole line or more apart, ask nothing,
+//!   and words two or more sides added at one spot stay an `order` gap.
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
@@ -122,10 +131,12 @@
 //! keeps the retyping side's identity unless the caller asks the base's
 //! back, and the record then lists each retyped run M no longer holds under
 //! `values.retyped`, with its side. The rule reads the values of the runs it
-//! compares, a run a side windows from another document among them; where
-//! the reader may not read that document the composition refuses naming it
+//! compares, and the line rule reads the base text between two sides'
+//! neighbouring additions whatever the value rule's switches, a run a side
+//! windows from another document among either; where the reader may not
+//! read that document the composition refuses naming it
 //! ([`Refusal::Unreadable`]; [`verify`] answers [`Verdict::Unreadable`]),
-//! and the rule switched off reads no value.
+//! and no switch keeps the line rule from that read.
 
 mod compose;
 pub mod journal;

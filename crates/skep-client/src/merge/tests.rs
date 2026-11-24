@@ -12,7 +12,12 @@
 //! removes taking none and one it makes numbered after the report's last;
 //! the resolutions, one per unsettled kind, `keep_both` confirming what
 //! the dedup kept, a move at a gap the rules settled moving nothing and the
-//! last of two choices at a spine's `moves` gap standing; a word both
+//! last of two choices at a spine's `moves` gap standing; two sides'
+//! additions met at a line's edge (skep #1173) — a rewrite inside a line
+//! beside lines after its break, the mirror at a line's start and at the
+//! document's start, the additions it leaves unasked, its choices, its
+//! numbers under a holder's choice and a chosen order, a read of another
+//! count of items, and the rule over generated lines; a word both
 //! groups at a place kept once list no copy the dedup dropped; words two
 //! sides added at one spot, over every order of them, asking exactly where
 //! neither side's words hold the other's in order and laid once; three
@@ -1577,6 +1582,324 @@ fn a_move_and_an_order_compose_at_one_gap() {
     }
 }
 
+// ── a line's edge (skep #1173) ───────────────────────────────────────────
+
+/// The lined base, `D·1–35`: "one\n" at `D·1–4`, "two reads the model.
+/// The\n" at `D·5–29` — its break `D·29` — and "three\n" at `D·30–35`.
+fn lined() -> Vec<Run> {
+    vec![rd(1, 35)]
+}
+
+/// The lined cells' bytes: the base, the head's "h1\nh2 The\n" at
+/// `D·36–45`, the side's "Every\ns1 " at `D·46–54`, and one-letter words
+/// at `D·60…`.
+const LINED: &[(u64, &str)] = &[
+    (1, "one\ntwo reads the model. The\nthree\n"),
+    (36, "h1\nh2 The\n"),
+    (46, "Every\ns1 "),
+    (60, "xytu"),
+];
+
+/// A side of the lined base adding `fresh` right after `D·at`, `0` the
+/// document's start.
+fn adding_after(at: u64, fresh: Run) -> Vec<Run> {
+    let mut side = Vec::new();
+    if at > 0 {
+        side.push(rd(1, at));
+    }
+    side.push(fresh);
+    if at < 35 {
+        side.push(rd(at + 1, 35 - at));
+    }
+    side
+}
+
+/// The reproduction: the head's lines after line 2's break, the side's
+/// rewrite inside line 2, before its kept "The\n".
+fn rewrite_beside_lines() -> Vec<(SideIx, Vec<Run>)> {
+    two(adding_after(29, rd(36, 10)), adding_after(25, rd(46, 9)))
+}
+
+/// Composes over the lined base with `options` under the lined bytes.
+fn compose_lined(sides: &[(SideIx, Vec<Run>)], options: &Options) -> Composed {
+    compose_runs(&lined(), &d(), sides, None, options, &text(LINED))
+}
+
+/// A rewrite inside a line beside another side's lines right after its
+/// break asks twice: each side's words a `line` gap, unsettled, at its own
+/// place, so M is as composed with no rule — the head's lines after
+/// `D·29`, the side's words after `D·25` — whatever the value rule's
+/// switches; read by no value, nothing asks (the mutant whose check never
+/// fires answers no gap).
+#[test]
+fn a_rewrite_inside_a_line_beside_lines_after_its_break_is_two_line_gaps() {
+    let m = vec![rd(1, 25), rd(46, 9), rd(26, 4), rd(36, 10), rd(30, 6)];
+    for options in [Options::default(), Options { dedup: false, ..Options::default() }] {
+        let c = compose_lined(&rewrite_beside_lines(), &options);
+        assert_eq!(runs(&c), m, "{options:?}: M at the defaults");
+        assert_eq!(kinds(&c), vec![(GapKind::Line, false), (GapKind::Line, false)], "{options:?}");
+        assert_eq!(anchors(&c), vec![(Some(25), Some(26)), (Some(29), Some(30))], "{options:?}");
+        assert_eq!(gap_runs(&c), vec![vec![(1, rd(46, 9))], vec![(0, rd(36, 10))]], "{options:?}");
+        assert_eq!(
+            c.gaps
+                .iter()
+                .map(|g| (g.id, g.placed.clone(), g.resolved_by.clone()))
+                .collect::<Vec<_>>(),
+            vec![(GapId(1), Placement::After, None), (GapId(2), Placement::After, None)],
+            "{options:?}"
+        );
+        assert_eq!(c.counts, RunCounts { a: 3, b: 3, m: 5 }, "{options:?}");
+    }
+    let c = compose(&lined(), &rewrite_beside_lines());
+    assert_eq!((runs(&c), kinds(&c)), (m, vec![]), "no value read, nothing asked");
+}
+
+/// The mirror asks too: an addition at a line's start beside another
+/// side's inside that line — after `D·29` and after `D·31`, line 3 — and
+/// at the document's start beside one inside line 1, after `D·2`.
+#[test]
+fn an_addition_at_a_lines_start_beside_one_inside_that_line_is_two_line_gaps() {
+    for (start, inside, expected) in [
+        (29, 31, vec![(Some(29), Some(30)), (Some(31), Some(32))]),
+        (0, 2, vec![(None, Some(1)), (Some(2), Some(3))]),
+    ] {
+        let c = compose_lined(
+            &two(adding_after(start, rd(36, 10)), adding_after(inside, rd(46, 9))),
+            &Options::default(),
+        );
+        assert_eq!(
+            kinds(&c),
+            vec![(GapKind::Line, false), (GapKind::Line, false)],
+            "after D·{start} and D·{inside}"
+        );
+        assert_eq!(anchors(&c), expected, "after D·{start} and D·{inside}");
+        let unasked = compose(
+            &lined(),
+            &two(adding_after(start, rd(36, 10)), adding_after(inside, rd(46, 9))),
+        );
+        assert_eq!(runs(&c), runs(&unasked), "after D·{start} and D·{inside}: M at the defaults");
+    }
+}
+
+/// Two additions that do not meet at one line's edge ask nothing: both
+/// inside line 2 (after `D·8` and `D·17`); a whole line apart (line 2's
+/// start, `D·4`, and its break, `D·29`); two lines apart (`D·2` and
+/// `D·29`); inside line 2 and inside line 3, one break between not its
+/// last byte (`D·25` and `D·31`).
+#[test]
+fn additions_inside_one_line_or_a_line_apart_ask_nothing() {
+    for (a, b) in [(8, 17), (4, 29), (2, 29), (25, 31)] {
+        let c = compose_lined(
+            &two(adding_after(a, rd(36, 10)), adding_after(b, rd(46, 9))),
+            &Options::default(),
+        );
+        assert_eq!(kinds(&c), vec![], "after D·{a} and D·{b}");
+    }
+}
+
+/// Words both sides add at one spot after a break stay one `order` gap; a
+/// side's words inside the line beside it are a `line` gap, the gap of
+/// both sides' words left to the order rule (the mutant that marks every
+/// caught gap a `line` gap answers two).
+#[test]
+fn words_two_sides_add_at_one_spot_stay_an_order_gap() {
+    let c = compose_lined(
+        &two(adding_after(29, rd(36, 3)), adding_after(29, rd(46, 9))),
+        &Options::default(),
+    );
+    assert_eq!(
+        (kinds(&c), anchors(&c)),
+        (vec![(GapKind::Order, false)], vec![(Some(29), Some(30))])
+    );
+    let side = vec![rd(1, 25), rd(46, 9), rd(26, 4), rd(60, 1), rd(30, 6)];
+    let c = compose_lined(&two(adding_after(29, rd(36, 3)), side), &Options::default());
+    assert_eq!(kinds(&c), vec![(GapKind::Line, false), (GapKind::Order, false)]);
+    assert_eq!(anchors(&c), vec![(Some(25), Some(26)), (Some(29), Some(30))]);
+}
+
+/// A rewrite of the whole line is no `line` gap: the side removing line 2
+/// and typing its words in its place keeps R2's `anchor`, settled by the
+/// rule, the head's lines after the side's words.
+#[test]
+fn a_whole_line_rewritten_beside_lines_after_it_stays_an_anchor() {
+    let c = compose_lined(
+        &two(adding_after(29, rd(36, 10)), vec![rd(1, 4), rd(46, 9), rd(30, 6)]),
+        &Options::default(),
+    );
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(46, 9), rd(36, 10), rd(30, 6)]);
+    assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
+    assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Rule));
+}
+
+/// A `line` gap takes the choices a one-group gap takes: `Omit` leaves the
+/// side's words out, `KeepOnly` of its side and `Order` of it keep them
+/// where they stand, `After` moves them, each settling the gap by the
+/// chooser; `KeepBoth` is no choice there and stands in `ignored`.
+#[test]
+fn a_line_gap_takes_omit_keep_only_and_a_move() {
+    let sides = rewrite_beside_lines();
+    let at_defaults = runs(&compose_lined(&sides, &Options::default()));
+    let c = compose_lined(&sides, &resolve(1, Choice::Omit));
+    assert_eq!(runs(&c), vec![rd(1, 29), rd(36, 10), rd(30, 6)], "the side's words out");
+    assert_eq!(kinds(&c), vec![(GapKind::Line, true), (GapKind::Line, false)]);
+    assert_eq!(
+        (c.gaps[0].placed.clone(), c.gaps[0].resolved_by.clone()),
+        (Placement::Omitted, Some(ResolvedBy::Person))
+    );
+    for choice in [Choice::KeepOnly(SideIx(1)), Choice::Order(vec![SideIx(1)])] {
+        let c = compose_lined(&sides, &resolve(1, choice.clone()));
+        assert_eq!(runs(&c), at_defaults, "{choice:?}");
+        assert_eq!(kinds(&c), vec![(GapKind::Line, true), (GapKind::Line, false)], "{choice:?}");
+        assert!(c.ignored.is_empty(), "{choice:?}");
+    }
+    let c = compose_lined(&sides, &resolve(2, Choice::After(d_at(25))));
+    assert_eq!(
+        runs(&c),
+        vec![rd(1, 25), rd(46, 9), rd(36, 10), rd(26, 10)],
+        "the head's lines moved after D·25"
+    );
+    assert_eq!((kinds(&c)[1], anchors(&c)[1]), ((GapKind::Line, true), (Some(25), Some(26))));
+    let c = compose_lined(&sides, &resolve(1, Choice::KeepBoth));
+    assert_eq!(
+        (runs(&c), kinds(&c)),
+        (at_defaults, vec![(GapKind::Line, false), (GapKind::Line, false)])
+    );
+    assert_eq!(c.ignored.len(), 1);
+}
+
+/// The `line` gaps keep their numbers under every choice that walks again.
+///
+/// Beside a `moves` gap with spots — both sides hold "xy" (`D·60–61`), the
+/// head after `D·1`, the side after `D·2` — and an `order` gap at the end,
+/// choosing the side's placement of "xy" leaves the `line` gaps 2 and 3
+/// and the `order` gap 4 as numbered (the mutant whose walk at the claims'
+/// defaults reads no base text numbers the `order` gap 2). Beside a spine's
+/// `moves` gap — crossed reorders of `D·31–33` — choosing the side's order
+/// walks the spine again and leaves the `line` gaps 2 and 3.
+#[test]
+fn the_line_gaps_keep_their_numbers_under_a_holders_choice_and_a_chosen_order() {
+    let ends = |side: Vec<Run>, word: u64| {
+        let mut side = side;
+        side.push(rd(word, 1));
+        side
+    };
+    let head = ends(vec![rd(1, 1), rd(60, 2), rd(2, 28), rd(36, 10), rd(30, 6)], 62);
+    let side = ends(vec![rd(1, 2), rd(60, 2), rd(3, 23), rd(46, 9), rd(26, 10)], 63);
+    let sides = two(head, side);
+    let numbered = |c: &Composed| c.gaps.iter().map(|g| (g.id, g.kind)).collect::<Vec<_>>();
+    let at_defaults = compose_lined(&sides, &Options::default());
+    let expected = vec![
+        (GapId(1), GapKind::Moves),
+        (GapId(2), GapKind::Line),
+        (GapId(3), GapKind::Line),
+        (GapId(4), GapKind::Order),
+    ];
+    assert_eq!(numbered(&at_defaults), expected, "the premise");
+    let chosen = compose_lined(&sides, &resolve(1, Choice::Order(vec![SideIx(1)])));
+    assert_eq!(runs(&chosen)[..3], [rd(1, 2), rd(60, 2), rd(3, 23)], "the side's placement of xy");
+    assert_eq!(numbered(&chosen), expected);
+    assert_eq!(
+        gap_runs(&chosen)[1..],
+        gap_runs(&at_defaults)[1..],
+        "the same gaps by their numbers"
+    );
+    let head = vec![rd(1, 29), rd(36, 10), rd(30, 1), rd(32, 1), rd(31, 1), rd(33, 3)];
+    let side = vec![rd(1, 25), rd(46, 9), rd(26, 5), rd(31, 1), rd(33, 1), rd(32, 1), rd(34, 2)];
+    let crossed = two(head, side);
+    let at_defaults = compose_lined(&crossed, &Options::default());
+    let expected =
+        vec![(GapId(1), GapKind::Moves), (GapId(2), GapKind::Line), (GapId(3), GapKind::Line)];
+    assert_eq!(numbered(&at_defaults), expected, "the premise");
+    let chosen = compose_lined(&crossed, &resolve(1, Choice::Order(vec![SideIx(1)])));
+    assert_eq!(
+        runs(&chosen)[4..],
+        [rd(30, 2), rd(33, 1), rd(32, 1), rd(34, 2)],
+        "the side's order"
+    );
+    assert_eq!(numbered(&chosen), expected);
+    assert_eq!(
+        gap_runs(&chosen)[1..],
+        gap_runs(&at_defaults)[1..],
+        "the same gaps by their numbers"
+    );
+}
+
+/// A read not answering one item a position decides nothing: a reader
+/// answering a run of more than one position with its last item alone
+/// leaves the reproduction unasked (the mutant that weighs the items
+/// whatever their count reads "\n" as the text between and asks).
+#[test]
+fn a_read_answering_another_count_of_items_decides_nothing() {
+    let bytes = text(LINED);
+    let last_alone = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+        let items = bytes(side, run)?;
+        Some(if run.width > 1 { items.last().into_iter().cloned().collect() } else { items })
+    };
+    let c = compose_runs(
+        &lined(),
+        &d(),
+        &rewrite_beside_lines(),
+        None,
+        &Options::default(),
+        &last_alone,
+    );
+    assert_eq!(kinds(&c), vec![]);
+}
+
+/// The line rule as a property: over short bases of lines — empty lines
+/// among them — and two sides each adding one word at a place drawn at
+/// random, the two are `line` gaps exactly where the base text between
+/// them is one break, its last byte, and the first is not at a line's
+/// start, or holds no break and the first is; at one place they are one
+/// `order` gap; and M is the composition read by no value.
+#[test]
+fn the_line_rule_holds_over_generated_lines() {
+    let mut rng = Rng(0x11E5_ED6E);
+    let mut asked = 0;
+    for case in 0..3000 {
+        let n = 1 + rng.below(8);
+        let base: Vec<u8> = (0..n).map(|_| b"ab\n"[rng.below(3) as usize]).collect();
+        let mut table = vec![(100u64, b'x'), (101, b'y')];
+        table.extend(base.iter().enumerate().map(|(k, b)| (1 + k as u64, *b)));
+        let values = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+            (run.i_start..run.reach())
+                .map(|p| table.iter().find(|(q, _)| *q == p).map(|(_, b)| vec![*b]))
+                .collect()
+        };
+        let (i, j) = (rng.below(n + 1), rng.below(n + 1));
+        let at = |k: u64, fresh: u64| {
+            let mut side = Vec::new();
+            if k > 0 {
+                side.push(rd(1, k));
+            }
+            side.push(rd(fresh, 1));
+            if k < n {
+                side.push(rd(k + 1, n - k));
+            }
+            side
+        };
+        let sides = two(at(i, 100), at(j, 101));
+        let c = compose_runs(&[rd(1, n)], &d(), &sides, None, &Options::default(), &values);
+        let say = format!("case {case}: {:?}, after {i} and {j}", String::from_utf8_lossy(&base));
+        assert_eq!(runs(&c), runs(&compose(&[rd(1, n)], &sides)), "{say}: M at the defaults");
+        if i == j {
+            assert_eq!(kinds(&c), vec![(GapKind::Order, false)], "{say}");
+            continue;
+        }
+        let (lo, hi) = (i.min(j) as usize, i.max(j) as usize);
+        let between = &base[lo..hi];
+        let start = lo == 0 || base[lo - 1] == b'\n';
+        let breaks = between.iter().filter(|b| **b == b'\n').count();
+        let meets =
+            (breaks == 1 && between.last() == Some(&b'\n') && !start) || (breaks == 0 && start);
+        let expected =
+            if meets { vec![(GapKind::Line, false), (GapKind::Line, false)] } else { vec![] };
+        assert_eq!(kinds(&c), expected, "{say}");
+        asked += usize::from(meets);
+    }
+    assert!(asked > 100, "the line rule fired in {asked} cases");
+}
+
 // ── the record's re-statement ────────────────────────────────────────────
 
 /// The record a landing of `c` writes, read back from its JSON.
@@ -1609,31 +1932,69 @@ fn recorded(c: &Composed) -> Record {
     Record::from_value(&record.to_value()).expect("the record reads back")
 }
 
+/// A value read as `compose_runs` takes one.
+type Values<'a> = &'a dyn Fn(SideIx, &Run) -> Option<Vec<Item>>;
+
 /// A record's options compose the same M and gaps as its merger's choices.
 ///
 /// It is the record's re-statement law (merge record §4), over every
 /// unsettled shape of gap — an order gap, a cut, a corner beside one
-/// survivor or between two, a collision of no, one and two groups. Each
+/// survivor or between two, a collision of no, one and two groups, a
+/// `line` gap over the lined base read through its bytes (skep #1173). Each
 /// gap is moved after or before every base position, or not moved, then
 /// ordered, kept or omitted, the move given first or last; the options its
-/// record re-states compose again to the runs and the gaps the merger's
-/// own choices composed. Every shape's gap is moved somewhere, so the law
-/// never holds by the default place alone.
+/// record re-states, its gaps read back from its JSON, compose again to the
+/// runs and the gaps the merger's own choices composed. Every shape's gap is
+/// moved somewhere, so the law never holds by the default place alone.
 #[test]
 fn a_record_recomposes_every_place_and_choice_its_merger_made() {
-    let shapes = [
-        ("(b)", two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)])),
-        ("(c)", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4)])),
-        ("(e′)", two(vec![rd(5, 7), rd(1, 4)], vec![rd(1, 4), rd(12, 4), rd(5, 7)])),
-        ("(f′)", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 5), rd(16, 1), rd(6, 6)])),
-        ("(i′)", two(vec![rd(1, 2), rd(12, 1), rd(4, 8)], vec![rd(1, 2), rd(13, 1), rd(4, 8)])),
-        ("the corner, a left survivor", two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)])),
-        ("the agent case", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4), rd(16, 6), rd(8, 4)])),
-        ("a collision with nothing placed", two(vec![rd(1, 4), rd(8, 4)], vec![rd(1, 4)])),
+    let lines = text(LINED);
+    let shapes: [(&str, Vec<Run>, _, Values<'_>); 9] = [
+        (
+            "(b)",
+            base(),
+            two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]),
+            &unread,
+        ),
+        ("(c)", base(), two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4)]), &unread),
+        (
+            "(e′)",
+            base(),
+            two(vec![rd(5, 7), rd(1, 4)], vec![rd(1, 4), rd(12, 4), rd(5, 7)]),
+            &unread,
+        ),
+        (
+            "(f′)",
+            base(),
+            two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 5), rd(16, 1), rd(6, 6)]),
+            &unread,
+        ),
+        (
+            "(i′)",
+            base(),
+            two(vec![rd(1, 2), rd(12, 1), rd(4, 8)], vec![rd(1, 2), rd(13, 1), rd(4, 8)]),
+            &unread,
+        ),
+        (
+            "the corner, a left survivor",
+            base(),
+            two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)]),
+            &unread,
+        ),
+        (
+            "the agent case",
+            base(),
+            two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4), rd(16, 6), rd(8, 4)]),
+            &unread,
+        ),
+        (
+            "a collision with nothing placed",
+            base(),
+            two(vec![rd(1, 4), rd(8, 4)], vec![rd(1, 4)]),
+            &unread,
+        ),
+        ("a line's edge", lined(), rewrite_beside_lines(), &lines),
     ];
-    let places: Vec<Option<Choice>> = std::iter::once(None)
-        .chain((1..=11).flat_map(|n| [Some(Choice::After(d_at(n))), Some(Choice::Before(d_at(n)))]))
-        .collect();
     let picks = [
         None,
         Some(Choice::Order(vec![SideIx(0), SideIx(1)])),
@@ -1643,8 +2004,15 @@ fn a_record_recomposes_every_place_and_choice_its_merger_made() {
         Some(Choice::KeepBoth),
         Some(Choice::Omit),
     ];
-    for (name, sides) in &shapes {
-        let unmoved = anchors(&compose(&base(), sides));
+    for (name, base, sides, values) in &shapes {
+        let width: u64 = base.iter().map(|r| r.width).sum();
+        let places: Vec<Option<Choice>> = std::iter::once(None)
+            .chain(
+                (1..=width)
+                    .flat_map(|n| [Some(Choice::After(d_at(n))), Some(Choice::Before(d_at(n)))]),
+            )
+            .collect();
+        let unmoved = anchors(&compose_runs(base, &d(), sides, None, &Options::default(), values));
         let mut moved = 0;
         for place in &places {
             for pick in &picks {
@@ -1652,18 +2020,35 @@ fn a_record_recomposes_every_place_and_choice_its_merger_made() {
                     let resolutions: Vec<Resolution> = given
                         .into_iter()
                         .flatten()
-                        .map(|choice| Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person })
+                        .map(|choice| Resolution {
+                            gap: GapId(1),
+                            choice: choice.clone(),
+                            by: ResolvedBy::Person,
+                        })
                         .collect();
-                    let options = Options { resolutions: resolutions.clone(), ..Options::default() };
-                    let first = compose_runs(&base(), &d(), sides, None, &options, &unread);
-                    let again = compose_runs(&base(), &d(), sides, None, &recorded(&first).options(), &unread);
-                    assert_eq!((runs(&again), &again.gaps), (runs(&first), &first.gaps), "{name}: {resolutions:?}");
+                    let options =
+                        Options { resolutions: resolutions.clone(), ..Options::default() };
+                    let first = compose_runs(base, &d(), sides, None, &options, values);
+                    let again =
+                        compose_runs(base, &d(), sides, None, &recorded(&first).options(), values);
+                    assert_eq!(
+                        (runs(&again), &again.gaps),
+                        (runs(&first), &first.gaps),
+                        "{name}: {resolutions:?}"
+                    );
                     moved += usize::from(anchors(&first) != unmoved);
                 }
             }
         }
         assert!(moved > 0, "{name}: no place moved its gap");
     }
+    let line = recorded(&compose_lined(&rewrite_beside_lines(), &Options::default()));
+    assert_eq!(line.to_value()["gaps"][0]["kind"], "line", "the kind as the record spells it");
+    assert_eq!(
+        line.gaps.iter().map(|g| g.kind).collect::<Vec<_>>(),
+        [GapKind::Line, GapKind::Line],
+        "read back"
+    );
 }
 
 /// A record re-states a move over a base that places one run twice.
@@ -1788,17 +2173,26 @@ fn vectors() -> Vec<(&'static str, Composed)> {
         ("the agent case", compose(&base(), &two(edit(), vec![rd(1, 4), rd(16, 6), rd(8, 4)]))),
         ("moves", compose(&[rd(1, 3)], &two(vec![rd(2, 1), rd(1, 1), rd(3, 1)], vec![rd(1, 1), rd(3, 1), rd(2, 1)]))),
         ("one identity at two spots", compose(&base(), &apart())),
+        ("a line's edge", compose_lined(&rewrite_beside_lines(), &Options::default())),
     ]
 }
 
-/// Six kinds, exactly, and one of them settles by rule: the only gap the
+/// Seven kinds, exactly, and one of them settles by rule: the only gap the
 /// composition marks settled with no resolution is an `anchor`, or an
 /// `order` gap the value rule emptied — over every vector.
 #[test]
-fn six_kinds_and_only_the_anchor_settles_by_rule() {
-    let all = [GapKind::Order, GapKind::Anchor, GapKind::Corner, GapKind::Cut, GapKind::Collision, GapKind::Moves];
+fn seven_kinds_and_only_the_anchor_settles_by_rule() {
+    let all = [
+        GapKind::Order,
+        GapKind::Anchor,
+        GapKind::Corner,
+        GapKind::Cut,
+        GapKind::Collision,
+        GapKind::Moves,
+        GapKind::Line,
+    ];
     for kind in all {
-        // A seventh variant fails to compile here.
+        // An eighth variant fails to compile here.
         let _: &str = match kind {
             GapKind::Order => "order",
             GapKind::Anchor => "anchor",
@@ -1806,9 +2200,10 @@ fn six_kinds_and_only_the_anchor_settles_by_rule() {
             GapKind::Cut => "cut",
             GapKind::Collision => "collision",
             GapKind::Moves => "moves",
+            GapKind::Line => "line",
         };
     }
-    assert_eq!(all.iter().collect::<BTreeSet<_>>().len(), 6);
+    assert_eq!(all.iter().collect::<BTreeSet<_>>().len(), 7);
     let mut seen = BTreeSet::new();
     for (name, c) in vectors() {
         for gap in &c.gaps {
@@ -1822,7 +2217,7 @@ fn six_kinds_and_only_the_anchor_settles_by_rule() {
             }
         }
     }
-    assert_eq!(seen.len(), 6, "every kind arises in some vector: {seen:?}");
+    assert_eq!(seen.len(), 7, "every kind arises in some vector: {seen:?}");
 }
 
 /// The §8 bound at every vector: `runs(M) ≤ runs(A) + runs(B) + G − 1`,

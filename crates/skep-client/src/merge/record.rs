@@ -43,7 +43,9 @@
 //! a document it may not read (D14): the trunk, the head, the base, a side
 //! or the landed document withheld from the reader answers `Unreadable`
 //! naming it, as does the origin of a run a side windows whose values the
-//! value rule reads, masked as a `withheld` item.
+//! value rule reads, or the line rule reads in the base text between two
+//! sides' neighbouring additions whatever the switches, masked as a
+//! `withheld` item.
 //! A fork's text can change after the merge, so the record keeps each
 //! mutable side's state beside its address — the position its text last
 //! changed at when the merge was composed, `doc_metadata`'s `arranged_at`
@@ -112,10 +114,16 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// where it does not, a choice at one such gap settling that gap alone, the
 /// last naming it standing; a move takes the placement of a run placed
 /// twice nearest the gap's composed place, and moves no gap the rules
-/// settled; and `KeepBoth` confirms a gap's placement as composed, never
-/// putting back a copy the dedup dropped. [`verify`] composes under this
-/// build's rules whatever version a record names, so a record written under
-/// an earlier set can verify `Differs` where the sets part.
+/// settled; `KeepBoth` confirms a gap's placement as composed, never
+/// putting back a copy the dedup dropped; and a one-sided addition another
+/// side's meets at a line's edge is a `line` gap, unsettled, read off the
+/// base text between them whatever the value switches (skep #1173).
+/// [`verify`] composes under this build's rules whatever version a record
+/// names, so a record written under an earlier set can verify `Differs`
+/// where the sets part — and so can a record naming this set but holding no
+/// `line` gap where this build composes one, the name standing for records
+/// composed with the line rule and without it: its gaps numbered otherwise,
+/// its choices name other gaps.
 pub const RULES: &str = "merge-rules-4";
 
 /// Returns the `by` member: this library's crate and version.
@@ -875,6 +883,7 @@ fn gap_to_value(g: &Gap) -> Value {
         GapKind::Cut => "cut",
         GapKind::Collision => "collision",
         GapKind::Moves => "moves",
+        GapKind::Line => "line",
     };
     let placed = match &g.placed {
         Placement::Order(sides) => Value::from(sides.iter().map(|s| s.0).collect::<Vec<u8>>()),
@@ -944,6 +953,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         "cut" => GapKind::Cut,
         "collision" => GapKind::Collision,
         "moves" => GapKind::Moves,
+        "line" => GapKind::Line,
         _ => return None,
     };
     let placed = match &v["placed"] {
@@ -1604,12 +1614,14 @@ pub enum Verdict {
     /// the recomputation makes, the join's `compare` included; the origin of
     /// a run a side windows, met as a `withheld` item, or as the `withheld`
     /// a read by identity answers, where the value rule reads the run's
-    /// values; the landed member, or the draft, withheld or not registered;
-    /// or the draft side, or the draft landed in, as of the position the
-    /// record names for it, whose history the board has reclaimed: the
-    /// verdict withheld, never made up (D14). At a read of several documents
-    /// — the join's `compare`, the read by identity — it is the document the
-    /// board names, and a `withheld` naming none is no verdict (SP-18).
+    /// values or the line rule reads it among the base text between two
+    /// sides' neighbouring additions, whatever the value switches; the
+    /// landed member, or the draft, withheld or not registered; or the draft
+    /// side, or the draft landed in, as of the position the record names for
+    /// it, whose history the board has reclaimed: the verdict withheld, never
+    /// made up (D14). At a read of several documents — the join's `compare`,
+    /// the read by identity — it is the document the board names, and a
+    /// `withheld` naming none is no verdict (SP-18).
     Unreadable(Address),
 }
 
@@ -1658,13 +1670,14 @@ pub enum Verdict {
 /// `compare` included, answers [`Verdict::Unreadable`] naming the document
 /// the board refused, and so does a `withheld` item a value read meets —
 /// a run a side windows from a document the reader may not read, masked
-/// at its own position (wire.md §Value encodings) — naming the item's
-/// origin. A document the board has never registered is no withheld one
-/// (wire.md §The read predicate): it is refused. A `withheld` or a
-/// `doc_not_registered` at a read of several documents — the join's
-/// `compare`, the read by identity — that names no document this client
-/// parses is the board's refusal verbatim, never a verdict naming one of
-/// the read's documents in the board's place (SP-18).
+/// at its own position (wire.md §Value encodings), which the value rule
+/// reads or the line rule reads whatever the record's value switches —
+/// naming the item's origin. A document the board has never registered is
+/// no withheld one (wire.md §The read predicate): it is refused. A
+/// `withheld` or a `doc_not_registered` at a read of several documents —
+/// the join's `compare`, the read by identity — that names no document this
+/// client parses is the board's refusal verbatim, never a verdict naming
+/// one of the read's documents in the board's place (SP-18).
 ///
 /// A position the record names — its draft side's, its draft landing's —
 /// is read as named or not at all (skep #761): where the board has

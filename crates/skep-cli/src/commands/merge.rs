@@ -1522,6 +1522,7 @@ fn kind_name(kind: GapKind) -> &'static str {
         GapKind::Cut => "cut",
         GapKind::Collision => "collision",
         GapKind::Moves => "moves",
+        GapKind::Line => "line",
     }
 }
 

@@ -16,9 +16,12 @@
 //! where the splice lays it once — and at two or more it is a `moves` gap
 //! with spots (CM-I33), the merger's choice of holder applied before the
 //! walk. §2's rules decide each gap's kind and its default — the sides'
-//! reorders folded into the spine in the order listed (`fold`); §5's value
-//! rule reads bytes at a shared gap (the dedup) and, switched on, before the
-//! walk (the retype), logging each run either takes out of M.
+//! reorders folded into the spine in the order listed (`fold`), and two
+//! sides' neighbouring additions met at a line's edge, which `line_edges`
+//! reads off the base text between them inside `gaps` whatever the
+//! switches (skep #1173); §5's value rule reads bytes at a shared gap (the
+//! dedup) and, switched on, before the walk (the retype), logging each run
+//! either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms —
 //! the record on the trunk, where every member was minted against the one
@@ -262,9 +265,9 @@ pub enum ResolvedBy {
     Answer(Address),
 }
 
-/// The six kinds of gap (merge record §2, §4).
+/// The seven kinds of gap (merge record §2, §4; skep #1173).
 ///
-/// The rules settle one of them, `Anchor`; the other five are the merger's,
+/// The rules settle one of them, `Anchor`; the other six are the merger's,
 /// save an `order` gap the value rule's dedup settles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GapKind {
@@ -311,6 +314,19 @@ pub enum GapKind {
     /// placement, every other holder's copy left out, its [`Gap::spots`]
     /// naming each holder's spot. The same identity at one spot is no gap.
     Moves,
+    /// One side's addition next in M to another side's at a line's edge:
+    /// unsettled, the default its own place (skep #1173).
+    ///
+    /// The two stand at different spots with only surviving base text
+    /// between them, one inside a line and the other right after that
+    /// line's break, or one at a line's start — the document's start among
+    /// them — and the other inside that line; a line break is the byte
+    /// `\n`. Each of the two held by one side alone is a `line` gap, and
+    /// words two or more sides added at one spot stay an `order` gap. Two
+    /// additions inside one line ask nothing, nor do two a whole line or
+    /// more apart, nor two whose base text between them `values` does not
+    /// answer, nor an addition whose anchors do not both stand together.
+    Line,
 }
 
 /// How a gap's material was laid in M (merge record §4, `placed`).
@@ -447,6 +463,7 @@ pub struct Composed {
     /// where a side's order is chosen at a spine's `moves` gap — then every
     /// gap only a resolution makes. A one-sided addition between two
     /// surviving anchors that stand together asks nothing and is not listed,
+    /// save one next to another side's at a line's edge ([`GapKind::Line`]),
     /// nor is a fresh identity several sides placed at one spot in one
     /// order, one side's words there an in-order part of another's.
     pub gaps: Vec<Gap>,
@@ -515,10 +532,12 @@ pub enum InPlaceOp {
 /// before it where they touch different material, and each that does not a
 /// `moves` gap, its reorder not applied, so one overlapping pair voids
 /// neither the other sides' reorders nor its earlier side's. `values`
-/// answers a side's run with its items, which the value rule compares; a
-/// run asked may be a part of a run the side holds; `None` leaves the rule
-/// unfired there. The composition writes nothing and dials nothing (merge
-/// record §1.4, §7).
+/// answers a side's run with its items: the value rule compares them, and
+/// the line rule reads through the first side listed the surviving base
+/// text between two sides' neighbouring additions ([`GapKind::Line`]),
+/// whatever the value rule's switches; a run asked may be a part of a run
+/// the side holds; `None` leaves the rule that asked unfired there. The
+/// composition writes nothing and dials nothing (merge record §1.4, §7).
 ///
 /// Before the walk, a fresh identity two or more sides hold is kept by one
 /// of them. Where every holder placed it at one spot — the nearest base
@@ -542,14 +561,14 @@ pub enum InPlaceOp {
 ///
 /// The walk, in the record's seven steps: the removals, the spine, each
 /// side's additions with their anchors, the placement of each by its
-/// kind, the gaps with the order rule and the value rule, the splice and
-/// the coalesce, the report with the resolutions applied — applied ahead
-/// of the splice, so M holds them. A holder chosen at a gap with spots
-/// moves the words to its spot, which can raise a gap there or leave none
-/// at the default spot; every other gap keeps the number it has at the
-/// default, the first gap of the walk at the defaults with its kind, its
-/// place in the spine and the same runs besides the moved words, and any
-/// other gap, one the moved words make, is numbered after that walk's
+/// kind, the gaps with the line rule, the order rule and the value rule,
+/// the splice and the coalesce, the report with the resolutions applied —
+/// applied ahead of the splice, so M holds them. A holder chosen at a gap
+/// with spots moves the words to its spot, which can raise a gap there or
+/// leave none at the default spot; every other gap keeps the number it has
+/// at the default, the first gap of the walk at the defaults with its kind,
+/// its place in the spine and the same runs besides the moved words, and
+/// any other gap, one the moved words make, is numbered after that walk's
 /// last. A spine's `moves` gap resolved by `Choice::Order` of the side
 /// whose order the spine took is settled, nothing walked again. With no
 /// `spine_hint`, one resolved by `Choice::Order` of the other side walks the
@@ -656,7 +675,8 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
     let (stretches, placed) = layout.place(&claimed.kept);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
     let first = after_claims + moves.len() as u32;
-    let (mut entries, mut applied) = gaps(r, chain, &stretches, &placed, &regions, first, options, values);
+    let (mut entries, mut applied) =
+        gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, values);
     if let SpineOrder::Chosen { numbering, .. } = order {
         // A side's order chosen at a spine's `moves` gap: every gap numbered
         // as the walk at the order given numbered it, which a holder's
@@ -666,10 +686,14 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
         // A holder chosen at a gap with spots: the gaps numbered as the walk
         // at the claims' defaults numbers its own. Only the moved words'
         // stretches differ between the two, so the removals, the spine and
-        // the collision regions are this walk's; and the dedup changes no
-        // kind, run or place, so that walk reads no value.
+        // the collision regions are this walk's. That walk's line rule reads
+        // the base text as this one's does, so a `line` gap at the defaults
+        // is one there too and keeps its number; the dedup changes no kind,
+        // run or place, so that walk's dedup reads no value.
         let (stretches, placed) = layout.place(defaults);
-        let (at_defaults, _) = gaps(r, chain, &stretches, &placed, &regions, first, options, &|_, _| None);
+        let none = |_: SideIx, _: &Run| -> Option<Vec<Item>> { None };
+        let (at_defaults, _) =
+            gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, &none);
         number_as(&mut entries, &mut applied, &at_defaults, &claimed.moved(), first);
     }
     let ignored = resolve(r, &mut entries, &mut moves, &claimed.claims, &options.resolutions, &in_base, &spine_pos);
@@ -896,6 +920,12 @@ impl Refinement {
     fn last_address(&self, f: usize) -> Option<Address> {
         let frag = self.frags[f];
         element_address(&self.origins[frag.origin], frag.start.checked_add(frag.width)?.checked_sub(1)?)
+    }
+
+    /// Returns a fragment's last position, as a run of width 1.
+    fn last_position(&self, f: usize) -> Run {
+        let frag = self.frags[f];
+        Run::new(self.origins[frag.origin].clone(), frag.start + (frag.width - 1), 1)
     }
 
     /// Returns the items of a side's fragments, read through the closure.
@@ -1831,8 +1861,8 @@ fn additions(seqs: &[Vec<usize>], in_base: &[Option<usize>]) -> Vec<Stretch> {
 /// `home` is the gap of the spine it lands in (gap `g` lies before the
 /// spine's `g`-th survivor, `0` the start), `kind` `None` for an addition
 /// between two anchors that stand together, which asks nothing where it is
-/// one-sided, and `key` the spot it sorts by there, its anchors'
-/// (`stretch_key`).
+/// one-sided and meets no other side's at a line's edge (`line_edges`), and
+/// `key` the spot it sorts by there, its anchors' (`stretch_key`).
 #[derive(Clone, Copy)]
 struct Placed {
     kind: Option<GapKind>,
@@ -2060,27 +2090,32 @@ struct Entry {
     resolved_by: Option<ResolvedBy>,
 }
 
-/// Returns step 5's gaps (merge record §1.4, §2 R1, §5).
+/// Returns step 5's gaps (merge record §1.4, §2 R1, §5; skep #1173).
 ///
 /// The stretches that landed at one spot are grouped by side, each group in
-/// its side's own order, the groups in the order rule's order — a spot two
-/// sides added at is an `order` gap, unsettled, where it would otherwise be
-/// no gap or an `anchor`; the collisions at one spine gap are one
-/// `collision` gap, a region no side filled listed too; then the dedup
-/// where it is on. The gaps are numbered here from `first`, in M's order
-/// after the `moves` gaps, so the dedup can name the gap it fired at; a
-/// walk with a holder chosen, or under a chosen order, numbers them again
-/// (`number_as`, `Numbering::number`), the dedup's ids following them.
-/// `chain` is the document's chain the order rule reads.
+/// its side's own order; the collisions at one spine gap are one
+/// `collision` gap, a region no side filled listed too; the gaps are put in
+/// M's order, the order `splice` lays them in, and two sides' neighbouring
+/// additions met at a line's edge are `line` gaps (`line_edges`, its reads
+/// through `lines`); then the groups go in the order rule's order — a spot
+/// two sides added at is an `order` gap, unsettled, where it would otherwise
+/// be no gap or an `anchor` — and the dedup reads through `values` where it
+/// is on. The gaps are numbered here from `first`, in M's order after the
+/// `moves` gaps, so the dedup can name the gap it fired at; a walk with a
+/// holder chosen, or under a chosen order, numbers them again (`number_as`,
+/// `Numbering::number`), the dedup's ids following them. `chain` is the
+/// document's chain the order rule reads, and `spine` the walk's.
 #[allow(clippy::too_many_arguments)]
 fn gaps(
     r: &Refinement,
     chain: &HashSet<usize>,
+    spine: &[usize],
     stretches: &[Stretch],
     placed: &[Placed],
     regions: &[Region],
     first: u32,
     options: &Options,
+    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> (Vec<Entry>, Vec<GapId>) {
     let mut entries: Vec<Entry> = Vec::new();
@@ -2146,6 +2181,8 @@ fn gaps(
             });
         }
     }
+    entries.sort_by_key(|e| (e.home, e.key));
+    line_edges(r, spine, &mut entries, lines);
     // The order rule: a spot two sides added at is an `order` gap where it
     // would otherwise be no gap or an `anchor`, the groups by the commit of
     // their first run — inside the document's chain the address order, a
@@ -2172,7 +2209,6 @@ fn gaps(
             entry.resolved_by = Some(ResolvedBy::Rule);
         }
     }
-    entries.sort_by(|a, b| (a.home, a.key).cmp(&(b.home, b.key)));
     let mut next = first;
     for entry in entries.iter_mut().filter(|e| e.kind.is_some()) {
         entry.id = Some(GapId(next));
@@ -2204,6 +2240,78 @@ fn gaps(
         }
     }
     (entries, applied)
+}
+
+/// Marks each addition another side's meets at a line's edge a `line` gap
+/// (skep #1173).
+///
+/// `entries` are in M's order. Two neighbours among those that lay words
+/// are a pair where they lie in different spine gaps, so that only
+/// surviving base text stands between them in M, neither has a kind, their
+/// groups are of two sides or more, and one at least is held by one side
+/// alone — two held by several sides are `order` gaps whatever the text.
+/// For each pair `lines` reads, through the first side listed, which holds
+/// every surviving base position, the base text M lays between the two and
+/// the base position just before the first: the first stands at a line's
+/// start where that position is a line break, or where it lies at the
+/// document's start. The pair meets at a line's edge where that text holds
+/// one line break, its last byte, and the first does not stand at a line's
+/// start — one inside a line, the other right after its break — or where
+/// the text holds none and the first does — one at a line's start, the
+/// other inside that line. Each of the two held by one side alone is then a
+/// `line` gap.
+///
+/// Which runs are read is the entries' alone, never the values': every
+/// pair is found on the kinds `placement` gave, the marks made once every
+/// pair is weighed, and both of a pair's reads are asked before either is
+/// weighed. A pair whose reads do not answer one item a position decides
+/// nothing, so a reader answering no run, or every run with no items,
+/// marks no gap.
+fn line_edges(
+    r: &Refinement,
+    spine: &[usize],
+    entries: &mut [Entry],
+    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+) {
+    let is_break = |item: &Item| item.as_slice() == b"\n";
+    let alone = |e: &Entry| e.groups.len() == 1;
+    let last = |at: usize| r.last_position(r.base[spine[at]]);
+    let laying: Vec<usize> =
+        (0..entries.len()).filter(|&i| !entries[i].groups.is_empty()).collect();
+    let mut marked: Vec<usize> = Vec::new();
+    for pair in laying.windows(2) {
+        let (p, q) = (&entries[pair[0]], &entries[pair[1]]);
+        let held: HashSet<usize> = p.groups.iter().chain(&q.groups).map(|g| g.side).collect();
+        let apart = p.home < q.home && p.kind.is_none() && q.kind.is_none();
+        if !apart || held.len() < 2 || !(alone(p) || alone(q)) {
+            continue;
+        }
+        let between = &spine[p.home..q.home];
+        let before = p.home.checked_sub(1).map(|at| lines(r.side_ix[0], &last(at)));
+        let text = r.bytes(0, between.iter().map(|&bi| r.base[bi]), lines);
+        let start = match before {
+            None => Some(true),
+            Some(Some(items)) if items.len() == 1 => Some(is_break(&items[0])),
+            Some(_) => None,
+        };
+        let width =
+            between.iter().map(|&bi| r.frags[r.base[bi]].width).fold(0, u64::saturating_add);
+        let (Some(start), Some(text)) = (start, text) else { continue };
+        if text.len() as u64 != width {
+            continue;
+        }
+        let meets = match text.iter().filter(|item| is_break(item)).count() {
+            0 => start,
+            1 => !start && text.last().is_some_and(is_break),
+            _ => false,
+        };
+        if meets {
+            marked.extend(pair.iter().copied().filter(|&i| alone(&entries[i])));
+        }
+    }
+    for i in marked {
+        entries[i].kind = Some(GapKind::Line);
+    }
 }
 
 /// A gap's groups by side, each its fragments in the side's order, the

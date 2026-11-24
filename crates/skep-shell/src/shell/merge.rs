@@ -2727,6 +2727,7 @@ fn gap_json(g: &Gap) -> Value {
         GapKind::Cut => "cut",
         GapKind::Collision => "collision",
         GapKind::Moves => "moves",
+        GapKind::Line => "line",
     };
     let placed = match &g.placed {
         Placement::Order(sides) => Value::from(sides.iter().map(|s| s.0).collect::<Vec<u8>>()),

@@ -89,8 +89,9 @@ fn board_said(stop: Stop) -> (String, String) {
 /// A default's line says where the gap stands (§1.5): a `moves` gap
 /// with spots at each side's place for the one set of words, a spine's
 /// `moves` gap in the order of the side the spine took and never "at
-/// the document's start", and every other gap by its anchor (the
-/// mutants that keep the anchors' line for a `moves` gap say the start).
+/// the document's start", and every other gap by its anchor, a `line`
+/// gap (skep #1173) among them (the mutants that keep the anchors' line
+/// for a `moves` gap say the start).
 #[test]
 fn a_default_line_names_each_sides_place_and_no_place_for_the_spines_order() {
     assert_eq!(
@@ -114,6 +115,15 @@ fn a_default_line_names_each_sides_place_and_no_place_for_the_spines_order() {
         default_line(&gap_at(GapKind::Corner, None, Placement::After, Vec::new())),
         "left at its default: gap 2 (corner) at the document's start, placed order:0"
     );
+    assert_eq!(
+        default_line(&gap_at(
+            GapKind::Line,
+            Some(a("1.0.1.0.1.0.1.25")),
+            Placement::After,
+            Vec::new()
+        )),
+        "left at its default: gap 2 (line) after 1.0.1.0.1.0.1.25, placed after:1.0.1.0.1.0.1.25"
+    );
 }
 
 /// A gap needing a choice is named where it stands in the composition's
@@ -121,8 +131,8 @@ fn a_default_line_names_each_sides_place_and_no_place_for_the_spines_order() {
 /// its default line names it: one set of words two sides placed apart
 /// at each side's place, beside them the choice that takes one side's
 /// place; a spine's `moves` gap in the order of the side the spine took;
-/// every other gap by its anchor (the mutant that names the kind and the
-/// default alone fails each).
+/// every other gap by its anchor, a `line` gap among them (the mutant that
+/// names the kind and the default alone fails each).
 #[test]
 fn a_gap_needing_a_choice_is_named_where_it_stands() {
     assert_eq!(
@@ -141,6 +151,15 @@ fn a_gap_needing_a_choice_is_named_where_it_stands() {
             Vec::new()
         )),
         "gap 2 (order) after 1.0.1.0.1.0.1.4, default order:0,1"
+    );
+    assert_eq!(
+        choice_named(&gap_at(
+            GapKind::Line,
+            Some(a("1.0.1.0.1.0.1.25")),
+            Placement::After,
+            Vec::new()
+        )),
+        "gap 2 (line) after 1.0.1.0.1.0.1.25, default after:1.0.1.0.1.0.1.25"
     );
 }
 

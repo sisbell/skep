@@ -15,8 +15,10 @@
 //! over the daughter's base; and the fences — a side that changes while it
 //! is read refused, a draft's recorded base moved while it is read
 //! refused, a trunk member read as of a draft's named position, and a
-//! board serving no `arranged_at` refused at the first fence; and the
-//! dedup's values read together through each side.
+//! board serving no `arranged_at` refused at the first fence; the dedup's
+//! values read together through each side; and the line rule's base text
+//! read together through the head, whatever the dedup's switch, and a
+//! window withheld between two additions refused whatever the switches.
 
 use super::*;
 
@@ -1284,12 +1286,13 @@ fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
 /// `doc_metadata` is read for the base the board records for it — right
 /// after the trunk's, as a fork's is for its source, its opening fence —
 /// and the merge's base is derived from it, so the caller names none; the
-/// reads then run in the record's order, each at the head, the prior records
-/// by the links of the kind to the draft, and nothing is written. A base the
-/// caller names
-/// is checked, never trusted: one equal to the derived base is taken; a
-/// different one refuses `DraftBaseDisagrees`, naming both, before any
-/// `image`.
+/// reads then run in the record's order, each at the head — the base text
+/// between the head's window and the draft's "!!!" read once through the
+/// head by the line rule (skep #1173), which finds no line's edge there —
+/// the prior records by the links of the kind to the draft, and nothing is
+/// written. A base the caller names is checked, never trusted: one equal to
+/// the derived base is taken; a different one refuses `DraftBaseDisagrees`,
+/// naming both, before any `image`.
 #[test]
 fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
     let (dialer, board, _) = open(World::window_and_draft());
@@ -1309,10 +1312,16 @@ fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
             "image",
             "retrieve_doc_v_span_set",
             "image",
+            "retrieve_v",
             "doc_metadata",
             "doc_metadata",
             "find_links_ftt"
         ]
+    );
+    assert_eq!(
+        dialer.frames("retrieve_v")[0]["specs"][0]["doc"].as_str(),
+        Some(format!("{D}.2").as_str()),
+        "the line rule's read, through the head"
     );
     let metadata: Vec<String> = dialer
         .frames("doc_metadata")
@@ -1673,4 +1682,146 @@ fn the_dedups_values_are_read_together_through_each_side() {
             "g = {g}"
         );
     }
+}
+
+/// The line cells' world (skep #1173): the base `D.1` "one\ntwo reads the
+/// model. The\nthree\n" (`D·1–35`, line 2's break `D·29`), the head `D.2`
+/// adding "h1\nh2 The\n" (`D·36–45`) right after that break, and the
+/// daughter `D.1.1` rewriting inside line 2, "Every\ns1 " (`D·46–54`)
+/// after `D·25`, before its kept "The\n".
+fn lined_world() -> World {
+    let mut w = World::new();
+    w.text(D, 1, "one\ntwo reads the model. The\nthree\n");
+    w.text(D, 36, "h1\nh2 The\n");
+    w.text(D, 46, "Every\ns1 ");
+    let head = vec![run(D, 1, 29), run(D, 36, 10), run(D, 30, 6)];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), vec![run(D, 1, 35)], None);
+    w.member(&format!("{D}.2"), head, Some(35));
+    w.member(&format!("{D}.1.1"), vec![run(D, 1, 25), run(D, 46, 9), run(D, 26, 10)], Some(35));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    w
+}
+
+/// THE LINE RULE READS THE BASE TEXT TOGETHER (skep #1173): a rewrite
+/// inside a line beside the head's lines right after its break is two
+/// `line` gaps, unsettled, M as composed with no rule; the base text the
+/// rule reads — `D·25` and `D·26–29` — goes out in ONE `retrieve_v`
+/// through the head, with the dedup on and with it off, and the
+/// composition is the one the core makes reading each run as it asks it
+/// (the mutant that batches the reads only with the dedup on sends two
+/// with it off). A record of the merge landed at the defaults verifies
+/// Equal.
+#[test]
+fn a_line_edge_reads_the_base_text_in_one_read_through_the_head() {
+    let (dialer, board, signer) = open(lined_world());
+    let session = sign_in(&board, &signer);
+    let head = vec![run(D, 1, 29), run(D, 36, 10), run(D, 30, 6)];
+    let daughter = vec![run(D, 1, 25), run(D, 46, 9), run(D, 26, 10)];
+    let bytes: Vec<u8> = b"one\ntwo reads the model. The\nthree\nh1\nh2 The\nEvery\ns1 ".to_vec();
+    let values = |_: SideIx, r: &Run| {
+        Some((r.i_start..r.reach()).map(|p| vec![bytes[p as usize - 1]]).collect::<Vec<Item>>())
+    };
+    for dedup in [true, false] {
+        dialer.clear();
+        let options = Options { dedup, ..Options::default() };
+        let inputs = Inputs { options: options.clone(), ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        let reads = dialer.frames("retrieve_v");
+        assert_eq!(reads.len(), 1, "dedup {dedup}: one read: {:?}", dialer.ops());
+        assert_eq!(
+            reads[0]["specs"][0]["doc"].as_str(),
+            Some(format!("{D}.2").as_str()),
+            "dedup {dedup}: through the head"
+        );
+        let kinds: Vec<(GapKind, bool)> =
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect();
+        assert_eq!(kinds, [(GapKind::Line, false), (GapKind::Line, false)], "dedup {dedup}");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 25), run(D, 46, 9), run(D, 26, 4), run(D, 36, 10), run(D, 30, 6)],
+            "dedup {dedup}: M at the defaults"
+        );
+        let sides = [(SideIx(0), head.clone()), (SideIx(1), daughter.clone())];
+        let one_at_a_time = compose_runs(&[run(D, 1, 35)], &a(D), &sides, None, &options, &values);
+        assert_eq!(
+            merged.composed, one_at_a_time,
+            "dedup {dedup}: the composition read a run at a time"
+        );
+    }
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    land(&board, &merged, shot(&session, &signer)).expect("landed at the defaults");
+    let record = current(&board, Some(&token()), &a(K), &merged.key)
+        .expect("the lookup")
+        .expect("the record");
+    assert_eq!(
+        record.gaps.iter().map(|g| g.kind).collect::<Vec<_>>(),
+        [GapKind::Line, GapKind::Line]
+    );
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+}
+
+/// THE LINE RULE READS WHATEVER THE SWITCHES, SO A WITHHELD WINDOW BETWEEN
+/// TWO ADDITIONS REFUSES: the base `D.1` "ab" `W`'s "c\n" "de\n" — a window
+/// onto another account's draft ending line 1 — the head adding "X" after
+/// `D·1`, inside line 1, the daughter "Y" right after line 1's break. With
+/// `W` readable, two `line` gaps, and a record of the merge, dedup off,
+/// verifies Equal against a member holding M; with `W` withheld, the
+/// composition with the dedup off refuses naming `W` (SP-14), as the
+/// composition with it on does, and the record answers Unreadable naming it
+/// (the mutant whose line rule reads no value with the dedup off composes).
+#[test]
+fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
+    const W: &str = "1.0.2.0.70";
+    let mut w = World::new();
+    w.text(D, 1, "abde\n");
+    w.text(D, 10, "X");
+    w.text(D, 20, "Y");
+    w.text(W, 1, "c\n");
+    w.doc(W, false, "1.0.2", vec![run(W, 1, 2)]);
+    let base = vec![run(D, 1, 2), run(W, 1, 2), run(D, 3, 3)];
+    let head = vec![run(D, 1, 1), run(D, 10, 1), run(D, 2, 1), run(W, 1, 2), run(D, 3, 3)];
+    let m =
+        vec![run(D, 1, 1), run(D, 10, 1), run(D, 2, 1), run(W, 1, 2), run(D, 20, 1), run(D, 3, 3)];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), base, None);
+    w.member(&format!("{D}.2"), head, Some(5));
+    w.member(
+        &format!("{D}.1.1"),
+        vec![run(D, 1, 2), run(W, 1, 2), run(D, 20, 1), run(D, 3, 3)],
+        Some(5),
+    );
+    w.member(&format!("{D}.3"), m.clone(), Some(6));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    let (dialer, board, _) = open(w);
+    let off = Inputs { options: Options { dedup: false, ..Options::default() }, ..race_inputs() };
+    let merged = compose(&board, Some(&token()), &off).expect("composed, W readable");
+    assert_eq!(m_runs(&merged), m, "the premise: M");
+    let kinds: Vec<(GapKind, bool)> =
+        merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect();
+    assert_eq!(
+        kinds,
+        [(GapKind::Line, false), (GapKind::Line, false)],
+        "the premise: the rule fires"
+    );
+    let mut record = merged.record.clone();
+    record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 0 });
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+    dialer.world().withheld.insert(W.to_string());
+    for inputs in [&off, &race_inputs()] {
+        dialer.clear();
+        assert_eq!(
+            compose(&board, Some(&token()), inputs),
+            Err(Refusal::Unreadable(a(W))),
+            "{:?}",
+            inputs.options
+        );
+        assert_eq!(
+            dialer.ops().last().map(String::as_str),
+            Some("retrieve_v"),
+            "the masked value read is the last: {:?}",
+            dialer.ops()
+        );
+    }
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
 }

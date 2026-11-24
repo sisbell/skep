@@ -221,6 +221,11 @@ struct DocState {
     stamped: Vec<Marker>,
     /// The arrangement as of each position it changed at, for `/op-at`.
     history: BTreeMap<u64, Vec<Run>>,
+    /// The position of the commit that minted a member — a `publish`'s, or
+    /// the row a cell plants it with — served as its `doc_metadata` `at`
+    /// whatever the feed still holds (wire.md §The response envelope);
+    /// `None` serves the first position of its history.
+    minted: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -432,6 +437,7 @@ impl World {
                 markers: BTreeMap::new(),
                 stamped: Vec::new(),
                 history,
+                minted: None,
             },
         );
     }
@@ -488,6 +494,7 @@ impl World {
         d.base_extent = base_extent;
         d.shot_base = shot_base;
         self.position += 1;
+        self.docs.get_mut(text).unwrap().minted = Some(self.position);
         self.rows.push(FeedRow {
             at: self.position,
             op: "publish",
@@ -837,7 +844,7 @@ impl World {
                 // since it planted it at its start (wire.md §The
                 // response envelope, `arranged_at`).
                 let arranged_at = d.history.range(..=position).next_back().map(|(at, _)| *at).filter(|at| *at > 0);
-                let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.history.keys().next(), "arranged_at": arranged_at});
+                let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.minted.or_else(|| d.history.keys().next().copied()), "arranged_at": arranged_at});
                 // The address named's own content count, never floated —
                 // absent on an older board.
                 if !self.no_own_count {
@@ -1327,6 +1334,7 @@ impl World {
                     }
                 }
                 let at = self.commit("publish", docs);
+                self.docs.get_mut(&member).unwrap().minted = Some(at);
                 // THE BASE MOVES at the shot's position: the rendering
                 // draft's recorded base becomes the member the shot
                 // minted, `base_copied` its whole count, and the marker

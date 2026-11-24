@@ -17,7 +17,8 @@ composition refused with nothing published), `--into` sets a draft's whole
 text to it in one write, what the draft held replaced, `--new` lands it in
 a fresh draft staged from the head or finds this composition's landing
 standing in a draft of yours and says so, `--resolve ⟨gap⟩=⟨choice⟩`
-settles a gap the rules left open by its number in the report, `--undo
+settles a gap the rules left open by its number in the report of the same
+head, which a new head numbers afresh, `--undo
 ⟨S⟩` puts a draft back as it stood before the merge landed in it (with
 `--withdrawal ⟨P⟩` a withdrawal taken back) and `--withdraw ⟨S⟩` takes the
 merge out keeping the words — a `--publish` whose head already holds the
@@ -27,7 +28,8 @@ written, its words naming this command's own way on, and a landing
 stopped with its record unwritten naming the run that writes it — the record kept only
 in a private document
 — a published `--journal` said by the composition's talk and refused
-before any write, exit 1 — a daughter is reported and never retried,
+before any write, exit 1 — a daughter is reported and never retried, the
+talk naming the run that merges that daughter with the new head,
 another account's fork of the document (`--fork`) is merged from where the board records
 it standing — its recorded base, which a landing into it moves, else its source — every
 side's base derived up the bases the board recorded

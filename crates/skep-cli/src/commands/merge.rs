@@ -63,16 +63,22 @@
 //! where the merge landed in a draft of the merger's that no record of theirs
 //! names — a landing cut off before its record — lands nothing and stages
 //! nothing, refused `landing_begun` naming the draft, exit 1, for `--into`
-//! that draft to land it with its record or `--undo` it; and the report then
+//! that draft in place of `--new` to land it with its record, or `--undo`
+//! it; and the report then
 //! carries the landing, naming a newer version published since where the
 //! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
 //! left open — at a `moves` gap with spots, one set of words two sides
 //! placed at two places, `order:⟨side⟩` or `keep:⟨side⟩` takes that side's
 //! placement (CM-I33). Every choice names a gap by its number in the report
-//! printed with no `--resolve`, which no choice renumbers: `order:⟨side⟩` at
-//! the spine's `moves` gap orders the merge by that side and leaves every
-//! other gap its number, and a choice naming a gap that order removes is
-//! applied nowhere and listed under `ignored` (skep #1155); `--journal`
+//! printed with no `--resolve` for the same composition, which no choice
+//! renumbers: `order:⟨side⟩` at the spine's `moves` gap orders the merge by
+//! that side and leaves every other gap its number, and a choice naming a
+//! gap that order removes is applied nowhere and listed under `ignored`
+//! (skep #1155); a composition on another head numbers its gaps afresh, so
+//! where the head moved under a `--publish` that named a `--resolve`, the
+//! refusal (`supersede_refused`, `head_moved`) says to compose again on the
+//! new head with no `--publish` and no `--resolve` and give the choices by
+//! that report's numbers; `--journal`
 //! names the merge journal (decision 7), `--kind` the record kind's type
 //! address (decision 9's row is interim and unpinned, so the caller names
 //! it). The board's refusal is exit 1, a halt exit 3. A `withheld` refusal —
@@ -134,7 +140,9 @@
 //! here naming its own flags (SP-10): `landing_begun`, `head_holds` and
 //! `fork_base_moved` at a landing ([`refused_landing`]), an inherited
 //! marker's `nothing_to_undo` and a withdrawal's `no_merge` at a take-back,
-//! beside the take-backs' `history_reclaimed` ([`refused_taking_out`]). A
+//! beside the take-backs' `history_reclaimed` ([`refused_taking_out`]); and
+//! `supersede_refused` at `head_moved` after a `--resolve`, whose numbers
+//! name gaps of this composition alone ([`refused_landing`]). A
 //! landing stopped by a halt or the session's end says the run that takes
 //! it on where its write stands with its record unwritten: at `--publish`
 //! the `--head` the merge composed on, at a landing into a draft named or
@@ -142,9 +150,16 @@
 //! `--new`, which names the draft the landing stands in.
 //!
 //! **A daughter is reported, never retried (decision 17).** Where the head
-//! moved under the merge the shot lands as the head's daughter, the report
-//! says so under `landed.daughter`, the talk says to run again with
-//! `--retries` one higher, and the command runs nothing again.
+//! moved under a shot that names no daughter — a `--draft` or a `--fork`
+//! side's — the shot lands as the head's daughter, the report says so under
+//! `landed.daughter`, and the command runs nothing again. The daughter holds
+//! this merge's result, so the talk names the run that merges it with the
+//! new head (C-46's re-apply): `--alternative` that daughter in place of
+//! this run's side, `--retries` one higher and no `--head`, any choice given
+//! by that run's own report — it asks only where the new head's changes
+//! meet this merge's, and marks the daughter superseded — where this run's
+//! side composed again asks every gap again and leaves the daughter
+//! standing beside the head.
 //!
 //! **Who resolves (decisions 1–5).** A `--resolve` is the merger's, and the
 //! record keeps who the merger was — `person` where stdin and stderr are
@@ -159,7 +174,9 @@
 //! the merge kept once, words both sides added alike at one spot, the merge
 //! record's §5 case (g): `{gap, kept, dropped}`, the sides whose copy M
 //! holds and every other side's runs, which stay in that side with any link
-//! on them, the talk naming each), `as_of` — the one
+//! on them, the talk naming each; and under `values.retyped` each run
+//! `--retype` took out of the merge, §5 case (f), its side's copy staying
+//! in that side, the talk naming each too), `as_of` — the one
 //! position the composition stands at, where every side that can change
 //! held the state it was read in — `landed`, and to
 //! each gap a `default` — its placement as this run composed it, in
@@ -198,7 +215,8 @@ use skep_client::merge::{
     compose, head_of, journal, land, landed_draft, replaced, standing_landing, undo, unwithdraw,
     withdraw, Answers, Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
     Merger, Misfit, NoUndo, Options, Placement, Record, RecordLanding, Refusal, Replaced,
-    Resolution, ResolvedBy, Side, SideIx, SideState, Undone, Unwithdrawn, WindowPart, Withdrawn,
+    Resolution, ResolvedBy, Side, SideIx, SideState, SupersedeCause, Undone, Unwithdrawn,
+    WindowPart, Withdrawn,
 };
 use skep_client::publication::OriginAnswer;
 use skep_client::sheet::render_inert;
@@ -446,7 +464,7 @@ fn run(
             (_, Some(draft)) => format!(
                 "where the stop came after the landing's write, the merge stands in {draft} with its record unwritten: run this again with --into {draft}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since"
             ),
-            (_, None) => "where the stop came after the landing's write, the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft, which lands the merged list there again and writes its record".to_string(),
+            (_, None) => "where the stop came after the landing's write, the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft in place of --new, which lands the merged list there again and writes its record".to_string(),
         };
         let landing = match landing {
             Land::Publish(answers) => Landing::Shot { merger, draft: None, answers: (**answers).clone(), journal },
@@ -463,7 +481,7 @@ fn run(
                 Refusal::WindowPartsOwed { parts, misfits, given } => {
                     Stop::Refusal(owed_block(&merged, &parts, &misfits, &given))
                 }
-                other => refused_landing(other, step),
+                other => refused_landing(other, step, !options.resolutions.is_empty()),
             }
         })?;
         // A landing made before this run's composition, found and not made:
@@ -676,23 +694,43 @@ fn said(code: &str, detail: String) -> Stop {
 /// this command has none of — a `resume`, a draft discarded, a fork made
 /// afresh — are said naming its own flags (SP-10): `landing_begun`, a
 /// `--new` landing that found this merge landed in a draft of the merger's
-/// with no record, names `--into` that draft, which lands the merged list
-/// there again and writes its record, replacing any edit made in it since,
-/// `--undo` and, where the draft records a base, `--withdraw`; `head_holds`,
-/// a `--publish` whose head holds the merged list, names the `--head` an
-/// earlier run of the merge composed on — the version before the head,
-/// which no merge's shot minted where the head is version 1, so none is
-/// named there — which finds the head and writes its record; and
-/// `fork_base_moved`, a fork landed into itself on another head than its
-/// source, names `--new`, which stages a fresh draft from the head and
-/// lands the merge there. `step` is the landing's, [`Step::Publish`] or
+/// with no record, names `--into` that draft in place of `--new`, which
+/// lands the merged list there again and writes its record, replacing any
+/// edit made in it since, `--undo` and, where the draft records a base,
+/// `--withdraw`; `head_holds`, a `--publish` whose head holds the merged
+/// list, names the `--head` an earlier run of the merge composed on — the
+/// version before the head, which no merge's shot minted where the head is
+/// version 1, so none is named there — which finds the head and writes its
+/// record; and `fork_base_moved`, a fork landed into itself on another head
+/// than its source, names `--new`, which stages a fresh draft from the head
+/// and lands the merge there. And where this run named a `--resolve`
+/// (`resolved`), `supersede_refused` at `head_moved` says to compose again
+/// on the new head with no `--publish` and no `--resolve` and to give the
+/// choices by that report's numbers: a gap's number names a gap of the
+/// composition it was printed for, and the new head can number another gap
+/// so (§1.4 step 7). `step` is the landing's, [`Step::Publish`] or
 /// [`Step::Draft`].
-fn refused_landing(r: Refusal, step: Step) -> Stop {
+fn refused_landing(r: Refusal, step: Step, resolved: bool) -> Stop {
+    if let (Refusal::SupersedeRefused { cause: SupersedeCause::HeadMoved { head }, .. }, true) =
+        (&r, resolved)
+    {
+        let on = head.as_ref().map_or_else(|| "the new head".to_string(), ToString::to_string);
+        let named = head
+            .as_ref()
+            .map(|h| format!(" with --head {h}, or with no --head to take the feed's,"))
+            .unwrap_or_default();
+        return said(
+            "supersede_refused",
+            format!(
+                "{r}: run this again{named} with no --publish and no --resolve, read the gaps that run reports, then land the merge with your choices by that report's numbers — a gap's number names a gap of the composition it was printed for, and on {on} the same number can name another gap"
+            ),
+        );
+    }
     match r {
         Refusal::LandingBegun { draft, position } => said(
             "landing_begun",
             format!(
-                "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written now, so the merge does not land twice; to keep it, run this again with --into {draft}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since; to give it up, --undo {draft} puts {draft} back as it stood before the merge (refused where it was edited since), or, where {draft} records a base, --withdraw {draft} takes the merge out and keeps the words"
+                "this merge already landed in {draft} at position {position}, and its record is not written — nothing was staged or written now, so the merge does not land twice; to keep it, run this again with --into {draft} in place of --new, which lands the merged list there again and writes its record, replacing any edit made in {draft} since; to give it up, --undo {draft} puts {draft} back as it stood before the merge (refused where it was edited since), or, where {draft} records a base, --withdraw {draft} takes the merge out and keeps the words"
             ),
         ),
         Refusal::HeadHolds { head } => {
@@ -893,10 +931,11 @@ fn withdrawn_value(withdrawn: &Withdrawn) -> Value {
 /// Says the talk after the composition.
 ///
 /// It names the base and the counts, each place the merge kept once
-/// ([`dedup_lines`]), each unsettled gap in the copy's register ("⟨n⟩
+/// ([`dedup_lines`]) and each retyped run it holds by the base's identity
+/// ([`retype_lines`]); each unsettled gap in the copy's register ("⟨n⟩
 /// places need a choice"), where it stands and its default
-/// ([`choice_named`]), the resolutions not applied, and the cap where the
-/// list passes it.
+/// ([`choice_named`]), beside the side that stands where nothing lands; the
+/// resolutions not applied; and the cap where the list passes it.
 fn say_composed(merged: &Merged) {
     let counts = merged.composed.counts;
     let gaps = &merged.composed.gaps;
@@ -910,13 +949,18 @@ fn say_composed(merged: &Merged) {
         gaps.len(),
         if gaps.len() == 1 { "" } else { "s" }
     ));
-    for line in dedup_lines(&merged.record) {
+    for line in dedup_lines(&merged.record).into_iter().chain(retype_lines(&merged.record)) {
         talk(line);
     }
     if !unsettled.is_empty() {
         let named: Vec<String> = unsettled.iter().map(|g| choice_named(g)).collect();
+        let side = merged
+            .inputs
+            .sides
+            .first()
+            .map_or_else(|| "the side".to_string(), |s| side_named(s, None));
         talk(format!(
-            "{} place{} a choice: {} — resolve each with --resolve <gap>=<choice>, or land nothing and the alternative stands",
+            "{} place{} a choice: {} — resolve each with --resolve <gap>=<choice>, or land nothing and {side} stands",
             unsettled.len(),
             if unsettled.len() == 1 { " needs" } else { "s need" },
             named.join("; ")
@@ -940,9 +984,11 @@ fn say_composed(merged: &Merged) {
 
 /// Says the talk after a landing.
 ///
-/// It says what landed, or the daughter and the re-run; at the shot, each
-/// window part's answer, every default taken and every place kept once (the
-/// merge record's §1.5, the lines of §6); at a draft landing,
+/// It says what landed, or the daughter and the run that merges it with the
+/// new head ([`daughter_way_on`]); at the shot, each window part's answer,
+/// every default taken, every place kept once and every run retyped (the
+/// merge record's §1.5, the lines of §6), and the claims the shot filed by
+/// their addresses; at a draft landing,
 /// the draft — the fresh one staged where the library answers it `staged` —
 /// and, where the board told a newer head, that a newer version was
 /// published since the merge was composed and the merge landed against the
@@ -970,7 +1016,8 @@ fn say_landed(
             for part in answers {
                 talk(answered_line(part));
             }
-            for line in default_lines(merged).into_iter().chain(dedup_lines(&merged.record)) {
+            let defaults = default_lines(merged).into_iter().chain(dedup_lines(&merged.record));
+            for line in defaults.chain(retype_lines(&merged.record)) {
                 talk(line);
             }
             talk("no links were published with this version — the links on its words stay where they were made".to_string());
@@ -981,7 +1028,7 @@ fn say_landed(
                     "; the claim{} marking the side{} superseded by it: {}",
                     if claims.len() == 1 { "" } else { "s" },
                     if claims.len() == 1 { "" } else { "s" },
-                    claims.len()
+                    claims.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 )
             };
             talk(if found {
@@ -991,15 +1038,16 @@ fn say_landed(
             });
         }
         Landed::AsDaughter { address, position } => {
-            let retries = merged.inputs.options.retries + 1;
+            let side = side_flags(merged.inputs.sides.first(), merged.inputs.base.as_ref());
+            let way_on = daughter_way_on(&side, merged.inputs.options.retries + 1, address);
             talk(if found {
                 format!(
-                    "{address}, a daughter of {}, already holds this merge — it was published at position {position}, before this run, when the head of {doc} had moved under it; nothing was published now and no record was written. Nothing is retried here — run this again with --retries {retries} to merge against the new head",
+                    "{address}, a daughter of {}, already holds this merge — it was published at position {position}, before this run, when the head of {doc} had moved under it; nothing was published now and no record was written. {way_on}",
                     merged.inputs.head
                 )
             } else {
                 format!(
-                    "the head of {doc} moved under the merge: the shot landed as the daughter {address} at position {position}, and no record was written. Nothing is retried here — run this again with --retries {retries} to merge against the new head"
+                    "the head of {doc} moved under the merge: the shot landed as the daughter {address} at position {position}, and no record was written. {way_on}"
                 )
             });
         }
@@ -1050,6 +1098,36 @@ fn replaced_line(draft: &Address, as_of: u64, stretches: &[Replaced], kind: &Add
         if n == 1 { "" } else { "es" },
         named.join(", ")
     )
+}
+
+/// Returns the way on after a shot that landed as the head's daughter
+/// (decision 17; C-46's re-apply).
+///
+/// Nothing is retried here. The daughter holds this merge's result, so the
+/// way on merges it with the new head: `--alternative` that daughter in
+/// place of `side`, the flags this run named its side by ([`side_flags`]),
+/// `--retries` at `retries` and no `--head`, any choice given by that run's
+/// own report. That composition asks only where the new head's changes meet
+/// this merge's, and its shot marks the daughter superseded; this run's side
+/// composed again asks every gap again and leaves the daughter standing
+/// beside the head.
+fn daughter_way_on(side: &str, retries: u32, daughter: &Address) -> String {
+    format!(
+        "Nothing is retried here — merge it with the new head: run this again with --alternative {daughter} in place of {side}, with --retries {retries} and no --head, giving any --resolve by that run's own report; it asks only where the new head's changes meet this merge's and marks {daughter} superseded by the version it publishes, where {side} composed again asks every gap again and leaves {daughter} standing beside the head"
+    )
+}
+
+/// Returns the flags a run named its side by, as a line asks them replaced:
+/// `--alternative ⟨A⟩`, `--draft ⟨S⟩` with its `--base` where one was
+/// named, or `--fork ⟨F⟩`.
+fn side_flags(side: Option<&Side>, base: Option<&Address>) -> String {
+    let base = base.map(|b| format!(" --base {b}")).unwrap_or_default();
+    match side {
+        Some(Side::Member(a)) => format!("--alternative {a}"),
+        Some(Side::Draft { at, .. }) => format!("--draft {at}{base}"),
+        Some(Side::Fork(f)) => format!("--fork {f}"),
+        None => "this run's side".to_string(),
+    }
 }
 
 /// Returns the report: the merge record's §7 `Merged`.
@@ -1367,29 +1445,21 @@ fn place_of(g: &Gap) -> String {
 ///
 /// Words both sides added alike at one spot are kept as one side has them,
 /// and the other side's copy stays in that side with any link on it. A
-/// side is named by its place, side 0 the head, and its copy by the address
-/// the record's `sides` holds for it, or by its number where they hold
-/// none.
+/// side is named by its place ([`side_word`]) and its copy by its address
+/// ([`side_address`]).
 fn dedup_lines(record: &Record) -> Vec<String> {
-    let named = |side: &SideIx| if side.0 == 0 { "the head" } else { "the side" };
-    let address = |side: &SideIx| {
-        record
-            .sides
-            .get(usize::from(side.0))
-            .map_or_else(|| format!("side {}", side.0), |s| s.address().to_string())
-    };
     record
         .deduped()
         .iter()
         .map(|d| {
-            let kept: Vec<&str> = d.kept.iter().map(named).collect();
+            let kept: Vec<&str> = d.kept.iter().map(side_word).collect();
             let mut dropped: Vec<&SideIx> = Vec::new();
             for (side, _) in &d.dropped {
                 if !dropped.contains(&side) {
                     dropped.push(side);
                 }
             }
-            let stays: Vec<String> = dropped.iter().map(|side| format!("{}'s copy stays in {}", named(side), address(side))).collect();
+            let stays: Vec<String> = dropped.iter().map(|side| format!("{}'s copy stays in {}", side_word(side), side_address(record, side))).collect();
             format!(
                 "gap {}: matching words were added on both sides — kept once, as {} {} them; {}, and any links on it stay there, not carried into the merge",
                 d.gap.0,
@@ -1399,6 +1469,50 @@ fn dedup_lines(record: &Record) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Returns the lines naming each run `--retype` took out of the merge (the
+/// merge record's §5, case (f); `ValueLog::retyped`).
+///
+/// A side removed base words and placed equal words in their place, and
+/// `--retype` keeps the base's identity there instead: the merge holds the
+/// base's words, and the side's copy, with any link on it, stays in that
+/// side. A side is named as [`dedup_lines`] names it.
+fn retype_lines(record: &Record) -> Vec<String> {
+    record
+        .values
+        .retyped
+        .iter()
+        .map(|(side, run)| {
+            let at = run.address_at(0).map(|a| a.to_string()).unwrap_or_default();
+            let word = side_word(side);
+            format!(
+                "retyped: {word}'s {} position{} at {at} equal the base's words it removed there — the merge holds the base's, by --retype; {word}'s copy stays in {}, and any links on it stay there, not carried into the merge",
+                run.width,
+                if run.width == 1 { "" } else { "s" },
+                side_address(record, side)
+            )
+        })
+        .collect()
+}
+
+/// Returns how a line names a side by its place: side 0 the head, any other
+/// the side.
+fn side_word(side: &SideIx) -> &'static str {
+    if side.0 == 0 {
+        "the head"
+    } else {
+        "the side"
+    }
+}
+
+/// Returns the address the record's `sides` holds for `side`, or its number
+/// where they hold none.
+fn side_address(record: &Record, side: &SideIx) -> String {
+    record
+        .sides
+        .get(usize::from(side.0))
+        .map_or_else(|| format!("side {}", side.0), |s| s.address().to_string())
 }
 
 /// Returns each place the merge kept once as the report carries it,

@@ -421,10 +421,10 @@ fn the_claim_is_read_and_the_record_is_written_after_the_shot_each_read_first() 
 /// THE LOST ACK: the dialer drops the shot's acknowledgment and the one
 /// re-ask's under the same id — the write applied once, the memo
 /// answering the re-ask — so `land` halts at the transport; `resume`
-/// finds the member whose first `placed` positions equal M, with its
-/// position off the feed, AND THE CLAIM WITH IT — a landed shot carried
-/// its claim — and completes the record; a second `resume` writes
-/// nothing.
+/// finds the member whose first `placed` positions equal M, with the
+/// position it was minted at off its own `doc_metadata` and no walk of the
+/// feed, AND THE CLAIM WITH IT — a landed shot carried its claim — and
+/// completes the record; a second `resume` writes nothing.
 #[test]
 fn a_lost_ack_is_completed_by_resume_and_nothing_is_written_twice() {
     let (dialer, board, signer) = open(World::race());
@@ -450,15 +450,15 @@ fn a_lost_ack_is_completed_by_resume_and_nothing_is_written_twice() {
     assert_eq!(
         *position,
         dialer.world().rows.iter().find(|r| r.docs[0] == format!("{D}.3")).unwrap().at,
-        "the position off the feed"
+        "the position the shot minted the member at"
     );
     let ops = dialer.ops();
     assert!(!ops.iter().any(|o| o == "publish"), "the shot is not re-sent: {ops:?}");
     assert_eq!(ops.iter().filter(|o| *o == "insert").count(), 1);
     assert_eq!(ops.iter().filter(|o| *o == "make_link").count(), 1);
     assert!(
-        ops.iter().any(|o| o.starts_with("GET /changes?")),
-        "the member's position off the feed"
+        !ops.iter().any(|o| o.starts_with("GET /changes?")),
+        "the member's position off its own doc_metadata, no walk of the feed: {ops:?}"
     );
     dialer.clear();
     let twice = resume(&board, &merged, shot(&session, &signer)).expect("resumed again");
@@ -485,6 +485,44 @@ fn a_lost_ack_is_completed_by_resume_and_nothing_is_written_twice() {
     dialer.clear();
     assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None));
     assert_eq!(dialer.ops(), ["doc_metadata"]);
+}
+
+/// A version found standing answers the position it was minted at.
+///
+/// The shot lands `D.3` and both its answers are lost; the feed then holds
+/// no row of `D.3`'s mint, and a write elsewhere commits past it. `resume`
+/// finds `D.3` holding M and answers the position its own `doc_metadata`
+/// serves as its `at`, and the record it writes keeps that position — never
+/// the reads' highest `as_of`, past the mint, which a run that finds the
+/// version would take for a version published now (the mutant that reads
+/// the position off the feed alone answers that `as_of`).
+#[test]
+fn a_version_found_standing_answers_the_position_it_was_minted_at() {
+    let (dialer, board, signer) = open(World::race());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    dialer.world().drop_acks = 2;
+    land(&board, &merged, shot(&session, &signer)).expect_err("both answers lost");
+    let member = format!("{D}.3");
+    let minted = {
+        let mut w = dialer.world();
+        let row = w.rows.iter().position(|r| r.op == "publish" && r.docs[0] == member);
+        let minted = w.rows.remove(row.expect("the shot's row")).at;
+        // A write elsewhere: the board's position moves past the mint.
+        w.position += 1;
+        minted
+    };
+    dialer.clear();
+    let resumed = resume(&board, &merged, shot(&session, &signer)).expect("resumed");
+    let Some(Landed::Member { address, position, .. }) = &resumed else { panic!("{resumed:?}") };
+    assert_eq!(address.to_string(), member);
+    assert!(minted < dialer.world().position, "the premise: the board moved past the mint");
+    assert_eq!(*position, minted, "the mint, off the member's own doc_metadata");
+    assert_eq!(
+        appended_record(&dialer)["landed"],
+        json!({"member": member, "position": minted}),
+        "the record keeps the mint"
+    );
 }
 
 /// THE HEAD HOLDS THE MERGE (P13): the shot landed and both its answers

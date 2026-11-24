@@ -188,8 +188,7 @@ pub(super) enum Standing {
     Absent,
     /// The trunk's next member holds M, minted at this position.
     ///
-    /// Where the feed holds no row of the mint, the position is the reads'
-    /// highest `as_of`.
+    /// The position is the member's own `doc_metadata` `at` (`Holds::Merged`).
     Trunk(Address, u64),
     /// A daughter of the head holds M: the shot landed under a moved head.
     Daughter(Address, u64),
@@ -203,7 +202,11 @@ enum Holds {
     Other,
     /// M over its first `placed` positions, minted at this position.
     ///
-    /// Where the feed holds no row of the mint, the position is the reads'
+    /// It is the member's own `doc_metadata` `at`, the position of the
+    /// commit that minted it, which the board serves whatever its feed
+    /// still holds. Where the board serves none — a member a build before
+    /// the position map minted — it is the position of the member's mint
+    /// row on the feed, and where the feed holds no such row, the reads'
     /// highest `as_of`.
     Merged(u64),
 }
@@ -256,14 +259,17 @@ impl Writer<'_> {
     /// holds it where its words at the draft side's re-minted runs are that
     /// side's own (`first_word_difference`): the shot gave those words new
     /// addresses, so a version of other words of the same widths is never
-    /// taken for this merge's landing.
+    /// taken for this merge's landing. A member that holds it answers the
+    /// position it was minted at (`Holds::Merged`), so a landing found
+    /// standing is told apart from one made now by its own position.
     ///
     /// # Errors
     ///
     /// The member's reads' refusals but `withheld`, a `doc_not_registered`
     /// on its metadata and a member too fragmented to image, which answer as
     /// what it holds; an `image` run that is no content I-address; the word
-    /// reads' refusals, each as itself; the feed walk's halts.
+    /// reads' refusals, each as itself; where the board serves no mint
+    /// position, the feed walk's halts.
     fn holds(&self, merged: &Merged, shot: &ShotParts, member: &Address) -> Result<Holds, Refusal> {
         let meta = match self.reader.metadata(member, None) {
             Ok(m) => m,
@@ -293,7 +299,10 @@ impl Writer<'_> {
         if first_word_difference(&self.reader, doc, &merged.maps, member, &re_minted)?.is_some() {
             return Ok(Holds::Other);
         }
-        let at = position_of(&self.reader, member)?.unwrap_or_else(|| self.reader.as_of());
+        let at = match meta.at {
+            Some(minted) => minted,
+            None => position_of(&self.reader, member)?.unwrap_or_else(|| self.reader.as_of()),
+        };
         Ok(Holds::Merged(at))
     }
 }

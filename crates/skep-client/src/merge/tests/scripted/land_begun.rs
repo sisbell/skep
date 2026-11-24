@@ -367,7 +367,10 @@ fn a_landing_cut_off_before_its_record_is_completed_by_resume_after_an_edit() {
 /// record names is recorded only where it can be judged (#914 F16) — and a
 /// landing with no draft named still refuses it `LandingBegun`, nothing
 /// staged (the mutant that answers every reclaimed landing as standing
-/// writes a record at the resume).
+/// writes a record at the resume). The refusal's words say both ways on
+/// as they stand here: the resume writes nothing, and the undo naming `L`
+/// refuses `history_reclaimed`, nothing sent, the state before the landing
+/// reclaimed.
 #[test]
 fn a_landing_begun_whose_list_cannot_be_read_back_is_named_never_recorded() {
     let (dialer, board, signer, l, at) =
@@ -387,10 +390,25 @@ fn a_landing_begun_whose_list_cannot_be_read_back_is_named_never_recorded() {
         Ok(None),
         "no record of a landing that cannot be judged"
     );
+    let begun = Refusal::LandingBegun { draft: l.clone(), position: at };
     assert_eq!(
         land(&board, &again, draft_landing(&session, &signer, None)),
-        Err(Refusal::LandingBegun { draft: l, position: at }),
+        Err(begun.clone()),
         "the landing begun named"
+    );
+    let words = begun.to_string();
+    for said in [
+        format!("save where the board has reclaimed position {at} and {l} as it stands no longer holds the merged list, where the landing cannot be judged and resume writes nothing"),
+        format!("undo it naming {l} (the command's --undo {l}), which refuses history_reclaimed where the board has reclaimed the state before the landing"),
+    ] {
+        assert!(words.contains(&said), "the words say {said:?}: {words}");
+    }
+    assert!(
+        matches!(
+            undo(&board, merger(&session, &signer), &l, &a(K), None, None),
+            Err(Refusal::HistoryReclaimed { .. })
+        ),
+        "the undo the words name refuses the reclaimed state before the landing"
     );
     let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
     let ops = dialer.ops();

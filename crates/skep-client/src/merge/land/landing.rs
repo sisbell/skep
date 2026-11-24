@@ -110,8 +110,12 @@ pub enum Landed {
         address: Address,
         /// The shot's commit position.
         ///
-        /// Where the member already stood and the feed holds no row of its
-        /// mint, it is the highest `as_of` the reads answered.
+        /// Where the member already stood, it is the position the member
+        /// was minted at, its own `doc_metadata` `at`: a landing made before
+        /// the composition and found standing answers a position at or below
+        /// `Merged::as_of`. Where the board serves no such position, it is
+        /// the position of the member's mint row on the feed, else the
+        /// highest `as_of` the reads answered.
         position: u64,
         /// The supersession claims standing at the daughters whose `new` is the
         /// member, as read after the shot — the claims the shot deposited, one
@@ -132,8 +136,13 @@ pub enum Landed {
     },
     /// The head moved under the merge; the shot landed as its daughter.
     ///
-    /// Reported, never a success; the embedder re-runs with the new head and
-    /// `retries` one higher (decision 17). Only a shot naming NO daughter
+    /// Reported, never a success. The daughter holds this merge's result, so
+    /// the embedder merges it with the new head — the daughter as a
+    /// `Side::Member`, `retries` one higher (decision 17; C-46's re-apply) —
+    /// which asks only where the new head's changes meet this merge's and
+    /// claims the daughter superseded; composing this merge's own sides
+    /// again on the new head asks every gap again and leaves the daughter
+    /// standing beside the head. Only a shot naming NO daughter
     /// can meet it — a merge of draft or fork sides alone — or a landing
     /// whose read-first finds a daughter of the head already holding M: a
     /// shot naming a daughter in `supersede` is refused whole at a moved
@@ -146,8 +155,8 @@ pub enum Landed {
         address: Address,
         /// The shot's commit position.
         ///
-        /// Where the daughter already stood and the feed holds no row of its
-        /// mint, it is the highest `as_of` the reads answered.
+        /// Where the daughter already stood, it is the position it was
+        /// minted at, as `Member`'s `position` is.
         position: u64,
     },
     /// M landed into a draft.

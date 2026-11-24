@@ -502,7 +502,15 @@ impl Name {
     /// `gap_edited {gap}` crosses under it too (the draft holds a `moves`
     /// gap with spots' words elsewhere than the composition placed them —
     /// at another side's spot, or away from the one the merger's edit took;
-    /// nothing sent: compose again, which reads them).
+    /// nothing sent: compose again, which reads them), and so do
+    /// `merge.compose`'s own two at a daughter a supersession claim of the
+    /// person's own already names: `claim_names_no_member {member}` (the
+    /// claim's `new` is `doc`'s first version or no member of its chain,
+    /// which no merge's shot mints; nothing composed or written), and
+    /// `member_differs {member, at}`, only as the merged report's
+    /// `unrecorded` (the member holds otherwise than the record the
+    /// composition would write, first at the V-ordinal `at`; no record
+    /// written).
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

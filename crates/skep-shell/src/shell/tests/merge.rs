@@ -1928,6 +1928,39 @@ fn the_re_open_lands_nothing_and_a_checked_resolution_lands_on_the_trunk_with_th
     sd.shutdown();
 }
 
+/// Checks that a re-open after a newer version answers the marker's head
+/// and tells no newer head, against the daemon.
+///
+/// E.1.1's merge lands in L, staged from E.2, on the head E.2, the trunk's:
+/// `head_moved` null. E.3 is published since. `merge.compose` naming L
+/// again re-opens it, nothing landed: `head` E.2, the marker's, the head
+/// the landing composed on, and `head_moved` null, a re-open reading no
+/// trunk head — so the page tells the newer version by comparing `head`
+/// with the head it holds (the mutant that answers the trunk's head at a
+/// re-open answers E.3, and the one that tells it as `head_moved` answers
+/// E.3 there).
+#[test]
+fn a_re_open_after_a_newer_version_answers_the_markers_head_and_tells_no_newer_head() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(frames::stage(&f.e2, None));
+    let compose = || g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let landed = compose();
+    assert_eq!((landed["outcome"].as_str(), landed["head"].as_str(), &landed["head_moved"]), (Some("landed"), Some(f.e2.as_str()), &Value::Null), "on the trunk's head: {landed}");
+    let e3 = the_next_version(&g, &f);
+    let before = g.position();
+    let reopened = compose();
+    assert_report_declared(&reopened);
+    assert_eq!((reopened["outcome"].as_str(), reopened["into"].as_str(), reopened["position"].as_u64()), (Some("reopened"), Some(l.as_str()), landed["position"].as_u64()), "{reopened}");
+    assert_eq!((reopened["head"].as_str(), &reopened["head_moved"]), (Some(f.e2.as_str()), &Value::Null), "the marker's head, no newer head told, E.3 standing: {reopened}");
+    assert_ne!(reopened["head"].as_str(), Some(e3.as_str()));
+    assert_eq!(g.position(), before, "nothing landed");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// Asserts that the record of the merge `report` composed names gap `gap`
 /// placed `placed` by the person, and verifies `Equal`: the member it
 /// names holds the merge its options compose.
@@ -2895,7 +2928,8 @@ fn an_edits_choice_is_read_off_the_draft_only_where_it_holds_one_of_the_gaps() {
 ///
 /// At an `order` gap where both sides placed the quote `q` and each a word
 /// of its own after it — the head's `a`, the side's `b` — the library lists
-/// `q` under both sides and lays it once. Over `[q, a, b]` the default holds;
+/// `q` under both sides and lays it once, and the report's gap lists it so
+/// beside M's runs laying it once. Over `[q, a, b]` the default holds;
 /// over `[q, b]` the side alone holds and the head alone does not, the
 /// quote standing under the side; over `[q, b, a]` the side first. Where the
 /// sides placed two shared words `y` and `q` in two orders and nothing of
@@ -2937,6 +2971,21 @@ fn a_word_two_sides_placed_alike_is_read_once() {
     assert_eq!(read(&quoted, &[base, rq, rb, ra]), Some(order(&[1, 0])), "[q, b, a]: the side first");
     assert_eq!(read(&quoted, &[base, rq, ra]), Some(order(&[0])), "[q, a]: the head alone");
     assert_eq!(read(&quoted, &[base]), Some(Placement::Omitted), "[]: the omission");
+    // The report of that composition: the quote listed under both sides at
+    // the gap, and laid once in M.
+    let side = |own: &Address, width: u64| vec![Run::new(e.clone(), 1, 7), Run::new(q.clone(), 1, 3), Run::new(own.clone(), 1, width)];
+    let unread = |_: SideIx, _: &Run| None;
+    let composed = skep_client::merge::compose_runs(&[Run::new(e.clone(), 1, 7)], &e, &[(SideIx(0), side(&d, 5)), (SideIx(1), side(&s, 4))], None, &skep_client::merge::Options::default(), &unread);
+    let [reported] = composed.gaps.iter().map(super::super::merge::gap_json).collect::<Vec<Value>>().try_into().expect("one gap");
+    crate::shapes::assert_declared("MergeGap", &reported);
+    let quote_runs: Vec<&Value> = reported["runs"].as_array().unwrap().iter().filter(|r| r["i_start"] == format!("{q}.0.1.1")).collect();
+    assert_eq!((reported["kind"].as_str(), reported["settled"].as_bool(), &reported["placed"]), (Some("order"), Some(false), &json!([0, 1])), "{reported}");
+    assert_eq!(
+        quote_runs,
+        [&json!({"side": 0, "i_start": format!("{q}.0.1.1"), "width": 3}), &json!({"side": 1, "i_start": format!("{q}.0.1.1"), "width": 3})],
+        "the quote listed under each side that keeps it: {reported}"
+    );
+    assert_eq!(composed.runs.iter().filter(|p| p.run.origin == q).map(|p| p.run.width).collect::<Vec<u64>>(), [3], "M lays the quote once");
     // Two shared words in two orders, nothing of either side's own.
     let (ry, rq) = ((&y, 1, 2), (&q, 1, 3));
     let crossed = gap(vec![(0, Run::new(y.clone(), 1, 2)), (0, Run::new(q.clone(), 1, 3)), (1, Run::new(q.clone(), 1, 3)), (1, Run::new(y.clone(), 1, 2))]);

@@ -28,7 +28,10 @@
 //! daughter superseded refused whole by the board, exit 1 with the head to
 //! run again on and nothing published, and the re-run with `--retries 1`
 //! landing on the new head with the count in its record and its claim
-//! marking the daughter; and `--fork` ADMITTED — a
+//! marking the daughter, a `--publish` that named a `--resolve` sent to the
+//! new head's report instead; a draft side landed as the head's daughter,
+//! the talk naming that daughter as the merge to make next and the run it
+//! names landing on the new head with its claim; and `--fork` ADMITTED — a
 //! second account's fork of a published version merged from the source the
 //! board serves for it and published — and a fork of the bare document,
 //! taken before its first version, composed once a version stands over the
@@ -612,7 +615,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(claims.len(), 1, "the shot's own claim marking the daughter superseded: {}", v["landed"]);
     assert!(claims[0].as_str().is_some_and(|c| c.starts_with(&format!("{d}.0.2."))), "homed in the trunk: {}", claims[0]);
     assert_eq!(rig.read(&token, &frames::in_claims(&daughter_s))["claims"][0]["new"].as_str(), Some(member.as_str()), "in_claims at the daughter answers the member");
-    assert!(r.err.contains("the claim marking the side superseded by it: 1"), "{}", r.err);
+    assert!(r.err.contains(&format!("the claim marking the side superseded by it: {}", claims[0].as_str().expect("the claim's address"))), "the claim named by its address: {}", r.err);
     let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
     assert!(v["landed"]["position"].as_u64().is_some_and(|p| p > before), "{}", v["landed"]);
     assert_eq!(rig.image(&token, &addr(&member), 11), runs_of(&v), "the member's image over its placed positions is M");
@@ -859,7 +862,10 @@ fn every_choice_beside_a_spines_order_lands_at_the_gap_the_report_numbered() {
 /// head moved, that nothing was published and to run again against the new
 /// head — nothing on stdout, no publish in the feed, no claim at the
 /// daughter; and the re-run with `--retries 1` lands on the new head with
-/// the count in its record and its claim marking the daughter.
+/// the count in its record and its claim marking the daughter. Where the
+/// `--publish` named a `--resolve`, the refusal sends the merger to the new
+/// head's report with no `--publish` and no `--resolve`, never to the same
+/// line again (the mutant that says the same line again fails it).
 #[test]
 fn a_moved_head_is_refused_with_the_head_to_run_again_on_and_never_retried() {
     let dir = tempfile::tempdir().unwrap();
@@ -905,6 +911,101 @@ fn a_moved_head_is_refused_with_the_head_to_run_again_on_and_never_retried() {
     assert_eq!(v["gaps"], json!([]), "the head's two words between surviving anchors that stand together: no gap");
     assert_eq!(rig.image(&token, &addr(&format!("{d}.4")), 15), runs_of(&v));
     assert_eq!(rig.publishes_under(&token, &d), publishes + 1);
+
+    // A MOVED HEAD UNDER A RESOLVED MERGE (§1.4 step 7): the head "big " and
+    // the daughter "fat " at one spot, gap 1 resolved and published on the
+    // head its report numbered; the head moved, so the refusal sends the
+    // merger to the new head's report, never to the same line again, whose
+    // numbers can name other gaps there.
+    let d2 = rig.document(&session);
+    let base2 = rig.shot(&session, &d2, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let head2 = rig.shot(&session, &d2, Some((&base2, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let daughter2 = rig.shot(&session, &d2, Some((&base2, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "fat " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let third2 = rig.shot(
+        &session,
+        &d2,
+        Some((&head2, 15)),
+        &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "new " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+    );
+    assert_eq!(third2.to_string(), format!("{d2}.3"), "the head moved");
+    let publishes = rig.publishes_under(&token, &d2);
+    let r = rig.merge(&["--doc", &d2.to_string(), "--alternative", &daughter2.to_string(), "--kind", &kind, "--head", &head2.to_string(), "--resolve", "1=order:1,0", "--publish"]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(r.err.contains(&format!("the board refused: supersede_refused:the head moved under the merge: the trunk's head is now {third2}")), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("run this again with --head {third2}, or with no --head to take the feed's, with no --publish and no --resolve, read the gaps that run reports, then land the merge with your choices by that report's numbers")),
+        "{}",
+        r.err
+    );
+    assert!(!r.err.contains("to merge against it"), "never the same line again: {}", r.err);
+    assert_eq!(rig.publishes_under(&token, &d2), publishes, "nothing published");
+    session.close().expect("close");
+}
+
+/// A draft side landed as a daughter names that daughter as the merge to
+/// make next (decision 17; C-46's re-apply).
+///
+/// The draft `S` is staged from the base `D.1` with "fat " typed where the
+/// head `D.2` added "big ": composed, one `order` gap, the talk naming the
+/// draft as what stands where nothing lands. The head then moves (`D.3`),
+/// and `--draft S --head D.2 --publish` lands as the head's daughter
+/// `D.2.1`, exit 0, `landed.daughter` naming it and the talk naming
+/// `--alternative D.2.1` in place of `--draft S`, `--retries 1` and no
+/// `--head`. Followed, that run composes `D.2.1` with `D.3` — no gap — and
+/// lands `D.4`, its claim marking `D.2.1` superseded and its record keeping
+/// the retry (the mutants that say only `--retries`, or name the
+/// alternative as what stands at a draft side, fail it).
+#[test]
+fn a_draft_side_landed_as_a_daughter_names_the_daughter_to_merge_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, _daughter) = rig.race(&session);
+    let s = rig.stage(&base);
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": s.to_string(), "at": {"subspace": "1", "ordinal": "5"}, "values": ["fat "], "as_of": as_of})));
+    let (d_s, s_s, head_s) = (d.to_string(), s.to_string(), head.to_string());
+
+    // COMPOSED: "big " and "fat " at one spot, the draft what stands.
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--kind", &kind]);
+    let v = report(&r);
+    let kinds: Vec<Value> = v["gaps"].as_array().expect("gaps").iter().map(|g| g["kind"].clone()).collect();
+    assert_eq!(kinds, vec![json!("order")], "{}", v["gaps"]);
+    assert!(r.err.contains(&format!("or land nothing and the draft {s} stands")), "{}", r.err);
+    assert!(!r.err.contains("the alternative stands"), "{}", r.err);
+
+    // THE HEAD MOVES, then --PUBLISH on the head it was composed on: the
+    // shot names no daughter, so it lands as the head's daughter.
+    let third = rig.shot(
+        &session,
+        &d,
+        Some((&head, 15)),
+        &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "new " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+    );
+    assert_eq!(third.to_string(), format!("{d}.3"));
+    let r = rig.merge(&["--doc", &d_s, "--draft", &s_s, "--head", &head_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    let daughter = v["landed"]["daughter"].as_str().expect("the daughter").to_string();
+    assert_eq!(daughter, format!("{head}.1"), "{}", v["landed"]);
+    assert!(r.err.contains(&format!("the shot landed as the daughter {daughter}")), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("run this again with --alternative {daughter} in place of --draft {s}, with --retries 1 and no --head")),
+        "the daughter named as the merge to make next: {}",
+        r.err
+    );
+    assert!(r.err.contains(&format!("leaves {daughter} standing beside the head")), "{}", r.err);
+
+    // FOLLOWED: the daughter merged with the new head.
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter, "--kind", &kind, "--retries", "1", "--publish"]);
+    let v = report(&r);
+    assert_eq!(v["head"].as_str(), Some(third.to_string().as_str()), "the new head off the feed");
+    assert_eq!(v["gaps"], json!([]), "only the new head's words meet this merge's: no gap");
+    assert_eq!(v["landed"]["member"].as_str(), Some(format!("{d}.4").as_str()), "{}", v["landed"]);
+    assert_eq!(v["record"]["retries"], json!(1), "the retry kept in the record");
+    assert_eq!(rig.read(&token, &frames::in_claims(&daughter))["claims"][0]["new"].as_str(), Some(format!("{d}.4").as_str()), "the daughter superseded by the merge");
     session.close().expect("close");
 }
 
@@ -1017,7 +1118,9 @@ fn a_fresh_landing_stopped_before_its_record_is_named_by_new_and_landed_again_by
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(
-        r.err.contains("the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft"),
+        r.err.contains(
+            "the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft in place of --new"
+        ),
         "the way on in this command's flags: {}",
         r.err
     );
@@ -1033,7 +1136,11 @@ fn a_fresh_landing_stopped_before_its_record_is_named_by_new_and_landed_again_by
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: landing_begun:this merge already landed in {f_s} at position")), "{}", r.err);
-    assert!(r.err.contains(&format!("run this again with --into {f_s}, which lands the merged list there again and writes its record, replacing any edit made in {f_s} since")), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("run this again with --into {f_s} in place of --new, which lands the merged list there again and writes its record, replacing any edit made in {f_s} since")),
+        "{}",
+        r.err
+    );
     assert!(!r.err.contains("resume") && !r.err.contains("discard"), "no act this command lacks: {}", r.err);
     assert_eq!(position(), before, "nothing staged, nothing written");
 

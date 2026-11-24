@@ -778,10 +778,12 @@ flags (a flag beats its env variable; a variable set empty is unset):
             published one is refused before any write and no
             publication publishes a record; what a merge makes public
             is its version and, at a published daughter, the claim
-            riding its shot)  [--resolve <gap>=<choice>]... (a
-            choice: order:<side>,<side>...  after:<address>
-            before:<address>  keep:<side>  both  omit; a side is its
-            index as the report numbers it)  [--no-dedup]  [--retype]
+            riding its shot)  [--resolve <gap>=<choice>]... (a gap
+            is its number in the report of the same head, which a new
+            head numbers afresh; a choice: order:<side>,<side>...
+            after:<address>  before:<address>  keep:<side>  both
+            omit; a side is its index as the report numbers it)
+            [--no-dedup]  [--retype]
             [--retries <n>]  [--publish, or --into <draft> (the draft's
             whole text set to the merged text, what it held replaced:
             --undo <draft> puts it back while nothing else is written

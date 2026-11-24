@@ -444,8 +444,8 @@ impl SideAt {
 /// list was landed into and the position of the `set_arrangement` that
 /// first landed it — a later landing of the key into that draft is the same
 /// landing and writes no record (skep #790; the `land` module's doc); where
-/// the landing found the member standing with no feed row of its mint, the
-/// position is the reads' highest `as_of`. `None` in the
+/// the landing found the member standing, the position is the one it was
+/// minted at, its own `doc_metadata` `at`. `None` in the
 /// record is the question — a merger that chose not to land (§3) — or,
 /// where the record `replaces` one naming a draft landing, the undo's or
 /// the withdrawal's testimony that the merge no longer stands on the draft
@@ -458,8 +458,10 @@ pub enum RecordLanding {
         member: Address,
         /// The shot's commit position.
         ///
-        /// It is the reads' highest `as_of` where the member stood with no
-        /// feed row of its mint.
+        /// Where the landing found the member standing, it is the member's
+        /// own `doc_metadata` `at`, the commit that minted it; on a board
+        /// serving none, the position of the member's mint row on the feed,
+        /// else the reads' highest `as_of`.
         position: u64,
     },
     /// `{"draft": …, "position": N}`.

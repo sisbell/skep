@@ -174,9 +174,13 @@
 //! its record — is the library's refusal at the first read, `merge_refused`
 //! with `landing_begun` naming the `draft` and the `position`, nothing
 //! staged or written, so the merge never lands twice (PUB-8.32): the way on
-//! is that draft named as `into`, whose re-open records the landing, then
-//! `merge.undo` to take it back, or `merge.withdraw` to take it out keeping
-//! its words. A landing of the
+//! is that draft named as `into`, whose re-open records the landing — save
+//! where the board has reclaimed the landing's position and the draft as it
+//! stands no longer holds the merged list, a landing that cannot be judged
+//! and is recorded never — then `merge.undo` to take it back, refused
+//! `merge_refused` `history_reclaimed` where the board has reclaimed the
+//! state before the landing, or, where the draft records a base,
+//! `merge.withdraw` to take it out keeping its words. A landing of the
 //! person's own made between that read and the landing — on another
 //! device, or by `skep merge --new` naming the same kind — is the library's
 //! answer, found standing with nothing staged: `fresh` is the library's
@@ -2874,7 +2878,7 @@ fn run_json(run: &Run, side: Option<SideIx>, family: Family) -> Value {
 ///
 /// A `moves` gap with spots carries `spots`, each holder's `GapSpot`
 /// (CM-I33); every other gap carries none.
-fn gap_json(g: &Gap) -> Value {
+pub(super) fn gap_json(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
         GapKind::Anchor => "anchor",

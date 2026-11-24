@@ -165,29 +165,34 @@ fn a_gap_needing_a_choice_is_named_where_it_stands() {
 
 /// A landing's refusals whose library words name acts this command has
 /// none of are said naming its own flags (SP-10), each exit 1 under its
-/// code: `landing_begun` names `--into` the draft — and that it replaces
-/// any edit made there since — `--undo` and `--withdraw`; `head_holds`
-/// the `--head` before the head, and none at version 1; `fork_base_moved`
-/// `--new`. None says `resume`, a draft discarded or a fork made afresh
-/// (the mutants that fall back to the library's words fail each).
+/// code: `landing_begun` names `--into` the draft in place of `--new` —
+/// and that it replaces any edit made there since — `--undo` and
+/// `--withdraw`; `head_holds` the `--head` before the head, and none at
+/// version 1; `fork_base_moved` `--new`. None says `resume`, a draft
+/// discarded or a fork made afresh (the mutants that fall back to the
+/// library's words fail each, and the one that names `--into` beside
+/// `--new`, which the grammar refuses).
 #[test]
 fn a_landings_refusals_name_this_commands_own_ways_on() {
     let library = ["resume", "discard", "afresh"];
     let begun = Refusal::LandingBegun { draft: a("1.0.1.0.72"), position: 21 };
-    let (code, words) = board_said(refused_landing(begun.clone(), Step::Draft));
+    let (code, words) = board_said(refused_landing(begun.clone(), Step::Draft, false));
     assert_eq!(code, "landing_begun");
     for said in [
         "this merge already landed in 1.0.1.0.72 at position 21",
-        "run this again with --into 1.0.1.0.72, which lands the merged list there again and writes its record, replacing any edit made in 1.0.1.0.72 since",
+        "run this again with --into 1.0.1.0.72 in place of --new, which lands the merged list there again and writes its record, replacing any edit made in 1.0.1.0.72 since",
         "--undo 1.0.1.0.72 puts 1.0.1.0.72 back",
         "--withdraw 1.0.1.0.72 takes the merge out",
     ] {
         assert!(words.contains(said), "the words say {said:?}: {words}");
     }
     assert!(library.iter().all(|act| !words.contains(act)), "no act this command lacks: {words}");
-    assert_eq!(crate::commands::finish(Err(refused_landing(begun, Step::Draft))), 1);
-    let (code, words) =
-        board_said(refused_landing(Refusal::HeadHolds { head: a("1.0.1.0.64.3") }, Step::Publish));
+    assert_eq!(crate::commands::finish(Err(refused_landing(begun, Step::Draft, false))), 1);
+    let (code, words) = board_said(refused_landing(
+        Refusal::HeadHolds { head: a("1.0.1.0.64.3") },
+        Step::Publish,
+        false,
+    ));
     assert_eq!(code, "head_holds");
     for said in [
         "1.0.1.0.64.3 already holds this merge",
@@ -197,21 +202,131 @@ fn a_landings_refusals_name_this_commands_own_ways_on() {
         assert!(words.contains(said), "the words say {said:?}: {words}");
     }
     assert!(library.iter().all(|act| !words.contains(act)), "no act this command lacks: {words}");
-    let (_, words) =
-        board_said(refused_landing(Refusal::HeadHolds { head: a("1.0.1.0.64.1") }, Step::Publish));
+    let (_, words) = board_said(refused_landing(
+        Refusal::HeadHolds { head: a("1.0.1.0.64.1") },
+        Step::Publish,
+        false,
+    ));
     assert!(!words.contains("--head"), "no merge's shot minted version 1: {words}");
     let moved = Refusal::ForkBaseMoved {
         fork: a("1.0.1.2.0.70"),
         source: a("1.0.1.0.64.1"),
         head: a("1.0.1.0.64.2"),
     };
-    let (code, words) = board_said(refused_landing(moved, Step::Draft));
+    let (code, words) = board_said(refused_landing(moved, Step::Draft, false));
     assert_eq!(code, "fork_base_moved");
     assert!(
         words.contains("run this again with --new in place of --into 1.0.1.2.0.70: it stages a fresh draft of yours from 1.0.1.0.64.2 and lands the merge there"),
         "{words}"
     );
     assert!(library.iter().all(|act| !words.contains(act)), "no act this command lacks: {words}");
+}
+
+/// A moved head's refusal after a `--resolve` says to compose again before
+/// choosing (§1.4 step 7): a gap's number names a gap of the composition it
+/// was printed for, so the refusal sends the merger to the new head's report
+/// with no `--publish` and no `--resolve`, never to run the same line again,
+/// whose numbers can name other gaps there; with no `--resolve` the shared
+/// words stand, the head to run again on named; exit 1 under
+/// `supersede_refused` either way (the mutant that says the same line again
+/// after a `--resolve` fails it).
+#[test]
+fn a_moved_head_after_a_resolve_asks_for_the_new_reports_numbers() {
+    let moved = |head: Option<&str>| Refusal::SupersedeRefused {
+        index: 0,
+        cause: SupersedeCause::HeadMoved { head: head.map(a) },
+    };
+    let (code, words) =
+        board_said(refused_landing(moved(Some("1.0.1.0.64.3")), Step::Publish, true));
+    assert_eq!(code, "supersede_refused");
+    for said in [
+        "nothing was published",
+        "run this again with --head 1.0.1.0.64.3, or with no --head to take the feed's, with no --publish and no --resolve",
+        "then land the merge with your choices by that report's numbers",
+        "on 1.0.1.0.64.3 the same number can name another gap",
+    ] {
+        assert!(words.contains(said), "the words say {said:?}: {words}");
+    }
+    assert!(!words.contains("to merge against it"), "never the same line again: {words}");
+    let (_, words) = board_said(refused_landing(moved(None), Step::Publish, true));
+    assert!(
+        words.contains("run this again with no --publish and no --resolve")
+            && words.contains("on the new head the same number can name another gap")
+            && !words.contains("--head"),
+        "no head named: {words}"
+    );
+    let (code, words) =
+        board_said(refused_landing(moved(Some("1.0.1.0.64.3")), Step::Publish, false));
+    assert_eq!(code, "supersede_refused");
+    assert!(
+        words.contains("run this again with --head 1.0.1.0.64.3, or with no --head to take the feed's, to merge against it")
+            && !words.contains("report's numbers"),
+        "no --resolve: {words}"
+    );
+    assert_eq!(crate::commands::finish(Err(refused_landing(moved(None), Step::Publish, true))), 1);
+}
+
+/// A daughter's way on names the run that merges it with the new head
+/// (decision 17; C-46's re-apply): `--alternative` the daughter in place of
+/// the flags this run named its side by — a draft's `--base` among them,
+/// which no `--alternative` takes — `--retries` and no `--head`; and says
+/// that this run's side composed again asks every gap again and leaves the
+/// daughter standing (the mutant that says only `--retries` fails it).
+#[test]
+fn a_daughters_way_on_names_the_daughter_to_merge_next() {
+    let draft = Side::Draft { at: a("1.0.1.0.72"), position: None };
+    let side = side_flags(Some(&draft), Some(&a("1.0.1.0.64.1")));
+    assert_eq!(side, "--draft 1.0.1.0.72 --base 1.0.1.0.64.1");
+    assert_eq!(side_flags(Some(&Side::Fork(a("1.0.1.2.0.70"))), None), "--fork 1.0.1.2.0.70");
+    let way_on = daughter_way_on(&side, 2, &a("1.0.1.0.64.2.1"));
+    for said in [
+        "run this again with --alternative 1.0.1.0.64.2.1 in place of --draft 1.0.1.0.72 --base 1.0.1.0.64.1, with --retries 2 and no --head",
+        "giving any --resolve by that run's own report",
+        "marks 1.0.1.0.64.2.1 superseded by the version it publishes",
+        "--draft 1.0.1.0.72 --base 1.0.1.0.64.1 composed again asks every gap again and leaves 1.0.1.0.64.2.1 standing beside the head",
+    ] {
+        assert!(way_on.contains(said), "the words say {said:?}: {way_on}");
+    }
+}
+
+/// A run `--retype` took out of the merge is said (§5, case (f)): the side,
+/// the run's place and width, that the merge holds the base's words, and
+/// where the side's copy and any link on it stay; a record whose retype
+/// took nothing out says nothing (the mutant that leaves the retype
+/// unsaid).
+#[test]
+fn a_retyped_run_names_the_side_whose_copy_stays() {
+    use skep_client::merge::{Role, Run, RunCounts, SideAt, ValueLog};
+    let doc = a("1.0.1.0.1");
+    let mut record = Record {
+        doc: doc.clone(),
+        base: a("1.0.1.0.1.1"),
+        sides: vec![
+            SideAt::Member { at: a("1.0.1.0.1.2"), role: Role::Head },
+            SideAt::Member { at: a("1.0.1.0.1.1.1"), role: Role::Alternative },
+        ],
+        landed: None,
+        claims: Vec::new(),
+        runs: RunCounts { a: 3, b: 3, m: 3 },
+        retries: 0,
+        gaps: Vec::new(),
+        values: ValueLog {
+            dedup: true,
+            retype: true,
+            applied: Vec::new(),
+            retyped: vec![(SideIx(1), Run::new(doc.clone(), 15, 3))],
+        },
+        answers: Vec::new(),
+        replaces: None,
+        by: "skep-client".into(),
+        link: None,
+    };
+    assert_eq!(
+        retype_lines(&record),
+        ["retyped: the side's 3 positions at 1.0.1.0.1.0.1.15 equal the base's words it removed there — the merge holds the base's, by --retype; the side's copy stays in 1.0.1.0.1.1.1, and any links on it stay there, not carried into the merge"]
+    );
+    record.values.retyped.clear();
+    assert_eq!(retype_lines(&record), Vec::<String>::new());
 }
 
 /// A take-back's refusals whose library words name no act of this

@@ -34,14 +34,16 @@ impl Writer<'_> {
     /// its link, the record the landing's own will replace. A retry of the
     /// same landing reads the same newest record, so it is answered its
     /// stage again where its one write was never sent — one made after that
-    /// write finds the landing begun first ([`Writer::landing_begun`]) and
-    /// stages nothing; one composed after a take-back stages afresh, and so
-    /// does the same composition landed again after its landing was taken
-    /// back, whose newest record is the take-back's. The board mints a
-    /// private draft of the merger's account holding the head by identity
-    /// and records the head as its base, so the write that follows
-    /// re-records that base on the same head. A private draft's mint, it
-    /// carries no `attest` and reads no head (the `land` module's doc).
+    /// write finds the landing first, standing with its record
+    /// ([`Writer::found_standing`]) or begun without it
+    /// ([`Writer::landing_begun`]), and stages nothing; one composed after a
+    /// take-back stages afresh, and so does the same composition landed again
+    /// after its landing was taken back, whose newest record is the
+    /// take-back's. The board mints a private draft of the merger's account
+    /// holding the head by identity and records the head as its base, so the
+    /// write that follows re-records that base on the same head. A private
+    /// draft's mint, it carries no `attest` and reads no head (the `land`
+    /// module's doc).
     ///
     /// # Errors
     ///
@@ -269,16 +271,24 @@ impl Writer<'_> {
     /// landing at, so the edits made in the draft since its landing change
     /// nothing: a landing stands until it is taken back (skep #914), and the
     /// test is of the list it placed, which tells this composition's landing
-    /// from one of another composition of the same head and sides. Where the
-    /// board has reclaimed that position, `into` is read as it stands
-    /// instead: holding M whole there, it holds this composition's landing.
+    /// from one of another composition of the same head and sides — the key
+    /// holds no choice. A `resume` naming the draft, a fresh landing looking
+    /// for its own ([`Writer::found_standing`]) and the words of a refused
+    /// landing all judge a landing by it. Where the board has reclaimed that
+    /// position, `into` is read as it stands instead: holding M whole there,
+    /// it holds this composition's landing.
     ///
     /// # Errors
     ///
     /// The draft's `image` reads' refusals but a position reclaimed;
     /// [`Refusal::HistoryBusy`] past the bounded retries; an `image` run that
     /// is no content I-address.
-    fn holds_merge(&self, merged: &Merged, into: &Address, at: u64) -> Result<bool, Refusal> {
+    pub(super) fn holds_merge(
+        &self,
+        merged: &Merged,
+        into: &Address,
+        at: u64,
+    ) -> Result<bool, Refusal> {
         let imaged = match self.reader.imaged(into, Some(at)) {
             Err(Refusal::HistoryReclaimed { .. }) => self.reader.imaged(into, None)?,
             imaged => imaged?,

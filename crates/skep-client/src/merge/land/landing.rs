@@ -77,14 +77,15 @@ pub enum Landing<'a> {
         /// `None` lands it in a fresh draft staged from the head the merge
         /// was composed on (R3): `stage {from: the head}`, then the write
         /// typed against the stage's position, the base the stage recorded
-        /// re-recorded on the head — unless the merger's newest record for
-        /// the key, read at the landing, names a draft landing its draft
-        /// still marks, which is reported at the position its draft marks it
-        /// with nothing staged, its `staged` false, or, where it names none,
-        /// a draft of the merger's carries a landing of the merge no record
-        /// of theirs names, refused [`Refusal::LandingBegun`] with nothing
-        /// staged. A record whose draft marks no landing of the merge — taken
-        /// back, its take-back's record unwritten — names none.
+        /// re-recorded on the head — unless a draft the merger's records of
+        /// the key name, read at the landing, still holds this composition's
+        /// landing, which is reported at the position its draft marks it
+        /// with nothing staged, its `staged` false, or, where none does, a
+        /// draft of the merger's carries a landing of the merge no record of
+        /// theirs names, refused [`Refusal::LandingBegun`] with nothing
+        /// staged. A draft that marks no landing of the merge — taken back,
+        /// its take-back's record unwritten — or whose landing placed another
+        /// composition's list holds none.
         ///
         /// [`Refusal::LandingBegun`]: super::Refusal::LandingBegun
         into: Option<Address>,
@@ -151,10 +152,10 @@ pub enum Landed {
     },
     /// M landed into a draft.
     ///
-    /// It carries the draft — the one named, the fresh one staged, or the
-    /// one the merger's newest record for the key names, found standing —
-    /// the write's position, the record's link, the newer head where the
-    /// board told one, and whether this call staged the draft.
+    /// It carries the draft — the one named, the fresh one staged, or one a
+    /// record of the merger's of the key names, found standing — the write's
+    /// position, the record's link, the newer head where the board told one,
+    /// and whether this call staged the draft.
     Draft {
         /// The draft.
         into: Address,
@@ -162,10 +163,10 @@ pub enum Landed {
         ///
         /// Where the landing was found standing, it is the position the
         /// board marks it at — the draft's marker, or on a draft with no
-        /// recorded base its `set_arrangement` row — for a `resume` naming
-        /// the draft, the draft as of it holding M, and for a fresh landing
-        /// the merger's newest record for the key names, its draft marking
-        /// the merge at or past the position that record names; such a
+        /// recorded base its `set_arrangement` row — the draft as of it
+        /// holding M, for a `resume` naming the draft, and for a fresh
+        /// landing a draft the merger's records of the key name, marking the
+        /// merge at or past the position its record names; such a
         /// fresh landing whose draft cannot be judged, the walk of its rows
         /// needing a past state the board has reclaimed, answers the
         /// record's position. A landing into the
@@ -191,8 +192,8 @@ pub enum Landed {
         ///
         /// It is true only where no draft was named and this call sent the
         /// `stage`, the write landing in the draft the stage answered. It is
-        /// false for a draft named, for a landing found standing — the draft
-        /// the merger's newest record for the key names, nothing staged —
+        /// false for a draft named, for a landing found standing — a draft
+        /// a record of the merger's of the key names, nothing staged —
         /// and for every [`resume`], which sends no stage. An embedder says a
         /// fresh draft was made from it (SP-10), never from whether it named
         /// a draft: a landing of the merger's own made after the composition

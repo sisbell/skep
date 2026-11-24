@@ -48,15 +48,18 @@
 //! position — refused whole where the draft changed since, the draft's base
 //! re-recorded on the head and the merge marked beside it where the board
 //! records a base for it; with `--new` it stages a fresh draft from the head
-//! and lands there — or, where the merger's own landing of the key already
-//! stands in a draft, the draft still marking it, reports that landing and
+//! and lands there — or, where the merger's own landing of this composition
+//! already stands in a draft a record of theirs of the key names, whatever
+//! landed or was taken back in another since, the draft still marking it and
+//! holding the merged list this run composed, reports that landing and
 //! stages nothing, its `fresh` false — a landing taken back, whatever its
-//! take-back's record says, standing no more — and where a fork or a draft
-//! side moved since the merger's own landing of the merge, so the key is
-//! another, lands in the draft the merger's newest
-//! record of the merge names, found with the states ignored (`landed_draft`),
-//! its `fresh` false, and where
-//! the merge landed in a draft of the merger's that no record of theirs
+//! take-back's record says, standing no more, and a landing of the key with
+//! other `--resolve` choices no landing of this run's — and where a fork or
+//! a draft side moved since the merger's own landing of the merge, so the
+//! key is another, lands in the draft the merger's newest record of the
+//! merge naming a draft landing names, no take-back of theirs replacing it,
+//! found with the states ignored (`landed_draft`), its `fresh` false, and
+//! where the merge landed in a draft of the merger's that no record of theirs
 //! names — a landing cut off before its record — lands nothing and stages
 //! nothing, refused `landing_begun` naming the draft, exit 1, for `--into`
 //! that draft to land it with its record or `--undo` it; and the report then
@@ -162,8 +165,9 @@
 //! the landing standing by its `set_arrangement` rows, which a restore or
 //! any other re-arrangement neither ends nor brings back (skep #914) —
 //! whatever the merge landed in since (`standing_landing`); for `--new` it
-//! is the one the merger's newest record of the merge names, in the draft
-//! it lands in. `--json` is every command's flag and changes nothing here:
+//! is the one the merger's newest record of the merge naming a draft landing
+//! names, no take-back of theirs replacing it, in the draft it lands in.
+//! `--json` is every command's flag and changes nothing here:
 //! the report is JSON always.
 
 use serde_json::{json, Value};
@@ -200,8 +204,9 @@ enum Land {
     Into(Address),
     /// `--new`: a fresh draft staged from the head, then the same write.
     ///
-    /// Where the merger's own landing of the key stands in a draft, the
-    /// draft still marking it, the library reports it and stages nothing.
+    /// Where the merger's own landing of this composition stands in a draft
+    /// a record of theirs of the key names, the draft still marking it and
+    /// holding the merged list, the library reports it and stages nothing.
     New,
 }
 
@@ -374,8 +379,9 @@ fn run(
         // its states ignored, where its record is of another key — a fork or
         // a draft side moved since it. `--into` reads the landing standing
         // in the draft it names, whatever the merge landed in since; `--new`
-        // the merger's newest record of the merge, and lands in its draft,
-        // never a fresh one. A landing there says what it replaces.
+        // the merger's newest record of the merge naming a draft landing no
+        // take-back of theirs replaces, and lands in its draft, never a fresh
+        // one. A landing there says what it replaces.
         let earlier = match landing {
             Land::Publish(_) => None,
             Land::Into(into) => {

@@ -6,7 +6,11 @@
 //! own; that a resume finds a draft landing by its mark, never by the
 //! draft's words or a marker it was staged with; that the standing record
 //! is the merger's own newest for the key, read as a fresh landing lands
-//! and replaced by its record; that a second landing of one key into one
+//! and replaced by its record; that a fresh landing finds its own landing
+//! standing in any draft the merger's records of the key name, whatever
+//! landed or was taken back in another since — a take-back's record written
+//! late among them — and never another composition's landing of the key,
+//! which stages a draft of its own; that a second landing of one key into one
 //! draft is the same landing; that merges landed one over another are taken
 //! back a landing at a time, each by its own record, a marker a stage
 //! copied put back inherited; that a withdrawal and its undo go by the
@@ -1084,8 +1088,9 @@ fn the_standing_record_is_the_mergers_own_newest_for_the_key() {
 /// with the first record, which stays current for the key naming the
 /// first position and verifies equal there; a `resume` answers the same,
 /// writing nothing, and so does a fresh landing over either composition,
-/// in a landing and a resume alike, the draft read as it stands (skep
-/// #980); the undo is typed against the second write — the marker's,
+/// in a landing and a resume alike, the draft's marker read as it stands
+/// and its words as of that mark (skep #980); the undo is typed against the
+/// second write — the marker's,
 /// never the record's — puts the edit back with the first landing's
 /// marker, its own position kept (skep #964), and writes no record, the
 /// first one standing for that marker; the undo after it, the edit since
@@ -1160,7 +1165,7 @@ fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
         assert_eq!(
             (read, dialer.positions("doc_metadata")),
             (vec![json!(t)], vec![]),
-            "the draft read as it stands: {:?}",
+            "the draft's marker read as it stands: {:?}",
             dialer.ops()
         );
     }
@@ -2238,6 +2243,224 @@ fn a_fresh_landing_taken_back_with_its_record_unwritten_stands_no_more() {
         drop(w);
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(r.to_string().as_str()), "{withdrawal}: R replaced");
     }
+}
+
+/// A FRESH LANDING FINDS ITS LANDING STANDING IN ANY DRAFT ITS RECORDS NAME
+/// (P20: a record stands for its landing until a take-back replaces it; the
+/// board's mark the fact). (a) One actor: the race shape landed in `T`, then
+/// in `U`, its record replacing `T`'s, then `U` undone, the undo's record the
+/// newest of the key. A `resume` and a landing with no draft named each
+/// answer the landing standing in `T` at its marker with `T`'s record,
+/// nothing staged or written, and `landed_draft` names `T`'s record. (b) Two
+/// writers: the merge landed fresh in `F1`, then undone with its record
+/// unwritten, the board too busy to find the journal; landed fresh again in
+/// `F2`, its record replacing `F1`'s; then the undo's record of `F1` lands
+/// late, minted past `F2`'s. A landing with no draft named answers `F2`'s
+/// landing, nothing staged (the mutant that reads the merger's newest record
+/// of the key alone finds no landing standing in either, so a landing stages
+/// a fresh draft and the merge lands twice; the one whose `landed_draft`
+/// answers the newest record, whatever a take-back replaced, names none in
+/// (a)).
+#[test]
+fn a_fresh_landing_finds_its_landing_standing_in_any_draft_its_records_name() {
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    let wrote = |dialer: &Scripted| {
+        dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
+    };
+    // (a) One actor: landed in T, then in U, U undone.
+    let (t, u) = ("1.0.1.0.67", "1.0.1.0.68");
+    let mut w = World::race();
+    for draft in [t, u] {
+        w.doc(draft, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(draft, &format!("{D}.1"), 11);
+    }
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let into = |draft: &str| draft_landing(&session, &signer, Some(a(draft)));
+    let fresh = || draft_landing(&session, &signer, None);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let (in_t_at, in_t) = landing_of(&land(&board, &merged, into(t)).expect("landed in T"));
+    let (_, in_u) = landing_of(&land(&board, &merged, into(u)).expect("landed in U"));
+    let undone = undo(&board, merger(&session, &signer), &a(u), &a(K), None, None)
+        .expect("U undone")
+        .record
+        .expect("the undo's record");
+    let newest = current(&board, Some(session.token()), &a(K), &merged.key)
+        .expect("the lookup")
+        .expect("a record");
+    assert_eq!(
+        (newest.link, newest.replaces),
+        (Some(undone), Some(in_u)),
+        "the premise: the undo's record, the newest of the key"
+    );
+    assert_eq!(
+        dialer.world().standing(t).1.map(|m| m.at),
+        Some(in_t_at),
+        "the premise: T marks its landing"
+    );
+    let standing = Landed::Draft {
+        into: a(t),
+        position: in_t_at,
+        record: in_t.clone(),
+        head_moved: None,
+        staged: false,
+    };
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &merged, fresh()),
+        Ok(Some(standing.clone())),
+        "(a): the landing standing in T"
+    );
+    assert_eq!(land(&board, &merged, fresh()), Ok(standing), "(a): found, nothing staged");
+    assert!(wrote(&dialer).is_empty(), "(a): nothing staged or written: {:?}", dialer.ops());
+    assert_eq!(
+        landed_draft(&board, Some(session.token()), &a(K), &merged.key, ACCOUNT)
+            .expect("the lookup")
+            .and_then(|r| r.link),
+        Some(in_t),
+        "(a): T's record, U's taken back"
+    );
+
+    // (b) Two writers: F1's undo recorded late, past F2's landing.
+    let (dialer, board, signer) = open(World::race());
+    let session = sign_in(&board, &signer);
+    let fresh = || draft_landing(&session, &signer, None);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let first = land(&board, &merged, fresh()).expect("landed in F1");
+    let Landed::Draft { into: f1, record: r1, .. } = first else { panic!("{first:?}") };
+    too_busy_for_the_find(&mut dialer.world());
+    let taken = undo(&board, merger(&session, &signer), &f1, &a(K), None, None);
+    assert!(
+        matches!(taken, Err(Refusal::Halt(Halt::Halt(_)))),
+        "the premise: F1 undone, its record unwritten: {taken:?}"
+    );
+    dialer.world().scan_busy = 0;
+    let second = land(&board, &merged, fresh()).expect("landed in F2");
+    let Landed::Draft { into: f2, position: in_f2_at, .. } = second.clone() else {
+        panic!("{second:?}")
+    };
+    assert_ne!(f2, f1, "the premise: a draft of its own");
+    let journal = crate::address::document_of(&r1.to_string()).expect("R1's journal");
+    let late = {
+        let mut w = dialer.world();
+        w.position += 1;
+        let minted = w.position;
+        let take_back =
+            Record { landed: None, replaces: Some(r1.clone()), ..merged.record.clone() };
+        file(&mut w, &journal, &take_back, &[&f1.to_string(), &format!("{D}.1.1")], Some(minted))
+    };
+    let newest = current(&board, Some(session.token()), &a(K), &merged.key)
+        .expect("the lookup")
+        .expect("a record");
+    assert_eq!(
+        (newest.link.map(|l| l.to_string()), newest.replaces),
+        (Some(late), Some(r1)),
+        "the premise: F1's take-back, recorded late, the newest of the key"
+    );
+    assert_eq!(
+        dialer.world().standing(&f2.to_string()).1.map(|m| m.at),
+        Some(in_f2_at),
+        "the premise: F2 marks its landing"
+    );
+    dialer.clear();
+    assert_eq!(
+        land(&board, &merged, fresh()),
+        Ok(as_found(&second)),
+        "(b): F2's landing, standing"
+    );
+    assert!(wrote(&dialer).is_empty(), "(b): nothing staged or written: {:?}", dialer.ops());
+}
+
+/// A FRESH LANDING OF ANOTHER COMPOSITION OF THE KEY STAGES A DRAFT OF ITS
+/// OWN. The key holds no choice: the race shape with a second daughter
+/// `D.1.2` adding "fat " where the head added "big " is one `order` gap,
+/// and the merge composed at its default order and composed with the order
+/// swapped are one key with two lists. The default landed fresh in `F`: a
+/// `resume` and a landing with no draft named of the swapped one find no
+/// landing of it in `F`, whose landing placed the default list, read as of
+/// its mark — the resume answers none, nothing written, and the landing
+/// stages a draft of its own holding the swapped list, its record replacing
+/// `F`'s. The default composed again then finds its own landing in `F`, the
+/// swapped one in its own draft, each nothing written (the mutant that judges
+/// a draft by its mark alone answers `F` for the swapped composition, the
+/// merger's choice reported landed and never written; the one that reads the
+/// newest record alone stages a third draft for the default).
+#[test]
+fn a_fresh_landing_of_another_composition_of_the_key_stages_a_draft_of_its_own() {
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    let wrote = |dialer: &Scripted| {
+        dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>()
+    };
+    let mut w = World::race();
+    w.text(D, 16, "fat ");
+    w.member(&format!("{D}.1.2"), vec![run(D, 1, 4), run(D, 16, 4), run(D, 5, 7)], Some(11));
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let fresh = || draft_landing(&session, &signer, None);
+    let inputs = Inputs { sides: vec![Side::Member(a(&format!("{D}.1.2")))], ..race_inputs() };
+    let defaults = compose(&board, Some(session.token()), &inputs).expect("composed");
+    let swap = Resolution {
+        gap: GapId(1),
+        choice: Choice::Order(vec![SideIx(1), SideIx(0)]),
+        by: ResolvedBy::Agent,
+    };
+    let options = Options { resolutions: vec![swap], ..Options::default() };
+    let swapped = compose(&board, Some(session.token()), &Inputs { options, ..inputs })
+        .expect("composed swapped");
+    assert_eq!(swapped.key, defaults.key, "the premise: one key, which holds no choice");
+    assert_eq!(
+        (m_runs(&defaults), m_runs(&swapped)),
+        (
+            vec![run(D, 1, 4), run(D, 12, 8), run(D, 5, 7)],
+            vec![run(D, 1, 4), run(D, 16, 4), run(D, 12, 4), run(D, 5, 7)]
+        ),
+        "the premise: two lists"
+    );
+    let first = land(&board, &defaults, fresh()).expect("the default landed");
+    let Landed::Draft { into: f, record: r1, .. } = first.clone() else { panic!("{first:?}") };
+    dialer.clear();
+    assert_eq!(
+        resume(&board, &swapped, fresh()),
+        Ok(None),
+        "no landing of the swapped list stands in F"
+    );
+    assert!(wrote(&dialer).is_empty(), "a resume writes nothing: {:?}", dialer.ops());
+    let second = land(&board, &swapped, fresh()).expect("the swapped landed");
+    let Landed::Draft { into: g, position, staged, .. } = second.clone() else {
+        panic!("{second:?}")
+    };
+    assert!(staged && g != f, "a draft of its own, staged by this call: {second:?}");
+    assert_eq!(dialer.frames("stage").len(), 1, "one stage: {:?}", dialer.ops());
+    let w = dialer.world();
+    assert_eq!(
+        w.docs.get(&g.to_string()).unwrap().runs,
+        m_runs(&swapped),
+        "the new draft holds the swapped list"
+    );
+    assert_eq!(
+        w.docs.get(&f.to_string()).unwrap().runs,
+        m_runs(&defaults),
+        "F keeps the default list"
+    );
+    assert_eq!(w.standing(&g.to_string()).1.map(|m| m.at), Some(position), "its marker");
+    drop(w);
+    assert_eq!(
+        appended_record(&dialer)["replaces"].as_str(),
+        Some(r1.to_string().as_str()),
+        "F's record replaced"
+    );
+    dialer.clear();
+    assert_eq!(
+        land(&board, &defaults, fresh()),
+        Ok(as_found(&first)),
+        "the default's own landing, in F"
+    );
+    assert_eq!(
+        land(&board, &swapped, fresh()),
+        Ok(as_found(&second)),
+        "the swapped one's own, in its draft"
+    );
+    assert!(wrote(&dialer).is_empty(), "nothing staged or written: {:?}", dialer.ops());
 }
 
 /// A LANDING's RECORD REPLACES THE MERGER's NEWEST RECORD AS IT LANDS (the

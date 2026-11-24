@@ -1876,8 +1876,12 @@ fn what_a_landing_replaces_is_each_stretch_m_does_not_carry() {
 /// the mutant matching the key exactly finds none — and `replaced` names
 /// the stretch of `L` the new M does not carry. Landed in `L`, the merge
 /// writes a record of its own replacing none, never the same landing
-/// (skep #790); it verifies `Equal`, and the first `SideMoved`. Taken
-/// back by an undo, the key is open again: `landed_draft` answers none.
+/// (skep #790); it verifies `Equal`, and the first `SideMoved`. Taken back
+/// by an undo, which puts the first landing's marker back in `L` (skep
+/// #964), the first landing stands again: `landed_draft` names its record,
+/// the undo's record replacing the second's alone (the mutant that answers
+/// the newest record whatever a take-back replaced answers none). Taken back
+/// by a second undo, the key is open again: `landed_draft` answers none.
 #[test]
 fn a_fork_arranged_since_its_draft_landing_is_another_key_landed_with_a_record_of_its_own() {
     let mut w = World::race();
@@ -1946,11 +1950,27 @@ fn a_fork_arranged_since_its_draft_landing_is_another_key_landed_with_a_record_o
         Some(second_link),
         "the newest, whatever key it is looked up by"
     );
-    undo(&board, merger(&session, &signer), &l, &a(K), None, None).expect("undone");
+    let undone = undo(&board, merger(&session, &signer), &l, &a(K), None, None).expect("undone");
+    assert_eq!(
+        undone.marker.and_then(|m| m.at),
+        first_record.landed.as_ref().and_then(|landed| match landed {
+            RecordLanding::Draft { position, .. } => Some(*position),
+            RecordLanding::Member { .. } => None,
+        }),
+        "the premise: the first landing's marker put back in L"
+    );
+    assert_eq!(
+        landed_draft(&board, Some(session.token()), &a(K), &again.key, ACCOUNT)
+            .expect("the lookup")
+            .and_then(|r| r.link),
+        Some(first_link),
+        "the first landing standing again, its record named"
+    );
+    undo(&board, merger(&session, &signer), &l, &a(K), None, None).expect("undone again");
     assert_eq!(
         landed_draft(&board, Some(session.token()), &a(K), &again.key, ACCOUNT),
         Ok(None),
-        "a take-back leaves the key open"
+        "both taken back: the key open"
     );
 }
 

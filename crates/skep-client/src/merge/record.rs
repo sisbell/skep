@@ -1050,15 +1050,18 @@ pub(super) fn current_among(
 /// read through its journal — but matched on `doc`, `base` and `sides` alone
 /// ([`RecordKey::stateless`]), so a record composed over a fork or a draft side
 /// whose text has changed since matches, and so does one written before the
-/// states were kept. Of the matches whose link lies in `account` exactly, the
-/// newest by the order their links were minted is answered where it names a
-/// draft landing, else none: a take-back recorded since leaves the merge landed
-/// in no draft, as [`resume`](super::resume) reads it. An embedder reads it
-/// where a composition finds no record of its own key, to find the draft
-/// holding the person's latest landing of the merge, still the one to land
-/// in. It answers the newest record alone, so it names no earlier draft once
-/// the merge landed in another since: the record a draft's own landing
-/// stands on is [`standing_landing`]'s, read by that draft's mark.
+/// states were kept. Of the matches whose link lies in `account` exactly, it
+/// is the newest by the order their links were minted that names a draft
+/// landing and that no take-back's record among them replaces
+/// (`taken_back_links`): a record stands for the landing it names until a
+/// take-back replaces it, whatever landing of the key was recorded since, so
+/// an undo of a later landing elsewhere leaves the earlier one named (P20).
+/// `None` where every draft landing so recorded was taken back. An embedder
+/// reads it where a composition finds no record of its own key standing, to
+/// find the draft holding the person's latest landing of the merge, still the
+/// one to land in; that draft's marker, read as it stands, says whether the
+/// landing stands there. The record a draft's own landing stands on is
+/// [`standing_landing`]'s, read by that draft's mark.
 ///
 /// # Errors
 ///
@@ -1072,12 +1075,31 @@ pub fn landed_draft(
 ) -> Result<Option<Record>, Refusal> {
     let reader = Reader::new(board, token, OnEnd::Rerun);
     let stateless = key.stateless();
-    let own = records_of(&reader, kind, key, |k| k.stateless() == stateless)?
+    let own: Vec<Found> = records_of(&reader, kind, key, |k| k.stateless() == stateless)?
         .into_iter()
-        .filter(|f| f.lies_in(account));
-    Ok(newest(own)
-        .map(|f| f.record)
-        .filter(|r| matches!(r.landed, Some(RecordLanding::Draft { .. }))))
+        .filter(|f| f.lies_in(account))
+        .collect();
+    let taken_back = taken_back_links(&own);
+    let standing = own.into_iter().filter(|f| {
+        matches!(f.record.landed, Some(RecordLanding::Draft { .. }))
+            && !taken_back.contains(&f.link)
+    });
+    Ok(newest(standing).map(|f| f.record))
+}
+
+/// Returns the links of the records among `found` that a take-back replaces.
+///
+/// A take-back's record — an undo's or a withdrawal's — names no landing and
+/// names in `replaces` the record of the landing it took back (P20), so a
+/// record whose link is among these stands for no landing. A landing's own
+/// `replaces` ends none: the landing whose record it names stands on in its
+/// draft until a take-back of it.
+pub(super) fn taken_back_links(found: &[Found]) -> Vec<Address> {
+    found
+        .iter()
+        .filter(|f| f.record.landed.is_none())
+        .filter_map(|f| f.record.replaces.clone())
+        .collect()
 }
 
 /// Returns `account`'s own record of the landing `marker` marks in `draft`.

@@ -186,26 +186,26 @@
 //! no draft named ([`Landing::Draft`]'s `into` none), a fresh draft is
 //! staged from the head first — `stage {from: the head}`, two commits, the
 //! state between a plain staged draft (R3) — and the write is typed against
-//! the stage's own position; where the merger's newest record for the key,
-//! read before the stage, names a draft landing its draft still marks, that
-//! landing is reported and nothing is staged, so [`Landed::Draft`]'s
-//! `staged` is true only where the call sent the stage. Every document M
-//! windows is read before the stage ([`Writer::windows_readable`]), one the
-//! merger may not read refused [`Refusal::WindowWithheld`] with nothing
-//! staged, so the one write's source gate never leaves a staged draft
-//! standing empty. Where the record names none, a landing of the merge
-//! begun in a draft of the merger's and never recorded — the one write
-//! landed, the record cut off — is found before the stage, the mint a
-//! landing cut off would make twice (PUB-8.32, resume-by-read): the
-//! merger's drafts' rows on the supplement past the head's mint, each
-//! draft but the merge's own sides whose `set_arrangement` row names the
-//! head and the sides, and that no record of the merger's own of the merge
-//! stands for, read for the board's mark ([`Writer::landing_begun`]). One
-//! the board still marks is refused [`Refusal::LandingBegun`], at a
-//! landing and a resume alike, nothing staged or written: the merge never
-//! lands twice, and the landing begun is never finished unasked. A draft
-//! only staged, its one write never sent, carries no row naming the merge
-//! and stands beside the next stage.
+//! the stage's own position; where a draft the merger's records of the key
+//! name, read before the stage, still holds this composition's landing,
+//! that landing is reported and nothing is staged (**A fresh landing found
+//! standing**, below), so [`Landed::Draft`]'s `staged` is true only where
+//! the call sent the stage. Every document M windows is read before the
+//! stage ([`Writer::windows_readable`]), one the merger may not read
+//! refused [`Refusal::WindowWithheld`] with nothing staged, so the one
+//! write's source gate never leaves a staged draft standing empty. Where
+//! none stands, a landing of the merge begun in a draft of the merger's and
+//! never recorded — the one write landed, the record cut off — is found
+//! before the stage, the mint a landing cut off would make twice (PUB-8.32,
+//! resume-by-read): the merger's drafts' rows on the supplement past the
+//! head's mint, each draft but the merge's own sides whose `set_arrangement`
+//! row names the head and the sides, and that no record of the merger's own
+//! of the merge stands for, read for the board's mark
+//! ([`Writer::landing_begun`]). One the board still marks is refused
+//! [`Refusal::LandingBegun`], at a landing and a resume alike, nothing
+//! staged or written: the merge never lands twice, and the landing begun is
+//! never finished unasked. A draft only staged, its one write never sent,
+//! carries no row naming the merge and stands beside the next stage.
 //! The record follows, its draft landing's position
 //! the write's `at`. [`resume`] finds a landing in a draft named by that same
 //! mark, at the position it marks, where the draft as of that position held
@@ -237,21 +237,29 @@
 //! refused as itself ([`Refusal::HistoryBusy`]; SP-14).
 //!
 //! **A fresh landing found standing** is answered where its draft marks
-//! it: the draft the merger's newest record for the key names is read as it
-//! stands, its `doc_metadata` and, with no recorded base, its rows and the
-//! past states their walk needs, and the position is that same mark's. The
-//! record names the write that first landed the key in the draft, and a
-//! later landing of the key there, the same landing (skep #790), moves the
-//! mark past it; a mark below the record's position is an earlier merge's
-//! standing again — its marker put back, or with no recorded base its
-//! landing beneath one taken back. So where the draft marks none of this
-//! merge, or only such a one, no landing of it stands — taken back, whether
-//! or not the take-back's record was written, the board's mark the fact and
-//! the record its testimony — and the landing goes on to the stage, its
-//! record replacing that one. Where the draft cannot be judged, the walk of
-//! its rows needing a past state the board has reclaimed, the position the
-//! record names is answered: a landing that cannot be judged is never made
-//! twice.
+//! it. The drafts are every one the merger's own records of the key name
+//! as landed in — for each, the newest such record no take-back's record
+//! replaces — taken newest first, so a newer record, a landing of the key
+//! elsewhere or a take-back of it, hides no landing standing in a draft an
+//! older record names. Each is read as it stands, its `doc_metadata` and,
+//! with no recorded base, its rows and the past states their walk needs,
+//! and the position answered is that same mark's. The record names the
+//! write that first landed the key in the draft, and a later landing of the
+//! key there, the same landing (skep #790), moves the mark past it; a mark
+//! below the record's position is an earlier merge's standing again — its
+//! marker put back, or with no recorded base its landing beneath one taken
+//! back. So where the draft marks none of this merge, or only such a one,
+//! no landing of it stands there — taken back, whether or not the
+//! take-back's record was written, the board's mark the fact and the record
+//! its testimony. The key holds no choice, so the draft is read as of the
+//! mark too, and a landing that placed another list than M is another
+//! composition's of the key, never this one's: a merge composed with other
+//! choices lands a draft of its own, never told its choices landed where
+//! they did not. Where no draft holds this composition's landing, the
+//! landing goes on to the stage, its record replacing the newest. Where a
+//! draft cannot be judged, the walk of its rows needing a past state the
+//! board has reclaimed, the position its record names is answered: a
+//! landing that cannot be judged is never made twice.
 //!
 //! **The per-session ids.** Every write of a landing carries the id
 //! `<stem>.<frame>`, its stem `merge:` and the SHA-256, in lowercase hex,
@@ -371,17 +379,20 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 /// draft after a take-back recorded since is a write of its own, which the
 /// board judges: typed against the position the merge was composed at,
 /// which the landing taken back moved the draft past, it is refused
-/// `arrangement_moved` with nothing written. With no draft named, a draft
-/// landing that record names is the answer, in any session, at the position
-/// its draft marks it (the module's doc), with nothing staged and
-/// [`Landed::Draft`]'s `staged` false; a take-back's record leaves the key
-/// open, so the same `merged` landed again stages a draft of its own, the
-/// stage's id naming that record, its `staged` true — and so does a
-/// take-back whose record went unwritten, the draft marking no landing of
-/// the merge: the board's mark decides, never the record alone.
+/// `arrangement_moved` with nothing written. With no draft named, this
+/// composition's landing standing in a draft the merger's records of the key
+/// name — whatever landed or was taken back since in another — is the
+/// answer, in any session, at the position its draft marks it (the module's
+/// doc), with nothing staged and [`Landed::Draft`]'s `staged` false; a
+/// take-back's record leaves the key open, so the same `merged` landed again
+/// stages a draft of its own, the stage's id naming that record, its
+/// `staged` true — and so does a take-back whose record went unwritten, the
+/// draft marking no landing of the merge, and a draft holding another
+/// composition's landing of the key: the board's mark and the list it
+/// placed decide, never the record alone.
 ///
-/// With no draft named and no record standing for a landing of the key — or
-/// one naming a landing its draft no longer marks — a
+/// With no draft named and no draft the merger's records of the key name
+/// holding this composition's landing, a
 /// landing of the merge begun in a draft of the merger's — its one write
 /// landed, no record of the merger's own of the merge naming the draft — is
 /// refused [`Refusal::LandingBegun`] naming the draft, nothing staged or
@@ -401,16 +412,16 @@ pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 ///   answer fits nothing, nothing sent, then the draft side's records'
 ///   read's refusals;
 /// - the reads' refusals, for a member already holding the answered list or
-///   for the merger's newest record for the key at a draft landing, and,
-///   with no draft named where that record names a draft landing, for that
-///   draft's `doc_metadata` and, on a draft with no recorded base, its rows
-///   and the past states their walk needs — [`Refusal::HistoryBusy`] past
-///   the bounded retries among them, a past state the board has reclaimed
-///   answering the record's landing as standing, never staged again (the
-///   module's doc, **A fresh landing found standing**) — each as itself
-///   (SP-14);
-/// - with no draft named where no record stands for a landing its draft
-///   still marks, the reads for a landing begun — the merge's head's
+///   for the merger's records of the key at a draft landing, and, with no
+///   draft named, for each draft those records name as landed in — its
+///   `doc_metadata`, on a draft with no recorded base its rows and the past
+///   states their walk needs, and its `image` as of its mark —
+///   [`Refusal::HistoryBusy`] past the bounded retries among them, a past
+///   state the board has reclaimed at the mark answering the record's
+///   landing as standing, never staged again (the module's doc, **A fresh
+///   landing found standing**) — each as itself (SP-14);
+/// - with no draft named where none of those drafts holds this
+///   composition's landing, the reads for a landing begun — the merge's head's
 ///   `doc_metadata`, the merger's drafts' rows on the supplement and each
 ///   draft's own reads (`Writer::landing_begun`) — each as itself, then
 ///   [`Refusal::LandingBegun`] where one stands, nothing staged or written;
@@ -514,8 +525,9 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// whose `at` is the draft's own mint (P2). A draft landing
 /// reads the merger's newest record for the key first, as [`land`] does, so
 /// the record it completes goes under the landing's own ids; for a fresh
-/// landing, where that record names a draft landing, it is the answer at
-/// the position that draft marks it, read as [`land`] reads it; else a
+/// landing, this composition's landing standing in a draft the merger's
+/// records of the key name is the answer at the position that draft marks
+/// it, read as [`land`] reads it; else a
 /// landing of the merge begun in a draft of the merger's and never recorded
 /// is refused [`Refusal::LandingBegun`], as [`land`] refuses it, and never
 /// completed by a `resume` naming no draft; else `None`. It stages nothing,

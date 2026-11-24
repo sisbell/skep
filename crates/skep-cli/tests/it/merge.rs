@@ -552,7 +552,11 @@ fn the_usage_forms_are_refused_before_any_socket() {
 /// read first; no head named, refused `head_holds` — a gap both sides added at
 /// resolved as the agent's choice, a resolution naming no gap not applied,
 /// the same words added by both kept once, said and reported, and the
-/// merged list landed in a draft.
+/// merged list landed in a draft; `--new` landing once and found standing
+/// after, the same key composed with the other order staging a draft of its
+/// own, the default still finding its own landing (the mutant that judges a
+/// draft by its mark alone reports the default's landing for the resolved
+/// order, the choice never written).
 #[test]
 fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent() {
     let dir = tempfile::tempdir().unwrap();
@@ -755,6 +759,31 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(position(), before, "nothing staged, nothing written");
     assert!(r.err.contains(&format!("landed in the draft {fresh} at position {at};")), "{}", r.err);
     assert!(!r.err.contains("fresh draft"), "{}", r.err);
+    // --NEW WITH THE OTHER ORDER: the same key, which holds no choice, and
+    // another list, so the landing above is no landing of this run's: a draft
+    // of its own staged, holding the resolved order. The default order run
+    // again still finds its own landing above, nothing staged.
+    let before = position();
+    let r = rig.merge(&["--doc", &d2_s, "--alternative", &daughter2_s, "--kind", &kind_s, "--head", &head2_s, "--new", "--resolve", "1=order:1,0"]);
+    let v = report(&r);
+    let resolved = addr(v["landed"]["draft"].as_str().expect("a draft of its own"));
+    assert_ne!(resolved, fresh, "a draft of its own: {}", v["landed"]);
+    assert_eq!(v["landed"]["fresh"], json!(true), "{}", v["landed"]);
+    assert!(position() > before, "staged and landed");
+    assert_eq!(runs_of(&v), expected, "the fat big cat sat");
+    assert_eq!(rig.image(&token, &resolved, 19), expected, "the new draft holds the resolved order");
+    let defaults: Vec<(String, String)> = vec![(format!("{d2}.0.1.1"), "4".into()), (format!("{d2}.0.1.12"), "8".into()), (format!("{d2}.0.1.5"), "7".into())];
+    assert_eq!(rig.image(&token, &fresh, 19), defaults, "the draft above keeps the default order");
+    let before = position();
+    let r = rig.merge(&["--doc", &d2_s, "--alternative", &daughter2_s, "--kind", &kind_s, "--head", &head2_s, "--new"]);
+    let v = report(&r);
+    assert_eq!(
+        (v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone(), v["landed"]["position"].as_u64()),
+        (Some(fresh.to_string().as_str()), json!(false), Some(at)),
+        "the default's own landing: {}",
+        v["landed"]
+    );
+    assert_eq!(position(), before, "nothing staged, nothing written");
     session.close().expect("close");
 }
 

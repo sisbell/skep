@@ -611,14 +611,15 @@ pub enum NoUndo {
     TakenBack,
     /// A withdrawal's undo found a merge in the draft since (skep #870).
     ///
-    /// It found the draft carrying a merge again, or one landed in it since
-    /// the withdrawal.
+    /// It found the draft carrying a merge again, or one put back or landed
+    /// in it since the withdrawal.
     /// The draft carries a marker — the one the withdrawal cleared, put
-    /// back already by this undo, or a merge landed since — or its base
-    /// moved with no publication since the withdrawal, a merge having
-    /// landed and been taken out again; the undo takes back the newest step
-    /// alone, so the merge standing, or the draft as it stands, is the one
-    /// to undo or edit.
+    /// back already by this undo, or a merge landed since; or its rows past
+    /// the withdrawal hold the cleared marker put back since, taken out
+    /// again after; or its base moved with no publication since the
+    /// withdrawal, a merge having landed and been taken out again. The undo
+    /// takes back the newest step alone, so the merge standing, or the draft
+    /// as it stands, is the one to undo or edit.
     Remarked,
 }
 
@@ -731,7 +732,7 @@ impl fmt::Display for Refusal {
                 NoUndo::Inherited => write!(f, "nothing to undo: {draft} inherited the merge when it was staged; discard it or edit it"),
                 NoUndo::Published { version } => write!(f, "nothing to undo: {draft} was published as version {version} since, and a version stands — the way back is to publish the older text again"),
                 NoUndo::TakenBack => write!(f, "nothing to undo: the merge in {draft} was already taken back"),
-                NoUndo::Remarked => write!(f, "nothing to undo: {draft} carries a merge again, or a merge landed in it since the merge was taken out — undo that merge, or edit the draft as it stands"),
+                NoUndo::Remarked => write!(f, "nothing to undo: {draft} carries a merge again, or a merge was put back or landed in it since the merge was taken out — the newest step alone is taken back: undo the merge the draft carries, or edit the draft as it stands"),
             },
             Refusal::NoMerge { draft } => write!(f, "{draft} carries no merge: nothing to undo, nothing to take out"),
             Refusal::NoWithdrawal { draft, at } => write!(f, "position {at} names no withdrawal of a merge from {draft}: nothing to undo, and nothing was sent"),

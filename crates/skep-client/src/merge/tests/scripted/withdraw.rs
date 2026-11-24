@@ -7,15 +7,15 @@
 //! writing nothing twice; and a withdrawal taken back — the marker put back
 //! and the next undo taking the landing back, typed at the landing or
 //! refused where another hand edited after it, and nothing to undo past a
-//! landing or a publication. And it checks the words a withdrawal and its
-//! undo keep: a member's own word sent under the member's chain, no
-//! correspondence record read by the withdrawal, another account's words
-//! sent by its undo as their owner published them, a write that changed a
-//! member's word for the trunk's naming no withdrawal and leaving the next
-//! undo typed at the landing, and both refused at the cap counted on the
-//! runs they would write. And it checks the withdrawal's undo writing the
-//! landing's record again past newer records naming the draft as a side, a
-//! sub-account's and the merger's own.
+//! landing, a publication, or a put-back taken out again. And it checks the
+//! words a withdrawal and its undo keep: a member's own word sent under the
+//! member's chain, no correspondence record read by the withdrawal, another
+//! account's words sent by its undo as their owner published them, a write
+//! that changed a member's word for the trunk's naming no withdrawal and
+//! leaving the next undo typed at the landing, and both refused at the cap
+//! counted on the runs they would write. And it checks the withdrawal's undo
+//! writing the landing's record again past newer records naming the draft
+//! as a side, a sub-account's and the merger's own.
 
 use super::*;
 
@@ -462,6 +462,53 @@ fn a_withdrawals_undo_finds_nothing_to_undo_past_a_landing_or_a_publication() {
     assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
     assert_eq!(err.to_string(), format!("nothing to undo: {S} was published as version {D}.3 since, and a version stands — the way back is to publish the older text again"));
     assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
+}
+
+/// A withdrawal's undo run again after its put-back was taken out sends
+/// nothing (the `undo` module's doc, **Nothing to undo**).
+///
+/// `T`, staged from the head `D.2`, takes the race merge, which re-records
+/// the base pair `T` was staged with; the merge is withdrawn, the
+/// withdrawal taken back and the landing undone, so `T` holds the head's
+/// words again with no marker and the base pair it held at the withdrawal.
+/// The withdrawal's undo run again — typed at the caller's own last ack,
+/// the undo's write, and with none — is `Remarked`, nothing sent: the row
+/// that put the cleared marker back stands past the withdrawal (the mutant
+/// without that row check puts the marker back over the head's words at
+/// the caller's ack, and sends a frame the board refuses with none; the one
+/// that takes any row naming a merge as a put-back refuses the withdrawal's
+/// undo past another merge's landing and undo, which skep #1154's suite
+/// pins).
+#[test]
+fn a_withdrawals_undo_run_again_after_its_put_back_was_taken_out_sends_nothing() {
+    let t = "1.0.1.0.67";
+    let head = format!("{D}.2");
+    let words = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, words.clone());
+    w.staged(t, &head, 15);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    land(&board, &merged, draft_landing(&session, &signer, Some(a(t)))).expect("landed");
+    assert_eq!(dialer.world().standing(t).0, Some((head.clone(), 15)), "the premise: the landing re-recorded the pair T was staged with");
+    let withdrawn = withdraw(&board, m, &a(t), &a(K), None).expect("withdrawn");
+    unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("the landing taken back");
+    assert_eq!(dialer.world().docs.get(t).unwrap().runs, words, "the premise: T holds the head's words again");
+    assert_eq!(dialer.world().standing(t), (Some((head.clone(), 15)), None), "the premise: the base pair as at the withdrawal, no marker");
+    for own_ack in [Some(undone.position), None] {
+        dialer.clear();
+        assert_eq!(
+            unwithdraw(&board, m, &a(t), &a(K), withdrawn.position, own_ack, None),
+            Err(Refusal::NothingToUndo { draft: a(t), why: NoUndo::Remarked }),
+            "own_ack {own_ack:?}: the put-back taken out again since"
+        );
+        assert!(dialer.frames("set_arrangement").is_empty(), "own_ack {own_ack:?}: nothing sent: {:?}", dialer.ops());
+    }
+    assert_eq!(dialer.world().docs.get(t).unwrap().runs, words, "T's words stand");
+    assert_eq!(dialer.world().standing(t), (Some((head, 15)), None), "no marker put back");
 }
 
 /// A withdrawal and its undo keep a member's own word (skep #1121).

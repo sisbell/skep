@@ -12,14 +12,15 @@
 //! late among them — and never another composition's landing of the key,
 //! which stages a draft of its own; that a second landing of one key into one
 //! draft is the same landing; that merges landed one over another are taken
-//! back a landing at a time, each by its own record, a marker a stage
-//! copied put back inherited; that a withdrawal and its undo go by the
-//! marker's own record — the withdrawal after an undo put an earlier merge
-//! back replacing that merge's, the withdrawal's undo writing the landing's
-//! again after another merge, or the same one landed again, was undone
-//! since, and writing back none taken back before its landing; the
-//! take-backs' refusals, each mapped; and a merge taken back unsigned where
-//! a claimed board's head is owed.
+//! back a landing at a time, each by its own record — a merge landed again
+//! over another leaving its first landing's record standing beneath — a
+//! marker a stage copied put back inherited; that a withdrawal and its undo
+//! go by the marker's own record — the withdrawal after an undo put an
+//! earlier merge back replacing that merge's, the withdrawal's undo writing
+//! the landing's again after another merge, or the same one landed again,
+//! was undone since, and writing back none taken back before its landing;
+//! the take-backs' refusals, each mapped; and a merge taken back unsigned
+//! where a claimed board's head is owed.
 
 use super::*;
 
@@ -1618,6 +1619,89 @@ fn an_undo_of_a_merge_landed_over_another_puts_its_marker_back_and_leaves_its_re
         appended_record(&dialer)["replaces"].as_str(),
         Some(a_record.to_string().as_str()),
         "A's record replaced"
+    );
+}
+
+/// An undo of a merge landed again over another leaves the first landing's
+/// record standing beneath.
+///
+/// Skep #790 under skep #914's one rule: the race shape — merge A — landed
+/// in `T` with its record, the draft-side merge of `T` — merge B — landed
+/// over it with its own, and A composed again and landed in `T` over B, the
+/// same landing as A's first: A's record is its key's newest and names
+/// `T`, so no record is written. The undo takes A's later write back and
+/// puts B's marker back, writing no record: A's record names A's first
+/// landing, below B's, and that landing stands on beneath B (the mutant
+/// that judges by the record standing for B's marker alone replaces A's
+/// record). The undo after it takes B back, A's marker back, and replaces
+/// B's record; A's record is current for its key, and a fresh landing of A
+/// finds A standing in `T` at its first landing, nothing staged or written
+/// (with A's record replaced, it answers `LandingBegun`).
+#[test]
+fn an_undo_of_a_merge_landed_again_over_another_leaves_its_first_landings_record() {
+    let t = "1.0.1.0.67";
+    let mut w = World::race();
+    w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+    w.staged(t, &format!("{D}.1"), 11);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let into_t = || draft_landing(&session, &signer, Some(a(t)));
+    let merge_a = compose(&board, Some(session.token()), &race_inputs()).expect("A composed");
+    let (a_at, a_record) = landing_of(&land(&board, &merge_a, into_t()).expect("A landed"));
+    let b_inputs =
+        Inputs { sides: vec![Side::Draft { at: a(t), position: None }], ..race_inputs() };
+    let merge_b = compose(&board, Some(session.token()), &b_inputs).expect("B composed");
+    let (b_at, b_record) = landing_of(&land(&board, &merge_b, into_t()).expect("B landed"));
+    let again = compose(&board, Some(session.token()), &race_inputs()).expect("A composed again");
+    assert_eq!(again.key, merge_a.key, "the premise: A's key");
+    dialer.clear();
+    let (again_at, again_record) =
+        landing_of(&land(&board, &again, into_t()).expect("A landed again"));
+    assert!(a_at < b_at && b_at < again_at, "the premise: A, B, then A again");
+    assert_eq!(again_record, a_record, "the premise: the same landing, A's record");
+    assert!(
+        dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+        "the premise: no record written: {:?}",
+        dialer.ops()
+    );
+    dialer.clear();
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("A's later write taken back");
+    assert_eq!(undone.marker.as_ref().and_then(|m| m.at), Some(b_at), "B's marker put back");
+    assert_eq!(undone.record, None, "A's record stands for its first landing, beneath B");
+    assert!(
+        dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+        "nothing of a record: {:?}",
+        dialer.ops()
+    );
+    dialer.clear();
+    let undone = undo(&board, m, &a(t), &a(K), None, None).expect("B taken back");
+    assert_eq!(undone.marker.as_ref().and_then(|m| m.at), Some(a_at), "A's marker put back");
+    assert_eq!(
+        appended_record(&dialer)["replaces"].as_str(),
+        Some(b_record.to_string().as_str()),
+        "B's record replaced"
+    );
+    let found = current(&board, Some(session.token()), &a(K), &merge_a.key)
+        .expect("the lookup")
+        .expect("a record");
+    assert_eq!(
+        (found.link, found.landed),
+        (Some(a_record.clone()), Some(RecordLanding::Draft { draft: a(t), position: a_at })),
+        "A's record current"
+    );
+    dialer.clear();
+    let fresh = land(&board, &merge_a, draft_landing(&session, &signer, None))
+        .expect("A's landing found standing");
+    assert_eq!(
+        fresh,
+        Landed::Draft { into: a(t), position: a_at, record: a_record, head_moved: None, staged: false },
+        "A standing in T at its first landing"
+    );
+    assert!(
+        dialer.frames("stage").is_empty() && dialer.frames("set_arrangement").is_empty(),
+        "nothing staged or written: {:?}",
+        dialer.ops()
     );
 }
 

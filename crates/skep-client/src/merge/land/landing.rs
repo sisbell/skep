@@ -143,9 +143,11 @@ pub enum Landed {
     /// claims the daughter superseded; composing this merge's own sides
     /// again on the new head asks every gap again and leaves the daughter
     /// standing beside the head. Only a shot naming NO daughter
-    /// can meet it — a merge of draft or fork sides alone — or a landing
-    /// whose read-first finds a daughter of the head already holding M: a
-    /// shot naming a daughter in `supersede` is refused whole at a moved
+    /// can meet it — a merge of draft or fork sides alone, or one whose
+    /// every daughter an active claim of the merger's own names superseded
+    /// by a version at or below the head it composed on (the skip) — or a
+    /// landing whose read-first finds a daughter of the head already holding
+    /// M: a shot naming a daughter in `supersede` is refused whole at a moved
     /// head, [`Refusal::SupersedeRefused`], and lands as the trunk's next
     /// member or not at all (the `land` module's doc).
     ///

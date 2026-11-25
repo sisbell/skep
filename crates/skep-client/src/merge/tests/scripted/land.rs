@@ -790,6 +790,75 @@ fn a_shot_naming_a_daughter_at_a_moved_head_is_refused_whole_and_typed() {
     );
 }
 
+/// A CLAIM MINTED PAST THE COMPOSITION's HEAD LEAVES ITS DAUGHTER TO THE
+/// BOARD's REFUSAL (ruling (ii) of the supersede race; skep #806): two
+/// compositions of one key, the race shape's head with `D.1.2` — the
+/// defaults, and the order swapped at gap 1 — each composed on `D.2` by
+/// one of two agents of the account. The defaults land first as `D.3`, with
+/// the claim that `D.1.2` is superseded by it. The swapped one's shot, in
+/// the second agent's session, names `D.1.2` all the same, that claim's
+/// `new` a trunk member past its head: the board refuses it whole,
+/// `head_moved` naming `D.3`, nothing committed — no daughter `D.2.1`
+/// beside `D.3`, no second claim. Composed again on `D.3`, the merge is
+/// `D.3`'s own list and its daughter's claim names the head itself, so the
+/// landing is refused `HeadHolds`, nothing sent (the mutant that skips
+/// every daughter an own claim names, whatever its `new`, publishes
+/// `D.2.1`, a permanent second copy of the merge beside the version that
+/// took it).
+#[test]
+fn a_claim_minted_past_the_compositions_head_leaves_its_daughter_to_the_boards_refusal() {
+    let mut w = World::race();
+    w.text(D, 16, "fat ");
+    w.member(&format!("{D}.1.2"), vec![run(D, 1, 4), run(D, 16, 4), run(D, 5, 7)], Some(11));
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let inputs = Inputs { sides: vec![Side::Member(a(&format!("{D}.1.2")))], ..race_inputs() };
+    let defaults = compose(&board, Some(session.token()), &inputs).expect("composed");
+    let swap = Resolution {
+        gap: GapId(1),
+        choice: Choice::Order(vec![SideIx(1), SideIx(0)]),
+        by: ResolvedBy::Agent,
+    };
+    let swapped_inputs =
+        Inputs { options: Options { resolutions: vec![swap], ..Options::default() }, ..inputs };
+    let swapped = compose(&board, Some(session.token()), &swapped_inputs).expect("composed swapped");
+    assert_eq!(swapped.key, defaults.key, "the premise: one key, which holds no choice");
+    assert_ne!(m_runs(&swapped), m_runs(&defaults), "the premise: two lists");
+    let d3 = format!("{D}.3");
+    let first = land(&board, &defaults, shot(&session, &signer)).expect("the defaults landed");
+    assert!(
+        matches!(&first, Landed::Member { address, claims, .. } if address.to_string() == d3 && *claims == vec![a(&format!("{D}.0.2.1"))]),
+        "the premise: D.3 claims D.1.2 superseded: {first:?}"
+    );
+    // The swapped one landed by a second agent of the account, in a session
+    // of its own: no memo of the first shot stands.
+    let (rows, claims) = {
+        let mut w = dialer.world();
+        w.memo.clear();
+        (w.rows.len(), w.claims.len())
+    };
+    dialer.clear();
+    let err = land(&board, &swapped, shot(&session, &signer)).expect_err("refused");
+    assert_eq!(
+        err,
+        Refusal::SupersedeRefused { index: 0, cause: SupersedeCause::HeadMoved { head: Some(a(&d3)) } }
+    );
+    let sent = dialer.frames("publish");
+    assert_eq!(sent.len(), 1, "one shot: {:?}", dialer.ops());
+    assert_eq!(sent[0]["supersede"], json!([format!("{D}.1.2")]), "the daughter named: {}", sent[0]);
+    {
+        let w = dialer.world();
+        assert!(!w.docs.contains_key(&format!("{D}.2.1")), "no daughter beside D.3");
+        assert_eq!((w.rows.len(), w.claims.len()), (rows, claims), "nothing committed");
+    }
+    // Composed again on the head the refusal names, which holds the merge.
+    let again = compose(&board, Some(session.token()), &Inputs { head: a(&d3), ..swapped_inputs })
+        .expect("composed again");
+    dialer.clear();
+    assert_eq!(land(&board, &again, shot(&session, &signer)), Err(Refusal::HeadHolds { head: a(&d3) }));
+    assert!(!dialer.ops().iter().any(|o| o == "publish"), "nothing sent: {:?}", dialer.ops());
+}
+
 /// THE SHOT NAMES THE MEMBER SIDES AS `supersede` AND NEVER A DRAFT SIDE
 /// (the merge bridge lane): the race shape's shot carries `supersede`
 /// `[D.1.1]`, the skip read at the daughter before it, its `attest`
@@ -797,9 +866,9 @@ fn a_shot_naming_a_daughter_at_a_moved_head_is_refused_whole_and_typed() {
 /// one group the daemon's verifier spells for the daughter — the trunk
 /// by address, the supersedes class, `from` the daughter's unit span,
 /// `to` the tag `member`; a daughter an active claim of the merger's own
-/// already names, whatever its `new`, is dropped from the list and the
-/// body alike, the frame then naming no `supersede` and the body
-/// today's; a draft side beside a member side is named as `draft`, never
+/// already names, its `new` no trunk member past the head, is dropped from
+/// the list and the body alike, the frame then naming no `supersede` and the
+/// body today's; a draft side beside a member side is named as `draft`, never
 /// in `supersede`; and a draft side alone names none.
 #[test]
 fn the_shot_names_the_member_sides_as_supersede_and_never_a_draft_side() {

@@ -335,14 +335,20 @@
 //! READ BEFORE SIGNING: `in_claims{y: the daughter, view: active}` at each,
 //! a daughter an active claim of the merger's own already names dropped from
 //! the list and the body, as the board's plan drops it, so the body signed
-//! is the body the board composes. A shot naming a daughter lands on the
-//! trunk or not at all: where the head moved under the merge the board
-//! refuses it whole, `supersede_refused` with `detail` `head_moved`, nothing
-//! committed, answered as [`Refusal::SupersedeRefused`] naming the trunk's
-//! head for the merge to be composed again on. After the shot the claims
-//! are read back at the daughters ([`Writer::claims_standing`]) and written
-//! into the record; a merger that loses the acknowledgment finds them with
-//! the member ([`resume`]), since a landed shot carried them.
+//! is the body the board composes — save a daughter such a claim names
+//! superseded by a trunk member past the head the merge composed on, which
+//! is kept: the trunk took that claim's shot after the composition, so it
+//! moved, and the board refuses a list naming the daughter whole ahead of
+//! any skip. A shot naming a daughter lands on the trunk or not at all:
+//! where the head moved under the merge the board refuses it whole,
+//! `supersede_refused` with `detail` `head_moved`, nothing committed,
+//! answered as [`Refusal::SupersedeRefused`] naming the trunk's head for the
+//! merge to be composed again on — so a second composition of a merge whose
+//! first landed past its head never lands as a daughter beside it. After the
+//! shot the claims are read back at the daughters
+//! ([`Writer::claims_standing`]) and written into the record; a merger that
+//! loses the acknowledgment finds them with the member ([`resume`]), since a
+//! landed shot carried them.
 //!
 //! [`Answers`]: super::Answers
 //! [`windows::kept_places`]: super::windows::kept_places

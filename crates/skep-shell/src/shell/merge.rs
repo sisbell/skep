@@ -154,40 +154,45 @@
 //! newest such record that no take-back's record replaces, newest first,
 //! so a landing of the key in another draft since, or the undo of one,
 //! hides none — never the composition's `prior`, which can be another
-//! account's, else, where a fork or a draft side moved since that
-//! landing so the key is another, their newest record of the merge with
-//! the states ignored that names a draft landing no take-back of theirs
-//! replaces (`skep_client::merge::landed_draft`): that draft is read as
-//! `into` is, refused `not_owner` where it is published or another
-//! account's. Found by the key, it is the re-open, at the position the
-//! library answers it at: the board's mark of that landing, or the position
-//! its record names where the walk of a draft with no recorded base needs a
-//! past state the board has reclaimed — a landing the library cannot judge
-//! is never made a second time; found with the states ignored, the call
-//! goes on as one naming that draft as `into` — the re-open where its
-//! marker names the side, or at a fork moved since the landing over it,
-//! with what it replaced — else the landing goes into it, a record of its
-//! own written. The library is handed `into` none only where neither read
-//! found a record (the survey §5 item 2). Where no draft a record of the
-//! person's names still holds this composition's landing — none written, or
-//! each taken back, its take-back's record written or not — a
-//! landing of the merge begun in a
-//! draft of theirs and never recorded — cut off between its one write and
-//! its record — is the library's refusal at the first read, `merge_refused`
-//! with `landing_begun` naming the `draft` and the `position`, nothing
-//! staged or written, so the merge never lands twice (PUB-8.32): the way on
-//! is that draft named as `into`, whose re-open records the landing — save
-//! where the board has reclaimed the landing's position and the draft as it
-//! stands no longer holds the merged list, a landing that cannot be judged
-//! and is recorded never — then `merge.undo` to take it back, refused
-//! `merge_refused` `history_reclaimed` where the board has reclaimed the
-//! state before the landing, or, where the draft records a base,
-//! `merge.withdraw` to take it out keeping its words. A landing of the
-//! person's own made between that read and the landing — on another
-//! device, or by `skep merge --new` naming the same kind — is the library's
-//! answer, found standing with nothing staged: `fresh` is the library's
-//! `staged`, never whether `into` was named. So another account's record of
-//! the kind never decides where a merge lands.
+//! account's, else their newest record of the merge with the states ignored
+//! that names a draft landing no take-back of theirs replaces
+//! (`skep_client::merge::landed_draft`), where its key is another than the
+//! composition's — a fork or a draft side moved since that landing: that
+//! draft is read as `into` is, refused `not_owner` where it is published or
+//! another account's. Found by the key, it is the re-open, at the position
+//! the library answers it at: the board's mark of that landing, or the
+//! position its record names where the walk of a draft with no recorded
+//! base needs a past state the board has reclaimed — a landing the library
+//! cannot judge is never made a second time; found with the states ignored,
+//! the call goes on as one naming that draft as `into` — the re-open where
+//! its marker names the side — else the landing goes into it, a fork moved
+//! since the landing over it among them, naming what it replaced, a record
+//! of its own written. A record of the composition's own key whose draft no
+//! longer holds its landing — taken back with the take-back's record
+//! unwritten, or another hand's landing standing over it — names no draft
+//! to land in: the page asked for a fresh draft, and the merge lands in one
+//! (the merge record's decision 16), never over another landing or the
+//! person's own words. The library is handed `into` none only where neither
+//! read found a draft to land in (the survey §5 item 2). Where no draft a
+//! record of the person's names still holds this composition's landing —
+//! none written, or each taken back, its take-back's record written or not
+//! — a landing of the merge begun in a draft of theirs and never recorded —
+//! cut off between its one write and its record — is the library's refusal
+//! at the first read, `merge_refused` with `landing_begun` naming the
+//! `draft` and the `position`, nothing staged or written, so the merge
+//! never lands twice (PUB-8.32): the way on is that draft named as `into`,
+//! whose re-open records the landing — save where the board has reclaimed
+//! the landing's position and the draft as it stands no longer holds the
+//! merged list, a landing that cannot be judged and is recorded never —
+//! then `merge.undo` to take it back, refused `merge_refused`
+//! `history_reclaimed` where the board has reclaimed the state before the
+//! landing, or, where the draft records a base, `merge.withdraw` to take it
+//! out keeping its words. A landing of the person's own made between that
+//! read and the landing — on another device, or by `skep merge --new`
+//! naming the same kind — is the library's answer, found standing with
+//! nothing staged: `fresh` is the library's `staged`, never whether `into`
+//! was named. So another account's record of the kind never decides where a
+//! merge lands.
 //!
 //! **`merge.land`** — `{resolutions?, answers?}` — publishes the merge from
 //! the draft the standing composition landed in, THE SHOT CARRYING THE
@@ -382,35 +387,40 @@
 //! dying with it, dropped by the bus's watcher at `session-died` as the
 //! panels are, saying nothing: a composition's state crosses in its calls'
 //! answers alone, and the contract names no event for the family. `land`
-//! and `undo` with nothing standing answer `no_merge` naming the session;
-//! `land` over a draft that no longer carries the standing composition's
-//! landing, and `undo` over one whose latest landing is another, drop it,
-//! answering `no_merge` naming the draft (**`merge.land`**,
-//! **`merge.undo`**; skep #992, #1050). A composition stands for one
-//! landing, known by its draft and the position the board marks it at
-//! (`Composition::marks`): a draft's marker, or on a draft with no recorded
-//! base, which carries none, the landing standing by its `set_arrangement`
-//! rows (`Shell::standing_mark`; skep #914) — one mark, which the re-open,
-//! the set-aside, the stand-again and the undo's gate read alike, save a
-//! walk of the rows that needs a past state the board has reclaimed: the
-//! land side reads it as no landing standing, as the library's land side
-//! does, and the undo's gate refuses it as the library's undo does.
-//! A landing into the draft the standing composition stands in, over
-//! the mark of that composition's own landing as the compose read it there
-//! — its side among the mark's sides, or no side where a fork landed in
-//! itself, its head the mark's and its position the mark's `at` — sets the
-//! composition aside by the mark's `at`, and whichever undo puts that
-//! landing back stands it again (`Merges::stand_again`): this session's,
-//! which stands it as it answers, or another device's, which this session
-//! meets as `land` or `undo` finds the draft carrying that landing and not
-//! the standing composition's, the refusal naming the draft and the
-//! composition set aside then standing. So while the session lasts, undo
-//! after undo takes the draft's merges back a landing at a time, whichever
-//! device takes a step (skep #981). Over any other mark — another hand's
-//! landing, of another merge or of this one, or one the draft's stage
-//! copied while the composition stood in the draft it came from — nothing
-//! is set aside, so the undo that puts it back leaves nothing standing and
-//! the next `undo` answers `no_merge`.
+//! and `undo` with nothing standing answer `no_merge` naming the session,
+//! save where a composition a later landing set aside stands again, its
+//! draft carrying its landing as read then (below); `land` over a draft
+//! that no longer carries the standing composition's landing, and `undo`
+//! over one whose latest landing is another, drop it, answering `no_merge`
+//! naming the draft (**`merge.land`**, **`merge.undo`**; skep #992, #1050).
+//! A composition stands for one landing, known by its draft and the
+//! position the board marks it at (`Composition::marks`): a draft's marker,
+//! or on a draft with no recorded base, which carries none, the landing
+//! standing by its `set_arrangement` rows (`Shell::standing_mark`; skep
+//! #914) — one mark, which the re-open, the set-aside, the stand-again and
+//! the undo's gate read alike, save a walk of the rows that needs a past
+//! state the board has reclaimed: the land side reads it as no landing
+//! standing, as the library's land side does, and the undo's gate refuses
+//! it as the library's undo does. A landing into the draft the standing
+//! composition stands in, over the mark of that composition's own landing
+//! as the compose read it there — its side among the mark's sides, or no
+//! side where a fork landed in itself, its head the mark's and its position
+//! the mark's `at` — sets the composition aside by the mark's `at`, and
+//! whichever undo puts that landing back stands it again
+//! (`Merges::stand_again`): this session's, which stands it as it answers,
+//! or another device's, which this session meets as `land` or `undo` finds
+//! the draft carrying that landing and not the standing composition's, the
+//! refusal naming the draft and the composition set aside then standing —
+//! or, where no composition stands to meet it, as `land` or `undo` reads
+//! each draft a composition is set aside in, after the door, and goes on
+//! with the first composition its draft's mark stands again
+//! (`Shell::standing_or_set_aside`). So while the session lasts, undo after
+//! undo takes the draft's merges back a landing at a time, whichever device
+//! takes a step (skep #981). Over any other mark — another hand's landing,
+//! of another merge or of this one, or one the draft's stage copied while
+//! the composition stood in the draft it came from — nothing is set aside,
+//! so the undo that puts it back leaves nothing standing and the next
+//! `undo` answers `no_merge`.
 //!
 //! **The door.** Every row meets the shell's one write door before any
 //! read it makes (`Shell::write_door`, through `Shell::signed`), with the
@@ -804,6 +814,38 @@ impl Merges {
         if let Some(earlier) = earlier.filter(|c| c.marks(draft, marker)) {
             standing.insert(key.clone(), earlier);
         }
+    }
+
+    /// Returns the drafts compositions under `key` are set aside in by a
+    /// later landing ([`Merges::stand_over`]), each once.
+    fn set_aside_in(&self, key: &(String, u64)) -> Vec<Address> {
+        let replaced = self.replaced.lock().expect("the compositions' lock");
+        let mut drafts: Vec<Address> = replaced.iter().filter(|((k, _, _), _)| k == key).map(|(_, c)| c.into.clone()).collect();
+        drafts.dedup();
+        drafts
+    }
+
+    /// Stands again, where none stands under `key`, the composition a later
+    /// landing set aside in `draft` whose landing `marker` marks, answering
+    /// the composition that then stands.
+    ///
+    /// `marker` is the mark of the landing standing in `draft` as read: put
+    /// back by undos made while no composition stood here to meet them. One
+    /// standing already is answered as it stands, a composition being the
+    /// session's latest; none where `marker` marks no composition set aside
+    /// at its `at`, which stays aside.
+    fn stand_set_aside(&self, key: &(String, u64), draft: &Address, marker: Option<&MergeMarker>) -> Option<Composition> {
+        let mut standing = self.standing.lock().expect("the compositions' lock");
+        if let Some(composition) = standing.get(key) {
+            return Some(composition.clone());
+        }
+        let (marker, at) = marker.and_then(|m| m.at.map(|at| (m, at)))?;
+        let mut replaced = self.replaced.lock().expect("the compositions' lock");
+        let set_aside = (key.clone(), draft.to_string(), at);
+        let earlier = replaced.get(&set_aside).filter(|c| c.marks(draft, marker))?.clone();
+        replaced.remove(&set_aside);
+        standing.insert(key.clone(), earlier.clone());
+        Some(earlier)
     }
 
     /// Takes `composition` aside at the withdrawal at `position` of `draft`.
@@ -1293,6 +1335,45 @@ impl Shell {
         }
     }
 
+    /// Returns the composition a row acts on: the one standing under `key`,
+    /// else one a later landing set aside whose landing stands again.
+    ///
+    /// A composition a later landing of this session's set aside
+    /// ([`Merges::stand_over`]) stands again where its draft carries its
+    /// landing again as `mark` reads it — the row's own read of a draft's
+    /// mark, the undo's the landing standing (`Shell::standing_mark`), the
+    /// landing's the draft's marker: put back by undos another device made
+    /// while no composition stood here to meet them (skep #981). With
+    /// nothing set aside nothing is read and the door is not asked. Else the
+    /// door is asked with `write`, the row's write, before any read, each
+    /// draft a composition is set aside in is read in turn, and the first
+    /// whose mark is a set-aside composition's own landing stands it again
+    /// (`Merges::stand_set_aside`).
+    ///
+    /// # Errors
+    ///
+    /// In this order: `no_merge` naming the session where none stands and
+    /// none is set aside; the door's; a draft's read's, each answered as
+    /// itself (SP-14), `session_died` among them; `no_merge` naming the
+    /// session where no draft's mark stands a composition again.
+    fn standing_or_set_aside(&self, session: &SessionEntry, key: &(String, u64), write: Write<'_>, mark: impl Fn(&Address) -> Result<Option<MergeMarker>, Refusal>) -> Result<Composition, Refusal> {
+        if let Some(composition) = self.merges.standing(key) {
+            return Ok(composition);
+        }
+        let none = || Refusal::shell(Name::NO_MERGE, json!({"session": session.reference}));
+        let aside = self.merges.set_aside_in(key);
+        if aside.is_empty() {
+            return Err(none());
+        }
+        self.write_door(Writer::Session(session), &write)?;
+        for draft in &aside {
+            if let Some(composition) = self.merges.stand_set_aside(key, draft, mark(draft)?.as_ref()) {
+                return Ok(composition);
+            }
+        }
+        Err(none())
+    }
+
     // ── The rows ─────────────────────────────────────────────────────────
 
     /// Answers `merge.compose(session, {doc, alternative, into?})`, THE
@@ -1395,13 +1476,15 @@ impl Shell {
     ///    the first answers a draft, that draft's `doc_metadata` read, as
     ///    `into`'s in step 4, `not_owner` among them, then the re-open's read
     ///    of its image (`Shell::whole_draft`), as step 3's reads, nothing
-    ///    landed; where the second names a draft landing,
+    ///    landed; where the second names a draft landing under another key,
     ///    that draft's read, as `into`'s in step 4, `not_owner` among them,
     ///    and, where its marker names the side, the composition on the
     ///    marker's head and the re-open's reads as in step 5, the person's
     ///    record of the landing the marker marks read through that draft;
     ///    where the landing goes into that draft in a fresh one's place, the
-    ///    write door's again for it, `held_lines` among them, nothing
+    ///    read of what it replaces, as step 5's, `merge_refused` with
+    ///    `side_moved` where the draft changed since the composition, then
+    ///    the write door's again for it, `held_lines` among them, nothing
     ///    landed; then the landing's
     ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
@@ -1546,25 +1629,31 @@ impl Shell {
         // `lib::resume` with no draft named, which writes nothing — never
         // the composition's `prior`, which is read under the reader's
         // currency and can be another account's record of the kind —
-        // else, where a fork or a draft side moved since that landing, so
-        // the key is another, their newest record of the merge with the
-        // states ignored that names a draft landing no take-back of theirs
-        // replaces (`lib::landed_draft`). That draft is read as `into` is,
-        // untrusted. Found by the key, it is the re-open at the position the
-        // library answers: its mark's, or its record's where the walk of a
-        // draft with no recorded base needs a past state the board has
-        // reclaimed — a landing the library cannot judge is never made a
-        // second time, and no second read of the mark here overrules it.
-        // Found with the states ignored, the call goes on as one naming it:
-        // its marker naming the side re-opens it or, at a fork moved since,
-        // is landed over with what it replaces; else it is landed into. The
+        // else their newest record of the merge with the states ignored
+        // that names a draft landing no take-back of theirs replaces
+        // (`lib::landed_draft`), where its key is another than the
+        // composition's: a fork or a draft side moved since that landing.
+        // That draft is read as `into` is, untrusted. Found by the key, it
+        // is the re-open at the position the library answers: its mark's,
+        // or its record's where the walk of a draft with no recorded base
+        // needs a past state the board has reclaimed — a landing the
+        // library cannot judge is never made a second time, and no second
+        // read of the mark here overrules it. A record of the composition's
+        // own key whose draft no longer holds its landing — taken back with
+        // the take-back's record unwritten, or another landing standing
+        // over it — names no draft to land in: the page asked for a fresh
+        // draft, and the landing goes to one (the merge record's decision
+        // 16). Found with the states ignored, the call goes on as one naming
+        // it: its marker naming the side re-opens it; else, or at a fork
+        // moved since, it is landed into, naming what it replaces. The
         // library is handed `into` none only where neither read found a
-        // record — one landed since is the library's answer, nothing staged,
-        // which its `staged` says, and a landing of the merge begun in a
-        // draft of the person's and never recorded is the library's refusal
-        // naming it, nothing staged. `over` is the mark of the landing
-        // standing in the draft the landing goes into, read here, which the
-        // composition standing in it is set aside by (skep #981).
+        // draft to land in — one landed since is the library's answer,
+        // nothing staged, which its `staged` says, and a landing of the
+        // merge begun in a draft of the person's and never recorded is the
+        // library's refusal naming it, nothing staged. `over` is the mark of
+        // the landing standing in the draft the landing goes into, read
+        // here, which the composition standing in it is set aside by (skep
+        // #981).
         let mut landing_into = into.clone();
         if landing_into.is_none() {
             if let Some(standing) = lib::resume(&session.board, &merged, lib::Landing::Draft { merger, into: None, journal: None }).map_err(|r| self.merge_refusal(&session, r))? {
@@ -1577,7 +1666,7 @@ impl Shell {
                 };
                 self.landing_target(&session, &signed.account, &prior)?;
                 return self.reopened(&session, key, form, merged, &prior, Some(position));
-            } else if let Some(prior) = self.landed_draft(&session, &signed.account, &kind, &merged)?.as_ref().and_then(draft_landing).map(|(draft, _)| draft.clone()) {
+            } else if let Some(prior) = self.landed_draft(&session, &signed.account, &kind, &merged)?.filter(|record| record.key() != merged.key).as_ref().and_then(draft_landing).map(|(draft, _)| draft.clone()) {
                 let facts = self.landing_target(&session, &signed.account, &prior)?;
                 let mark = self.standing_mark(&session, &prior, facts, MarkRead::Land)?;
                 if let Some(marker) = reopening(&doc, form.side(), &prior, mark.as_ref()) {
@@ -1594,8 +1683,11 @@ impl Shell {
                     if !fork_moved(&form, &composed, &prior, &marker, landed.as_ref()) {
                         return self.reopened(&session, key, form, composed, &prior, marker.at);
                     }
-                    replaced = Some(self.replaced(&session, &prior, &merged)?);
                 }
+                // Landed over whatever stands in `prior` — the merge's
+                // earlier landing with a moved fork, another merge's landing,
+                // the person's own edits — the landing names what it replaces.
+                replaced = Some(self.replaced(&session, &prior, &merged)?);
                 over = mark;
                 landing_into = Some(prior);
             }
@@ -1725,10 +1817,12 @@ impl Shell {
     ///
     /// The record is found with its states ignored, names the draft it
     /// landed in, and no take-back of theirs replaces it
-    /// (`skep_client::merge::landed_draft`): the draft a call naming no
-    /// `into` goes on with where no landing of this composition stands. The
-    /// re-open there goes by that draft's own record of the landing its
-    /// marker marks (`Shell::reopened_by`), never by this one.
+    /// (`skep_client::merge::landed_draft`): where its key is another than
+    /// the composition's — a fork or a draft side moved since that landing —
+    /// the draft a call naming no `into` goes on with where no landing of
+    /// this composition stands. The re-open there goes by that draft's own
+    /// record of the landing its marker marks (`Shell::reopened_by`), never
+    /// by this one.
     ///
     /// # Errors
     ///
@@ -1897,7 +1991,11 @@ impl Shell {
     /// present and no object, naming `answers` where it is present and no
     /// object of strings; `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
-    /// stands under its board and principal; `malformed_args` naming
+    /// stands under its board and principal and none is set aside — where
+    /// one is, the write door's as below, naming `publish` and no draft, then
+    /// each such draft's marker read's, as the marker read's below, and
+    /// `no_merge` naming the session where none stands again
+    /// (`Shell::standing_or_set_aside`); `malformed_args` naming
     /// `resolutions` where a gap id names no gap of the composition, one
     /// another id names too, one the rules settled (`resolved_by` `rule`) or
     /// a spine's `moves` gap, or a choice is none the gap admits
@@ -1949,9 +2047,9 @@ impl Shell {
         let raw_answers = optional(args, "answers", |v| v.as_object().filter(|m| m.values().all(Value::is_string)).cloned())?.unwrap_or_default();
         let session = self.session(&args["session"])?;
         let key = Self::family_key(&session);
-        let Some(mut composition) = self.merges.standing(&key) else {
-            return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
-        };
+        // The composition standing, or one set aside whose landing its draft
+        // carries again, read by its marker as this row's gate reads it.
+        let mut composition = self.standing_or_set_aside(&session, &key, Write::call("merge.land", "publish"), |draft| self.draft_marker(&session, draft))?;
         // The merger's choices: the call's own, checked against the
         // composition before the door, over those an earlier call of the
         // composition named, a choice the call names at a gap taking the
@@ -2148,7 +2246,11 @@ impl Shell {
     /// In this order: `malformed_args` naming `session`, then
     /// `session_ended`; the withdrawal's undo's where `draft` or
     /// `withdrawal` is named; `no_merge` naming the session where no
-    /// composition stands; the write door's, in its order —
+    /// composition stands and none is set aside — where one is, the write
+    /// door's as below, naming `set_arrangement` and no draft, then each such
+    /// draft's reads, as the draft's reads below, and `no_merge` naming the
+    /// session where none stands again (`Shell::standing_or_set_aside`); the
+    /// write door's, in its order —
     /// `write_in_bare_session`,
     /// `another_window`, `stopped`, `poisoned` or `halted` naming
     /// `set_arrangement`, `held_lines` naming the draft the composition
@@ -2179,9 +2281,13 @@ impl Shell {
             return self.merge_unwithdraw(&session, args);
         }
         let key = Self::family_key(&session);
-        let Some(composition) = self.merges.standing(&key) else {
-            return Err(Refusal::shell(Name::NO_MERGE, json!({"session": session.reference})));
-        };
+        // The composition standing, or one set aside whose landing its draft
+        // carries again, read by the landing standing as this row's gate
+        // reads it.
+        let composition = self.standing_or_set_aside(&session, &key, Write::call("merge.undo", "set_arrangement"), |draft| {
+            let facts = self.draft_facts(&session, draft)?;
+            self.standing_mark(&session, draft, facts, MarkRead::Undo)
+        })?;
         // The one write door, over the draft the undo sets whole.
         let signed = self.signed(&session, Write::call("merge.undo", "set_arrangement").over([composition.into.to_string()]))?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };

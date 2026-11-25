@@ -18,10 +18,11 @@ use crate::board::{acked_addr, acked_at, answers, frames, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
 use crate::merge::reads::{
-    first_difference, runs_of, stretches, values_of, Family, Merged, Refusal, Side,
+    comps, first_difference, is_trunk_member, runs_of, stretches, values_of, Family, Merged,
+    Refusal, Side,
 };
 use crate::merge::windows::{self, AnsweredRun, ShotParts};
-use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
+use crate::publication::{self, own_claim_names, owned_by, Piece, SupersedeCause};
 
 use super::faults::{head_owed, own_fault, own_fault_face, shape_face};
 use super::standing::Standing;
@@ -384,16 +385,36 @@ impl Writer<'_> {
     /// body the board composes (the `land` module's doc). A draft side and a
     /// fork side name no daughter.
     ///
+    /// A daughter an active claim of the merger's own names superseded by a
+    /// trunk member past the head the merge composed on is kept: that claim
+    /// rode a shot the trunk took after the composition read its head, so
+    /// the trunk moved, and the board refuses a list naming the daughter
+    /// whole, `head_moved`, ahead of any skip (wire.md §The publish shot and
+    /// head-float, the deposits). The shot then lands on the trunk or not at
+    /// all, never as a permanent daughter holding another copy of a merge the
+    /// trunk already took (ruling (ii) of the supersede race; skep #806).
+    ///
     /// # Errors
     ///
     /// The `in_claims` read's refusal at a daughter.
     fn daughters(&self, merged: &Merged) -> Result<Vec<Address>, Refusal> {
+        let (doc, head) = (&merged.inputs.doc, &merged.inputs.head);
+        let account = self.merger.account;
+        // The head is a trunk member of `doc` (`check_shape`), so a claim's
+        // `new` on the trunk compares with it by its version alone.
+        let past_the_head = |claim: &answers::Claim| {
+            claim.active
+                && owned_by(&claim.home, account)
+                && parse_address(&claim.new)
+                    .is_some_and(|new| is_trunk_member(doc, &new) && comps(&new) > comps(head))
+        };
         let mut out = Vec::new();
         for side in &merged.inputs.sides {
             let Side::Member(daughter) = side else { continue };
             let v =
                 self.reader.answered(daughter, &frames::in_claims(&daughter.to_string()), None)?;
-            if !own_claim_names(&answers::claims(&v), self.merger.account) {
+            let claims = answers::claims(&v);
+            if !own_claim_names(&claims, account) || claims.iter().any(past_the_head) {
                 out.push(daughter.clone());
             }
         }

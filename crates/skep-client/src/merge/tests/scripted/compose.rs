@@ -17,8 +17,10 @@
 //! refused, a trunk member read as of a draft's named position, and a
 //! board serving no `arranged_at` refused at the first fence; the dedup's
 //! values read together through each side; and the line rule's base text
-//! read together through the head, whatever the dedup's switch, and a
-//! window withheld between two additions refused whatever the switches.
+//! read together through the head, whatever the dedup's switch, a window
+//! withheld in the text that decides it refused whatever the switches,
+//! naming the window and the pair's place, and one past that text never
+//! read.
 
 use super::*;
 
@@ -1824,17 +1826,22 @@ fn the_line_rule_reads_what_decides_it_whatever_the_documents_length() {
     }
 }
 
-/// THE LINE RULE READS WHATEVER THE SWITCHES, SO A WITHHELD WINDOW BETWEEN
-/// TWO ADDITIONS REFUSES: the base `D.1` "ab" `W`'s "c\n" "de\n" — a window
-/// onto another account's draft ending line 1 — the head adding "X" after
-/// `D·1`, inside line 1, the daughter "Y" right after line 1's break. With
-/// `W` readable, two `line` gaps, and a record of the merge, dedup off,
-/// verifies Equal against a member holding M; with `W` withheld, the
-/// composition with the dedup off refuses naming `W` (SP-14), as the
-/// composition with it on does, and the record answers Unreadable naming it
-/// (the mutant whose line rule reads no value with the dedup off composes).
+/// A WINDOW WITHHELD IN THE TEXT THAT DECIDES THE LINE RULE IS REFUSED BY
+/// NAME, WHATEVER THE SWITCHES (skep #1174): the base `D.1` "ab" `W`'s
+/// "c\n" "de\n" — a window onto another account's draft ending line 1 —
+/// the head adding "X" after `D·1`, inside line 1, the daughter "Y" right
+/// after line 1's break, so the rule reads `W` to decide the pair. With
+/// `W` readable, two `line` gaps, the first's `after` `D·1` and the
+/// second's `before` `D·3`, and a record of the merge, dedup off, verifies
+/// Equal against a member holding M; with `W` withheld, the composition
+/// with the dedup off, on and with the retype refuses `LineTextWithheld`
+/// naming `W` and that place — never `Unreadable(W)`, a side's refusal —
+/// the masked value read its last (SP-14), and the record answers
+/// Unreadable naming `W` (the mutants whose line rule reads no value with
+/// the dedup off, that refuse as `Unreadable`, that name the text's own
+/// ends).
 #[test]
-fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
+fn a_withheld_window_in_the_text_deciding_the_line_rule_is_refused_naming_the_pair() {
     const W: &str = "1.0.2.0.70";
     let mut w = World::new();
     w.text(D, 1, "abde\n");
@@ -1858,6 +1865,8 @@ fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
     w.trunk_head.insert(D.to_string(), format!("{D}.2"));
     let (dialer, board, _) = open(w);
     let off = Inputs { options: Options { dedup: false, ..Options::default() }, ..race_inputs() };
+    let on = race_inputs();
+    let retype = Inputs { options: Options { retype: true, ..Options::default() }, ..race_inputs() };
     let merged = compose(&board, Some(&token()), &off).expect("composed, W readable");
     assert_eq!(m_runs(&merged), m, "the premise: M");
     let kinds: Vec<(GapKind, bool)> =
@@ -1867,18 +1876,20 @@ fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
         [(GapKind::Line, false), (GapKind::Line, false)],
         "the premise: the rule fires"
     );
+    let (after, before) = (merged.composed.gaps[0].after.clone(), merged.composed.gaps[1].before.clone());
+    assert_eq!(
+        (&after, &before),
+        (&Some(a(&format!("{D}.0.1.1"))), &Some(a(&format!("{D}.0.1.3")))),
+        "the premise: the pair's place"
+    );
     let mut record = merged.record.clone();
     record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 0 });
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
     dialer.world().withheld.insert(W.to_string());
-    for inputs in [&off, &race_inputs()] {
+    let refused = Refusal::LineTextWithheld { doc: a(W), after, before };
+    for inputs in [&off, &on, &retype] {
         dialer.clear();
-        assert_eq!(
-            compose(&board, Some(&token()), inputs),
-            Err(Refusal::Unreadable(a(W))),
-            "{:?}",
-            inputs.options
-        );
+        assert_eq!(compose(&board, Some(&token()), inputs), Err(refused.clone()), "{:?}", inputs.options);
         assert_eq!(
             dialer.ops().last().map(String::as_str),
             Some("retrieve_v"),
@@ -1887,13 +1898,21 @@ fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
         );
     }
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
-    // Past the first read: `m` = `LINE_READ` + 10 "a"s of `D`, `W`'s "cc",
-    // then "de\n"; the head adds "X" after `D·1`, the daughter "Y" after
-    // the "d". The text between them ends in "d" and the first stands
-    // inside a line, so the rule's first reads decide it and the two ask
-    // nothing; still the first position of `W`'s run is among those reads,
-    // so `W` withheld refuses the composition and withholds the verdict
-    // (the mutant that reads no later run's first position composes).
+}
+
+/// A WINDOW PAST THE TEXT THAT DECIDES THE LINE RULE IS NEVER READ (skep
+/// #1174): the base `D.1` `LINE_READ` + 10 "a"s of `D`, `W`'s "cc", then
+/// "de\n"; the head adds "X" after `D·1`, the daughter "Y" after the "d".
+/// The text between them ends in "d" and the first stands inside a line,
+/// so the rule's first reads — the position before the first, the text's
+/// first `LINE_READ` positions and its last byte — decide it, `W` past
+/// them, and the two ask nothing. With `W` withheld, the composition with
+/// the dedup off, on and with the retype answers what it answers with `W`
+/// readable — M and no gap — and the record of it verifies Equal (the
+/// mutant that reads each later run's first position refuses).
+#[test]
+fn a_withheld_window_past_the_text_deciding_the_line_rule_is_never_read() {
+    const W: &str = "1.0.2.0.70";
     let m = crate::merge::compose::LINE_READ + 10;
     let mut w = World::new();
     w.text(D, 1, &"a".repeat(m as usize));
@@ -1923,25 +1942,28 @@ fn a_withheld_window_between_two_additions_refuses_whatever_the_switches() {
     w.member(&format!("{D}.3"), merged_list.clone(), Some(m + 6));
     w.trunk_head.insert(D.to_string(), format!("{D}.2"));
     let (dialer, board, _) = open(w);
-    let merged =
-        compose(&board, Some(&token()), &off).expect("composed past the first read, W readable");
-    assert_eq!(m_runs(&merged), merged_list, "the premise: M");
+    let off = Inputs { options: Options { dedup: false, ..Options::default() }, ..race_inputs() };
+    let on = race_inputs();
+    let retype = Inputs { options: Options { retype: true, ..Options::default() }, ..race_inputs() };
+    let switches = [&off, &on, &retype];
+    let readable: Vec<Merged> = switches
+        .iter()
+        .map(|inputs| compose(&board, Some(&token()), inputs).expect("composed, W readable"))
+        .collect();
+    assert_eq!(m_runs(&readable[0]), merged_list, "the premise: M");
     assert!(
-        merged.composed.gaps.is_empty(),
+        readable[0].composed.gaps.is_empty(),
         "the premise: nothing asked: {:?}",
-        merged.composed.gaps
+        readable[0].composed.gaps
     );
-    let mut record = merged.record.clone();
+    let mut record = readable[0].record.clone();
     record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 0 });
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
     dialer.world().withheld.insert(W.to_string());
-    for inputs in [&off, &race_inputs()] {
-        assert_eq!(
-            compose(&board, Some(&token()), inputs),
-            Err(Refusal::Unreadable(a(W))),
-            "past the first read: {:?}",
-            inputs.options
-        );
+    for (inputs, readable) in switches.iter().zip(&readable) {
+        let merged = compose(&board, Some(&token()), inputs)
+            .unwrap_or_else(|r| panic!("{:?}: composed past the text, W withheld: {r}", inputs.options));
+        assert_eq!(merged.composed, readable.composed, "{:?}: as with W readable", inputs.options);
     }
-    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
 }

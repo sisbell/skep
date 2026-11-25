@@ -43,8 +43,9 @@
 //! a document it may not read (D14): the trunk, the head, the base, a side
 //! or the landed document withheld from the reader answers `Unreadable`
 //! naming it, as does the origin of a run a side windows whose values the
-//! value rule reads, or the line rule reads in the base text between two
-//! sides' neighbouring additions whatever the switches, masked as a
+//! value rule reads, or the line rule reads in the text that decides
+//! whether two sides' neighbouring additions meet at a line's edge whatever
+//! the switches — the composition's `LineTextWithheld` — masked as a
 //! `withheld` item.
 //! A fork's text can change after the merge, so the record keeps each
 //! mutable side's state beside its address — the position its text last
@@ -1616,8 +1617,9 @@ pub enum Verdict {
     /// the recomputation makes, the join's `compare` included; the origin of
     /// a run a side windows, met as a `withheld` item, or as the `withheld`
     /// a read by identity answers, where the value rule reads the run's
-    /// values or the line rule reads it among the base text between two
-    /// sides' neighbouring additions, whatever the value switches; the
+    /// values or the line rule reads it among the text that decides whether
+    /// two sides' neighbouring additions meet at a line's edge, whatever the
+    /// value switches — the composition's [`Refusal::LineTextWithheld`]; the
     /// landed member, or the draft, withheld or not registered; or the draft
     /// side, or the draft landed in, as of the position the record names for
     /// it, whose history the board has reclaimed: the verdict withheld, never
@@ -1673,8 +1675,9 @@ pub enum Verdict {
 /// the board refused, and so does a `withheld` item a value read meets —
 /// a run a side windows from a document the reader may not read, masked
 /// at its own position (wire.md §Value encodings), which the value rule
-/// reads or the line rule reads whatever the record's value switches —
-/// naming the item's origin. A document the board has never registered is
+/// reads or the line rule reads whatever the record's value switches (the
+/// composition's [`Refusal::LineTextWithheld`]) — naming the item's
+/// origin. A document the board has never registered is
 /// no withheld one (wire.md §The read predicate): it is refused. A
 /// `withheld` or a `doc_not_registered` at a read of several documents —
 /// the join's `compare`, the read by identity — that names no document this
@@ -1781,9 +1784,12 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         &options,
     ) {
         Ok(readings) => readings,
-        // A document the recomputation reads that this reader may not read:
-        // the verdict withheld, never manufactured (§4, testimony; D14).
-        Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
+        // A document the recomputation reads that this reader may not read,
+        // the text deciding the line rule's among them: the verdict
+        // withheld, never manufactured (§4, testimony; D14).
+        Err(Refusal::Unreadable(doc) | Refusal::LineTextWithheld { doc, .. }) => {
+            return Ok(Verdict::Unreadable(doc))
+        }
         Err(e) => return at_record(e, composed_at),
     };
     // The forks' states at the recomputation's own position: an edit

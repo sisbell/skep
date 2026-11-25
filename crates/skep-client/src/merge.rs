@@ -134,12 +134,16 @@
 //! keeps the retyping side's identity unless the caller asks the base's
 //! back, and the record then lists each retyped run M no longer holds under
 //! `values.retyped`, with its side. The rule reads the values of the runs it
-//! compares, and the line rule reads a position of every run of the base
-//! text between two sides' neighbouring additions whatever the value rule's
-//! switches, a run a side windows from another document among either; where
-//! the reader may not read that document the composition refuses naming it
-//! ([`Refusal::Unreadable`]; [`verify`] answers [`Verdict::Unreadable`]),
-//! and no switch keeps the line rule from that read.
+//! compares, and the line rule reads, whatever the value rule's switches,
+//! the text that decides whether two sides' neighbouring additions meet at
+//! a line's edge — the same positions for every reader, no run of the base
+//! text between them past those read (skep #1174) — a run a side windows
+//! from another document among either. Where the reader may not read that
+//! document the composition refuses naming it: at the value rule's read
+//! [`Refusal::Unreadable`], at the line rule's [`Refusal::LineTextWithheld`]
+//! with the two additions' anchors, its ways on a share of the document or
+//! its words published; [`verify`] answers [`Verdict::Unreadable`] naming
+//! it, and no switch keeps the line rule from its read.
 
 mod compose;
 pub mod journal;

@@ -1230,7 +1230,8 @@ fn the_publication_references_state_the_shells_shapes() {
 /// that draft, and naming its `hop` where the board serves no count of the
 /// document's words before version 1, `hop_unrecorded` naming its `hop`,
 /// and the fork side's own refusal at its landing, `fork_base_moved`, a
-/// fork its owner staged taking the landing at any head; it and MERGING
+/// fork its owner staged taking the landing at any head, and the arm
+/// `line_text_withheld` with its members and the ways past it; it and MERGING
 /// say that a fork stands where the board records it — its recorded base,
 /// which a landing into it moves, else its source — that a side begun
 /// from the document before its first
@@ -1346,8 +1347,10 @@ fn the_merge_references_state_the_shells_shapes() {
     // leaves — a landing no record names refused `landing_begun` with no
     // `into`, and recorded by the re-open naming it — and how a draft only
     // staged is found; the base read off the records, `doc` itself for a
-    // side begun before the first version; and `base_unknown` by each
-    // reason, with the way on from a draft begun while no version stands.
+    // side begun before the first version; `base_unknown` by each reason,
+    // with the way on from a draft begun while no version stands; and a
+    // window withheld in the text the line rule reads, refused under its
+    // own arm with its members and its ways on (skep #1174).
     let compose = reference(&catalog, "merge_compose");
     for said in [
         "which the adapter makes again itself, once, under the next session — may have left a draft it staged, or landed in, that no merge record names",
@@ -1369,6 +1372,8 @@ fn the_merge_references_state_the_shells_shapes() {
         "reason hop_unrecorded, naming the hop, a version on the side's line the board records no base for, its base never taken from its address",
         "refused merge_refused fork_base_moved {fork, source, head} where its source is not the head",
         "is refused merge_refused {arm: \"side_moved\", side, at, before, after}, isError, nothing landed",
+        "the text the merge reads, whatever the dedup, to tell whether two sides' additions meet at a line's edge holds words of a document you may not read, the call is refused merge_refused {arm: \"line_text_withheld\", doc, after, before}, isError, nothing written",
+        "call again once doc is shared with you or its words are published, since no switch keeps the merge from that read",
         "before and after the side's arranged_at at the two reads, equal where its recorded base moved and its text did not; call again, which reads it as it stands",
         "as_of the one position the composition stands at, where every side that can change held the state it was read in",
         "spots, only on a moves gap of one set of words both sides placed at two places, each side's place {side, after, before}, the default the head's",

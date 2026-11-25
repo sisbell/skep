@@ -101,8 +101,10 @@
 //! `base_unknown` with `reason` `fork_of_owner`, as the fork alone and as
 //! `into` too, nothing written, and landing as the draft side (skep
 //! #1107); the refusals of a side and its line crossing as typed data
-//! naming their members with no daemon behind the shell, and a write's
-//! window withheld naming its origin and its words' stretches; the agent's
+//! naming their members with no daemon behind the shell, a write's window
+//! withheld naming its origin and its words' stretches, and a window
+//! withheld in the text the line rule reads naming it and the two
+//! additions' anchors, apart from a side unreadable (skep #1174); the agent's
 //! re-base of its own fork into a fresh draft of its own, the fork itself
 //! as `into` refused `fork_base_moved` and its landing on the person's
 //! trunk refused `not_owner`; the merged arm
@@ -516,6 +518,39 @@ fn a_window_withheld_crosses_as_typed_data_naming_the_origin_and_its_words() {
         "no_merge",
         "the session stands"
     );
+    shell.shutdown();
+}
+
+/// Checks that a window withheld in the text the line rule reads crosses
+/// as typed data naming the window's document and the pair's place.
+///
+/// The library's `LineTextWithheld` is `merge_refused` with the arm
+/// `line_text_withheld`, `doc` the document the window opens on and
+/// `after` and `before` the two additions' outer anchors as the gap report
+/// spells them, `null` at an edge — never the `unreadable {doc}` a side
+/// the session may not read answers, which still crosses so (skep #1174);
+/// the session stands (the mutants that cross it as `unreadable`, or drop
+/// an anchor).
+#[test]
+fn a_line_text_withheld_crosses_as_typed_data_naming_the_window_and_its_place() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let parse = |text: &str| parse_address(text).expect("an address");
+    let session = shell.sessions.get(&standing).unwrap();
+    let (window, start, end) = ("1.0.1.3.0.64", "1.0.1.0.65.0.1.1", "1.0.1.0.65.0.1.4");
+    let crossed = shell.merge_refusal(&session, Library::LineTextWithheld { doc: parse(window), after: None, before: Some(parse(start)) });
+    let v = crossed.to_value();
+    assert_eq!(
+        (crossed.name(), v["arm"].as_str(), v["doc"].as_str(), &v["after"], v["before"].as_str()),
+        ("merge_refused", Some("line_text_withheld"), Some(window), &json!(null), Some(start)),
+        "{v}"
+    );
+    let at_the_end = shell.merge_refusal(&session, Library::LineTextWithheld { doc: parse(window), after: Some(parse(end)), before: None }).to_value();
+    assert_eq!((at_the_end["after"].as_str(), &at_the_end["before"]), (Some(end), &json!(null)), "{at_the_end}");
+    let side = shell.merge_refusal(&session, Library::Unreadable(parse(window))).to_value();
+    assert_eq!(side, json!({"kind": "shell", "name": "unreadable", "doc": window}), "a side unreadable");
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
     shell.shutdown();
 }
 

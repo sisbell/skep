@@ -50,8 +50,13 @@
 //! documents — a second top-level account's private draft and fork — each
 //! `withheld` refusal saying beside the document what the run did, and the
 //! draft named as the journal refused before the shot, exit 3, nothing
-//! published; and A PUBLISHED JOURNAL — the trunk and the account's doc 1 —
-//! said by the composition's talk before any landing flag is acted on, and
+//! published; and A WINDOW WITHHELD in the text the line rule reads — a
+//! sub-account's private draft the base windows, which the claimant reads
+//! and the forker beside it may not — refused under every switch naming
+//! the window, the two additions' place and the ways on, exit 1, nothing
+//! written (skep #1174); and A PUBLISHED JOURNAL — the trunk and the
+//! account's doc 1 — said by the composition's talk before any landing flag
+//! is acted on, and
 //! refused `published_target` in the command's words at `--publish`,
 //! `--new` and `--undo`, exit 1, nothing written; and THE RECORD KEPT
 //! PRIVATE — each record's link homed in the journal beside its atom, none
@@ -91,6 +96,7 @@ use skep_client::ceremony::claim::{self, ClaimOutcome, NotebookOptions};
 use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::PlainHttp;
+use skep_client::merge::Refusal;
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
 use skep_client::sign::{sig_hex, Signer};
@@ -337,6 +343,38 @@ impl Rig {
         let (prefix, token) = self.stranger_account();
         let draft = addr(acked_addr(&Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})))).expect("a minted address"));
         (draft, self.fork(&token, source))
+    }
+
+    /// A SIBLING's private draft holding `text`, answered with its address.
+    ///
+    /// The sibling is a sub-account delegated beside the forker's from the
+    /// claimant's full-scope session, as [`Rig::forker`] delegates that
+    /// one, to the first free principal — so it is made once the forker's
+    /// account stands, the next prefix the board serves; its bare session
+    /// mints its home, then the draft, and fills it. The claimant, the
+    /// account above it, reads the draft; the forker, beside it, does not
+    /// (wire.md §The read predicate).
+    fn siblings_draft(&self, text: &str) -> Address {
+        let prefix = self.board.next_account_prefix(ACCOUNT).expect("the read").expect("a prefix under the claimant's");
+        let mut principal = FORKER + 1;
+        while self.board.principal_prefix(principal).expect("the read").is_some() {
+            principal += 1;
+        }
+        let full = handshake(&self.board, Scope::Full, &self.device, PRINCIPAL, Site::Session).expect("a full session");
+        let v = Rig::acked(full.op(&frames::delegate(&prefix, principal, None)));
+        assert_eq!(acked_addr(&v), Some(prefix.as_str()), "the sibling's account: {v}");
+        full.close().expect("closed");
+        let token = match self.board.session_open(SessionBody::Bare { principal }).expect("a bare session") {
+            Opened::Token(t) => t,
+            other => panic!("the bare bind answered {other:?}"),
+        };
+        let mint = || addr(acked_addr(&Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})))).expect("a minted address"));
+        assert_eq!(mint().to_string(), format!("{prefix}.0.1"), "the sibling's home first");
+        let draft = mint();
+        let as_of = self.board.health().unwrap().log_position();
+        let insert = json!({"op": "insert", "doc": draft.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": as_of});
+        Rig::acked(self.board.op(Some(&token), &insert));
+        draft
     }
 
     /// A private cross-owner fork of `source` by `forker`: the fresh document
@@ -2349,6 +2387,62 @@ fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_befo
     let v = report(&r);
     assert_eq!((v["landed"]["member"].as_str(), v["landed"]["record"].as_str()), (Some(member.as_str()), Some(link.as_str())), "the standing landing: {}", v["landed"]);
     assert_eq!(position(), before, "nothing written twice");
+    session.close().expect("close");
+}
+
+/// A window withheld in the text the line rule reads is refused by name.
+///
+/// The base `D.1` is a window onto `W` — "cc", a private draft of a
+/// sub-account beside the forker's — then "de\n"; the head `D.2` adds "X"
+/// at the document's start and the daughter `D.1.1` "Y" right after the
+/// window, so the merge reads the window to tell whether the two meet at a
+/// line's edge. The claimant, who reads `W`, composes two `line` gaps. The
+/// forker, who does not, is refused with no switch, with `--no-dedup` and
+/// with `--retype`: `withheld`, the library's words naming `W`, the place
+/// the claimant's report names — the first gap's `after`, the second's
+/// `before` — and the ways on, then "nothing was composed", exit 1,
+/// nothing on stdout and nothing written (skep #1174).
+#[test]
+fn a_window_withheld_in_the_text_the_line_rule_reads_is_refused_naming_its_place_and_the_ways_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let kind = rig.draft().to_string();
+    let forker_store = dir.path().join("forker-store");
+    let key = rig.keyed_forker(&forker_store);
+    let w = rig.siblings_draft("cc");
+    let d = rig.document(&session);
+    let base = rig.shot(&session, &d, None, &[Staged::Window { origin: &w, from: 1, width: 2 }, Staged::Fresh { text: "de\n" }]);
+    assert_eq!(base.to_string(), format!("{d}.1"), "the birth version");
+    let head = rig.shot(&session, &d, Some((&base, 5)), &[Staged::Fresh { text: "X" }, Staged::Window { origin: &w, from: 1, width: 2 }, Staged::Own { from: 1, text: "de\n" }]);
+    assert_eq!(head.to_string(), format!("{d}.2"), "the trunk's next member");
+    let daughter = rig.shot(&session, &d, Some((&base, 5)), &[Staged::Window { origin: &w, from: 1, width: 2 }, Staged::Fresh { text: "Y" }, Staged::Own { from: 1, text: "de\n" }]);
+    assert_eq!(daughter.to_string(), format!("{d}.1.1"), "the base's daughter");
+    let (d_s, daughter_s) = (d.to_string(), daughter.to_string());
+    let merge = ["--doc", d_s.as_str(), "--alternative", daughter_s.as_str(), "--kind", kind.as_str()];
+    // The premise: the claimant reads `W`, and the rule fires.
+    let v = report(&rig.merge(&merge));
+    let kinds: Vec<&str> = v["gaps"].as_array().expect("gaps").iter().map(|g| g["kind"].as_str().expect("a kind")).collect();
+    assert_eq!(kinds, ["line", "line"], "the premise: the rule reads the window: {}", v["gaps"]);
+    let start = format!("{d}.0.1.1");
+    assert_eq!(
+        (&v["gaps"][0]["after"], v["gaps"][1]["before"].as_str()),
+        (&json!(null), Some(start.as_str())),
+        "the premise: the pair's place: {}",
+        v["gaps"]
+    );
+    let words = Refusal::LineTextWithheld { doc: w.clone(), after: None, before: Some(addr(&start)) }.to_string();
+    let position = || rig.board.health().unwrap().log_position();
+    for switch in [&[][..], &["--no-dedup"][..], &["--retype"][..]] {
+        let at = position();
+        let mut args = merge.to_vec();
+        args.extend_from_slice(switch);
+        let r = rig.merge_as_forker(&forker_store, &key, &args);
+        assert_eq!(r.code, 1, "{switch:?}: {r:?}");
+        assert!(r.out.is_empty(), "{switch:?}: nothing on stdout: {}", r.out);
+        assert!(r.err.contains(&format!("the board refused: withheld:{words}; nothing was composed")), "{switch:?}: {}", r.err);
+        assert_eq!(position(), at, "{switch:?}: nothing written");
+    }
     session.close().expect("close");
 }
 

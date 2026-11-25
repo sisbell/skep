@@ -438,7 +438,10 @@
 //! `base_unknown {reason, …}` (the members each reason names, `side` beside
 //! all but `base_disagrees`), `two_drafts`, `over_cap {n, cap}`,
 //! `not_owner {addr}`, `no_merge`, `nothing_to_undo {draft, why}` — the
-//! rest under `merge_refused {arm, …}`; the board's verdicts verbatim,
+//! rest under `merge_refused {arm, …}`, a window withheld in the text the
+//! line rule reads between two sides' additions among them, `arm`
+//! `line_text_withheld {doc, after, before}` and never a side's
+//! `unreadable` (skep #1174); the board's verdicts verbatim,
 //! `arrangement_moved` with its `site.as_of` and `site.current` among them;
 //! the death signal met at a read or a write under the session's token —
 //! the library's `SessionEnded` arm — ends the session, `session_died`; the
@@ -1188,6 +1191,10 @@ impl Shell {
         };
         match r {
             R::Unreadable(doc) => Refusal::shell(Name::UNREADABLE, json!({"doc": s(&doc)})),
+            R::LineTextWithheld { doc, after, before } => other(
+                "line_text_withheld",
+                json!({"doc": s(&doc), "after": after.as_ref().map(s), "before": before.as_ref().map(s)}),
+            ),
             R::NoSuchDocument(doc) => Refusal::shell(Name::NO_SUCH_DOCUMENT, json!({"doc": s(&doc)})),
             R::BaseUnknown(side) => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(side.address()), "reason": "base_unknown"})),
             R::ForkOfOwner { fork } => Refusal::shell(Name::BASE_UNKNOWN, json!({"side": s(&fork), "reason": "fork_of_owner"})),
@@ -1348,8 +1355,11 @@ impl Shell {
     ///    its first version (an older board), `base_unknown` —
     ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
     ///    with its arm — `side_moved` where a side changed while the
-    ///    composition read it, nothing composed — the board's verdicts
-    ///    verbatim; at a re-open at the
+    ///    composition read it, `line_text_withheld` naming the `doc` and
+    ///    the two additions' anchors where the text the line rule reads
+    ///    between them holds a window onto a document the session may not
+    ///    read, whatever the switches, nothing composed — the board's
+    ///    verdicts verbatim; at a re-open at the
     ///    draft side or of a fork landed in another draft, the read of the
     ///    person's own record of the landing the marker marks, through the
     ///    links of the kind to `into` (`skep_client::merge::landing_record`):

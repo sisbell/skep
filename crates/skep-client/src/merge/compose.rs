@@ -3,7 +3,10 @@
 //! A base and its sides come in as run lists, as `image` delivers them,
 //! with the document the merge lands on; the merged list, the gap report
 //! and the run counts go out; every value read is made through a closure
-//! the caller supplies, so a test needs no board.
+//! the caller supplies, so a test needs no board. `compose_asking`'s
+//! closure is told beside each run which rule asks it (`Ask`) — for the
+//! line rule, which pair of additions — so a caller whose read is refused
+//! can say which.
 //! The record's §1.4 states the composition in seven steps, and the seven
 //! private functions `removals`, `spine_of`, `additions`, `placement`,
 //! `gaps`, `splice` and `report` are those steps in that order, with
@@ -19,9 +22,10 @@
 //! reorders folded into the spine in the order listed (`fold`), and two
 //! sides' neighbouring additions met at a line's edge, which `line_edges`
 //! decides inside `gaps`, whatever the switches, off as much of the base
-//! text between them as the answer needs (skep #1173); §5's value rule
-//! reads bytes at a shared gap (the dedup) and, switched on, before the
-//! walk (the retype), logging each run either takes out of M.
+//! text between them as the answer needs, never a run of it past that
+//! (skep #1173, #1174); §5's value rule reads bytes at a shared gap (the
+//! dedup) and, switched on, before the walk (the retype), logging each run
+//! either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms —
 //! the record on the trunk, where every member was minted against the one
@@ -537,11 +541,11 @@ pub enum InPlaceOp {
 /// the line rule reads through the first side listed as much of the
 /// surviving base text between two sides' neighbouring additions as its
 /// answer needs ([`GapKind::Line`]) — the position before the first, the
-/// text's last byte, its first 4,096 positions and the first of each run
-/// past them, more only where a longer line leaves the answer open —
-/// whatever the value rule's switches; a run asked may be a part of a run
-/// the side holds; `None` leaves the rule that asked unfired there. The
-/// composition writes nothing and dials nothing (merge record §1.4, §7).
+/// text's last byte and its first 4,096 positions, read on from them only
+/// where a longer line leaves the answer open — whatever the value rule's
+/// switches; a run asked may be a part of a run the side holds; `None`
+/// leaves the rule that asked unfired there. The composition writes
+/// nothing and dials nothing (merge record §1.4, §7).
 ///
 /// Before the walk, a fresh identity two or more sides hold is kept by one
 /// of them. Where every holder placed it at one spot — the nearest base
@@ -605,10 +609,65 @@ pub fn compose_runs(
     options: &Options,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> Composed {
+    let told = |side: SideIx, run: &Run, _: &Ask| values(side, run);
+    compose_asking(base, doc, sides, spine_hint, options, &told)
+}
+
+/// Which rule asks a value read, and for the line rule which pair.
+///
+/// [`compose_asking`]'s closure is told it beside each run, so its caller
+/// can say which rule a read it could not answer was for: the value rule's
+/// comparison of a run, or the line rule's read of the text that decides
+/// whether two sides' neighbouring additions meet at a line's edge, the
+/// pair named by its two anchors as the report names a gap's (`anchors_at`;
+/// skep #1174).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::merge) enum Ask {
+    /// The value rule's: the dedup's comparison at a gap, or the retype's.
+    Value,
+    /// The line rule's, for the pair of additions between `after` and
+    /// `before`.
+    Line {
+        /// The surviving base position M holds just before the first of
+        /// the two, as that addition's gap names it ([`Gap::after`]);
+        /// `None` at M's start.
+        after: Option<Address>,
+        /// The surviving base position M holds just after the second, as
+        /// that addition's gap names it ([`Gap::before`]); `None` at M's
+        /// end.
+        before: Option<Address>,
+    },
+}
+
+/// What answers a side's run with its items, told the rule that asks it.
+///
+/// It is [`compose_asking`]'s `values`, the walk's and the line rule's
+/// reads: `None` leaves the rule that asked unfired there.
+pub(in crate::merge) type AskedValues<'a> = dyn Fn(SideIx, &Run, &Ask) -> Option<Vec<Item>> + 'a;
+
+/// Composes as [`compose_runs`] does, each read told the rule that asks it.
+///
+/// `values` is told beside each run whether the value rule or the line
+/// rule asks it, and for the line rule the pair of additions the read
+/// decides ([`Ask`]); [`compose_runs`] is this with a closure that answers
+/// alike whatever it is told.
+///
+/// # Panics
+///
+/// Panics in a debug build on a run of width 0, as [`compose_runs`] does.
+pub(in crate::merge) fn compose_asking(
+    base: &[Run],
+    doc: &Address,
+    sides: &[(SideIx, Vec<Run>)],
+    spine_hint: Option<SideIx>,
+    options: &Options,
+    values: &AskedValues<'_>,
+) -> Composed {
     let r = Refinement::of(base, sides);
     let chain = r.chain(doc);
     let mut seqs = r.sides.clone();
-    let retyped = if options.retype { undo_retypes(&r, &mut seqs, values) } else { Vec::new() };
+    let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
+    let retyped = if options.retype { undo_retypes(&r, &mut seqs, &by_value) } else { Vec::new() };
     let claimed = Claimed::of(&r, &seqs, &options.resolutions);
     let hint = spine_hint.and_then(|h| r.side_ix.iter().position(|s| *s == h));
     let walked =
@@ -645,7 +704,8 @@ struct Walking<'a> {
     /// one, with the gaps with spots that decided it.
     claimed: &'a Claimed,
     options: &'a Options,
-    values: &'a dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+    /// The reads, each told the rule that asks it.
+    values: &'a AskedValues<'a>,
     /// The runs the retype normalization took out of M (`undo_retypes`).
     retyped: &'a [(SideIx, Run)],
 }
@@ -679,8 +739,9 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
     let (stretches, placed) = layout.place(&claimed.kept);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
     let first = after_claims + moves.len() as u32;
+    let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
     let (mut entries, mut applied) =
-        gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, values);
+        gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, &by_value);
     if let SpineOrder::Chosen { numbering, .. } = order {
         // A side's order chosen at a spine's `moves` gap: every gap numbered
         // as the walk at the order given numbered it, which a holder's
@@ -2142,7 +2203,8 @@ struct Entry {
 /// through `lines`); then the groups go in the order rule's order — a spot
 /// two sides added at is an `order` gap, unsettled, where it would otherwise
 /// be no gap or an `anchor` — and the dedup reads through `values` where it
-/// is on. The gaps are numbered here from `first`, in M's order after the
+/// is on, each line read told the pair it decides (`Ask::Line`). The gaps
+/// are numbered here from `first`, in M's order after the
 /// `moves` gaps, so the dedup can name the gap it fired at; a walk with a
 /// holder chosen, or under a chosen order, numbers them again (`number_as`,
 /// `Numbering::number`), the dedup's ids following them. `chain` is the
@@ -2157,7 +2219,7 @@ fn gaps(
     regions: &[Region],
     first: u32,
     options: &Options,
-    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+    lines: &AskedValues<'_>,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> (Vec<Entry>, Vec<GapId>) {
     let mut entries: Vec<Entry> = Vec::new();
@@ -2288,9 +2350,9 @@ fn gaps(
 ///
 /// A read of this many positions finds the break of any line shorter than
 /// it. The rule's first reads over two additions ask at most this many
-/// positions of the text between them, the first of each later run of it
-/// and two more, whatever the text's length; it reads on only where a line
-/// longer than this leaves its answer open (`meet_at_a_line_edge`).
+/// positions of the text between them and two more, whatever the text's
+/// length; it reads on only where a line longer than this leaves its
+/// answer open (`meet_at_a_line_edge`).
 pub(super) const LINE_READ: u64 = 4096;
 
 /// Marks each addition another side's meets at a line's edge a `line` gap
@@ -2310,7 +2372,9 @@ pub(super) const LINE_READ: u64 = 4096;
 /// line's start, the other inside that line. Each of the two held by one
 /// side alone is then a `line` gap. `lines` reads what decides it through
 /// the first side listed, which holds every surviving base position
-/// (`meet_at_a_line_edge`).
+/// (`meet_at_a_line_edge`), each read told the pair it decides: the first
+/// addition's `after` anchor and the second's `before`, as the report
+/// names each gap's (`anchors_at`).
 ///
 /// Which runs a pair's first reads ask is the entries' alone, never the
 /// values': every pair is found on the kinds `placement` gave, the marks
@@ -2319,12 +2383,7 @@ pub(super) const LINE_READ: u64 = 4096;
 /// answered one item a position and left it undecided, so a reader
 /// answering no run, or every run with no items, marks no gap and is asked
 /// no further read.
-fn line_edges(
-    r: &Refinement,
-    spine: &[usize],
-    entries: &mut [Entry],
-    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
-) {
+fn line_edges(r: &Refinement, spine: &[usize], entries: &mut [Entry], lines: &AskedValues<'_>) {
     let alone = |e: &Entry| e.groups.len() == 1;
     let laying: Vec<usize> =
         (0..entries.len()).filter(|&i| !entries[i].groups.is_empty()).collect();
@@ -2338,7 +2397,12 @@ fn line_edges(
         }
         let before = p.home.checked_sub(1).map(|at| r.last_position(r.base[spine[at]]));
         let text = r.coalesce(spine[p.home..q.home].iter().map(|&bi| r.base[bi]));
-        if meet_at_a_line_edge(r.side_ix[0], before, &text, lines) {
+        let ask = Ask::Line {
+            after: anchors_at(r, spine, p.home).0,
+            before: anchors_at(r, spine, q.home).1,
+        };
+        let read = |side: SideIx, run: &Run| lines(side, run, &ask);
+        if meet_at_a_line_edge(r.side_ix[0], before, &text, &read) {
             marked.extend(pair.iter().copied().filter(|&i| alone(&entries[i])));
         }
     }
@@ -2357,12 +2421,13 @@ fn line_edges(
 /// break stands before that last byte; the two meet where the first two
 /// facts differ and no such break stands, so the text is read whole only
 /// where they meet. The first reads, asked together, are `before`, the
-/// text's first `LINE_READ` positions, the first position of each later
-/// run of it — so every origin the text holds is read — and its last byte;
-/// where those leave the answer open, the text is read on from them, each
-/// read twice as long as the one before, until a break or the last byte. A
-/// read answering anything but one item a position, or none, decides
-/// nothing: the answer is `false`.
+/// text's first `LINE_READ` positions and its last byte; where those leave
+/// the answer open, the text is read on from them, each read twice as long
+/// as the one before, until a break or the last byte. So every position
+/// read is one the answer turns on, the same for every reader, and a run
+/// of the text past them is never read (skep #1174). A read answering
+/// anything but one item a position, or none, decides nothing: the answer
+/// is `false`.
 fn meet_at_a_line_edge(
     head: SideIx,
     before: Option<Run>,
@@ -2383,29 +2448,20 @@ fn meet_at_a_line_edge(
     let width = text.iter().map(|run| run.width).fold(0, u64::saturating_add);
     let Some(last) = width.checked_sub(1) else { return false };
     let opening = last.min(LINE_READ);
-    let mut probes = Vec::new();
-    let mut at = 0u64;
-    for run in text {
-        if (opening..last).contains(&at) {
-            probes.push(Run::new(run.origin.clone(), run.i_start, 1));
-        }
-        at = at.saturating_add(run.width);
-    }
     // The first reads, in the text's order, every one asked before any is
     // weighed.
     let start = before.map(|run| read(&[run]));
     let opened = read(&runs_over(text, 0, opening));
-    let probed = read(&probes);
     let ending = read(&runs_over(text, last, width));
     let start = match start {
         None => true,
         Some(Some(items)) => is_break(&items[0]),
         Some(None) => return false,
     };
-    let (Some(opened), Some(probed), Some(ending)) = (opened, probed, ending) else {
+    let (Some(opened), Some(ending)) = (opened, ending) else {
         return false;
     };
-    if is_break(&ending[0]) == start || opened.iter().chain(&probed).any(is_break) {
+    if is_break(&ending[0]) == start || opened.iter().any(is_break) {
         return false;
     }
     let (mut read_to, mut asked) = (opening, LINE_READ);
@@ -2825,12 +2881,12 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
     }));
     for entry in entries {
         let (Some(id), Some(kind)) = (entry.id, entry.kind) else { continue };
-        let home = entry.home.min(spine.len());
+        let (after, before) = anchors_at(r, spine, entry.home);
         out.push(Gap {
             id,
             kind,
-            after: home.checked_sub(1).and_then(|p| r.last_address(r.base[spine[p]])),
-            before: spine.get(home).and_then(|&bi| r.first_address(r.base[bi])),
+            after,
+            before,
             runs: entry
                 .groups
                 .iter()
@@ -2844,6 +2900,21 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
     }
     out.sort_by_key(|g| g.id);
     out
+}
+
+/// Returns the anchors M holds either side of the spine gap `home`.
+///
+/// They are the address of the last position of the surviving base
+/// material just before it and of the first just after it, `None` at M's
+/// start and at its end: the anchors a gap there is reported with
+/// ([`Gap::after`], [`Gap::before`]), and a line read's pair is told
+/// (`Ask::Line`).
+fn anchors_at(r: &Refinement, spine: &[usize], home: usize) -> (Option<Address>, Option<Address>) {
+    let home = home.min(spine.len());
+    (
+        home.checked_sub(1).and_then(|p| r.last_address(r.base[spine[p]])),
+        spine.get(home).and_then(|&bi| r.first_address(r.base[bi])),
+    )
 }
 
 // ── the base of two members ───────────────────────────────────────────────

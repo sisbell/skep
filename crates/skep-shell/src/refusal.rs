@@ -490,7 +490,13 @@ impl Name {
     /// first position from 1 and its count, numbers — the past state as
     /// `history.past` answers it at `history.restore` — and `[]` where the
     /// list holds no word of `origin`'s, at the shot none the head does not
-    /// carry), `needs_signed_session`,
+    /// carry), `line_text_withheld {doc, after, before}` (`merge.compose`'s
+    /// text the line rule reads, whatever the switches, to tell whether two
+    /// sides' additions meet at a line's edge holds a window onto `doc`, a
+    /// document the person may not read; `after` and `before` the two
+    /// additions' outer anchors as the gap report names them, `null` at an
+    /// edge; nothing composed, the ways on a share of `doc` or its words
+    /// published; skep #1174), `needs_signed_session`,
     /// `fork_base_named {fork, base}`,
     /// `supersede_refused {index, detail, head}`, `published_journal {journal}`
     /// (a published document named as the merge journal, which keeps a record

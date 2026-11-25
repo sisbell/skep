@@ -3542,20 +3542,37 @@ fn a_run_names_its_positions_and_the_options_default_as_ruled() {
     assert!(options.dedup && !options.retype && options.resolutions.is_empty() && options.retries == 0);
 }
 
-/// The two `withheld` refusals name the document and the code, the same
+/// The three `withheld` refusals name the document and the code, the same
 /// words at every act that returns them (SP-10): `Unreadable` answers the
 /// composition, the shot's value reads, the draft landing's read of its
-/// draft and the take-backs' reads; `WindowWithheld` the shot's, the draft
-/// landing's, the take-backs' and the restore's writes, naming beside the
-/// document the words refused — a stretch by its first and last position,
-/// a stretch of one by that position alone, the document and the code
-/// alone where it names none. Neither says what the act did, which the
-/// embedder says.
+/// draft and the take-backs' reads; `LineTextWithheld` the composition's
+/// read of the text that decides the line rule, naming beside the document
+/// the two additions' place — each by its anchor, or the document's edge —
+/// and the ways on, a share or the words published (skep #1174);
+/// `WindowWithheld` the shot's, the draft landing's, the take-backs' and
+/// the restore's writes, naming beside the document the words refused — a
+/// stretch by its first and last position, a stretch of one by that
+/// position alone, the document and the code alone where it names none.
+/// None says what the act did, which the embedder says.
 #[test]
 fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder() {
     let doc = addr("1.0.2.0.70");
     let unreadable = Refusal::Unreadable(doc.clone()).to_string();
     assert_eq!(unreadable, "1.0.2.0.70 is not readable to this reader (withheld)");
+    let line = |after: Option<&str>, before: Option<&str>| {
+        Refusal::LineTextWithheld { doc: doc.clone(), after: after.map(addr), before: before.map(addr) }
+            .to_string()
+    };
+    let between = line(Some("1.0.1.0.64.0.1.1"), Some("1.0.1.0.64.0.1.3"));
+    assert_eq!(between, "1.0.2.0.70 is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' additions meet at a line's edge — the first after 1.0.1.0.64.0.1.1, the second before 1.0.1.0.64.0.1.3: the merge composes once 1.0.2.0.70 is shared with this reader or its words are published");
+    let edges = line(None, None);
+    assert!(edges.contains("— the first at the document's start, the second at its end:"), "{edges}");
+    for said in [&between, &edges] {
+        assert!(
+            !said.replace("its words are published", "").contains("published"),
+            "published only as the way on: {said}"
+        );
+    }
     let windowed = |positions: Vec<(u64, u64)>| {
         Refusal::WindowWithheld { origin: doc.clone(), positions }.to_string()
     };
@@ -3572,6 +3589,11 @@ fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder
     assert!(three.contains("the words at positions 1–2, 4 and 9–11 of the state"), "{three}");
     for said in [&unreadable, &unplaced, &placed, &one, &three] {
         for outcome in ["nothing", "composed", "published", "shot", "merged"] {
+            assert!(!said.contains(outcome), "`{outcome}`: {said}");
+        }
+    }
+    for said in [&between, &edges] {
+        for outcome in ["nothing", "composed", "shot", "merged"] {
             assert!(!said.contains(outcome), "`{outcome}`: {said}");
         }
     }

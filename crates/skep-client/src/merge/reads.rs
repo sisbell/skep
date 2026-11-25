@@ -22,8 +22,9 @@
 //! whole; each side imaged whole; the shared material joined by the core
 //! over the lists; the values where the value rule has work, and as much of
 //! the base text between two sides' neighbouring additions as the line rule
-//! needs — a position of every run of it among them — whatever the switches
-//! (skep #1173), read through the side that holds them; and the prior
+//! needs — the same positions for every reader, no run of it past them —
+//! whatever the switches (skep #1173, #1174), read through the side that
+//! holds them; and the prior
 //! records for the key, so a standing record is known before anything is
 //! written (§3, idempotence).
 //! Every `image` past the run budget is re-asked in halves and the parts
@@ -125,10 +126,12 @@
 //! read masks it at its own position (`retrieve_v`; wire.md §The read
 //! predicate, "a delivery masks per run") and a read by identity of a
 //! draft's or a fork's words refuses it whole (`retrieve_i`), each naming
-//! that document, so it refuses where a value is read
-//! ([`Refusal::Unreadable`]): where the value rule compares it, and where it
-//! stands in the base text between two sides' neighbouring additions, which
-//! the line rule reads whatever the value rule's switches. A `withheld` or
+//! that document, so it refuses where a value is read: where the value rule
+//! compares it, [`Refusal::Unreadable`], and where it stands in the text
+//! that decides whether two sides' neighbouring additions meet at a line's
+//! edge, which the line rule reads whatever the value rule's switches,
+//! [`Refusal::LineTextWithheld`], naming the two additions' anchors too —
+//! the first such read in the walk's order. A `withheld` or
 //! a `doc_not_registered` at a read of several documents — the join's
 //! `compare`, the read by identity — names the document the board's
 //! `site.addr` names, and one naming none this client parses is the
@@ -256,8 +259,12 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 /// named at a position the board does not answer,
 /// [`Refusal::HistoryReclaimed`], [`Refusal::BeyondHead`] or
 /// [`Refusal::NotAPosition`], and [`Refusal::HistoryBusy`] past the bounded
-/// retries — a composition naming no position meets none of the four — then
-/// the prior records' reads' refusals, which `record::current` answers.
+/// retries — a composition naming no position meets none of the four; a
+/// window onto a document the reader may not read in the text that decides
+/// whether two sides' neighbouring additions meet at a line's edge,
+/// [`Refusal::LineTextWithheld`] naming it and the pair's anchors, under
+/// every switch — then the prior records' reads' refusals, which
+/// `record::current` answers.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {

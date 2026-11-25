@@ -17,7 +17,7 @@ use skep_address::Address;
 use crate::address::parse_address;
 use crate::board::answers::{ArrangedAt, Metadata};
 use crate::halt::Halt;
-use crate::merge::compose::{compose_runs, Composed, Item, Options, Run, SideIx};
+use crate::merge::compose::{compose_asking, Ask, Composed, Item, Options, Run, SideIx};
 
 use super::addresses::{
     account_of, address_parent, comps, content_prefix, in_chain, is_trunk_member, last_component,
@@ -407,11 +407,13 @@ pub(in crate::merge) struct Readings {
 ///   no `own_count`, [`Refusal::BareSource`] naming the first side whose
 ///   line ends there — every refusal so far decided before any `image`;
 /// - then each image and value read's own refusals — a run a readable side
-///   windows from a document the reader may not read,
-///   [`Refusal::Unreadable`] naming that document where the value rule
-///   reads its values or it stands in the base text between two sides'
-///   neighbouring additions, which the line rule reads whatever the value
-///   switches — and an `image` run that is no content I-address;
+///   windows from a document the reader may not read, the first the walk
+///   reads: [`Refusal::Unreadable`] naming that document where the value
+///   rule reads its values, and [`Refusal::LineTextWithheld`] naming it and
+///   the two additions' anchors where it stands in the text that decides
+///   whether two sides' neighbouring additions meet at a line's edge, which
+///   the line rule reads whatever the value switches — and an `image` run
+///   that is no content I-address;
 /// - at the head, a side whose closing fence answers otherwise than its
 ///   opening one, [`Refusal::SideMoved`] naming it, the first in fence
 ///   order, and the closing fences' own refusals.
@@ -639,7 +641,9 @@ pub(in crate::merge) fn read_shape(
 ///
 /// The value reads' first refusal in the order the walk asks them: the
 /// reads together refused, the runs are read again one at a time, so the
-/// refusal is that run's.
+/// refusal is that run's, as the rule that asked it meets it ([`met_by`]) —
+/// a window withheld in the text deciding the line rule
+/// [`Refusal::LineTextWithheld`], naming the pair the read was for.
 fn compose_with_values(
     reader: &Reader<'_>,
     doc: &Address,
@@ -649,22 +653,22 @@ fn compose_with_values(
     options: &Options,
 ) -> Result<Composed, Refusal> {
     let fault: RefCell<Option<Refusal>> = RefCell::new(None);
-    let one_at_a_time = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+    let one_at_a_time = |side: SideIx, run: &Run, ask: &Ask| -> Option<Vec<Item>> {
         match values_for(reader, doc, maps, Some(side.0 as usize), run) {
             Ok(items) => Some(items),
             Err(e) => {
-                fault.borrow_mut().get_or_insert(e);
+                fault.borrow_mut().get_or_insert(met_by(e, ask));
                 None
             }
         }
     };
     let composed = if !options.retype {
         let asked: RefCell<Vec<(SideIx, Run)>> = RefCell::new(Vec::new());
-        let noting = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+        let noting = |side: SideIx, run: &Run, _: &Ask| -> Option<Vec<Item>> {
             asked.borrow_mut().push((side, run.clone()));
             Some(Vec::new())
         };
-        let first = compose_runs(base, doc, sides, None, options, &noting);
+        let first = compose_asking(base, doc, sides, None, options, &noting);
         let mut asked = asked.into_inner();
         let mut seen = HashSet::new();
         asked.retain(|key| seen.insert(key.clone()));
@@ -679,21 +683,41 @@ fn compose_with_values(
                 Ok(read) => {
                     let held: HashMap<(SideIx, Run), Vec<Item>> =
                         asked.into_iter().zip(read).collect();
-                    let answered = |side: SideIx, run: &Run| match held.get(&(side, run.clone())) {
-                        Some(items) => Some(items.clone()),
-                        None => one_at_a_time(side, run),
-                    };
-                    compose_runs(base, doc, sides, None, options, &answered)
+                    let answered =
+                        |side: SideIx, run: &Run, ask: &Ask| match held.get(&(side, run.clone())) {
+                            Some(items) => Some(items.clone()),
+                            None => one_at_a_time(side, run, ask),
+                        };
+                    compose_asking(base, doc, sides, None, options, &answered)
                 }
-                Err(_) => compose_runs(base, doc, sides, None, options, &one_at_a_time),
+                Err(_) => compose_asking(base, doc, sides, None, options, &one_at_a_time),
             }
         }
     } else {
-        compose_runs(base, doc, sides, None, options, &one_at_a_time)
+        compose_asking(base, doc, sides, None, options, &one_at_a_time)
     };
     match fault.into_inner() {
         Some(e) => Err(e),
         None => Ok(composed),
+    }
+}
+
+/// Returns the refusal a value read met, as the rule that asked it meets it.
+///
+/// A window the line rule's read met withheld — a document the reader may
+/// not read in the text that decides whether two sides' neighbouring
+/// additions meet at a line's edge — is [`Refusal::LineTextWithheld`],
+/// naming the document and the pair's anchors (skep #1174); every other
+/// refusal is itself, the value rule's withheld window
+/// [`Refusal::Unreadable`] among them.
+fn met_by(e: Refusal, ask: &Ask) -> Refusal {
+    match (e, ask) {
+        (Refusal::Unreadable(doc), Ask::Line { after, before }) => Refusal::LineTextWithheld {
+            doc,
+            after: after.clone(),
+            before: before.clone(),
+        },
+        (e, Ask::Value | Ask::Line { .. }) => e,
     }
 }
 

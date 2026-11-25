@@ -82,9 +82,13 @@
 //! names the merge journal (decision 7), `--kind` the record kind's type
 //! address (decision 9's row is interim and unpinned, so the caller names
 //! it). The board's refusal is exit 1, a halt exit 3. A `withheld` refusal —
-//! a document the merger may not read, or an origin a write's run windows —
-//! names the document, the second the positions of its words in the list the
-//! write sends too, and the command says beside it what the run did: nothing
+//! a document the merger may not read; a window onto one in the text the
+//! composition reads, under every switch, to tell whether two sides'
+//! additions meet at a line's edge (skep #1174); or an origin a write's run
+//! windows — names the document, the second the two additions' places in
+//! the merged text and the ways on, a share of the document or its words
+//! published, the third the positions of its words in the list the write
+//! sends, and the command says beside it what the run did: nothing
 //! composed; the merge composed, and nothing published or merged; nothing
 //! taken back or out.
 //!

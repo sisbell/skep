@@ -148,7 +148,9 @@ pub enum Refusal {
     /// at the undo and the withdrawal the draft taken back. It is as well
     /// the origin of a `withheld` item a value read met: a run a readable
     /// side windows from a document the reader may not read, which the board
-    /// masks at its own position (wire.md §Value encodings). Its words name
+    /// masks at its own position (wire.md §Value encodings) — where the value
+    /// rule reads it; where the line rule does, the composition is
+    /// [`Refusal::LineTextWithheld`]. Its words name
     /// the document and the code alone, the same at every act; the embedder
     /// says what the act did (SP-10). At a read of several documents — the
     /// join's `compare`, the read by identity — it is the one the board's
@@ -162,6 +164,40 @@ pub enum Refusal {
     /// [`record::verify`]: super::record::verify
     /// [`Verdict::Unreadable`]: super::record::Verdict::Unreadable
     Unreadable(Address),
+    /// `withheld` on a window in the text that decides the line rule.
+    ///
+    /// The line rule reads, whatever the value switches, the base text M
+    /// lays between two sides' neighbouring additions to tell whether they
+    /// meet at a line's edge: the position before the first, the text's
+    /// first positions and its last byte, and on from them only where a
+    /// longer line leaves the answer open — the same positions for every
+    /// reader (the merge record's §2; skep #1173, #1174). Where one of them
+    /// lies in a window onto a document the reader may not read, the board
+    /// masks it (wire.md §Value encodings) and the composition is refused,
+    /// naming the document and the pair's place in M: nothing is composed,
+    /// under any switch, and no gap set is made of what the reader cannot
+    /// see. The ways on are a share of `doc` to the merger, or its words
+    /// published. Its words name these facts alone; the embedder says what
+    /// the act did (SP-10).
+    ///
+    /// Where the reads are a merge record's recomputation, [`record::verify`]
+    /// answers [`Verdict::Unreadable`] naming `doc` instead: the verdict
+    /// withheld (D14).
+    ///
+    /// [`record::verify`]: super::record::verify
+    /// [`Verdict::Unreadable`]: super::record::Verdict::Unreadable
+    LineTextWithheld {
+        /// The document the window opens on, the masked item's origin.
+        doc: Address,
+        /// The surviving base position M holds just before the first of the
+        /// two additions, as that addition's gap names it
+        /// ([`Gap::after`](crate::merge::Gap::after)); `None` at M's start.
+        after: Option<Address>,
+        /// The surviving base position M holds just after the second, as
+        /// that addition's gap names it
+        /// ([`Gap::before`](crate::merge::Gap::before)); `None` at M's end.
+        before: Option<Address>,
+    },
     /// `doc_not_registered` on the document named.
     ///
     /// At a read of several documents — the join's `compare`, the read by
@@ -652,6 +688,19 @@ impl fmt::Display for Refusal {
             Refusal::NamedBaseDisagrees { named, served } => write!(f, "the base {named} was named, and the bases the board records for the sides derive the base {served}: a merge's base is the board's to serve — leave base unset, or name the base the board derives"),
             Refusal::TwoDrafts => f.write_str("two drafts off one head are no merge shape: shoot one first"),
             Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld)"),
+            Refusal::LineTextWithheld { doc, after, before } => {
+                write!(f, "{doc} is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' additions meet at a line's edge — the first ")?;
+                match after {
+                    Some(after) => write!(f, "after {after}")?,
+                    None => f.write_str("at the document's start")?,
+                }
+                f.write_str(", the second ")?;
+                match before {
+                    Some(before) => write!(f, "before {before}")?,
+                    None => f.write_str("at its end")?,
+                }
+                write!(f, ": the merge composes once {doc} is shared with this reader or its words are published")
+            }
             Refusal::NoSuchDocument(doc) => write!(f, "{doc} is not registered at this board"),
             Refusal::TooFragmented { doc, runs_seen } => write!(f, "{doc} is in more pieces than `image` can answer, even one position at a time ({runs_seen} runs seen)"),
             Refusal::HistoryBusy => f.write_str("the board was busy reading history (history_busy) past the bounded retries"),

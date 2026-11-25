@@ -1,8 +1,11 @@
 //! The merge records a landing reads and writes (the merge record's §4).
 //!
 //! [`Newest`] is the merger's newest record for the key as the landing read
-//! it, beside the draft landings its records of the key stand for and the
-//! records a landing begun is judged by; the `Writer` methods here read it,
+//! it, beside the draft landings its records of the key stand for;
+//! [`WholeMerge`] holds it beside the records of the whole merge, its states
+//! ignored, which a shot and a fresh landing judge a member and a landing
+//! begun by. The `Writer` methods here read either — newest first, down to
+//! the floor past which every record they hold was linked (`NewestFirst`) —
 //! find a landing of the composition standing in a draft its records name,
 //! check that no landing of the merge stands begun and never recorded
 //! ([`NoneBegun`], what a fresh landing's stage is spelled over), and write
@@ -17,7 +20,7 @@ use crate::halt::Halt;
 use crate::merge::journal::{self, Unfound};
 use crate::merge::reads::{feed_rows, Merged, Refusal, Role};
 use crate::merge::record::{
-    newest, read_records, record_links, taken_back_links, Found, PartAnswer, Record, RecordLanding,
+    newest, record_links, taken_back_links, Found, NewestFirst, PartAnswer, Record, RecordLanding,
 };
 use crate::publication::{owned_by, SCAN_BUSY_REISSUES};
 
@@ -55,33 +58,42 @@ impl RecordedLanding {
 
 /// The merger's newest record for the key, as the landing read it.
 ///
-/// Only [`Writer::newest_record`] builds one, from the board, so what a
-/// landing finds standing, the record a draft landing's ids follow and the
-/// record it writes replaces are the board's state at the landing (P20),
-/// never what the composition saw. Its newest is empty where no record of
-/// the merger's own of the key stands. Beside it are the draft landings the
-/// merger's own records of the key stand for, each draft's newest record of
-/// the key naming it as landed in that no take-back's record replaces,
-/// newest first, which a fresh landing looks for its own landing among
-/// ([`Writer::found_standing`]) and a landing found in a draft named is
-/// answered by ([`Newest::standing_in`]); every record of the merger's own
-/// of the merge, its states ignored, which name a member a shot minted once
-/// ([`Newest::recording`]); and every draft a record of the merger's own of
-/// the merge names as landed in, whatever its state, and no take-back's
-/// record replaces, which no landing begun stands in
-/// ([`Newest::recorded_in`]).
+/// Only [`Writer::newest_record`] and [`Writer::records_of_the_merge`] build
+/// one, from the board, so what a landing finds standing, the record a draft
+/// landing's ids follow and the record it writes replaces are the board's
+/// state at the landing (P20), never what the composition saw. Its newest is
+/// empty where no record of the merger's own of the key stands. Beside it
+/// are the draft landings the merger's own records of the key stand for,
+/// each draft's newest record of the key naming it as landed in that no
+/// take-back's record replaces, newest first, which a fresh landing looks
+/// for its own landing among ([`Writer::found_standing`]) and a landing
+/// found in a draft named is answered by ([`Newest::standing_in`]).
 pub(super) struct Newest {
     /// The newest record of the key, with its link.
     newest: Option<(Address, Record)>,
     /// The draft landings the records of the key stand for, newest first.
     drafts: Vec<RecordedLanding>,
+}
+
+/// The merger's records of the whole merge, as the landing read them.
+///
+/// Only [`Writer::records_of_the_merge`] builds one: the key's [`Newest`],
+/// beside every record of the merger's own of the merge, its states ignored,
+/// which name a member a shot minted once ([`WholeMerge::recording`]), and
+/// every draft a record of the merger's own of the merge names as landed in,
+/// whatever its state, and no take-back's record replaces, which no landing
+/// begun stands in ([`WholeMerge::recorded_in`]). A shot and a fresh draft
+/// landing read it; a landing into a draft named reads the key's alone.
+pub(super) struct WholeMerge {
+    /// The newest record of the key and the draft landings it stands for.
+    pub(super) key: Newest,
     /// The merger's own records of the merge, its states ignored.
     of_the_merge: Vec<Found>,
     /// The drafts the merger's own standing records of the merge name.
     landed_in: Vec<Address>,
 }
 
-impl Newest {
+impl WholeMerge {
     /// Returns whether a record of the merger's own stands for `draft`.
     ///
     /// The record is of the merge, its states ignored, and names `draft` as
@@ -96,11 +108,6 @@ impl Newest {
     /// the draft since, its record unwritten, is a landing begun.
     fn recorded_in(&self, draft: &Address) -> bool {
         self.landed_in.contains(draft)
-    }
-
-    /// Returns the newest record's link: what a record written now replaces.
-    pub(super) fn link(&self) -> Option<&Address> {
-        self.newest.as_ref().map(|(link, _)| link)
     }
 
     /// Returns the link of the merger's newest record naming `member`.
@@ -119,6 +126,42 @@ impl Newest {
             matches!(&f.record.landed, Some(RecordLanding::Member { member: m, .. }) if m == member)
         });
         naming.max_by_key(|f| f.age()).map(|f| &f.link)
+    }
+}
+
+impl Newest {
+    /// Returns the key's newest record and the draft landings its records
+    /// stand for, of `found`, the merger's own records of the merge read
+    /// past a floor every record of the key lies past.
+    ///
+    /// A record stands for its draft's landing until a take-back's record,
+    /// which names no landing and is composed of the record it replaces,
+    /// its key the same, replaces it.
+    fn of(merged: &Merged, found: &[Found]) -> Newest {
+        let taken_back = taken_back_links(found);
+        let mut exact: Vec<Found> =
+            found.iter().filter(|f| f.record.key() == merged.key).cloned().collect();
+        exact.sort_by_key(|f| std::cmp::Reverse(f.age()));
+        let mut drafts: Vec<RecordedLanding> = Vec::new();
+        for f in exact.iter().filter(|f| !taken_back.contains(&f.link)) {
+            let Some(RecordLanding::Draft { draft, position }) = &f.record.landed else {
+                continue;
+            };
+            if drafts.iter().all(|d| d.draft != *draft) {
+                drafts.push(RecordedLanding {
+                    draft: draft.clone(),
+                    position: *position,
+                    link: f.link.clone(),
+                });
+            }
+        }
+        let newest = newest(exact).map(|f| (f.link, f.record));
+        Newest { newest, drafts }
+    }
+
+    /// Returns the newest record's link: what a record written now replaces.
+    pub(super) fn link(&self) -> Option<&Address> {
+        self.newest.as_ref().map(|(link, _)| link)
     }
 
     /// Returns the link of the record of the key standing for a landing in
@@ -224,31 +267,42 @@ impl Writer<'_> {
     /// naming no landing or another — an undo's or a withdrawal's, or a
     /// landing of the key elsewhere — replaced the record of this landing. A
     /// landing into a draft named spells its ids over the record it follows
-    /// ([`Newest::follows`]). The links are walked once, every record whose
-    /// key is the key with its states ignored kept: those of the key itself
-    /// give the newest and the draft landings they stand for — each draft's
-    /// newest record naming it as landed in that no take-back's record
-    /// replaces, newest first ([`Writer::found_standing`],
-    /// [`Newest::standing_in`]) — all of them name a member a shot minted
-    /// once ([`Newest::recording`]), and the drafts all of them name as
-    /// landed in, but those a take-back's record replaced, stand for no
-    /// landing begun ([`Newest::recorded_in`]).
+    /// ([`Newest::follows`]). The records of the key give the newest and the
+    /// draft landings they stand for — each draft's newest record naming it
+    /// as landed in that no take-back's record replaces, newest first
+    /// ([`Newest::standing_in`]). They are read newest first down to the
+    /// key's floor (`RecordKey::floor`): every record of the key was linked
+    /// past the head's mint and past each fork's and draft's state the key
+    /// keeps, so a draft landed in and taken back again and again, its state
+    /// moved by each, is read past its last state alone.
     ///
     /// # Errors
     ///
-    /// A halt reading the links or a record.
+    /// The head's mint's read where the composition read none
+    /// ([`Writer::head_minted`]); a halt reading the links or a record.
     pub(super) fn newest_record(&self, merged: &Merged) -> Result<Newest, Refusal> {
-        let stateless = merged.key.stateless();
-        let head = &merged.inputs.head;
-        let sides = merged.key.sides.iter().filter(|side| *side != head);
-        let own: Vec<Address> = record_links(&self.reader, &merged.inputs.kind, sides)?
-            .into_iter()
-            .filter(|link| owned_by(&link.to_string(), self.merger.account))
-            .collect();
-        let found: Vec<Found> = read_records(&self.reader, &own)?
-            .into_iter()
-            .filter(|f| f.record.key().stateless() == stateless)
-            .collect();
+        let found = self.own_records(merged, |minted| merged.key.floor(minted))?;
+        Ok(Newest::of(merged, &found))
+    }
+
+    /// Returns the merger's records of the whole merge, the key's newest
+    /// among them ([`WholeMerge`]).
+    ///
+    /// They are found as [`Writer::newest_record`] finds the key's, every
+    /// record whose key is the key with its states ignored kept: those of
+    /// the key itself give its newest and the draft landings they stand for
+    /// ([`Writer::found_standing`]), all of them name a member a shot minted
+    /// once ([`WholeMerge::recording`]), and the drafts all of them name as
+    /// landed in, but those a take-back's record replaced, stand for no
+    /// landing begun ([`WholeMerge::recorded_in`]). They are read newest
+    /// first down to the mint of the head the merge composed on, past which
+    /// every record of the merge on that head was linked.
+    ///
+    /// # Errors
+    ///
+    /// As [`Writer::newest_record`]'s.
+    pub(super) fn records_of_the_merge(&self, merged: &Merged) -> Result<WholeMerge, Refusal> {
+        let found = self.own_records(merged, |minted| minted)?;
         // A record stands for its draft's landing until a take-back's record,
         // which names no landing, replaces it.
         let taken_back = taken_back_links(&found);
@@ -260,24 +314,58 @@ impl Writer<'_> {
                 _ => None,
             })
             .collect();
-        let mut exact: Vec<Found> =
-            found.iter().filter(|f| f.record.key() == merged.key).cloned().collect();
-        exact.sort_by_key(|f| std::cmp::Reverse(f.age()));
-        let mut drafts: Vec<RecordedLanding> = Vec::new();
-        for f in exact.iter().filter(|f| !taken_back.contains(&f.link)) {
-            let Some(RecordLanding::Draft { draft, position }) = &f.record.landed else {
-                continue;
-            };
-            if drafts.iter().all(|d| d.draft != *draft) {
-                drafts.push(RecordedLanding {
-                    draft: draft.clone(),
-                    position: *position,
-                    link: f.link.clone(),
-                });
-            }
+        Ok(WholeMerge { key: Newest::of(merged, &found), of_the_merge: found, landed_in })
+    }
+
+    /// Returns the merger's own records of the merge, its states ignored,
+    /// read newest first down to `floor`, which the head's mint answers.
+    ///
+    /// The links of the kind to each side of the key but the head are kept to
+    /// the merger's own account before any is read; the head's mint is read
+    /// only where one stands ([`Writer::head_minted`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Writer::newest_record`]'s.
+    fn own_records(
+        &self,
+        merged: &Merged,
+        floor: impl FnOnce(Option<u64>) -> Option<u64>,
+    ) -> Result<Vec<Found>, Refusal> {
+        let stateless = merged.key.stateless();
+        let head = &merged.inputs.head;
+        let sides = merged.key.sides.iter().filter(|side| *side != head);
+        let own: Vec<Address> = record_links(&self.reader, &merged.inputs.kind, sides)?
+            .into_iter()
+            .filter(|link| owned_by(&link.to_string(), self.merger.account))
+            .collect();
+        if own.is_empty() {
+            return Ok(Vec::new());
         }
-        let newest = newest(exact).map(|f| (f.link, f.record));
-        Ok(Newest { newest, drafts, of_the_merge: found, landed_in })
+        let floor = floor(self.head_minted(merged)?);
+        Ok(NewestFirst::new(&self.reader, own, floor)
+            .rest()?
+            .into_iter()
+            .filter(|f| f.record.key().stateless() == stateless)
+            .collect())
+    }
+
+    /// Returns the position the head the merge composed on was minted at.
+    ///
+    /// It is the composition's own read of it, its head's fence
+    /// (`Merged::head_minted`); where the composition read none — one named
+    /// at a position, which fences nothing — it is read now, off the head's
+    /// `doc_metadata` at the board's head. `None` where the board serves
+    /// none.
+    ///
+    /// # Errors
+    ///
+    /// That read's refusals, each as itself (SP-14).
+    pub(super) fn head_minted(&self, merged: &Merged) -> Result<Option<u64>, Refusal> {
+        match merged.head_minted {
+            Some(minted) => Ok(Some(minted)),
+            None => Ok(self.reader.metadata(&merged.inputs.head, None)?.at),
+        }
     }
 
     /// Returns the landing of the composition standing in a recorded draft.
@@ -350,10 +438,10 @@ impl Writer<'_> {
     /// cut-off landing would make twice (PUB-8.32, resume-by-read): the
     /// merger's drafts' `set_arrangement` rows on the supplement (wire.md
     /// §The change feed), `drafts=true`, walked past the position the head
-    /// was minted at — its `doc_metadata`'s `at`, read at the board's head,
-    /// the walk from the floor where the board serves none — since every
-    /// landing on the head was made after it, whatever position the
-    /// composition was read at. The walk is `under` `⟨account⟩.0`, the
+    /// was minted at ([`Writer::head_minted`]) — the walk from the floor
+    /// where the board serves none — since every landing on the head was
+    /// made after it, whatever position the composition was read at. The
+    /// walk is `under` `⟨account⟩.0`, the
     /// tumbler every document of the merger's account's own lies under and
     /// no sub-account's does, so the board serves none of a sub-account's
     /// rows, an agent's among them. A row is a landing of the merge where
@@ -363,7 +451,7 @@ impl Writer<'_> {
     /// of the merge — a landing in a side itself moves that side's text and
     /// base, so no composition read since is the one that landed there — and
     /// that no record of the merger's own of the merge stands for
-    /// ([`Newest::recorded_in`]) is read as it stands, latest row first, and
+    /// ([`WholeMerge::recorded_in`]) is read as it stands, latest row first, and
     /// the first the board still marks this merge's landing in
     /// ([`Writer::marked_landing`]) is a landing begun: an undo, a
     /// withdrawal, another merge's landing standing over it or a publication
@@ -378,17 +466,18 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
-    /// The head's `doc_metadata` read's, the feed walk's and each draft's
-    /// reads' ([`Writer::marked_landing`]), each as itself (SP-14); then
+    /// The head's mint's read where the composition read none
+    /// ([`Writer::head_minted`]), the feed walk's and each draft's reads'
+    /// ([`Writer::marked_landing`]), each as itself (SP-14); then
     /// [`Refusal::LandingBegun`] naming the draft and the position the board
     /// marks the landing begun at.
     pub(super) fn check_landing_begun(
         &self,
         merged: &Merged,
-        newest: &Newest,
+        records: &WholeMerge,
     ) -> Result<NoneBegun, Refusal> {
         let head = merged.inputs.head.to_string();
-        let minted = self.reader.metadata(&merged.inputs.head, None)?.at.unwrap_or(0);
+        let minted = self.head_minted(merged)?.unwrap_or(0);
         let account = self.merger.account;
         let own_documents = format!("{account}.0");
         let mut drafts: Vec<Address> = Vec::new();
@@ -406,7 +495,7 @@ impl Writer<'_> {
             }
             latest = latest.max(row["at"].as_u64());
             let side = merged.inputs.sides.iter().any(|s| *s.address() == draft);
-            if !side && !newest.recorded_in(&draft) {
+            if !side && !records.recorded_in(&draft) {
                 drafts.retain(|d| *d != draft);
                 drafts.push(draft);
             }

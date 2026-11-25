@@ -38,7 +38,11 @@ use super::writer::{Stem, Writer};
 /// key where it names the draft (skep #790; `Newest::naming`); a landing
 /// the residue walk finds in the draft named answers by the record of the
 /// key standing for it there (`Newest::standing_in`), whatever the newest
-/// names, and is recorded only where none stands.
+/// names, and is recorded only where none stands. A shot and a fresh draft
+/// landing read the merger's records of the whole merge, which judge a
+/// member found and a landing begun (`Writer::records_of_the_merge`); a
+/// landing into a draft named reads the key's alone
+/// (`Writer::newest_record`).
 ///
 /// # Errors
 ///
@@ -84,13 +88,14 @@ pub(super) fn walk(
             };
             let claims = writer.claims_standing(merged, &member)?;
             let landed = RecordLanding::Member { member: member.clone(), position };
-            let newest = writer.newest_record(merged)?;
-            let record = match newest.naming(&landed).or_else(|| newest.recording(&member)) {
+            let records = writer.records_of_the_merge(merged)?;
+            let record = match records.key.naming(&landed).or_else(|| records.recording(&member)) {
                 Some(link) => link.clone(),
                 None => {
                     let stem = Stem::of(&shot.text(merged));
                     let journal = landing.journal();
-                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, &shot.kept())?
+                    let kept = shot.kept();
+                    writer.write_landing_record(merged, landed, &claims, &records.key, &stem, journal, &kept)?
                 }
             };
             Ok(Some(Landed::Member {
@@ -108,17 +113,17 @@ pub(super) fn walk(
             // beside it the drafts its records of the key name, a fresh
             // landing's answer where one still holds this composition's
             // landing. The stage and the one write write no record, so it is
-            // the record step's read too.
-            let newest = writer.newest_record(merged)?;
-            // The draft, the position the write is typed against, the text the
-            // landing's per-session ids are spelled over (the `land` module's
-            // doc), and whether this call staged the draft: for a draft named,
-            // the merge's one position and the record the landing follows, so a
-            // landing composed after a take-back, into another draft, or into
-            // its draft again after a take-back recorded since, is a write of
-            // its own; for a fresh draft, the stage's own draft and position.
-            let (into, as_of, text, staged) = match into {
+            // the record step's read too. The draft, the position the write
+            // is typed against, the text the landing's per-session ids are
+            // spelled over (the `land` module's doc), and whether this call
+            // staged the draft: for a draft named, the merge's one position
+            // and the record the landing follows, so a landing composed after
+            // a take-back, into another draft, or into its draft again after
+            // a take-back recorded since, is a write of its own; for a fresh
+            // draft, the stage's own draft and position.
+            let (newest, into, as_of, text, staged) = match into {
                 Some(into) => {
+                    let newest = writer.newest_record(merged)?;
                     if shoot {
                         check_journal()?;
                     }
@@ -127,21 +132,22 @@ pub(super) fn walk(
                         Some(link) => format!("{text}~{link}"),
                         None => text,
                     };
-                    (into.clone(), merged.as_of, text, false)
+                    (newest, into.clone(), merged.as_of, text, false)
                 }
                 None => {
+                    let records = writer.records_of_the_merge(merged)?;
                     // Each draft the records name, judged by its mark and the
                     // list that landing placed: a draft whose rows' walk needs
                     // a past state the board reclaimed is answered by its
                     // record, never landed into again.
-                    if let Some(standing) = writer.found_standing(merged, &newest)? {
+                    if let Some(standing) = writer.found_standing(merged, &records.key)? {
                         return Ok(Some(standing));
                     }
                     // A landing of the merge begun in a draft of the
                     // merger's and never recorded is named, nothing staged
                     // or written, at a landing and a resume alike: never a
                     // second landing, and never finished unasked (PUB-8.32).
-                    let none_begun = writer.check_landing_begun(merged, &newest)?;
+                    let none_begun = writer.check_landing_begun(merged, &records)?;
                     if !shoot {
                         return Ok(None);
                     }
@@ -149,9 +155,9 @@ pub(super) fn walk(
                     // one write's source gate refuses nothing past it.
                     writer.windows_readable(merged)?;
                     check_journal()?;
-                    let (fresh, at) = writer.stage(merged, &newest, &none_begun)?;
+                    let (fresh, at) = writer.stage(merged, &records.key, &none_begun)?;
                     let text = format!("{}:{fresh}@{at}", merged.key.text());
-                    (fresh, at, text, true)
+                    (records.key, fresh, at, text, true)
                 }
             };
             let stem = Stem::of(&text);

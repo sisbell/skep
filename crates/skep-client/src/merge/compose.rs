@@ -3,10 +3,12 @@
 //! A base and its sides come in as run lists, as `image` delivers them,
 //! with the document the merge lands on; the merged list, the gap report
 //! and the run counts go out; every value read is made through a closure
-//! the caller supplies, so a test needs no board. `compose_asking`'s
-//! closure is told beside each run which rule asks it (`Ask`) — for the
-//! line rule, which pair of changes — so a caller whose read is refused
-//! can say which.
+//! the caller supplies, so a test needs no board. `compose_asking` takes the
+//! line rule's reads through a closure of their own, told beside each run
+//! which pair of changes it decides (`LinePair`), so a caller whose read is
+//! refused can say which; that closure answers only where a run's line
+//! breaks fall (`LineRead`), so no byte the line rule reads outlives its
+//! read.
 //! The record's §1.4 states the composition in seven steps, and the seven
 //! private functions `removals`, `spine_of`, `additions`, `placement`,
 //! `gaps`, `splice` and `report` are those steps in that order, with
@@ -67,7 +69,7 @@
 //! `skep-address`, for the address form the anchors are reported in.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Level, Nat, Tumbler};
 
@@ -590,8 +592,10 @@ pub enum InPlaceOp {
 /// one's reads showed no break that parts it from the addition, a run whose
 /// every position an earlier read answered not asked again — whatever the
 /// value rule's switches; a run asked may be a part of a run the side
-/// holds; `None` leaves the rule that asked unfired there. The composition
-/// writes nothing and dials nothing (merge record §1.4, §7).
+/// holds; `None` leaves the rule that asked unfired there. The line rule
+/// keeps no item it reads: each answer is taken down to where its line
+/// breaks fall as it arrives (`LineRead`). The composition writes nothing
+/// and dials nothing (merge record §1.4, §7).
 ///
 /// Before the walk, a fresh identity two or more sides hold is kept by one
 /// of them. Where every holder placed it at one spot — the nearest base
@@ -657,49 +661,81 @@ pub fn compose_runs(
     options: &Options,
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> Composed {
-    let told = |side: SideIx, run: &Run, _: &Ask| values(side, run);
-    compose_asking(base, doc, sides, spine_hint, options, &told)
+    let lines = |side: SideIx, run: &Run, _: &LinePair| {
+        values(side, run).map(|items| LineRead::of(&items, run.width))
+    };
+    compose_asking(base, doc, sides, spine_hint, options, values, &lines)
 }
 
-/// Which rule asks a value read, and for the line rule which pair.
+/// The pair of changes a line read decides, named by its two anchors.
 ///
-/// [`compose_asking`]'s closure is told it beside each run, so its caller
-/// can say which rule a read it could not answer was for: the value rule's
-/// comparison of a run, or the line rule's read of the text that decides
-/// whether two sides' neighbouring changes meet at a line's edge — two
-/// additions, or an addition and a removal one side alone made — the pair
-/// named by its two anchors as the report names a gap's or a removal's
-/// (`anchors_at`; skep #1174, #1176).
+/// [`compose_asking`]'s line closure is told it beside each run, so its
+/// caller can say which pair a read it could not answer was for: two sides'
+/// neighbouring changes — two additions, or an addition and a removal one
+/// side alone made — whose meeting at a line's edge the read decides, named
+/// as the report names a gap's or a removal's (`anchors_at`; skep #1174,
+/// #1176).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::merge) enum Ask {
-    /// The value rule's: the dedup's comparison at a gap, or the retype's.
-    Value,
-    /// The line rule's, for the pair of changes between `after` and
-    /// `before`.
-    Line {
-        /// The surviving base position M holds just before the first of
-        /// the two, as that addition's gap names it ([`Gap::after`]), or
-        /// that removal's ([`Removed::after`]); `None` at M's start.
-        after: Option<Address>,
-        /// The surviving base position M holds just after the second, as
-        /// that addition's gap names it ([`Gap::before`]), or that
-        /// removal's ([`Removed::before`]); `None` at M's end.
-        before: Option<Address>,
-    },
+pub(in crate::merge) struct LinePair {
+    /// The surviving base position M holds just before the first of the
+    /// two, as that addition's gap names it ([`Gap::after`]), or that
+    /// removal's ([`Removed::after`]); `None` at M's start.
+    pub(in crate::merge) after: Option<Address>,
+    /// The surviving base position M holds just after the second, as that
+    /// addition's gap names it ([`Gap::before`]), or that removal's
+    /// ([`Removed::before`]); `None` at M's end.
+    pub(in crate::merge) before: Option<Address>,
 }
 
-/// What answers a side's run with its items, told the rule that asks it.
+/// What a line read answered: where the run's line breaks fall.
 ///
-/// It is [`compose_asking`]'s `values`, the walk's and the line rule's
-/// reads: `None` leaves the rule that asked unfired there.
-pub(in crate::merge) type AskedValues<'a> = dyn Fn(SideIx, &Run, &Ask) -> Option<Vec<Item>> + 'a;
+/// The line rule looks at nothing in an item but whether it is the byte
+/// `\n`, and at nothing in an answer but whether it holds one item a
+/// position (skep #1173), so a read is kept as those facts alone and no
+/// item outlives its read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::merge) enum LineRead {
+    /// One item a position: the offsets into the run, from 0, of the items
+    /// that are the byte `\n`, rising.
+    Breaks(Vec<u64>),
+    /// Another count of items than the run's positions, which decides
+    /// nothing.
+    Unfit,
+}
 
-/// Composes as [`compose_runs`] does, each read told the rule that asks it.
+impl LineRead {
+    /// Returns what `items`, a read of a run of `width` positions, tells the
+    /// line rule.
+    pub(in crate::merge) fn of(items: &[Item], width: u64) -> LineRead {
+        if items.len() as u64 != width {
+            return LineRead::Unfit;
+        }
+        let breaks = (0u64..).zip(items).filter(|(_, item)| item.as_slice() == b"\n");
+        LineRead::Breaks(breaks.map(|(k, _)| k).collect())
+    }
+}
+
+/// What answers a side's run with its items, for the value rule.
 ///
-/// `values` is told beside each run whether the value rule or the line
-/// rule asks it, and for the line rule the pair of changes the read
-/// decides ([`Ask`]); [`compose_runs`] is this with a closure that answers
-/// alike whatever it is told.
+/// It is [`compose_asking`]'s `values`: `None` leaves the rule unfired
+/// there.
+pub(in crate::merge) type AskedValues<'a> = dyn Fn(SideIx, &Run) -> Option<Vec<Item>> + 'a;
+
+/// What answers a side's run with where its line breaks fall, for the line
+/// rule, told the pair of changes the read decides.
+///
+/// It is [`compose_asking`]'s `lines`: `None` leaves the rule unfired
+/// there.
+pub(in crate::merge) type AskedLines<'a> =
+    dyn Fn(SideIx, &Run, &LinePair) -> Option<LineRead> + 'a;
+
+/// Composes as [`compose_runs`] does, the line rule reading through a
+/// closure of its own.
+///
+/// `values` answers the value rule's reads with a run's items, and `lines`
+/// the line rule's with where a run's line breaks fall ([`LineRead`]), told
+/// the pair of changes the read decides ([`LinePair`]); [`compose_runs`] is
+/// this with a `lines` that takes `values`' items down to their breaks.
 ///
 /// # Panics
 ///
@@ -711,16 +747,23 @@ pub(in crate::merge) fn compose_asking(
     spine_hint: Option<SideIx>,
     options: &Options,
     values: &AskedValues<'_>,
+    lines: &AskedLines<'_>,
 ) -> Composed {
     let r = Refinement::of(base, sides);
     let chain = r.chain(doc);
     let mut seqs = r.sides.clone();
-    let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
-    let retyped = if options.retype { undo_retypes(&r, &mut seqs, &by_value) } else { Vec::new() };
+    let retyped = if options.retype { undo_retypes(&r, &mut seqs, values) } else { Vec::new() };
     let claimed = Claimed::of(&r, &seqs, &options.resolutions);
     let hint = spine_hint.and_then(|h| r.side_ix.iter().position(|s| *s == h));
-    let walked =
-        Walking { r: &r, chain: &chain, claimed: &claimed, options, values, retyped: &retyped };
+    let walked = Walking {
+        r: &r,
+        chain: &chain,
+        claimed: &claimed,
+        options,
+        values,
+        lines,
+        retyped: &retyped,
+    };
     let (first, numbering) = walk(&walked, SpineOrder::Given(hint));
     if hint.is_none() {
         if let Some(side) = moves_choice(&r, &numbering, &options.resolutions) {
@@ -753,8 +796,10 @@ struct Walking<'a> {
     /// one, with the gaps with spots that decided it.
     claimed: &'a Claimed,
     options: &'a Options,
-    /// The reads, each told the rule that asks it.
+    /// The value rule's reads.
     values: &'a AskedValues<'a>,
+    /// The line rule's reads, each told the pair it decides.
+    lines: &'a AskedLines<'a>,
     /// The runs the retype normalization took out of M (`undo_retypes`).
     retyped: &'a [(SideIx, Run)],
 }
@@ -765,7 +810,7 @@ struct Walking<'a> {
 /// the composition it returns the numbering its gaps took, which a walk
 /// under a chosen order numbers its own by.
 fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
-    let Walking { r, chain, claimed, options, values, retyped } = *walking;
+    let Walking { r, chain, claimed, options, values, lines, retyped } = *walking;
     let in_base = r.in_base();
     let seqs = &claimed.kept.seqs;
     let in_side: Vec<Vec<Option<usize>>> = seqs.iter().map(|seq| r.presence(seq)).collect();
@@ -790,9 +835,8 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
     let lone =
         |laid: &Laid<'_>| lone_removals(r, &removed_by, &removed, &spine_pos, &laid.stretches);
     let first = after_claims + moves.len() as u32;
-    let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
     let (mut entries, mut applied) =
-        gaps(r, chain, &spine, &laid, &regions, &lone(&laid), first, options, values, &by_value);
+        gaps(r, chain, &spine, &laid, &regions, &lone(&laid), first, options, lines, values);
     if let SpineOrder::Chosen { numbering, .. } = order {
         // A side's order chosen at a spine's `moves` gap: every gap numbered
         // as the walk at the order given numbered it, which a holder's
@@ -819,7 +863,7 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
             &lone(&at_defaults),
             first,
             options,
-            values,
+            lines,
             &none,
         );
         number_as(&mut entries, &mut applied, &at_defaults, &claimed.moved(), first);
@@ -2350,7 +2394,7 @@ struct Entry {
 /// says it gave up); then the groups go in the order rule's order — a spot
 /// two sides added at is an `order` gap, unsettled, where it would otherwise
 /// be no gap or an `anchor` — and the dedup reads through `values` where it
-/// is on, each line read told the pair it decides (`Ask::Line`). The gaps
+/// is on, each line read told the pair it decides (`LinePair`). The gaps
 /// are numbered here from `first`, in M's order after the
 /// `moves` gaps, so the dedup can name the gap it fired at; a walk with a
 /// holder chosen, or under a chosen order, numbers them again (`number_as`,
@@ -2366,8 +2410,8 @@ fn gaps(
     lone: &[LoneRemoval],
     first: u32,
     options: &Options,
-    lines: &AskedValues<'_>,
-    values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+    lines: &AskedLines<'_>,
+    values: &AskedValues<'_>,
 ) -> (Vec<Entry>, Vec<GapId>) {
     let mut entries: Vec<Entry> = Vec::new();
     for (st, p) in laid.stretches.iter().zip(&laid.placed) {
@@ -2551,17 +2595,18 @@ pub(super) const LINE_READ: u64 = 4096;
 /// after the addition, where each text ends at its own removal — parts
 /// every farther removal too, and the walk ends there, unread. It ends as
 /// well at a pair whose reads did not answer one item a position. Every
-/// position a read answered is kept for the rest of the rule
-/// (`LineReads`), so a farther pair asks only the text the nearer ones'
-/// reads did not reach and the position before its removal: a walk reads
-/// the text out from its addition to the break that ends it, a line's
-/// worth or two, however many removals share one addition (skep #1176).
+/// range a read answered is kept for the rest of the rule, as where its
+/// breaks fall and never as its bytes (`LineReads`), so a farther pair asks
+/// only the text the nearer ones' reads did not reach and the position
+/// before its removal: a walk reads the text out from its addition to the
+/// break that ends it, a line's worth or two, however many removals share
+/// one addition (skep #1176).
 ///
 /// Which runs a pair's first reads ask is the entries' and the removals'
 /// alone, never the values', save a walk's past its nearest removal: every
 /// pair is found on the kinds `placement` gave, the marks made once every
 /// pair is weighed, and every first read of a pair asked before any is
-/// weighed, or answered from the positions kept. A pair reads on past
+/// weighed, or answered from the ranges kept. A pair reads on past
 /// them, and a walk goes on past its pair, only where they answered one
 /// item a position and left it undecided, so a reader answering no run, or
 /// every run with no items, marks no gap and is asked no further read.
@@ -2571,7 +2616,7 @@ fn line_edges(
     entries: &mut [Entry],
     lone: &[LoneRemoval],
     given_up: &[HashSet<usize>],
-    lines: &AskedValues<'_>,
+    lines: &AskedLines<'_>,
 ) {
     let reads = LineReads::new(lines);
     let alone = |e: &Entry| e.groups.len() == 1;
@@ -2715,61 +2760,90 @@ impl Placers {
 /// gap `first` to `second`, and the position before is the last of the
 /// survivor just before `first`, none at the document's start; each read
 /// is told the pair by the first's `after` anchor and the second's `before`
-/// (`Ask::Line`).
+/// (`LinePair`).
 fn meet_between(r: &Refinement, spine: &[usize], first: usize, second: usize, lines: &LineReads<'_>) -> Edge {
     let before = first.checked_sub(1).map(|at| r.last_position(r.base[spine[at]]));
     let text = r.coalesce(spine[first..second].iter().map(|&bi| r.base[bi]));
-    let ask = Ask::Line {
+    let pair = LinePair {
         after: anchors_at(r, spine, first).0,
         before: anchors_at(r, spine, second).1,
     };
-    let read = |side: SideIx, run: &Run| lines.read(side, run, &ask);
+    let read = |side: SideIx, run: &Run| lines.read(side, run, &pair);
     meet_at_a_line_edge(r.side_ix[0], before, &text, &read)
 }
 
-/// The line rule's reads of the base text, every position's item kept once
-/// a read answers it (`line_edges`; skep #1176).
+/// The line rule's reads of the base text, each kept as the range it read
+/// and the line breaks in it (`line_edges`; skep #1176).
 ///
-/// A run whose every position is kept is answered from them and asked
-/// nothing; any other is asked whole, as the pair spells it, so the runs
-/// asked are among those the rule asks keeping nothing, never a run cut
-/// otherwise, and a read answering anything but one item a position keeps
-/// none. The rule reads through the first side listed alone, and an item
-/// at an I-address is the same at every read, so a kept item is the one a
-/// read asked again answers.
+/// A run wholly inside the ranges kept for its origin is answered from them
+/// and asked nothing; any other is asked whole, as the pair spells it, so
+/// the runs asked are among those the rule asks keeping nothing, never a run
+/// cut otherwise, and a read answering anything but one item a position
+/// keeps nothing. The rule reads through the first side listed alone, and an
+/// item at an I-address is the same at every read, so a range kept answers
+/// as a read asked again would. No item is kept: the rule looks at nothing
+/// in one but whether it is the byte `\n` (`LineRead`).
 struct LineReads<'a> {
-    /// The reads, as [`compose_asking`]'s `values`.
-    lines: &'a AskedValues<'a>,
-    /// Each origin's items kept, by I-position.
-    kept: RefCell<HashMap<Address, HashMap<u64, Item>>>,
+    /// The reads, as [`compose_asking`]'s `lines`.
+    lines: &'a AskedLines<'a>,
+    /// Each origin's ranges read, and the breaks in them.
+    kept: RefCell<HashMap<Address, ReadRanges>>,
 }
 
 impl<'a> LineReads<'a> {
     /// Returns the reads through `lines`, nothing kept yet.
-    fn new(lines: &'a AskedValues<'a>) -> LineReads<'a> {
+    fn new(lines: &'a AskedLines<'a>) -> LineReads<'a> {
         LineReads { lines, kept: RefCell::new(HashMap::new()) }
     }
 
-    /// Returns `run`'s items, kept from earlier reads or read now as `ask`
-    /// tells; `None` where the read answers none.
-    fn read(&self, side: SideIx, run: &Run, ask: &Ask) -> Option<Vec<Item>> {
-        let held: Option<Vec<Item>> = self
-            .kept
-            .borrow()
-            .get(&run.origin)
-            .and_then(|at| (run.i_start..run.reach()).map(|p| at.get(&p).cloned()).collect());
-        if held.is_some() {
-            return held;
+    /// Returns where `run`'s line breaks fall, from the ranges kept or read
+    /// now as `pair` tells; `None` where the read answers none.
+    fn read(&self, side: SideIx, run: &Run, pair: &LinePair) -> Option<LineRead> {
+        let kept = self.kept.borrow().get(&run.origin).and_then(|at| at.breaks_over(run));
+        if let Some(breaks) = kept {
+            return Some(LineRead::Breaks(breaks));
         }
-        let items = (self.lines)(side, run, ask)?;
-        if items.len() as u64 == run.width {
-            let mut kept = self.kept.borrow_mut();
-            let at = kept.entry(run.origin.clone()).or_default();
-            for (p, item) in (run.i_start..).zip(&items) {
-                at.insert(p, item.clone());
-            }
+        let read = (self.lines)(side, run, pair)?;
+        if let LineRead::Breaks(breaks) = &read {
+            self.kept.borrow_mut().entry(run.origin.clone()).or_default().keep(run, breaks);
         }
-        Some(items)
+        Some(read)
+    }
+}
+
+/// One origin's ranges of I-ordinals the line rule has read, and the line
+/// breaks in them (`LineReads`).
+#[derive(Default)]
+struct ReadRanges {
+    /// The ranges read, each `(first, reach)`, rising and apart: two that
+    /// touch or overlap are kept as one.
+    ranges: Vec<(u64, u64)>,
+    /// The I-ordinals of the breaks in them.
+    breaks: BTreeSet<u64>,
+}
+
+impl ReadRanges {
+    /// Returns where `run`'s line breaks fall, as offsets into it from 0,
+    /// where every position of it was read; `None` where one was not.
+    fn breaks_over(&self, run: &Run) -> Option<Vec<u64>> {
+        let below = self.ranges.partition_point(|&(first, _)| first <= run.i_start);
+        let (_, reach) = *self.ranges.get(below.checked_sub(1)?)?;
+        let breaks = self.breaks.range(run.i_start..run.reach());
+        (reach >= run.reach()).then(|| breaks.map(|at| at - run.i_start).collect())
+    }
+
+    /// Keeps `run`'s positions as read, its line breaks at the offsets
+    /// `breaks`, from 0.
+    fn keep(&mut self, run: &Run, breaks: &[u64]) {
+        // The ranges touching or overlapping the run's, which every range
+        // before `lo` ends short of and every range from `hi` starts past.
+        let lo = self.ranges.partition_point(|&(_, reach)| reach < run.i_start);
+        let hi = self.ranges.partition_point(|&(first, _)| first <= run.reach());
+        let joined = self.ranges[lo..hi]
+            .iter()
+            .fold((run.i_start, run.reach()), |(a, b), &(first, reach)| (a.min(first), b.max(reach)));
+        self.ranges.splice(lo..hi, [joined]);
+        self.breaks.extend(breaks.iter().map(|at| run.i_start + at));
     }
 }
 
@@ -2796,8 +2870,9 @@ struct Edge {
 /// The two are additions, or an addition and a lone removal, which stands
 /// where its bytes were. `text` is the base text M lays between them, as
 /// runs, and `before` the base position just before the first, none at the
-/// document's start; `lines` reads them through `head`. The answer is
-/// decided by three facts: whether the first stands at a line's start —
+/// document's start; `lines` reads where their line breaks fall through
+/// `head`. The answer is decided by three facts: whether the first stands
+/// at a line's start —
 /// `before` a line break, or none — whether the text's last byte is a
 /// break, and whether a break stands before that last byte; the two meet
 /// where the first two facts differ and no such break stands, so the text
@@ -2813,41 +2888,38 @@ fn meet_at_a_line_edge(
     head: SideIx,
     before: Option<Run>,
     text: &[Run],
-    lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
+    lines: &dyn Fn(SideIx, &Run) -> Option<LineRead>,
 ) -> Edge {
-    let is_break = |item: &Item| item.as_slice() == b"\n";
-    // Every run asked, stopping at a read that answers none; the items, or
-    // none where a run answers another count than its width.
-    let read = |runs: &[Run]| -> Option<Vec<Item>> {
-        let mut answers = Vec::with_capacity(runs.len());
+    // Every run asked, stopping at a read that answers none; whether they
+    // hold a line break, or none where a run answers another count of items
+    // than its width.
+    let read = |runs: &[Run]| -> Option<bool> {
+        let (mut fits, mut broken) = (true, false);
         for run in runs {
-            answers.push(lines(head, run)?);
+            match lines(head, run)? {
+                LineRead::Breaks(at) => broken |= !at.is_empty(),
+                LineRead::Unfit => fits = false,
+            }
         }
-        let fits = runs.iter().zip(&answers).all(|(run, items)| items.len() as u64 == run.width);
-        fits.then(|| answers.concat())
+        fits.then_some(broken)
     };
     let width = text.iter().map(|run| run.width).fold(0, u64::saturating_add);
     let Some(last) = width.checked_sub(1) else { return Edge::default() };
     let opening = last.min(LINE_READ);
     // The first reads, in the text's order, every one asked before any is
-    // weighed.
+    // weighed; `before` and the last byte are one position each.
     let start = before.map(|run| read(&[run]));
     let opened = read(&runs_over(text, 0, opening));
     let ending = read(&runs_over(text, last, width));
     let start = match start {
         None => true,
-        Some(Some(items)) => is_break(&items[0]),
+        Some(Some(broken)) => broken,
         Some(None) => return Edge::default(),
     };
-    let (Some(opened), Some(ending)) = (opened, ending) else {
+    let (Some(broken), Some(ends_in_break)) = (opened, ending) else {
         return Edge::default();
     };
-    let shown = Edge {
-        meets: false,
-        answered: true,
-        broken: opened.iter().any(is_break),
-        ends_in_break: is_break(&ending[0]),
-    };
+    let shown = Edge { meets: false, answered: true, broken, ends_in_break };
     if shown.ends_in_break == start || shown.broken {
         return shown;
     }
@@ -2856,8 +2928,8 @@ fn meet_at_a_line_edge(
         asked = asked.saturating_mul(2);
         let to = read_to.saturating_add(asked).min(last);
         match read(&runs_over(text, read_to, to)) {
-            Some(items) if !items.iter().any(is_break) => read_to = to,
-            Some(_) => return Edge { broken: true, ..shown },
+            Some(false) => read_to = to,
+            Some(true) => return Edge { broken: true, ..shown },
             None => return Edge::default(),
         }
     }
@@ -3308,7 +3380,7 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
 /// material just before it and of the first just after it, `None` at M's
 /// start and at its end: the anchors a gap there is reported with
 /// ([`Gap::after`], [`Gap::before`]), a lone removal there is named with
-/// ([`Removed`]), and a line read's pair is told (`Ask::Line`).
+/// ([`Removed`]), and a line read's pair is told (`LinePair`).
 fn anchors_at(r: &Refinement, spine: &[usize], home: usize) -> (Option<Address>, Option<Address>) {
     let home = home.min(spine.len());
     (

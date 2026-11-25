@@ -1,31 +1,34 @@
 //! The withdrawal over the scripted board, and either take-back's record.
 //!
 //! The suite checks `withdraw`: the marker cleared and the runs and the base
-//! kept in one frame; refused after an edit since its read; nothing to take
-//! out at no marker. It checks the `replaces` record each take-back writes
-//! where a record stands, and none where none stands; a re-run of either
-//! writing nothing twice; and a withdrawal taken back — the marker put back
-//! and the next undo taking the landing back, typed at the landing or
-//! refused where another hand edited after it, and nothing to undo past a
-//! landing, a publication, or a put-back taken out again. And it checks the
-//! words a withdrawal and its undo keep: a member's own word sent under the
-//! member's chain, no correspondence record read by the withdrawal, another
-//! account's words sent by its undo as their owner published them, a write
-//! that changed a member's word for the trunk's naming no withdrawal and
-//! leaving the next undo typed at the landing, and both refused at the cap
-//! counted on the runs they would write. And it checks the withdrawal's undo
-//! writing the landing's record again past newer records naming the draft
-//! as a side, a sub-account's and the merger's own.
+//! kept in one frame, the draft read at the head; refused after an edit
+//! since its read; read again as of its read where the draft changed while
+//! it was imaged; nothing to take out at no marker. It checks the
+//! `replaces` record each take-back writes where a record stands, and none
+//! where none stands; a re-run of either writing nothing twice; and a
+//! withdrawal taken back — the marker put back and the next undo taking the
+//! landing back, typed at the landing or refused where another hand edited
+//! after it, and nothing to undo past a landing, a publication, or a
+//! put-back taken out again. And it checks the words a withdrawal and its
+//! undo keep: a member's own word sent under the member's chain, no
+//! correspondence record read by the withdrawal, another account's words
+//! sent by its undo as their owner published them, a write that changed a
+//! member's word for the trunk's naming no withdrawal and leaving the next
+//! undo typed at the landing, and both refused at the cap counted on the
+//! runs they would write. And it checks the withdrawal's undo writing the
+//! landing's record again past newer records naming the draft as a side, a
+//! sub-account's and the merger's own.
 
 use super::*;
 
 /// THE WITHDRAWAL (ruled 1 (a); skep #783): the draft's `doc_metadata`
-/// read live, its image at THAT read's position through `/op-at`, and
-/// ONE `set_arrangement` — the current image as the runs, `as_of` the
-/// read's position, the recorded base re-sent unmoved (address and
-/// extent as read), no `head`, no `merge`, the id naming the draft and
-/// the position — so the marker is cleared and the draft's words and
-/// base stay as they are; the replacing record follows.
+/// read live, its image read at the head and held to that read's position
+/// by its `arranged_at`, read again after the image — nothing read through
+/// `/op-at` — and ONE `set_arrangement` — the current image as the runs,
+/// `as_of` the read's position, the recorded base re-sent unmoved (address
+/// and extent as read), no `head`, no `merge`, the id naming the draft and
+/// the position — so the marker is cleared and the draft's words and base
+/// stay as they are; the replacing record follows.
 #[test]
 fn the_withdrawal_clears_the_marker_and_keeps_the_runs_and_the_base_in_one_frame() {
     let (dialer, board, signer) = open(draft_landing_world());
@@ -39,9 +42,13 @@ fn the_withdrawal_clears_the_marker_and_keeps_the_runs_and_the_base_in_one_frame
     assert!(withdrawn.position > at);
     let replacing = withdrawn.record.clone().expect("a record stood, so one replaces it");
     assert_ne!(replacing, link);
-    assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [read_at], "the image at the metadata read's position");
-    assert_eq!(dialer.positions("image"), [read_at]);
-    assert!(dialer.positions("doc_metadata").is_empty(), "the metadata read live, at the head: {:?}", dialer.ops());
+    let ops = dialer.ops();
+    let write = ops.iter().position(|o| o == "set_arrangement").expect("the write");
+    assert_eq!(
+        ops[..write],
+        ["doc_metadata", "retrieve_doc_v_span_set", "image", "doc_metadata"],
+        "the metadata, the image and the metadata again, every one at the head"
+    );
     let frames = dialer.frames("set_arrangement");
     assert_eq!(frames.len(), 1, "one write: {:?}", dialer.ops());
     let frame = &frames[0];
@@ -107,6 +114,49 @@ fn the_withdrawal_is_refused_arrangement_moved_after_an_edit_since_its_read() {
     assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands");
     assert_eq!(w.rows.len(), rows + 1, "the edit's commit alone");
     assert_eq!(w.standing(S), (Some((format!("{D}.2"), 15)), Some(Marker { sides: vec![], head: format!("{D}.2"), head_copied: 15, at })), "the marker stands");
+    drop(w);
+    assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "no record");
+}
+
+/// THE WITHDRAWAL READS AT THE HEAD, AND FALLS BACK WHERE THE DRAFT
+/// CHANGED: another hand's edit — one run past the cap — lands just before
+/// the head image is answered, so the `doc_metadata` read after the image
+/// names another `arranged_at`, and the draft is read again as of the first
+/// read's position through `/op-at`: the one frame names the image as it
+/// stood there, M, typed against that position, and the board refuses it
+/// `arrangement_moved`, the edit standing, the marker standing, no record.
+/// The mutant keeping the head image without the second read sends the
+/// edit's runs and is refused `OverCap`.
+#[test]
+fn a_withdrawal_reads_at_the_head_and_falls_back_where_the_draft_changed() {
+    // The place of the head image among a withdrawal's requests, off one
+    // that lands.
+    let n = {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        landed_in_s(&board, &session, &signer);
+        dialer.clear();
+        withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+        dialer.served_index("image")
+    };
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let (_, landed) = landed_in_s(&board, &session, &signer);
+    let (at, _) = landing_of(&landed);
+    let read_at = dialer.world().position;
+    dialer.clear();
+    dialer.world().interleave = Some((n, S.to_string(), alternating()));
+    let err = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect_err("the draft changed after the read");
+    assert!(dialer.world().interleave.is_none(), "the premise: the edit landed before the head image was answered");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved");
+    assert_eq!(dialer.positions("image"), [read_at], "the draft read again as of the first read: {:?}", dialer.ops());
+    let frame = &dialer.frames("set_arrangement")[0];
+    assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
+    assert_eq!(frame["runs"], frame_runs(&draft_m()), "the image as it stood at the read");
+    let w = dialer.world();
+    assert_eq!(w.docs.get(S).unwrap().runs, alternating(), "the other hand's edit stands");
+    assert_eq!(w.standing(S).1.map(|m| m.at), Some(at), "the marker stands");
     drop(w);
     assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "no record");
 }
@@ -258,7 +308,14 @@ fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_land
     );
     assert!(dialer.frames("set_arrangement").is_empty(), "nothing sent: {:?}", dialer.ops());
     dialer.clear();
+    let read_at = dialer.world().position;
     let unwithdrawn = unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
+    let past = dialer.positions("image");
+    assert!(
+        past.len() == 2 && !past.contains(&read_at),
+        "the draft at the withdrawal and before it alone, its words as they stand read at the head: {:?}",
+        dialer.ops()
+    );
     let walks: Vec<String> = dialer
         .ops()
         .into_iter()

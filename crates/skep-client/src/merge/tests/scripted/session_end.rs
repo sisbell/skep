@@ -368,8 +368,8 @@ fn a_death_at_any_request_under_the_token_is_the_typed_session_end() {
         Ends::TakeBack(OnEnd::EarlierBack),
     );
     assert!(
-        earlier.past_the_write > undoing.past_the_write,
-        "the earlier merge's way on staged at each of the record's reads and writes past the one write, the earlier landing's record read beside the later's: {} against {}",
+        earlier.past_the_write > 0 && earlier.past_the_write == undoing.past_the_write,
+        "the earlier merge's way on staged at each of the record's reads and writes past the one write, the record's walk stopping at the later landing's record and never reading the earlier landing's: {} against {}",
         earlier.past_the_write,
         undoing.past_the_write
     );

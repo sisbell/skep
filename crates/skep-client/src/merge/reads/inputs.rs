@@ -296,4 +296,12 @@ pub struct Merged {
     ///
     /// The landing reads the shot's values through them.
     pub(in crate::merge) maps: Vec<Imaged>,
+    /// The position the head was minted at, off its fence's `doc_metadata`
+    /// at a composition at the head; `None` at one named at a position,
+    /// which fences nothing, and where the board serves none.
+    ///
+    /// Every record of a merge on the head was linked past it, so it floors
+    /// the lookups of the records of the key and of the merge
+    /// (`RecordKey::floor`); the landing reads it again where it is `None`.
+    pub(in crate::merge) head_minted: Option<u64>,
 }

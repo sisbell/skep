@@ -285,8 +285,9 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         &inputs.sides,
         &inputs.options,
     )?;
-    let Readings { at, base, maps, head_extent, owner, composed, families, arranged, .. } =
-        readings;
+    let Readings {
+        at, base, maps, head_extent, owner, composed, families, arranged, head_minted, ..
+    } = readings;
     // The record's sides: the head, then each side — a draft at P, the one
     // position it was read at, and a fork and a draft with their states.
     let mut sides: Vec<SideAt> = vec![SideAt::Member { at: inputs.head.clone(), role: Role::Head }];
@@ -320,9 +321,12 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
     // nothing below reads. The prior stands beside the record, never in its
     // `replaces`: it can be another account's record, which no landing of
     // the merger's replaces, and the landing names what its record replaces
-    // from its own read (P20).
+    // from its own read (P20). They are read newest first down to the key's
+    // floor, the head's mint and each side's state as read here, past which
+    // every record of the key was linked: no read of an older record.
     let head = Some(&inputs.head);
-    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner), head)?;
+    let floor = || Ok(key.floor(head_minted));
+    let prior = record::current_among(&reader, &inputs.kind, &key, Some(&owner), head, floor)?;
     Ok(Merged {
         inputs: inputs.clone(),
         composed,
@@ -336,6 +340,7 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
         prior,
         head_extent,
         maps,
+        head_minted,
     })
 }
 

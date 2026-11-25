@@ -10,14 +10,16 @@
 //! they keep are the `reads` module's doc.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use skep_address::Address;
 
 use crate::address::parse_address;
 use crate::board::answers::{ArrangedAt, Metadata};
 use crate::halt::Halt;
-use crate::merge::compose::{compose_asking, Ask, Composed, Item, Options, Run, SideIx};
+use crate::merge::compose::{
+    compose_asking, Composed, Item, LinePair, LineRead, Options, Run, SideIx,
+};
 
 use super::addresses::{
     account_of, address_parent, comps, content_prefix, in_chain, is_trunk_member, last_component,
@@ -26,7 +28,7 @@ use super::addresses::{
 use super::inputs::{Family, Side};
 use super::reader::{Imaged, Reader};
 use super::refusal::Refusal;
-use super::MAX_SIDES;
+use super::{MAX_DELIVERY_ITEMS, MAX_SIDES};
 
 // ── the value mapping (the fragment model) ────────────────────────────────
 
@@ -318,6 +320,10 @@ pub(in crate::merge) struct Readings {
     /// where the board keeps none; a member's is `None`, its address its
     /// state.
     pub(in crate::merge) arranged: Vec<Option<u64>>,
+    /// The position the head was minted at, its fence's `doc_metadata`'s
+    /// `at`: a composition at the head's alone, `None` where the shape fences
+    /// nothing or the board serves none.
+    pub(in crate::merge) head_minted: Option<u64>,
 }
 
 /// Makes the reads of §1.3 in order, then the core's walk.
@@ -496,10 +502,9 @@ pub(in crate::merge) fn read_shape(
         ends.push(recorded_line(reader, doc, side, &anchor, positions.fixed())?);
         arranged.push(state);
     }
-    // The head's fence, the last of them: P is where they stand.
-    if live {
-        opened(reader, head)?;
-    }
+    // The head's fence, the last of them: P is where they stand. Its `at`
+    // is the head's mint, past which every record of a merge on it lies.
+    let head_minted = if live { opened(reader, head)?.at } else { None };
     let at = match positions {
         Positions::Live => fences.iter().map(|f| f.as_of).max().unwrap_or_default(),
         Positions::Named(at) | Positions::Recorded(at) => at,
@@ -611,6 +616,7 @@ pub(in crate::merge) fn read_shape(
         composed,
         families,
         arranged,
+        head_minted,
     })
 }
 
@@ -627,18 +633,23 @@ pub(in crate::merge) fn read_shape(
 /// asked before any is weighed, and every walk the core makes again under
 /// a chosen order or at a holder's defaults reads alike. So the walk is
 /// made once answering every run with no items, noting the runs it asks;
-/// those runs are read together, each holder's in as few reads as the
-/// budgets allow, and the walk is made again answering from them — two
-/// reads for a merge of two sides whatever its shared spots and its line
-/// edges, where a read a run would make one a run. A run the second walk
-/// asks and the first did not — the line rule reading on along a line
-/// longer than its first reads, or weighing a removal past the nearest
-/// beside an addition where no break parts them (skep #1176), which a walk
-/// answered no items never does — is read as it is asked. A walk that asks
-/// no run is the composition. With the retype on, which runs the walk
-/// reads depends on the values read before them, so each run is read as
-/// the walk asks it, as it is where the reads together meet a withheld
-/// window.
+/// those runs are read together in parts of at most `MAX_DELIVERY_ITEMS`
+/// positions, each part's holders' runs in as few reads as the budgets
+/// allow (`read_noted`), and kept — a run the value rule asked as its
+/// items, one the line rule asked only as where its line breaks fall
+/// ([`LineRead`]), so no more than one part's items stand at a time beside
+/// the value rule's — and the walk is made again answering from them: two
+/// reads for a merge of two sides whose noted runs fit one part, whatever
+/// its shared spots and its line edges, where a read a run would make one
+/// a run. A run the second walk asks and the first did not — the line rule
+/// reading on along a line longer than its first reads, or weighing a
+/// removal past the nearest beside an addition where no break parts them
+/// (skep #1176), which a walk answered no items never does — is read as it
+/// is asked, the line rule's in parts as the noted runs are (`lines_for`).
+/// A walk that asks no run is the composition. With the retype on, which
+/// runs the walk reads depends on the values read before them, so each run
+/// is read as the walk asks it, as it is where the reads together meet a
+/// withheld window.
 ///
 /// # Errors
 ///
@@ -660,51 +671,61 @@ fn compose_with_values(
     options: &Options,
 ) -> Result<Composed, Refusal> {
     let fault: RefCell<Option<Refusal>> = RefCell::new(None);
-    let one_at_a_time = |side: SideIx, run: &Run, ask: &Ask| -> Option<Vec<Item>> {
+    let value_read = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
         match values_for(reader, doc, maps, Some(side.0 as usize), run) {
             Ok(items) => Some(items),
             Err(e) => {
-                fault.borrow_mut().get_or_insert(met_by(e, ask));
+                fault.borrow_mut().get_or_insert(e);
+                None
+            }
+        }
+    };
+    let line_read = |side: SideIx, run: &Run, pair: &LinePair| -> Option<LineRead> {
+        match lines_for(reader, doc, maps, Some(side.0 as usize), run) {
+            Ok(read) => Some(read),
+            Err(e) => {
+                fault.borrow_mut().get_or_insert(met_by(e, pair));
                 None
             }
         }
     };
     let composed = if !options.retype {
-        let asked: RefCell<Vec<(SideIx, Run)>> = RefCell::new(Vec::new());
-        let noting = |side: SideIx, run: &Run, _: &Ask| -> Option<Vec<Item>> {
-            asked.borrow_mut().push((side, run.clone()));
+        // Each run asked, beside whether the line rule asked it.
+        let asked: RefCell<Vec<(SideIx, Run, bool)>> = RefCell::new(Vec::new());
+        let noting_values = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
+            asked.borrow_mut().push((side, run.clone(), false));
             Some(Vec::new())
         };
-        let first = compose_asking(base, doc, sides, None, options, &noting);
-        let mut asked = asked.into_inner();
-        let mut seen = HashSet::new();
-        asked.retain(|key| seen.insert(key.clone()));
-        if asked.is_empty() {
+        let noting_lines = |side: SideIx, run: &Run, _: &LinePair| -> Option<LineRead> {
+            asked.borrow_mut().push((side, run.clone(), true));
+            Some(LineRead::Unfit)
+        };
+        let first = compose_asking(base, doc, sides, None, options, &noting_values, &noting_lines);
+        let noted = Noted::of(asked.into_inner());
+        if noted.is_empty() {
             first
         } else {
-            let pairs: Vec<(Option<usize>, &Run)> = asked
-                .iter()
-                .map(|(side, run)| (Some(side.0 as usize), run))
-                .collect();
-            match values_of(reader, doc, maps, &pairs) {
-                Ok(read) => {
-                    let held: HashMap<(SideIx, Run), Vec<Item>> =
-                        asked.into_iter().zip(read).collect();
-                    let answered =
-                        |side: SideIx, run: &Run, ask: &Ask| match held.get(&(side, run.clone())) {
-                            Some(items) => Some(items.clone()),
-                            None => one_at_a_time(side, run, ask),
+            match read_noted(reader, doc, maps, &noted) {
+                Ok(Held { values, lines }) => {
+                    let held_values = |side: SideIx, run: &Run| match values.get(&(side, run.clone())) {
+                        Some(items) => Some(items.clone()),
+                        None => value_read(side, run),
+                    };
+                    let held_lines =
+                        |side: SideIx, run: &Run, pair: &LinePair| match lines.get(&(side, run.clone())) {
+                            Some(read) => Some(read.clone()),
+                            None => line_read(side, run, pair),
                         };
-                    compose_asking(base, doc, sides, None, options, &answered)
+                    compose_asking(base, doc, sides, None, options, &held_values, &held_lines)
                 }
                 Err(Refusal::Unreadable(_)) => {
-                    compose_asking(base, doc, sides, None, options, &one_at_a_time)
+                    compose_asking(base, doc, sides, None, options, &value_read, &line_read)
                 }
                 Err(refused) => return Err(refused),
             }
         }
     } else {
-        compose_asking(base, doc, sides, None, options, &one_at_a_time)
+        compose_asking(base, doc, sides, None, options, &value_read, &line_read)
     };
     match fault.into_inner() {
         Some(e) => Err(e),
@@ -712,22 +733,137 @@ fn compose_with_values(
     }
 }
 
-/// Returns the refusal a value read met, as the rule that asked it meets it.
+/// A run a walk asked, and which rules asked it (`compose_with_values`).
+struct Noted {
+    side: SideIx,
+    run: Run,
+    /// The value rule asked it: its items are kept for the walk.
+    value: bool,
+    /// The line rule asked it: where its line breaks fall is kept for the
+    /// walk.
+    line: bool,
+}
+
+impl Noted {
+    /// Returns each run of `asked` once, in the order first asked, beside
+    /// the rules that asked it.
+    ///
+    /// Each of `asked` is a side, the run asked of it and whether the line
+    /// rule asked it.
+    fn of(asked: Vec<(SideIx, Run, bool)>) -> Vec<Noted> {
+        let mut noted: Vec<Noted> = Vec::new();
+        let mut at: HashMap<(SideIx, Run), usize> = HashMap::new();
+        for (side, run, line) in asked {
+            let k = *at.entry((side, run.clone())).or_insert_with(|| {
+                noted.push(Noted { side, run, value: false, line: false });
+                noted.len() - 1
+            });
+            noted[k].value |= !line;
+            noted[k].line |= line;
+        }
+        noted
+    }
+}
+
+/// The runs a walk noted, as read: the value rule's as their items, the
+/// line rule's as where their line breaks fall (`compose_with_values`).
+struct Held {
+    values: HashMap<(SideIx, Run), Vec<Item>>,
+    lines: HashMap<(SideIx, Run), LineRead>,
+}
+
+/// Reads `noted` at the head in parts of at most `MAX_DELIVERY_ITEMS`
+/// positions, keeping a run the value rule asked as its items and one the
+/// line rule asked only as where its line breaks fall.
 ///
-/// A window the line rule's read met withheld — a document the reader may
-/// not read in the text that decides whether two sides' neighbouring
-/// changes meet at a line's edge — is [`Refusal::LineTextWithheld`],
-/// naming the document and the pair's anchors (skep #1174); every other
-/// refusal is itself, the value rule's withheld window
-/// [`Refusal::Unreadable`] among them.
-fn met_by(e: Refusal, ask: &Ask) -> Refusal {
-    match (e, ask) {
-        (Refusal::Unreadable(doc), Ask::Line { after, before }) => Refusal::LineTextWithheld {
+/// A part is the runs in the order noted up to the one that would take it
+/// past the budget, a run past it alone a part of its own, and each part's
+/// holders' runs are read in as few reads as the budgets allow
+/// ([`values_of`]): no more than one part's items stand at a time beside
+/// the value rule's.
+///
+/// # Errors
+///
+/// [`values_of`]'s, at the first part it refuses.
+fn read_noted(
+    reader: &Reader<'_>,
+    doc: &Address,
+    maps: &[Imaged],
+    noted: &[Noted],
+) -> Result<Held, Refusal> {
+    let mut held = Held { values: HashMap::new(), lines: HashMap::new() };
+    let mut parts: Vec<&[Noted]> = Vec::new();
+    let (mut from, mut positions) = (0, 0u64);
+    for (k, n) in noted.iter().enumerate() {
+        if k > from && positions.saturating_add(n.run.width) > MAX_DELIVERY_ITEMS {
+            parts.push(&noted[from..k]);
+            (from, positions) = (k, 0);
+        }
+        positions = positions.saturating_add(n.run.width);
+    }
+    parts.push(&noted[from..]);
+    for part in parts {
+        let asked: Vec<(Option<usize>, &Run)> =
+            part.iter().map(|n| (Some(n.side.0 as usize), &n.run)).collect();
+        for (n, items) in part.iter().zip(values_of(reader, doc, maps, &asked)?) {
+            if n.line {
+                held.lines.insert((n.side, n.run.clone()), LineRead::of(&items, n.run.width));
+            }
+            if n.value {
+                held.values.insert((n.side, n.run.clone()), items);
+            }
+        }
+    }
+    Ok(held)
+}
+
+/// Reads where the line breaks of `run`'s positions fall, at the head
+/// through the sides that hold them, the image at `prefer` asked first.
+///
+/// It reads the run in parts of at most `MAX_DELIVERY_ITEMS` positions
+/// ([`values_for`]), each taken down to its breaks as it arrives
+/// ([`LineRead::of`]), so no more than one part's items stand at a time.
+///
+/// # Errors
+///
+/// As [`values_for`]'s.
+fn lines_for(
+    reader: &Reader<'_>,
+    doc: &Address,
+    maps: &[Imaged],
+    prefer: Option<usize>,
+    run: &Run,
+) -> Result<LineRead, Refusal> {
+    let mut breaks = Vec::new();
+    let mut from = 0u64;
+    while from < run.width {
+        let width = (run.width - from).min(MAX_DELIVERY_ITEMS);
+        let part = Run::new(run.origin.clone(), run.i_start + from, width);
+        match LineRead::of(&values_for(reader, doc, maps, prefer, &part)?, width) {
+            LineRead::Breaks(at) => breaks.extend(at.into_iter().map(|k| from + k)),
+            LineRead::Unfit => return Ok(LineRead::Unfit),
+        }
+        from += width;
+    }
+    Ok(LineRead::Breaks(breaks))
+}
+
+/// Returns the refusal a line read met, as the line rule meets it.
+///
+/// A window the read met withheld — a document the reader may not read in
+/// the text that decides whether two sides' neighbouring changes meet at a
+/// line's edge — is [`Refusal::LineTextWithheld`], naming the document and
+/// the pair's anchors (skep #1174); every other refusal is itself. A value
+/// read's refusal is itself too, its withheld window
+/// [`Refusal::Unreadable`].
+fn met_by(e: Refusal, pair: &LinePair) -> Refusal {
+    match e {
+        Refusal::Unreadable(doc) => Refusal::LineTextWithheld {
             doc,
-            after: after.clone(),
-            before: before.clone(),
+            after: pair.after.clone(),
+            before: pair.before.clone(),
         },
-        (e, Ask::Value | Ask::Line { .. }) => e,
+        e => e,
     }
 }
 

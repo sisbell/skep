@@ -63,6 +63,13 @@
 //! it. The write's id names the draft, the withdrawal and the position the
 //! call read the draft at.
 //!
+//! The present state each of the two acts on a withdrawal sends — the
+//! withdrawal's words, and its undo's — is imaged at the head and held to
+//! the position the act read the draft's `doc_metadata` at by that read's
+//! `arranged_at`, read again after the image; only where the text changed
+//! between the two reads is it imaged as of that position through `/op-at`
+//! (`present`), so neither act rebuilds a state the head serves.
+//!
 //! **The dispatch (P4).** The undo reads the draft's `doc_metadata` live
 //! and dispatches on the base record first, then the marker:
 //!
@@ -324,7 +331,7 @@ use serde_json::Value;
 use skep_address::{content_subspace, document_of, Address};
 
 use crate::address::parse_address;
-use crate::board::answers::Metadata;
+use crate::board::answers::{ArrangedAt, Metadata};
 use crate::board::{acked_at, frames, Answer, Board, Image, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::publication;
@@ -866,10 +873,10 @@ fn put_back_of(
 
 /// Takes the merge out of a draft and keeps its words.
 ///
-/// The draft's `doc_metadata` is read live and its image at THAT read's
-/// position through `/op-at`; the one write sends the image back whole as
-/// read — each run under the chain that minted it, no record read and
-/// nothing mapped (the module's doc, **The mapping**) — with the recorded
+/// The draft's `doc_metadata` is read live and its image as it stood at
+/// *that* read's position (`present`); the one write sends the image back
+/// whole as read — each run under the chain that minted it, no record read
+/// and nothing mapped (the module's doc, **The mapping**) — with the recorded
 /// base re-sent unmoved — address and extent as read — and no `merge`,
 /// typed against that position, so the marker is cleared and the draft's
 /// words and base stay as they are; an inherited marker is taken out the
@@ -885,7 +892,7 @@ fn put_back_of(
 /// - [`Refusal::NoMerge`] where the draft carries no marker, nothing sent —
 ///   a draft with no recorded base carries none even where a merge landed
 ///   in it, a landing [`undo`] takes back by the draft's rows;
-/// - the image read's refusals at the read's position, and an image whose
+/// - the image's reads' refusals (`present`), and an image whose
 ///   positions reach the largest ordinal, the board's fault, faced;
 /// - [`Refusal::OverCap`] where the image is in more runs than one write
 ///   may name, nothing sent; then a run of it that is no content
@@ -926,7 +933,7 @@ pub fn withdraw(
     };
     // THE ONE POSITION: the image as of the metadata's read, sent back as
     // read — no record is read and none maps it.
-    let image = reader.imaged(draft, Some(as_of))?.into_image()?;
+    let image = present(reader, draft, as_of, meta.arranged_at)?;
     let runs = capped_runs(&mapped_image(&image, &[])?)?;
     let stem = format!("withdraw:{draft}:{as_of}");
     let base_text = base.0.to_string();
@@ -982,9 +989,10 @@ pub fn withdraw(
 /// - [`Refusal::NothingToUndo`] with [`NoUndo::Remarked`] — the draft
 ///   carrying a marker, or its rows past the withdrawal putting the cleared
 ///   marker back since — or with [`NoUndo::Published`], nothing sent;
-/// - the read of the draft's words at the first read's position, its
-///   refusals, and a run of them that is no content I-address, the board's
-///   fault, faced; the records' reads' refusals at the head; a record
+/// - the read of the draft's words as they stood at the first read's
+///   position (`present`), its refusals, and a run of them that is no
+///   content I-address, the board's fault, faced; the records' reads'
+///   refusals at the head; a record
 ///   mapping the words past the largest ordinal, the board's fault, faced
 ///   (SP-19); then [`Refusal::OverCap`] where the words mapped are in more
 ///   runs than one write may name, counted on the runs the write sends,
@@ -1067,7 +1075,7 @@ pub fn unwithdraw(
     }
     let cleared = Restorable::of(draft, cleared, "before the withdrawal")?;
     // THE MAPPING: the draft's words as they stand, through the records.
-    let image = reader.imaged(draft, Some(read_at))?.into_image()?;
+    let image = present(reader, draft, read_at, meta.arranged_at)?;
     let records = owners_records(reader, &runs_of(image.runs())?)?;
     let runs = capped_runs(&mapped_image(&image, &records)?)?;
     // THE TYPED POSITION (P3): the withdrawal's, or the caller's own last
@@ -1308,6 +1316,36 @@ pub fn written_runs(image: &Image) -> Result<Vec<Value>, Halt> {
             Ok(frames::shot_run(&origin.to_string(), &i_start.to_string(), run.width))
         })
         .collect()
+}
+
+/// Returns `draft`'s arrangement as it stood at `at`, the position of the
+/// `doc_metadata` read that answered `arranged_at` for it.
+///
+/// The draft is imaged at the head, then its `doc_metadata` read again:
+/// where that read answers the same `arranged_at` — the position its text
+/// last changed at, or `null` — no write changed the text past `at` before
+/// the image was read, so the head's image is the state at `at` and no past
+/// state is rebuilt. Where it answers another, or the board serves no
+/// `arranged_at`, the draft is imaged as of `at` through `/op-at`.
+///
+/// # Errors
+///
+/// The reads' refusals, at the head and then at `at` where it is read
+/// there; an image whose positions reach the largest ordinal, the board's
+/// fault, faced.
+fn present(
+    reader: &Reader<'_>,
+    draft: &Address,
+    at: u64,
+    arranged_at: ArrangedAt,
+) -> Result<Image, Refusal> {
+    if arranged_at != ArrangedAt::Unserved {
+        let imaged = reader.imaged(draft, None)?;
+        if reader.metadata(draft, None)?.arranged_at == arranged_at {
+            return Ok(imaged.into_image()?);
+        }
+    }
+    Ok(reader.imaged(draft, Some(at))?.into_image()?)
 }
 
 /// Returns `sent`'s runs as a take-back's one write spells them, capped.
@@ -1704,9 +1742,11 @@ fn replace_record(
             on_end.act(),
         )
     };
-    let own = linked_to(&writer.reader, kind, draft, merger.account)
-        .map_err(|e| Unrecorded::from(e).faced(&owed))?;
-    let Some(current) = standing_for(&own, draft, taken, landing) else { return Ok(None) };
+    let standing = linked_to(&writer.reader, kind, draft, merger.account, &taken.head)
+        .and_then(|mut own| standing_for(&mut own, draft, taken, landing));
+    let Some(current) = standing.map_err(|e| Unrecorded::from(e).faced(&owed))? else {
+        return Ok(None);
+    };
     // The record names its key's first landing in the draft (skep #790): at
     // or before the landing standing again, that first landing stands on
     // beneath the write taken back, and the record with it.
@@ -1764,9 +1804,10 @@ fn restore_record(
             OnEnd::PutBack.act(),
         )
     };
-    let own = linked_to(&writer.reader, kind, draft, merger.account)
-        .map_err(|e| Unrecorded::from(e).faced(&owed))?;
-    let Some((landing, take_back)) = taken_back(&own, draft, &cleared.marker, cleared.at) else {
+    let marker = &cleared.marker;
+    let found = linked_to(&writer.reader, kind, draft, merger.account, &marker.head)
+        .and_then(|mut own| taken_back(&mut own, draft, marker, cleared.at));
+    let Some((landing, take_back)) = found.map_err(|e| Unrecorded::from(e).faced(&owed))? else {
         return Ok(None);
     };
     let record =

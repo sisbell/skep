@@ -4,7 +4,10 @@
 //! publication publishes; `current` — the trunk owner's home first, then
 //! the newest, the record whose link was minted last, and the owner's over
 //! a sub-account's; a lookup reading each journal once and no other
-//! account's link; `landing_record`, a draft's own landing record read
+//! account's link, and reading its links newest first, down to the floor
+//! the key's head and sides set and no further than its answer — the prior
+//! of a merge on a later head, a draft landed in and taken back many
+//! times; `landing_record`, a draft's own landing record read
 //! through the draft once the merge landed in another, another account's
 //! records, another merge's, a landing past the marker's and a record a
 //! take-back replaced passed over; `standing_landing`, the same read by the
@@ -130,14 +133,19 @@ fn current_prefers_the_trunk_owners_home_then_the_newest() {
 
 /// A RECORD LOOKUP READS EACH JOURNAL ONCE, AND NO OTHER ACCOUNT'S LINK:
 /// `N` records of the merger's in one journal, each landing the race's merge
-/// in `S`, beside `N` of another account's, linked to `S` and the daughter
-/// too. `landing_record` through `S` and `landed_draft` over the key each
-/// read the merger's `N` links, then the journal's extent, its image and
-/// every atom in one `retrieve_v` — at `N` = 2 and at 8 alike — and none of
-/// the other account's links; each answers the newest of the merger's. The
-/// mutant reading each record alone reads the journal `N` times over; the
-/// one keeping the account's records after reading every link reads `2N`
-/// links at `landed_draft`.
+/// in `S`, the later at the later position, beside `N` of another
+/// account's, linked to `S` and the daughter too and minted after them.
+/// `landing_record` through `S` and `landed_draft` over the key each read
+/// the newest of the merger's links alone, then the journal's extent, its
+/// image and that one atom — at `N` = 2 and at 8 alike — and none of the
+/// other account's links, each answering the newest of the merger's. A
+/// `landing_record` whose marker names the oldest landing reads all `N` of
+/// the merger's links, newest first, the journal's extent and image once
+/// and the atoms in reads that double, one, two, four. The mutant keeping
+/// the account's records after reading every link reads the other account's
+/// newer links first; the one reading every link of the merger's reads `N`
+/// at the first two; the one reading the journal again at each read of its
+/// atoms reads its extent and image more than once.
 #[test]
 fn a_record_lookup_reads_each_journal_once_and_no_other_accounts_link() {
     const JOURNAL: &str = "1.0.1.0.80";
@@ -150,33 +158,110 @@ fn a_record_lookup_reads_each_journal_once_and_no_other_accounts_link() {
         let (dialer, board, _) = open(World::race());
         let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
         let daughter = format!("{D}.1.1");
-        let mut record = merged.record.clone();
-        record.landed = Some(RecordLanding::Draft { draft: a(S), position: 20 });
-        let mut newest_link = String::new();
+        let mut links = Vec::new();
         for k in 0..n {
+            let mut record = merged.record.clone();
+            record.landed = Some(RecordLanding::Draft { draft: a(S), position: 20 + k });
             let mut w = dialer.world();
-            newest_link = file(&mut w, JOURNAL, &record, &[S, &daughter], Some(30 + k));
+            links.push(file(&mut w, JOURNAL, &record, &[S, &daughter], Some(30 + k)));
             file(&mut w, THEIRS, &record, &[S, &daughter], Some(60 + k));
         }
-        let marker = crate::board::MergeMarker {
+        let marker = |at: u64| crate::board::MergeMarker {
             sides: vec![daughter.clone()],
             head: format!("{D}.2"),
             head_copied: Some(15),
-            at: Some(25),
+            at: Some(at),
         };
+        let link = |found: Option<Record>| found.and_then(|r| r.link).map(|l| l.to_string());
         let each = n as usize;
         dialer.clear();
-        let found = landing_record(&board, Some(&token()), &a(K), &a(S), &marker, ACCOUNT)
-            .expect("read")
-            .expect("a record");
-        assert_eq!(found.link.map(|l| l.to_string()), Some(newest_link.clone()), "{n}: the newest");
-        assert_eq!(reads(&dialer), [each, 1, 1, 1], "{n}: {:?}", dialer.names());
+        let found = landing_record(&board, Some(&token()), &a(K), &a(S), &marker(20 + n), ACCOUNT);
+        assert_eq!(link(found.expect("read")), links.last().cloned(), "{n}: the newest");
+        assert_eq!(reads(&dialer), [1, 1, 1, 1], "{n}: {:?}", dialer.names());
         dialer.clear();
-        let found = landed_draft(&board, Some(&token()), &a(K), &merged.key, ACCOUNT)
-            .expect("read")
-            .expect("a record");
-        assert_eq!(found.link.map(|l| l.to_string()), Some(newest_link), "{n}: the newest");
-        assert_eq!(reads(&dialer), [each, 1, 1, 1], "{n}: {:?}", dialer.names());
+        let found = landed_draft(&board, Some(&token()), &a(K), &merged.key, ACCOUNT);
+        assert_eq!(link(found.expect("read")), links.last().cloned(), "{n}: the newest");
+        assert_eq!(reads(&dialer), [1, 1, 1, 1], "{n}: {:?}", dialer.names());
+        dialer.clear();
+        let found = landing_record(&board, Some(&token()), &a(K), &a(S), &marker(20), ACCOUNT);
+        assert_eq!(link(found.expect("read")), links.first().cloned(), "{n}: the oldest");
+        let doublings = (each + 1).next_power_of_two().trailing_zeros() as usize;
+        assert_eq!(reads(&dialer), [each, 1, 1, doublings], "{n}: {:?}", dialer.names());
+    }
+}
+
+/// THE PRIOR LOOKUP READS NO RECORD OLDER THAN ITS HEAD: `n` records of the
+/// race's merge on `D.2`, filed before the head `D.3` is minted, and the
+/// merge composed on `D.3` reads the newest of their links alone — minted
+/// below the head's mint, the lookup's floor — and answers no prior, at `n`
+/// = 2 and at 40 alike; a record of the merge on `D.3`, filed after, is the
+/// prior, read off its one link. The mutant with no floor reads every link;
+/// the one reading on past the first record of the key reads two.
+#[test]
+fn a_prior_lookup_reads_no_record_older_than_its_head() {
+    const JOURNAL: &str = "1.0.1.0.80";
+    let daughter = format!("{D}.1.1");
+    let read_links = |dialer: &Scripted| dialer.names().iter().filter(|o| *o == "read_link").count();
+    for n in [2u64, 40] {
+        let (dialer, board, _) = open(World::race());
+        let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed on D.2");
+        {
+            let mut w = dialer.world();
+            for k in 0..n {
+                file(&mut w, JOURNAL, &merged.record, &[&daughter], Some(20 + k));
+            }
+            w.position = 20 + n;
+            w.member(&format!("{D}.3"), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)], Some(15));
+            w.trunk_head.insert(D.to_string(), format!("{D}.3"));
+        }
+        let on_d3 = Inputs { head: a(&format!("{D}.3")), ..race_inputs() };
+        dialer.clear();
+        let first = compose(&board, Some(&token()), &on_d3).expect("composed on D.3");
+        assert_eq!(first.prior, None, "{n}");
+        assert_eq!(read_links(&dialer), 1, "{n}: {:?}", dialer.names());
+        let link = file(&mut dialer.world(), JOURNAL, &first.record, &[&daughter], Some(22 + n));
+        dialer.clear();
+        let again = compose(&board, Some(&token()), &on_d3).expect("composed again");
+        assert_eq!(again.prior.and_then(|r| r.link).map(|l| l.to_string()), Some(link), "{n}");
+        assert_eq!(read_links(&dialer), 1, "{n}: {:?}", dialer.names());
+    }
+}
+
+/// A DRAFT LANDED IN AND TAKEN BACK `c` TIMES IS LOOKED UP IN CONSTANT
+/// READS: the draft landing's merge landed in `S` and undone `c` times,
+/// then landed and undone once more, at `c` = 2 and at 20 alike. The last
+/// composition's prior reads two links — the last take-back's, above the
+/// floor the draft's state sets, and the last landing's, below it; the last
+/// landing reads the same two and the journal's own find one; and the last
+/// undo reads its landing's record alone, the newest, and the journal's
+/// find one, its record replacing that landing's. The mutant with no floor
+/// reads every link at the composition and the landing; the one reading on
+/// past the record of the landing reads every link at the undo; the one
+/// whose named landing floors its walk at the head's mint alone reads every
+/// link at the landing.
+#[test]
+fn a_draft_landed_and_taken_back_c_times_is_looked_up_in_constant_reads() {
+    let read_links = |dialer: &Scripted| dialer.names().iter().filter(|o| *o == "read_link").count();
+    for c in [2usize, 20] {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        for _ in 0..c {
+            landed_in_s(&board, &session, &signer);
+            undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+        }
+        dialer.clear();
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        assert_eq!(read_links(&dialer), 2, "{c}: the composition: {:?}", dialer.names());
+        dialer.clear();
+        let landing = draft_landing(&session, &signer, Some(a(S)));
+        let (_, record) = landing_of(&land(&board, &merged, landing).expect("landed"));
+        assert_eq!(read_links(&dialer), 3, "{c}: the landing: {:?}", dialer.names());
+        dialer.clear();
+        undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+        assert_eq!(read_links(&dialer), 2, "{c}: the undo: {:?}", dialer.names());
+        let taken_back = appended_record(&dialer);
+        assert!(taken_back["landed"].is_null(), "{c}: {taken_back}");
+        assert_eq!(taken_back["replaces"].as_str(), Some(record.to_string().as_str()), "{c}");
     }
 }
 

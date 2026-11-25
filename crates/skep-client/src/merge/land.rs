@@ -85,7 +85,7 @@
 //! merger's own of the merge names, its states ignored — a merge composed
 //! again after its own shot re-windowed its draft side, which moves the
 //! draft's state, or the same composition landed in a draft since — is that
-//! record's landing, nothing written (`Newest::recording`). The
+//! record's landing, nothing written (`WholeMerge::recording`). The
 //! composition's `Merged::prior` is what the composition saw, under the
 //! reader's currency, and never the landing's answer: a composition kept
 //! across a take-back, or one made before its own landing, lands by the
@@ -630,7 +630,7 @@ pub fn resume(
 /// `claims` as read, `replaces` the newest — under the shot's per-session
 /// ids (the module's doc), unless the newest record already names the
 /// member as landed in, or any record of the merger's own of the merge,
-/// its states ignored, does (`Newest::recording`), which is answered with
+/// its states ignored, does (`WholeMerge::recording`), which is answered with
 /// nothing written (P4, P14).
 /// It never runs the shot landing's read-first: a member the person edited
 /// before publishing holds other runs than M, which [`land`] with
@@ -671,12 +671,12 @@ pub fn record_published(
     let writer = Writer::new(board, merger, OnEnd::Rerun);
     let claims = writer.claims_standing(merged, member)?;
     let landed = RecordLanding::Member { member: member.clone(), position };
-    let newest = writer.newest_record(merged)?;
-    let record = match newest.naming(&landed).or_else(|| newest.recording(member)) {
+    let records = writer.records_of_the_merge(merged)?;
+    let record = match records.key.naming(&landed).or_else(|| records.recording(member)) {
         Some(link) => link.clone(),
         None => {
             let stem = Stem::of(&merged.key.text());
-            writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal, answers)?
+            writer.write_landing_record(merged, landed, &claims, &records.key, &stem, journal, answers)?
         }
     };
     Ok(Landed::Member {

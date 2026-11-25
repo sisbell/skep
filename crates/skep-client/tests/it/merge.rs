@@ -76,6 +76,11 @@
 //! landing's one signed send after a claim: a publish-class frame refused
 //! `attestation_required` under an id, the same frame signed under that id
 //! admitted, then answered from the memo with nothing committed.
+//! And THE HEAP A COMPOSITION TAKES (skep #1173, #1174), counted on the
+//! test's thread by the binary's counting allocator (`heap`): the line
+//! rule's reads kept only as where their breaks fall, over `compose_runs`
+//! and against the board, where the line runs it first reads span parts
+//! and where it reads on past one.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -87,8 +92,8 @@ use skep_client::board::{
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, landed_draft, record_published, replaced, resume, undo, unwithdraw, verify, withdraw, Answers, GapKind, Inputs, Landed, Landing, Merger, NoUndo, Record,
-    RecordLanding, Refusal, Replaced, Role, Run, RunCounts, Side, SideAt, SideState, SupersedeCause, Verdict,
+    compose, compose_runs, current, head_of, land, landed_draft, record_published, replaced, resume, undo, unwithdraw, verify, withdraw, Answers, GapKind, Inputs, Landed, Landing, Merger, NoUndo, Options, Record,
+    RecordLanding, Refusal, Replaced, Role, Run, RunCounts, Side, SideAt, SideIx, SideState, SupersedeCause, Verdict,
 };
 use skep_client::publication;
 use skep_client::sign::{sig_hex, signer_from_seed, Signer};
@@ -102,6 +107,10 @@ use crate::common::{
     bare, board, claim, insert_text, keyed_sub_account, keygen, mint, recording_board, spawn,
     typed_at, wire_delegate, wire_session,
 };
+
+// The binary's counting allocator, which the heap cells measure a
+// composition by.
+mod heap;
 
 /// The claimant's account and principal on a notebook.
 const ACCOUNT: &str = "1.0.1";
@@ -209,7 +218,8 @@ pub(crate) enum Staged<'a> {
     /// reference as a window — signed by address.
     Window { origin: &'a Address, from: u64, width: u64 },
     /// `text` of the draft `draft`, from its ordinal `from`, named by its
-    /// address: the shot re-mints the draft's own words and names it.
+    /// address: the shot re-mints the draft's own words and names it. Two
+    /// of a shot name one draft.
     Draft { draft: &'a Address, from: u64, text: &'a str },
     /// The draft `draft` named as the rendering draft, placing none of its
     /// own identity: a publication of the draft itself whose runs the other
@@ -263,7 +273,7 @@ pub(crate) fn shot(
             Staged::Draft { draft: named, from, text } => {
                 runs.push(frames::shot_run(&named.to_string(), &format!("{named}.0.1.{from}"), text.len() as u64));
                 values.extend_from_slice(text.as_bytes());
-                assert!(draft.is_none(), "one staging draft a shot");
+                assert!(draft.is_none() || draft.as_ref() == Some(*named), "one staging draft a shot");
                 draft = Some((*named).clone());
             }
             Staged::Names { draft: named } => {
@@ -2818,5 +2828,161 @@ fn a_composition_and_its_landings_dial_no_op_at() {
     for read in ["POST /op retrieve_v", "POST /op retrieve_i"] {
         assert!(dialed.iter().any(|line| line == read), "the shot's values, {read}: {dialed:?}");
     }
+    session.close().expect("close");
+}
+
+/// THE LINE RULE KEEPS NO BYTE IT READS (skep #1173, #1174): over a base
+/// of `W` one-byte positions with no line break, one side adding a word at
+/// the document's start and the other at its end, the rule reads all `W`
+/// positions to find the two meet, two `line` gaps. The composition asks
+/// for under 40 bytes a position and holds under 20 at once, at `W` = 2¹⁴
+/// and 2¹⁶ — the 25 a position the value closure builds for every read
+/// among them, held a read at a time, the largest about half the text —
+/// where the mutant keeping the items each read answers holds all 25, and
+/// the one copying each item it reads asks for some 50.
+#[test]
+fn the_line_rule_keeps_no_byte_it_reads() {
+    let d = addr("1.0.1.0.1");
+    for w in [1u64 << 14, 1 << 16] {
+        let base = vec![rd(&d, 1, w)];
+        let sides = [
+            (SideIx(0), vec![rd(&d, w + 1, 1), rd(&d, 1, w)]),
+            (SideIx(1), vec![rd(&d, 1, w), rd(&d, w + 2, 1)]),
+        ];
+        let values = |_: SideIx, r: &Run| Some(vec![b"a".to_vec(); r.width as usize]);
+        let options = Options::default();
+        let (composed, heap) =
+            heap::measured(|| compose_runs(&base, &d, &sides, None, &options, &values));
+        let kinds: Vec<(GapKind, bool)> =
+            composed.gaps.iter().map(|g| (g.kind, g.settled)).collect();
+        assert_eq!(kinds, [(GapKind::Line, false), (GapKind::Line, false)], "W = {w}");
+        let (requested, peak) = (heap.requested / w, heap.peak / w);
+        assert!(
+            requested < 40 && peak < 20,
+            "W = {w}: {requested} bytes a position asked for, {peak} held at once"
+        );
+    }
+}
+
+/// A published document whose last version holds `text`: the document
+/// and that version.
+///
+/// The text is typed in versions of at most 2¹⁷ fresh positions each — a
+/// publication prices every value it re-inserts, and the transaction budget
+/// takes no more — each version the one before it and the next burst.
+fn typed_document(rig: &Rig, session: &Session<'_>, text: &str) -> (Address, Address) {
+    let d = published_document(&rig.board, session, &rig.device);
+    let mut base: Option<Address> = None;
+    let mut typed = 0usize;
+    for burst in text.as_bytes().chunks(1 << 17) {
+        let burst = std::str::from_utf8(burst).expect("a burst of whole characters");
+        let mut staged = Vec::new();
+        if typed > 0 {
+            staged.push(Staged::Own { from: 1, text: &text[..typed] });
+        }
+        staged.push(Staged::Fresh { text: burst });
+        let on = base.as_ref().map(|member| (member, typed as u64));
+        base = Some(shot(&rig.board, session, &rig.device, &rig.bare, &d, on, &staged));
+        typed += burst.len();
+    }
+    (d, base.expect("a version"))
+}
+
+/// A version of `d` published on the member `on` names with its extent:
+/// `text`, the document's own words from `D·1`, with the one word `word`
+/// typed before each ordinal of `at`, rising, one past the text its end.
+fn adding(rig: &Rig, session: &Session<'_>, d: &Address, text: &str, on: (&Address, u64), at: &[u64], word: &str) -> Address {
+    let draft = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    insert_text(&rig.board, &rig.bare, &draft.to_string(), 1, &word.repeat(at.len()));
+    let mut staged = Vec::new();
+    let mut from = 1;
+    for (k, &cut) in (1u64..).zip(at) {
+        if cut > from {
+            staged.push(Staged::Own { from, text: &text[from as usize - 1..cut as usize - 1] });
+        }
+        staged.push(Staged::Draft { draft: &draft, from: k, text: word });
+        from = cut;
+    }
+    if from as usize <= text.len() {
+        staged.push(Staged::Own { from, text: &text[from as usize - 1..] });
+    }
+    shot(&rig.board, session, &rig.device, &rig.bare, d, Some(on), &staged)
+}
+
+/// A COMPOSITION HOLDS NO BYTE ITS LINE RULE READS (skep #1173, #1174),
+/// against the board itself, its heap counted on the test's thread alone,
+/// the daemon's own threads uncounted. Over a base of `W` one-byte
+/// positions with no line break, the head adding a word at the document's
+/// start and the daughter one at its end, the rule reads all `W` positions
+/// and asks two `line` gaps: the composition asks for under 140 bytes a
+/// position and holds under 30 at once, at `W` = 2¹⁴ and 2¹⁶ — the rule
+/// reading on past its first 4,096 positions in parts that double, the
+/// largest about half the text, each part's delivery and items held only
+/// while it is read — where the mutants keeping each part's items, or the
+/// items of the line runs the first reads answer, hold some 35 at 2¹⁶ and
+/// some 32 at 2¹⁴. Over a base of 2¹⁹ positions in 128 stretches of 4,096,
+/// the head adding a word at every other stretch's start and the daughter
+/// at the others', the 127 pairs' first reads — four parts' worth — are
+/// read a part at a time and kept only as where their breaks fall, and the
+/// composition holds under 18 bytes a position at once, where the mutant
+/// reading every part at once holds some 31. And one pair over that whole
+/// base, read on past a part, holds under 18 too, where the mutant reading
+/// a run whole holds some 25.
+#[test]
+fn a_composition_holds_no_byte_its_line_rule_reads() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    // The bytes a position of `w` a composition of the head and the
+    // daughter asks for and holds at once, its two `line` gaps checked.
+    let per_position = |d: &Address, head: &Address, daughter: &Address, w: u64| -> (u64, u64) {
+        let inputs = Inputs {
+            doc: d.clone(),
+            head: head.clone(),
+            base: None,
+            sides: vec![Side::Member(daughter.clone())],
+            options: Default::default(),
+            kind: kind.clone(),
+        };
+        let (merged, heap) =
+            heap::measured(|| compose(&rig.board, Some(session.token()), &inputs).expect("composed"));
+        let kinds: Vec<(GapKind, bool)> =
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect();
+        assert_eq!(kinds, [(GapKind::Line, false), (GapKind::Line, false)], "W = {w}");
+        (heap.requested / w, heap.peak / w)
+    };
+    for w in [1u64 << 14, 1 << 16] {
+        let text = "a".repeat(w as usize);
+        let (d, base) = typed_document(&rig, &session, &text);
+        let head = adding(&rig, &session, &d, &text, (&base, w), &[1], "X");
+        let daughter = adding(&rig, &session, &d, &text, (&base, w), &[w + 1], "Y");
+        let (requested, peak) = per_position(&d, &head, &daughter, w);
+        assert!(
+            requested < 140 && peak < 30,
+            "W = {w}: {requested} bytes a position asked for, {peak} held at once"
+        );
+    }
+    let (stretches, stretch) = (128u64, 4096u64);
+    let w = stretches * stretch;
+    let text = "a".repeat(w as usize);
+    let (d, base) = typed_document(&rig, &session, &text);
+    let starts: Vec<u64> = (0..stretches).map(|k| 1 + k * stretch).collect();
+    let even: Vec<u64> = starts.iter().copied().step_by(2).collect();
+    let odd: Vec<u64> = starts.iter().copied().skip(1).step_by(2).collect();
+    let head = adding(&rig, &session, &d, &text, (&base, w), &even, "X");
+    let daughter = adding(&rig, &session, &d, &text, (&base, w), &odd, "Y");
+    let (requested, peak) = per_position(&d, &head, &daughter, w);
+    assert!(
+        requested < 140 && peak < 18,
+        "{} pairs: {requested} bytes a position asked for, {peak} held at once",
+        stretches - 1
+    );
+    let later = adding(&rig, &session, &d, &text, (&head, w + stretches / 2), &[1], "X");
+    let daughter = adding(&rig, &session, &d, &text, (&base, w), &[w + 1], "Y");
+    let (requested, peak) = per_position(&d, &later, &daughter, w);
+    assert!(
+        requested < 140 && peak < 18,
+        "one pair over W = {w}: {requested} bytes a position asked for, {peak} held at once"
+    );
     session.close().expect("close");
 }

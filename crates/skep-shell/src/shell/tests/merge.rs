@@ -2911,11 +2911,21 @@ fn a_quote_moved_since_its_composition_refuses_the_landing_until_composed_again(
     sd.shutdown();
 }
 
+/// Returns the merged list a composition laid as `cells`.
+///
+/// Each cell is a run, in order: its origin, its first ordinal, its width.
+fn laid(cells: &[(&Address, u64, u64)]) -> super::super::merge::MergedList {
+    use skep_client::merge::{PlacedRun, Run};
+    let runs: Vec<PlacedRun> = cells.iter().map(|(origin, i, w)| PlacedRun { run: Run::new((*origin).clone(), *i, *w), side: None }).collect();
+    super::super::merge::MergedList::of(&runs)
+}
+
 /// Checks the re-open's read of a `moves` gap with spots off a draft's
 /// image, with no daemon behind it (CM-I33).
 ///
 /// The head placed Z's "quote" after `E·4`, before `E·5`, and the side
-/// after `E·7`, at the end. The quote whole at the end is the side's
+/// after `E·7`, at the end; the composition laid it at the head's place.
+/// The quote whole at the end is the side's
 /// placement, by the merger the call names; whole at the head's place it is
 /// none, and so it stays with the word after it deleted, an anchor the
 /// draft no longer holds bounding nothing; with `E·7` deleted the side's
@@ -2932,6 +2942,7 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
     let a = |s: &str| parse_address(s).unwrap();
     let (e, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"));
     let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
+    let m = laid(&[(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)]);
     let gap = Gap {
         id: GapId(1),
         kind: GapKind::Moves,
@@ -2946,7 +2957,7 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
     };
     let read = |gap: &Gap, image: &[(&Address, u64, u64)]| {
         let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
-        super::super::merge::holders_moved(std::slice::from_ref(gap), &image, &ResolvedBy::Agent)
+        super::super::merge::holders_moved(std::slice::from_ref(gap), &image, &m, &ResolvedBy::Agent)
     };
     let sides = vec![Resolution { gap: GapId(1), choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Agent }];
     assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 5)]), sides, "the quote at the end");
@@ -2958,6 +2969,232 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
     assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 3)]), vec![], "not whole");
     let settled = Gap { settled: true, resolved_by: Some(ResolvedBy::Person), ..gap.clone() };
     assert_eq!(read(&settled, &[(&e, 1, 8), (&z, 1, 5)]), vec![], "a settled gap");
+}
+
+/// A gap with spots whose default is a cut reads at its default (CM-I33).
+///
+/// With no daemon behind it: over "p q r" (`E·1–3`) the head places Z's
+/// quote after `p`, before `q`; the side moves `q` to the front and places
+/// the quote after `p`, before `r`. In the side's order `p` and `q` stand
+/// apart, so the composition lays the head's quote after `p` — a `cut`
+/// (R4 (i)) — where the side's own spot holds it, and taking the side's
+/// placement lays the same M. A draft holding M reads at the default: no
+/// holder moved, the head's placement held, no gap edited. Over "p q r s t"
+/// with the side's quote after `s` instead, the composition lays the head's
+/// after `p` too, and a draft with the quote after `s` still reads the
+/// side's placement (the mutants that judge the default by its own spot
+/// alone, or read the spot M lays its words at as open on both sides, break
+/// one of these).
+#[test]
+fn a_gap_with_spots_whose_default_is_a_cut_reads_at_its_default() {
+    use std::collections::BTreeMap;
+
+    use skep_client::merge::{compose_runs, Choice, Composed, GapKind, Options, Placement, Resolution, ResolvedBy, Run, SideIx};
+    use skep_client::publication::Run as Held;
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"));
+    let r = |origin: &Address, i: u64, w: u64| Run::new(origin.clone(), i, w);
+    let unread = |_: SideIx, _: &Run| None;
+    let compose = |n: u64, head: &[Run], side: &[Run], options: &Options| compose_runs(&[r(&e, 1, n)], &e, &[(SideIx(0), head.to_vec()), (SideIx(1), side.to_vec())], None, options, &unread);
+    let image = |c: &Composed| -> Vec<Held> { c.runs.iter().map(|p| Held::new(p.run.origin.clone(), p.run.i_start, p.run.width)).collect() };
+    let runs = |c: &Composed| -> Vec<Run> { c.runs.iter().map(|p| p.run.clone()).collect() };
+    let side_first = |gap| Options { resolutions: vec![Resolution { gap, choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Agent }], ..Options::default() };
+    // "p q r": the head's quote at a cut, the side's beside it.
+    let head = [r(&e, 1, 1), r(&z, 1, 5), r(&e, 2, 2)];
+    let side = [r(&e, 2, 1), r(&e, 1, 1), r(&z, 1, 5), r(&e, 3, 1)];
+    let c = compose(3, &head, &side, &Options::default());
+    let kinds: Vec<(GapKind, bool)> = c.gaps.iter().map(|g| (g.kind, g.settled)).collect();
+    assert_eq!(kinds, vec![(GapKind::Moves, false), (GapKind::Cut, false)], "the premise: {:?}", c.gaps);
+    assert_eq!(runs(&c), side.to_vec(), "the premise: M lays the quote after `p`");
+    assert_eq!(runs(&compose(3, &head, &side, &side_first(c.gaps[0].id))), runs(&c), "the premise: the side's placement lays the same M");
+    let m = super::super::merge::MergedList::of(&c.runs);
+    let draft = image(&c);
+    assert_eq!(super::super::merge::holders_moved(&c.gaps, &draft, &m, &ResolvedBy::Agent), vec![], "no holder moved");
+    assert!(super::super::merge::draft_holds(&c.gaps[0], &Placement::Order(vec![SideIx(0)]), &draft, &m), "the head's placement held");
+    assert_eq!(super::super::merge::spots_edited(&c.gaps, &BTreeMap::new(), &draft, &m), None, "no gap edited");
+    // "p q r s t": the side's quote after `s`, apart from where M lays the
+    // head's.
+    let head = [r(&e, 1, 1), r(&z, 1, 5), r(&e, 2, 4)];
+    let side = [r(&e, 2, 1), r(&e, 1, 1), r(&e, 3, 2), r(&z, 1, 5), r(&e, 5, 1)];
+    let c = compose(5, &head, &side, &Options::default());
+    assert_eq!(runs(&c), vec![r(&e, 2, 1), r(&e, 1, 1), r(&z, 1, 5), r(&e, 3, 3)], "the premise: M lays the quote after `p`");
+    let m = super::super::merge::MergedList::of(&c.runs);
+    assert_eq!(super::super::merge::holders_moved(&c.gaps, &image(&c), &m, &ResolvedBy::Agent), vec![], "M at the default");
+    let moved = compose(5, &head, &side, &side_first(c.gaps[0].id));
+    assert_eq!(runs(&moved), side.to_vec(), "the premise: the side's placement lays the quote after `s`");
+    assert_eq!(
+        super::super::merge::holders_moved(&c.gaps, &image(&moved), &m, &ResolvedBy::Agent),
+        vec![Resolution { gap: c.gaps[0].id, choice: Choice::Order(vec![SideIx(1)]), by: ResolvedBy::Agent }],
+        "the quote after `s`: the side's placement"
+    );
+}
+
+/// THE RE-OPEN READS A DRAFT AS ITS COMPOSITION LAYS IT, as a property.
+///
+/// Over generated compositions, with no daemon behind it (CM-I33; the
+/// module doc, THE RE-OPEN and **`merge.land`**): over a base of three to
+/// seven positions of E, two sides remove a stretch or not and insert words
+/// of their own, the side moving a stretch of the base half the time, and
+/// half the time both hold Z's quote, at one place or at two. Over M at the
+/// defaults no holder reads as moved and no gap as
+/// edited, the default holder's placement holds at every gap with spots,
+/// and no gap that is no `moves` gap reads a choice. Each single choice at
+/// each unsettled gap that is no `moves` gap — the omission, each side kept
+/// alone, each order of two — composed again to M′, reads no choice there
+/// where M′ is M, else one that composes again to M′, every other gap
+/// reading none. Each holder chosen at a gap with spots, composed again to
+/// M′: what the reading names composes again to M′, and it names nothing
+/// where M′ is M (the mutants that judge the default by its own spot alone,
+/// judge a holder's placement by its own spot alone, or rank an edit's
+/// sides by their listing and not by where the draft holds them, break one
+/// of these). Every draft here is a composition; an edit no composition
+/// makes is the cells' above. Three thousand cases, the default's own spot
+/// missing the place M lays its words at in more than twenty.
+#[test]
+fn the_re_open_reads_a_draft_as_its_composition_lays_it() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::super::merge::{draft_holds, edit_choice, holders_moved, spots_edited, MergedList};
+    use skep_client::merge::{compose_runs, Choice, Composed, GapKind, Options, Placement, Resolution, ResolvedBy, Run, SideIx};
+    use skep_client::publication::Run as Held;
+
+    /// splitmix64.
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, n: u64) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) % n
+        }
+    }
+    let a = |s: &str| parse_address(s).unwrap();
+    let (e, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"));
+    let unread = |_: SideIx, _: &Run| None;
+    let image = |c: &Composed| -> Vec<Held> { c.runs.iter().map(|p| Held::new(p.run.origin.clone(), p.run.i_start, p.run.width)).collect() };
+    let runs = |c: &Composed| -> Vec<Run> { c.runs.iter().map(|p| p.run.clone()).collect() };
+    // A side's list: the base in its order less its removals, each insert
+    // after the position it follows.
+    let list = |order: &[u64], removed: &BTreeSet<u64>, inserts: &[(u64, Run)]| -> Vec<Run> {
+        let mut out: Vec<Run> = Vec::new();
+        let mut push = |run: Run| match out.last_mut() {
+            Some(last) if last.origin == run.origin && last.reach() == run.i_start => last.width += run.width,
+            _ => out.push(run),
+        };
+        for p in std::iter::once(0).chain(order.iter().copied()) {
+            if p >= 1 && !removed.contains(&p) {
+                push(Run::new(e.clone(), p, 1));
+            }
+            for (_, run) in inserts.iter().filter(|(after, _)| *after == p) {
+                push(run.clone());
+            }
+        }
+        out
+    };
+    let choice_of = |placed: &Placement| match placed {
+        Placement::Order(sides) => Choice::Order(sides.clone()),
+        Placement::Omitted => Choice::Omit,
+        Placement::After | Placement::Before => unreachable!("an edit reads no move"),
+    };
+    let mut rng = Rng(0x5EED_2026_1125);
+    let (mut at_a_cut, mut choices, mut read_back, mut holders) = (0, 0, 0, 0);
+    for case in 0..3000 {
+        let n = 3 + rng.below(5);
+        let mut removed = [BTreeSet::new(), BTreeSet::new()];
+        let mut inserts: [Vec<(u64, Run)>; 2] = [Vec::new(), Vec::new()];
+        for (k, fresh) in [100, 200].into_iter().enumerate() {
+            if rng.below(2) == 0 {
+                let from = 1 + rng.below(n);
+                removed[k].extend(from..(from + 1 + rng.below(2)).min(n + 1));
+            }
+            for j in 0..rng.below(3) {
+                inserts[k].push((rng.below(n + 1), Run::new(e.clone(), fresh + 10 * j, 1 + rng.below(2))));
+            }
+        }
+        let mut order: Vec<u64> = (1..=n).collect();
+        if rng.below(2) == 0 {
+            let from = rng.below(n) as usize;
+            let width = (1 + rng.below(2) as usize).min(order.len() - from);
+            let moved: Vec<u64> = order.drain(from..from + width).collect();
+            let to = rng.below(order.len() as u64 + 1) as usize;
+            order.splice(to..to, moved);
+        }
+        if rng.below(2) == 0 {
+            let (width, after) = (1 + rng.below(3), rng.below(n + 1));
+            let other = if rng.below(2) == 0 { after } else { rng.below(n + 1) };
+            inserts[0].push((after, Run::new(z.clone(), 1, width)));
+            inserts[1].push((other, Run::new(z.clone(), 1, width)));
+        }
+        let base_order: Vec<u64> = (1..=n).collect();
+        let sides = [(SideIx(0), list(&base_order, &removed[0], &inserts[0])), (SideIx(1), list(&order, &removed[1], &inserts[1]))];
+        let say = format!("case {case}: n {n}; head {:?}; side {:?}", sides[0].1, sides[1].1);
+        let compose = |resolutions: Vec<Resolution>| compose_runs(&[Run::new(e.clone(), 1, n)], &e, &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+        let one = |gap, choice| compose(vec![Resolution { gap, choice, by: ResolvedBy::Agent }]);
+        let c = compose(vec![]);
+        let m = MergedList::of(&c.runs);
+        let at_defaults = image(&c);
+        // At the defaults.
+        assert_eq!(holders_moved(&c.gaps, &at_defaults, &m, &ResolvedBy::Agent), vec![], "{say}: a holder read as moved; gaps {:?}", c.gaps);
+        assert_eq!(spots_edited(&c.gaps, &BTreeMap::new(), &at_defaults, &m), None, "{say}: a gap read as edited; gaps {:?}", c.gaps);
+        let unlaid = MergedList::of(&[]);
+        for g in c.gaps.iter().filter(|g| !g.spots.is_empty()) {
+            assert!(draft_holds(g, &g.placed, &at_defaults, &m), "{say}: the default not held at gap {:?}", g.id);
+            at_a_cut += usize::from(!draft_holds(g, &g.placed, &at_defaults, &unlaid));
+        }
+        let open: Vec<_> = c.gaps.iter().filter(|g| !g.settled && g.kind != GapKind::Moves).collect();
+        for g in &open {
+            assert_eq!(edit_choice(g, &at_defaults), None, "{say}: a choice read at gap {:?} at its default", g.id);
+        }
+        // Each single choice at a gap that is no `moves` gap.
+        for g in &open {
+            let mut sides_at: Vec<SideIx> = Vec::new();
+            for (side, _) in &g.runs {
+                if !sides_at.contains(side) {
+                    sides_at.push(*side);
+                }
+            }
+            let mut tried = vec![Choice::Omit];
+            tried.extend(sides_at.iter().map(|s| Choice::KeepOnly(*s)));
+            if let [x, y] = sides_at[..] {
+                tried.extend([Choice::Order(vec![x, y]), Choice::Order(vec![y, x])]);
+            }
+            for choice in tried {
+                let chosen = one(g.id, choice.clone());
+                assert!(chosen.ignored.is_empty(), "{say}: {choice:?} at gap {:?} not applied", g.id);
+                let draft = image(&chosen);
+                let read = edit_choice(g, &draft);
+                choices += 1;
+                if runs(&chosen) == runs(&c) {
+                    assert_eq!(read, None, "{say}: {choice:?} at gap {:?} lays M, and reads {read:?}", g.id);
+                    continue;
+                }
+                let Some(read) = read else { panic!("{say}: {choice:?} at gap {:?} reads no choice; M′ {:?}", g.id, runs(&chosen)) };
+                assert_eq!(runs(&one(g.id, choice_of(&read))), runs(&chosen), "{say}: {choice:?} at gap {:?} read as {read:?}", g.id);
+                read_back += 1;
+                for other in open.iter().filter(|o| o.id != g.id) {
+                    assert_eq!(edit_choice(other, &draft), None, "{say}: {choice:?} at gap {:?} read at gap {:?}", g.id, other.id);
+                }
+            }
+        }
+        // Each holder chosen at a gap with spots.
+        for g in c.gaps.iter().filter(|g| !g.spots.is_empty()) {
+            for spot in &g.spots {
+                let chosen = one(g.id, Choice::Order(vec![spot.side]));
+                let named = holders_moved(&c.gaps, &image(&chosen), &m, &ResolvedBy::Agent);
+                holders += 1;
+                if runs(&chosen) == runs(&c) {
+                    assert_eq!(named, vec![], "{say}: holder {:?} at gap {:?} lays M, and reads moved", spot.side, g.id);
+                } else if !named.is_empty() {
+                    assert_eq!(runs(&compose(named.clone())), runs(&chosen), "{say}: holder {:?} at gap {:?} read as {named:?}", spot.side, g.id);
+                }
+            }
+        }
+    }
+    assert!(
+        at_a_cut > 20 && choices > 2500 && read_back > 1000 && holders > 1000,
+        "the default's own spot missing M in {at_a_cut} cases, {choices} choices, {read_back} read back, {holders} holders chosen"
+    );
 }
 
 /// A `line` gap a removal meets crosses naming it, with no daemon behind it
@@ -3014,9 +3251,12 @@ fn a_choice_is_read_off_the_draft_by_its_runs_their_order_and_their_spot() {
     let (e, d, s, z) = (a("1.0.1.0.1"), a("1.0.1.0.2"), a("1.0.1.0.3"), a("1.0.1.0.4"));
     let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
     let order = |sides: &[u8]| Placement::Order(sides.iter().map(|&s| SideIx(s)).collect());
+    // The composition the gap with spots is one of laid the quote at the
+    // head's place; the gaps with no spots are read off the image alone.
+    let m = laid(&[(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)]);
     let holds = |gap: &Gap, placed: &Placement, image: &[(&Address, u64, u64)]| {
         let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
-        super::super::merge::draft_holds(gap, placed, &image)
+        super::super::merge::draft_holds(gap, placed, &image, &m)
     };
     // The order gap: `a` the head's D·1..5, `b` the side's S·1..4, after E·7.
     let gap = Gap {
@@ -3197,7 +3437,10 @@ fn a_word_two_sides_placed_alike_is_read_once() {
     let at = |n: u64| a(&format!("1.0.1.0.1.0.1.{n}"));
     let order = |sides: &[u8]| Placement::Order(sides.iter().map(|&s| SideIx(s)).collect());
     let image = |cells: &[(&Address, u64, u64)]| -> Vec<Held> { cells.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect() };
-    let holds = |gap: &Gap, placed: &Placement, cells: &[(&Address, u64, u64)]| super::super::merge::draft_holds(gap, placed, &image(cells));
+    // The composition the gap with spots is one of laid y then q at the
+    // head's place; the order gaps are read off the image alone.
+    let m = laid(&[(&e, 1, 4), (&y, 1, 2), (&q, 1, 3), (&e, 5, 3)]);
+    let holds = |gap: &Gap, placed: &Placement, cells: &[(&Address, u64, u64)]| super::super::merge::draft_holds(gap, placed, &image(cells), &m);
     let read = |gap: &Gap, cells: &[(&Address, u64, u64)]| super::super::merge::edit_choice(gap, &image(cells));
     let gap = |runs: Vec<(u8, Run)>| Gap {
         id: GapId(1),
@@ -3260,7 +3503,8 @@ fn a_word_two_sides_placed_alike_is_read_once() {
 /// draft, with no daemon behind it (CM-I33; skep #1148).
 ///
 /// The head placed Z's "quote" after `E·4`, before `E·5`, and the side
-/// after `E·7`. Unsettled, the quote at the side's place names the gap, its
+/// after `E·7`, each gap read with the merged list of its own composition.
+/// Unsettled, the quote at the side's place names the gap, its
 /// words moved since the composition, and at the head's place or gone it
 /// does not; with the side's placement the merger's edit took, the quote
 /// back at the head's place names it and at the side's does not; a gap a
@@ -3300,13 +3544,17 @@ fn a_gap_with_spots_is_named_where_its_words_moved_since_the_composition() {
         spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(7)), before: None }],
         removed: vec![],
     };
-    let read = |quote: &Gap, chosen: &BTreeMap<usize, Placement>, image: &[(&Address, u64, u64)]| {
-        let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
-        super::super::merge::spots_edited(&[order.clone(), quote.clone()], chosen, &image)
-    };
-    let none = BTreeMap::new();
     let side_place = [(&e, 1, 8), (&z, 1, 5), (&s, 1, 4), (&d, 1, 5)];
     let head_place = [(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)];
+    // Each gap's composition: the quote at the head's place by default, and
+    // at the side's once its placement is taken.
+    let (at_head, at_side) = (laid(&head_place), laid(&[(&e, 1, 8), (&z, 1, 5)]));
+    let read = |quote: &Gap, chosen: &BTreeMap<usize, Placement>, image: &[(&Address, u64, u64)]| {
+        let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
+        let m = if quote.placed == Placement::Order(vec![SideIx(1)]) { &at_side } else { &at_head };
+        super::super::merge::spots_edited(&[order.clone(), quote.clone()], chosen, &image, m)
+    };
+    let none = BTreeMap::new();
     assert_eq!(read(&quote, &none, &side_place), Some(GapId(2)), "unsettled, the quote at the side's place");
     assert_eq!(read(&quote, &none, &head_place), None, "unsettled, at the head's place");
     assert_eq!(read(&quote, &none, &[(&e, 1, 8)]), None, "unsettled, the quote gone");

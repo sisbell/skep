@@ -290,7 +290,7 @@ pub enum GapKind {
     Order,
     /// An addition beside a removal, one of its anchors surviving (R2).
     ///
-    /// The adding side's own removal overlaps nothing another side removed:
+    /// No base position between its anchors was removed by two sides:
     /// settled, placed beside the survivor, save where another side's change
     /// meets it at a line's edge, a `line` gap with that place its default.
     Anchor,
@@ -307,8 +307,9 @@ pub enum GapKind {
     /// Two or more sides removed overlapping base material: unsettled (R4 ii).
     ///
     /// It holds whether all, some or none of them put something in its
-    /// place; the default is what was put there, kept in the commit order
-    /// after the left survivor.
+    /// place, and every side's addition between anchors around the material
+    /// stands in it, its own side one of the removers or not; the default is
+    /// what was put there, kept in the commit order after the left survivor.
     Collision,
     /// A side's reorder the spine did not take: unsettled (R4 iii).
     ///
@@ -1521,8 +1522,8 @@ impl Kept {
     /// holder's. Of the candidates that break no order, the one
     /// asking the fewest gaps is taken — a holder at the same place with
     /// words the keeper lacks, or with the shared words in another order,
-    /// makes an `order` gap, anchors both gone a `corner`, the keeper's
-    /// removal there overlapping another's a `collision` — then a holder's
+    /// makes an `order` gap, anchors both gone a `corner`, a base position
+    /// there two sides removed a `collision` — then a holder's
     /// own stretch before the common spot, then the earliest place, then the
     /// earliest side. A holder that asks, or is broken, keeps its copy, so its
     /// group at the gap lists every word it placed there and a choice of that
@@ -1562,12 +1563,12 @@ impl Kept {
         // spot or its candidate alone, each read once whatever the shares:
         // a stretch's first and last fragment a side does not hold, by
         // (stretch, side); whether one holder orders a spot's shared words
-        // otherwise than another, by (spot, holder, keeper); whether a
-        // keeper's removal between a candidate's anchors overlaps another's,
-        // by (keeper, anchors).
+        // otherwise than another, by (spot, holder, keeper); whether two
+        // sides removed a base position between a candidate's anchors, by
+        // its anchors.
         let mut unheld_in: HashMap<(usize, usize), Option<(usize, usize)>> = HashMap::new();
         let mut crossed_at: HashMap<(Anchors, usize, usize), bool> = HashMap::new();
-        let mut collides: HashMap<(usize, Anchors), bool> = HashMap::new();
+        let mut collides: HashMap<Anchors, bool> = HashMap::new();
         for share in shares {
             let stretch_of = |t: usize| holding[&(t, share.frag)];
             let words = &by_spot[&share.spot];
@@ -1634,13 +1635,10 @@ impl Kept {
                         breaks.push(t);
                     }
                 }
-                let collision = *collides.entry((k, anchors)).or_insert_with(|| {
+                let collision = *collides.entry(anchors).or_insert_with(|| {
                     let (lo, hi) =
                         (anchors.0.map_or(0, |x| x + 1), anchors.1.unwrap_or(r.base.len()));
-                    (lo..hi).any(|bi| {
-                        removed_by[k][bi]
-                            && (0..removed_by.len()).any(|t| t != k && removed_by[t][bi])
-                    })
+                    (lo..hi).any(|bi| removed_twice(&removed_by, bi))
                 });
                 let gone = |bi: Option<usize>| bi.is_some_and(|bi| removed[bi]);
                 let asks =
@@ -2171,9 +2169,11 @@ fn joined_to(joins: &HashMap<StretchAt, StretchAt>, from: StretchAt) -> Option<S
 
 /// Returns step 4's placements (merge record §1.4, §2).
 ///
-/// Each stretch is placed by its anchors. Its own side's removal between
-/// its anchors overlapping another side's removal is a `collision`,
-/// whatever stands in the place. Else both anchors surviving and standing
+/// Each stretch is placed by its anchors. A base position between its
+/// anchors that two or more sides removed (`removed_twice`) makes it a
+/// `collision`, whichever sides removed it — the stretch's own side among
+/// them or not — and whatever stands in the place: the stretch stands where
+/// their removals overlap (R4 ii). Else both anchors surviving and standing
 /// together in the spine is the gap between them; both surviving apart is a
 /// `cut`, after the left; one surviving is an `anchor`, beside the
 /// survivor; neither is a `corner`, after the nearest survivor to the left
@@ -2194,10 +2194,7 @@ fn placement(
             let key = stretch_key(st.x, st.y);
             let lo = st.x.map_or(0, |x| x + 1);
             let hi = st.y.unwrap_or(r.base.len());
-            let collision = (lo..hi).any(|bi| {
-                removed_by[st.side][bi] && (0..removed_by.len()).any(|t| t != st.side && removed_by[t][bi])
-            });
-            if collision {
+            if (lo..hi).any(|bi| removed_twice(removed_by, bi)) {
                 return Placed {
                     kind: Some(GapKind::Collision),
                     home: left(st.x),
@@ -2254,6 +2251,16 @@ fn after_left_survivor(from: Option<usize>, removed: &[bool], spine_pos: &[Optio
     0
 }
 
+/// Returns whether two or more sides removed the base position `bi`.
+///
+/// It is the one test of a collision (R4 ii): a region of such positions is
+/// listed whether or not anything stands in it (`collision_regions`), every
+/// stretch placed between anchors around one stands in it (`placement`),
+/// and a keeper's candidate place there asks (`Kept::of`).
+fn removed_twice(removed_by: &[Vec<bool>], bi: usize) -> bool {
+    removed_by.iter().filter(|side| side[bi]).count() >= 2
+}
+
 /// A stretch of base material two sides both removed.
 ///
 /// It is held as a spine gap and the base indices it covers (merge record
@@ -2273,7 +2280,7 @@ fn collision_regions(
     removed: &[bool],
     spine_pos: &[Option<usize>],
 ) -> Vec<Region> {
-    let twice = |bi: usize| removed_by.iter().filter(|side| side[bi]).count() >= 2;
+    let twice = |bi: usize| removed_twice(removed_by, bi);
     let mut out = Vec::new();
     let mut bi = 0;
     while bi < r.base.len() {

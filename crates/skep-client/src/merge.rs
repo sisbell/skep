@@ -92,9 +92,9 @@
 //!
 //! * `order` — two or more sides added at one spot: unsettled, the commit
 //!   order shown as the default, each side's runs together.
-//! * `anchor` — an addition beside a removal, one anchor surviving and the
-//!   adding side's own removal overlapping nothing another side removed:
-//!   settled, placed beside the survivor — save at a line's edge, `line`.
+//! * `anchor` — an addition beside a removal, one anchor surviving and no
+//!   base position between its anchors removed by two sides: settled,
+//!   placed beside the survivor — save at a line's edge, `line`.
 //! * `corner` — an addition whose anchors are both gone: unsettled, the
 //!   default after the nearest surviving base position to its left.
 //! * `cut` — an addition whose anchors the spine's order parts — at a cut
@@ -102,7 +102,8 @@
 //!   side's own move is not applied: unsettled, the default after the left
 //!   anchor.
 //! * `collision` — two or more sides removed overlapping material, whether
-//!   all, some or none of them put something in its place: unsettled, the
+//!   all, some or none of them put something in its place, every side's
+//!   addition there in it, its own side a remover or not: unsettled, the
 //!   default what was put there kept in the commit order.
 //! * `moves` — a side's move the spine did not take: unsettled. The sides'
 //!   moves fold in the order listed, each applied where it composes with

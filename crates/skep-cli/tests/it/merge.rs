@@ -53,8 +53,13 @@
 //! published; and A WINDOW WITHHELD in the text the line rule reads — a
 //! sub-account's private draft the base windows, which the claimant reads
 //! and the forker beside it may not — refused under every switch naming
-//! the window, the two additions' place and the ways on, exit 1, nothing
-//! written (skep #1174); and A PUBLISHED JOURNAL — the trunk and the
+//! the window, the two changes' place and the ways on, exit 1, nothing
+//! written (skep #1174); and A REMOVAL AT A LINE'S EDGE — the head's
+//! removal inside a line beside the daughter's words right after its
+//! break — asked as one `line` gap naming the removal in the report, the
+//! record and the talk, the choices the gap does not take not applied, and
+//! an omission landing with the removal standing (skep #1176); and A
+//! PUBLISHED JOURNAL — the trunk and the
 //! account's doc 1 — said by the composition's talk before any landing flag
 //! is acted on, and
 //! refused `published_target` in the command's words at `--publish`,
@@ -2443,6 +2448,91 @@ fn a_window_withheld_in_the_text_the_line_rule_reads_is_refused_naming_its_place
         assert!(r.err.contains(&format!("the board refused: withheld:{words}; nothing was composed")), "{switch:?}: {}", r.err);
         assert_eq!(position(), at, "{switch:?}: nothing written");
     }
+    session.close().expect("close");
+}
+
+/// A removal inside a line beside an addition right after its break asks,
+/// naming the removal (skep #1176).
+///
+/// The base `D.1` is "the cat\nsat\n"; the head `D.2` removes "ca"
+/// (`D·5–6`) inside line 1 and the daughter `D.1.1` adds "big " right after
+/// its break, `D·8`. The report holds one `line` gap, unsettled, after
+/// `D·8`, its default its own place, naming the head's removal between
+/// `D·4` and `D·7` under `removed` — the record's gap the same — and M is
+/// the composition the rule leaves as it was, "the t\nbig sat\n"; the talk
+/// names the removal beside the gap and says it stands whatever is chosen.
+/// `keep:0`, the remover's, and `both` are no choice there, each not
+/// applied and said so; `omit` with `--publish`, the agent's, lands "the
+/// t\nsat\n", the removal standing and the gap still naming it (the mutant
+/// that weighs no removal reports no gap).
+#[test]
+fn a_removal_inside_a_line_beside_an_addition_after_its_break_asks_naming_the_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let d = rig.document(&session);
+    let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "the cat\nsat\n" }]);
+    assert_eq!(base.to_string(), format!("{d}.1"), "the birth version");
+    let head = rig.shot(&session, &d, Some((&base, 12)), &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 7, text: "t\nsat\n" }]);
+    assert_eq!(head.to_string(), format!("{d}.2"), "the trunk's next member");
+    let daughter = rig.shot(&session, &d, Some((&base, 12)), &[Staged::Own { from: 1, text: "the cat\n" }, Staged::Fresh { text: "big " }, Staged::Own { from: 9, text: "sat\n" }]);
+    assert_eq!(daughter.to_string(), format!("{d}.1.1"), "the base's daughter");
+    let (d_s, daughter_s) = (d.to_string(), daughter.to_string());
+    let merge = ["--doc", d_s.as_str(), "--alternative", daughter_s.as_str(), "--kind", kind.as_str()];
+    let at = |n: u64| format!("{d}.0.1.{n}");
+    let position = || rig.board.health().unwrap().log_position();
+    let before = position();
+    let r = rig.merge(&merge);
+    let v = report(&r);
+    let removed = json!([{"side": 0, "after": at(4), "before": at(7)}]);
+    let gaps = v["gaps"].as_array().expect("gaps");
+    assert_eq!(gaps.len(), 1, "one place asks: {gaps:?}");
+    let gap = &gaps[0];
+    assert_eq!((gap["kind"].as_str(), gap["settled"].as_bool(), gap["resolved_by"].is_null()), (Some("line"), Some(false), true), "{gap}");
+    assert_eq!((gap["after"].as_str(), gap["before"].as_str()), (Some(at(8).as_str()), Some(at(9).as_str())), "{gap}");
+    assert_eq!(gap["default"].as_str(), Some(format!("after:{}", at(8)).as_str()), "{gap}");
+    assert_eq!(gap["removed"], removed, "the removal named: {gap}");
+    assert_eq!(v["record"]["gaps"][0]["removed"], removed, "the record names it: {}", v["record"]);
+    let words = gap["runs"][0]["i_start"].as_str().expect("the daughter's words").to_string();
+    assert_eq!(runs_of(&v), vec![(at(1), "4".into()), (at(7), "2".into()), (words, "4".into()), (at(9), "4".into())], "the t, then big sat");
+    assert_eq!(position(), before, "composing writes nothing");
+    let named = format!(
+        "1 place needs a choice: gap 1 (line) after {}, beside the words side 0 removed between {} and {}, default after:{} — the removal stands whatever is chosen",
+        at(8),
+        at(4),
+        at(7),
+        at(8)
+    );
+    assert!(r.err.contains(&named), "the gap and its removal named: {}", r.err);
+    // The remover's side kept, or both: no choice the gap takes.
+    for choice in ["1=keep:0", "1=both"] {
+        let mut args = merge.to_vec();
+        args.extend_from_slice(&["--resolve", choice]);
+        let r = rig.merge(&args);
+        let v = report(&r);
+        assert_eq!(v["ignored"], json!([1]), "{choice}: {}", r.err);
+        assert!(
+            r.err.contains("not applied: the resolution of gap 1 — it names no gap of this report, a gap the rules settled, a choice the gap cannot take"),
+            "{choice}: {}",
+            r.err
+        );
+    }
+    // Omitted and published as the agent: the daughter's words out, the
+    // removal standing.
+    let mut args = merge.to_vec();
+    args.extend_from_slice(&["--resolve", "1=omit", "--publish"]);
+    let r = rig.merge(&args);
+    let v = report(&r);
+    let member = addr(v["landed"]["member"].as_str().expect("the member"));
+    assert_eq!(member.to_string(), format!("{d}.3"), "the trunk's next member");
+    let expected = vec![(at(1), "4".into()), (at(7), "6".into())];
+    assert_eq!(runs_of(&v), expected, "the t, then sat");
+    assert_eq!(rig.image(&token, &member, 10), expected, "the member holds the removal and not the words");
+    let gap = &v["gaps"][0];
+    assert_eq!((gap["placed"].as_str(), gap["resolved_by"].as_str(), &gap["removed"]), (Some("omitted"), Some("agent"), &removed), "{gap}");
+    assert_eq!(v["ignored"], json!([]));
     session.close().expect("close");
 }
 

@@ -1372,15 +1372,22 @@ fn the_merge_references_state_the_shells_shapes() {
         "reason hop_unrecorded, naming the hop, a version on the side's line the board records no base for, its base never taken from its address",
         "refused merge_refused fork_base_moved {fork, source, head} where its source is not the head",
         "is refused merge_refused {arm: \"side_moved\", side, at, before, after}, isError, nothing landed",
-        "the text the merge reads, whatever the dedup, to tell whether two sides' additions meet at a line's edge holds words of a document you may not read, the call is refused merge_refused {arm: \"line_text_withheld\", doc, after, before}, isError, nothing written",
+        "the text the merge reads, whatever the dedup, to tell whether two sides' changes meet at a line's edge holds words of a document you may not read, the call is refused merge_refused {arm: \"line_text_withheld\", doc, after, before}, isError, nothing written",
+        "after and before the pair's outer anchors as their gaps, or a gap's removed, name them, null at an edge",
         "call again once doc is shared with you or its words are published, since no switch keeps the merge from that read",
         "before and after the side's arranged_at at the two reads, equal where its recorded base moved and its text did not; call again, which reads it as it stands",
         "as_of the one position the composition stands at, where every side that can change held the state it was read in",
         "spots, only on a moves gap of one set of words both sides placed at two places, each side's place {side, after, before}, the default the head's",
         "or, at a moves gap with spots, move the words to another side's spot, then compose again",
+        "or text it alone removed with no words of its own in their place",
+        "removed, only on a line gap a removal of the other side's meets, each removal {side, after, before}, the side that removed the text and the surviving positions either side of where it stood — the removal stands whatever you choose, the gap's choices placing its words",
     ] {
         assert!(compose.contains(said), "merge_compose's reference says {said:?}: {compose}");
     }
+    // A line gap a removal meets names it, and the removal stands whatever
+    // the merger chooses (skep #1176).
+    let removal = "or text it alone removed with no words of its own in their place, which the gap names in removed and which stands whatever you choose";
+    assert!(merging.contains(removal), "MERGING says {removal:?}: {merging}");
     // One set of words two sides placed apart: settled by moving them in
     // the draft, the one choice at it the side the composition took.
     let spots = "A moves gap with spots is one set of words both sides placed, each at a spot of its own, the default the head's";

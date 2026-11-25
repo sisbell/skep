@@ -16,11 +16,13 @@
 //! is read refused, a draft's recorded base moved while it is read
 //! refused, a trunk member read as of a draft's named position, and a
 //! board serving no `arranged_at` refused at the first fence; the dedup's
-//! values read together through each side; and the line rule's base text
-//! read together through the head, whatever the dedup's switch, a window
+//! values read together through each side; the line rule's base text read
+//! together through the head, whatever the dedup's switch, a window
 //! withheld in the text that decides it refused whatever the switches,
 //! naming the window and the pair's place, and one past that text never
-//! read.
+//! read; and a removal at a line's edge asked, its gap recorded naming it
+//! and verified, a window withheld in its pair's text refused naming the
+//! removal's place.
 
 use super::*;
 
@@ -28,12 +30,15 @@ use super::*;
 /// document's metadata, the daughter's for the base the board recorded for
 /// it (skep #1113), the head's OPENING FENCE — its `doc_metadata` — then
 /// the head's extent and image, the base's extent and image, the
-/// daughter's extent and image, the head's CLOSING FENCE, then the prior
-/// records by the links of the kind to the daughter — a record links every
-/// side but the head — and nothing written, nothing read through `/op-at`. The daughter is a published version
-/// below the head and takes no fence. The result is the race shape's M
-/// with its counts, key, cap and unlanded record, its `as_of` the position
-/// the head's fence stood at.
+/// daughter's extent and image, ONE VALUE READ through the head — the line
+/// rule's, of the base text between the head's "big " and the daughter's
+/// removal of " sat", which meet at no line's edge (skep #1176) — the
+/// head's CLOSING FENCE, then the prior records by the links of the kind
+/// to the daughter — a record links every side but the head — and nothing
+/// written, nothing read through `/op-at`. The daughter is a published
+/// version below the head and takes no fence. The result is the race
+/// shape's M with its counts, key, cap and unlanded record, its `as_of`
+/// the position the head's fence stood at.
 #[test]
 fn compose_reads_in_the_records_order_and_writes_nothing() {
     let (dialer, board, _) = open(World::race());
@@ -50,11 +55,23 @@ fn compose_reads_in_the_records_order_and_writes_nothing() {
             "image",
             "retrieve_doc_v_span_set",
             "image",
+            "retrieve_v",
             "doc_metadata",
             "find_links_ftt"
         ],
         "every read at the head, none rebuilding a past state"
     );
+    let through: Vec<String> = dialer.frames("retrieve_v")[0]["specs"]
+        .as_array()
+        .expect("the read's specs")
+        .iter()
+        .map(|s| s["doc"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !through.is_empty() && through.iter().all(|doc| *doc == format!("{D}.2")),
+        "the line rule's read, through the head: {through:?}"
+    );
+    assert!(merged.composed.gaps.is_empty(), "{:?}", merged.composed.gaps);
     let metadata: Vec<String> = dialer
         .frames("doc_metadata")
         .iter()
@@ -722,8 +739,10 @@ fn more_sides_than_one_byte_numbers_refuse_before_any_read() {
 /// its `source` — its opening fence — the head's opening fence, the
 /// head's extent and image, the base's extent and image — the base `D.1`,
 /// derived from the source and never named — the fork's extent and image,
-/// the fork's and the head's closing fences, the prior records by the links
-/// of the kind to the fork, a record linking every side but the head. M is
+/// the line rule's one value read of the base text between "big " and the
+/// fork's removal (skep #1176), the fork's and the head's closing fences,
+/// the prior records by the links of the kind to the fork, a record
+/// linking every side but the head. M is
 /// the race shape's "the big cat", the fork's role `fork`, the merge lands
 /// as the trunk's
 /// next member, and `verify` recomputes its record against the source
@@ -747,6 +766,7 @@ fn case_j_a_fork_of_a_published_version_merges_from_the_source_the_board_serves(
             "image",
             "retrieve_doc_v_span_set",
             "image",
+            "retrieve_v",
             "doc_metadata",
             "doc_metadata",
             "find_links_ftt"
@@ -1965,5 +1985,96 @@ fn a_withheld_window_past_the_text_deciding_the_line_rule_is_never_read() {
             .unwrap_or_else(|r| panic!("{:?}: composed past the text, W withheld: {r}", inputs.options));
         assert_eq!(merged.composed, readable.composed, "{:?}: as with W readable", inputs.options);
     }
+    assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+}
+
+/// A WINDOW WITHHELD IN A REMOVAL'S PAIR IS REFUSED NAMING THE REMOVAL'S
+/// PLACE (skep #1174, #1176): the base `D.1` "ab" `W`'s "c\n" "de\n", the
+/// head removing "b" (`D·2`) inside line 1 and the daughter adding "Y"
+/// right after line 1's break, so the rule reads `W` to decide the pair.
+/// With `W` readable, one `line` gap, naming the removal after `D·1`; with
+/// `W` withheld, the composition with the dedup off, on and with the retype
+/// refuses `LineTextWithheld` naming `W`, the removal's `after` and the
+/// addition's `before`, `D·3` (the mutant that names the pair by the
+/// addition's anchors alone names `W·2`).
+#[test]
+fn a_withheld_window_in_a_removals_pair_is_refused_naming_the_removals_place() {
+    const W: &str = "1.0.2.0.70";
+    let mut w = World::new();
+    w.text(D, 1, "abde\n");
+    w.text(D, 20, "Y");
+    w.text(W, 1, "c\n");
+    w.doc(W, false, "1.0.2", vec![run(W, 1, 2)]);
+    let base = vec![run(D, 1, 2), run(W, 1, 2), run(D, 3, 3)];
+    let head = vec![run(D, 1, 1), run(W, 1, 2), run(D, 3, 3)];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), base, None);
+    w.member(&format!("{D}.2"), head, Some(5));
+    w.member(&format!("{D}.1.1"), vec![run(D, 1, 2), run(W, 1, 2), run(D, 20, 1), run(D, 3, 3)], Some(5));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    let (dialer, board, _) = open(w);
+    let off = Inputs { options: Options { dedup: false, ..Options::default() }, ..race_inputs() };
+    let merged = compose(&board, Some(&token()), &off).expect("composed, W readable");
+    let gaps: Vec<(GapKind, bool, Vec<Removed>)> =
+        merged.composed.gaps.iter().map(|g| (g.kind, g.settled, g.removed.clone())).collect();
+    let removed = Removed { side: SideIx(0), after: Some(a(&format!("{D}.0.1.1"))), before: Some(a(&format!("{W}.0.1.1"))) };
+    assert_eq!(gaps, [(GapKind::Line, false, vec![removed.clone()])], "the premise: the removal asks");
+    let before = merged.composed.gaps[0].before.clone();
+    assert_eq!(before, Some(a(&format!("{D}.0.1.3"))), "the premise: the addition's place");
+    dialer.world().withheld.insert(W.to_string());
+    let refused = Refusal::LineTextWithheld { doc: a(W), after: removed.after, before };
+    let on = race_inputs();
+    let retype = Inputs { options: Options { retype: true, ..Options::default() }, ..race_inputs() };
+    for inputs in [&off, &on, &retype] {
+        assert_eq!(compose(&board, Some(&token()), inputs), Err(refused.clone()), "{:?}", inputs.options);
+    }
+}
+
+/// A REMOVAL AT A LINE'S EDGE IS ASKED, RECORDED AND VERIFIED (skep #1176):
+/// over the lined base `D.1`, the head `D.2` removes "eads " (`D·10–14`)
+/// inside line 2 and the daughter `D.1.1` adds "h1\nh2 The\n" (`D·36–45`)
+/// right after that line's break. The composition asks: one `line` gap,
+/// unsettled, holding the daughter's words and naming the head's removal
+/// between `D·9` and `D·15`. Settled `omit`, the merge leaves the words out
+/// and the removal stands, the resolution applied; its record reads back
+/// from its JSON with the removal named and verifies Equal against a
+/// member holding M (the mutant that weighs no removal leaves the
+/// resolution in `ignored`, and the record verifies `Differs`).
+#[test]
+fn a_removal_at_a_lines_edge_is_asked_recorded_and_verified() {
+    let mut w = World::new();
+    w.text(D, 1, "one\ntwo reads the model. The\nthree\n");
+    w.text(D, 36, "h1\nh2 The\n");
+    let head = vec![run(D, 1, 9), run(D, 15, 21)];
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), vec![run(D, 1, 35)], None);
+    w.member(&format!("{D}.2"), head.clone(), Some(35));
+    w.member(&format!("{D}.1.1"), vec![run(D, 1, 29), run(D, 36, 10), run(D, 30, 6)], Some(35));
+    w.member(&format!("{D}.3"), head.clone(), Some(30));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    let (_, board, _) = open(w);
+    let removed = vec![Removed {
+        side: SideIx(0),
+        after: Some(a(&format!("{D}.0.1.9"))),
+        before: Some(a(&format!("{D}.0.1.15"))),
+    }];
+    let asked = compose(&board, Some(&token()), &race_inputs()).expect("composed");
+    assert_eq!(
+        asked.composed.gaps.iter().map(|g| (g.kind, g.settled, g.removed.clone())).collect::<Vec<_>>(),
+        [(GapKind::Line, false, removed.clone())],
+        "the premise: the removal asks"
+    );
+    let omit = Resolution { gap: GapId(1), choice: Choice::Omit, by: ResolvedBy::Person };
+    let inputs = Inputs {
+        options: Options { resolutions: vec![omit], ..Options::default() },
+        ..race_inputs()
+    };
+    let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+    assert!(merged.composed.ignored.is_empty(), "the gap takes it: {:?}", merged.composed.ignored);
+    assert_eq!(m_runs(&merged), head, "the words left out, the removal standing");
+    let mut record = Record::from_value(&merged.record.to_value()).expect("the record reads back");
+    assert_eq!(record.gaps, merged.record.gaps, "read back, the removal named");
+    assert_eq!(record.gaps[0].removed, removed);
+    record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.3")), position: 0 });
     assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
 }

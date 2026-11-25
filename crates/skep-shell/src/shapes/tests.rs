@@ -155,6 +155,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MergeGap", json!({"id": 1, "kind": "order", "after": "1.0.1.0.64.0.1.4", "before": null, "runs": [{"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6}], "placed": [0, 1], "settled": false, "resolved_by": null})),
         ("GapRun", json!({"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6})),
         ("GapSpot", json!({"side": 1, "after": "1.0.1.0.64.0.1.8", "before": null})),
+        ("GapRemoved", json!({"side": 0, "after": "1.0.1.0.64.0.1.9", "before": "1.0.1.0.64.0.1.15"})),
         ("MergeDedup", json!({"gap": 2, "kept": [0], "dropped": [{"side": 1, "i_start": "1.0.1.0.64.0.1.20", "width": 6}]})),
         ("RunCounts", json!({"a": 1, "b": 2, "m": 3})),
         ("MergeLanded", json!({"outcome": "landed", "member": "1.0.1.0.64.2", "at": 412, "via": "answer", "claim": false, "supersede": ["1.0.1.0.64.1.1"], "daughter": false, "record": "1.0.1.0.1.0.2.3", "claims": ["1.0.1.0.64.0.2.1"], "retries": 0, "answers": [], "left_private": [{"set": "1.0.1.0.68", "links": 2}], "defaults": [], "deduped": []})),

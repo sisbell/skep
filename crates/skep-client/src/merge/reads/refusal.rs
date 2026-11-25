@@ -167,18 +167,19 @@ pub enum Refusal {
     /// `withheld` on a window in the text that decides the line rule.
     ///
     /// The line rule reads, whatever the value switches, the base text M
-    /// lays between two sides' neighbouring additions to tell whether they
-    /// meet at a line's edge: the position before the first, the text's
-    /// first positions and its last byte, and on from them only where a
-    /// longer line leaves the answer open — the same positions for every
-    /// reader (the merge record's §2; skep #1173, #1174). Where one of them
-    /// lies in a window onto a document the reader may not read, the board
-    /// masks it (wire.md §Value encodings) and the composition is refused,
-    /// naming the document and the pair's place in M: nothing is composed,
-    /// under any switch, and no gap set is made of what the reader cannot
-    /// see. The ways on are a share of `doc` to the merger, or its words
-    /// published. Its words name these facts alone; the embedder says what
-    /// the act did (SP-10).
+    /// lays between two sides' neighbouring changes — two additions, or an
+    /// addition and a removal one side alone made with no words of its own
+    /// in its place — to tell whether they meet at a line's edge: the
+    /// position before the first, the text's first positions and its last
+    /// byte, and on from them only where a longer line leaves the answer
+    /// open — the same positions for every reader (the merge record's §2;
+    /// skep #1173, #1174, #1176). Where one of them lies in a window onto a
+    /// document the reader may not read, the board masks it (wire.md §Value
+    /// encodings) and the composition is refused, naming the document and
+    /// the pair's place in M: nothing is composed, under any switch, and no
+    /// gap set is made of what the reader cannot see. The ways on are a
+    /// share of `doc` to the merger, or its words published. Its words name
+    /// these facts alone; the embedder says what the act did (SP-10).
     ///
     /// Where the reads are a merge record's recomputation, [`record::verify`]
     /// answers [`Verdict::Unreadable`] naming `doc` instead: the verdict
@@ -190,12 +191,16 @@ pub enum Refusal {
         /// The document the window opens on, the masked item's origin.
         doc: Address,
         /// The surviving base position M holds just before the first of the
-        /// two additions, as that addition's gap names it
-        /// ([`Gap::after`](crate::merge::Gap::after)); `None` at M's start.
+        /// two changes, as that addition's gap names it
+        /// ([`Gap::after`](crate::merge::Gap::after)), or that removal's
+        /// ([`Removed::after`](crate::merge::Removed::after)); `None` at M's
+        /// start.
         after: Option<Address>,
         /// The surviving base position M holds just after the second, as
         /// that addition's gap names it
-        /// ([`Gap::before`](crate::merge::Gap::before)); `None` at M's end.
+        /// ([`Gap::before`](crate::merge::Gap::before)), or that removal's
+        /// ([`Removed::before`](crate::merge::Removed::before)); `None` at
+        /// M's end.
         before: Option<Address>,
     },
     /// `doc_not_registered` on the document named.
@@ -689,7 +694,7 @@ impl fmt::Display for Refusal {
             Refusal::TwoDrafts => f.write_str("two drafts off one head are no merge shape: shoot one first"),
             Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld)"),
             Refusal::LineTextWithheld { doc, after, before } => {
-                write!(f, "{doc} is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' additions meet at a line's edge — the first ")?;
+                write!(f, "{doc} is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' changes meet at a line's edge — the first ")?;
                 match after {
                     Some(after) => write!(f, "after {after}")?,
                     None => f.write_str("at the document's start")?,

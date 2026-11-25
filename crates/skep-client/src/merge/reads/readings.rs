@@ -410,9 +410,9 @@ pub(in crate::merge) struct Readings {
 ///   windows from a document the reader may not read, the first the walk
 ///   reads: [`Refusal::Unreadable`] naming that document where the value
 ///   rule reads its values, and [`Refusal::LineTextWithheld`] naming it and
-///   the two additions' anchors where it stands in the text that decides
-///   whether two sides' neighbouring additions meet at a line's edge, which
-///   the line rule reads whatever the value switches — and an `image` run
+///   the pair's anchors where it stands in the text that decides whether
+///   two sides' neighbouring changes meet at a line's edge, which the line
+///   rule reads whatever the value switches — and an `image` run
 ///   that is no content I-address;
 /// - at the head, a side whose closing fence answers otherwise than its
 ///   opening one, [`Refusal::SideMoved`] naming it, the first in fence
@@ -620,30 +620,37 @@ pub(in crate::merge) fn read_shape(
 ///
 /// With the retype off, the dedup and the line rule alone read values,
 /// whatever the dedup's switch, and which runs each first reads is the
-/// walk's and never the values': the gaps the dedup compares and their
-/// groups are the same whatever bytes they hold, the neighbouring additions
-/// the line rule reads between are all found before it marks any, each
-/// pair's first reads asked before any is weighed, and every walk the core
-/// makes again under a chosen order or at a holder's defaults reads alike.
-/// So the walk is made once answering every run with no items, noting the
-/// runs it asks; those runs are read together, each holder's in as few
-/// reads as the budgets allow, and the walk is made again answering from
-/// them — two reads for a merge of two sides whatever its shared spots and
-/// its line edges, where a read a run would make one a run. A run the
-/// second walk asks and the first did not — the line rule reading on along
-/// a line longer than its first reads, which a walk answered no items never
-/// does — is read as it is asked. A walk that asks no run is the
-/// composition. With the retype on, which runs the walk reads depends on
-/// the values read before them, so each run is read as the walk asks it,
-/// as it is where the reads together are refused.
+/// walk's and never the values', save a removal's past the nearest beside
+/// an addition: the gaps the dedup compares and their groups are the same
+/// whatever bytes they hold, the neighbouring changes the line rule reads
+/// between are all found before it marks any, each pair's first reads
+/// asked before any is weighed, and every walk the core makes again under
+/// a chosen order or at a holder's defaults reads alike. So the walk is
+/// made once answering every run with no items, noting the runs it asks;
+/// those runs are read together, each holder's in as few reads as the
+/// budgets allow, and the walk is made again answering from them — two
+/// reads for a merge of two sides whatever its shared spots and its line
+/// edges, where a read a run would make one a run. A run the second walk
+/// asks and the first did not — the line rule reading on along a line
+/// longer than its first reads, or weighing a removal past the nearest
+/// beside an addition where no break parts them (skep #1176), which a walk
+/// answered no items never does — is read as it is asked. A walk that asks
+/// no run is the composition. With the retype on, which runs the walk
+/// reads depends on the values read before them, so each run is read as
+/// the walk asks it, as it is where the reads together meet a withheld
+/// window.
 ///
 /// # Errors
 ///
-/// The value reads' first refusal in the order the walk asks them: the
-/// reads together refused, the runs are read again one at a time, so the
-/// refusal is that run's, as the rule that asked it meets it ([`met_by`]) —
-/// a window withheld in the text deciding the line rule
-/// [`Refusal::LineTextWithheld`], naming the pair the read was for.
+/// A refusal of the reads together that is no withheld window — the
+/// session's end, [`Refusal::SessionEnded`], a guest's read the board
+/// closed, any other fault — is the answer as met, nothing asked past it
+/// (skep #812). Else the value reads' first refusal in the order the walk
+/// asks them: the reads together met a withheld window, so the runs are
+/// read again one at a time and the refusal is that run's, as the rule that
+/// asked it meets it ([`met_by`]) — a window withheld in the text deciding
+/// the line rule [`Refusal::LineTextWithheld`], naming the pair the read was
+/// for, one the value rule compares [`Refusal::Unreadable`].
 fn compose_with_values(
     reader: &Reader<'_>,
     doc: &Address,
@@ -690,7 +697,10 @@ fn compose_with_values(
                         };
                     compose_asking(base, doc, sides, None, options, &answered)
                 }
-                Err(_) => compose_asking(base, doc, sides, None, options, &one_at_a_time),
+                Err(Refusal::Unreadable(_)) => {
+                    compose_asking(base, doc, sides, None, options, &one_at_a_time)
+                }
+                Err(refused) => return Err(refused),
             }
         }
     } else {
@@ -706,7 +716,7 @@ fn compose_with_values(
 ///
 /// A window the line rule's read met withheld — a document the reader may
 /// not read in the text that decides whether two sides' neighbouring
-/// additions meet at a line's edge — is [`Refusal::LineTextWithheld`],
+/// changes meet at a line's edge — is [`Refusal::LineTextWithheld`],
 /// naming the document and the pair's anchors (skep #1174); every other
 /// refusal is itself, the value rule's withheld window
 /// [`Refusal::Unreadable`] among them.

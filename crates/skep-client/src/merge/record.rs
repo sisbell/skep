@@ -44,7 +44,7 @@
 //! or the landed document withheld from the reader answers `Unreadable`
 //! naming it, as does the origin of a run a side windows whose values the
 //! value rule reads, or the line rule reads in the text that decides
-//! whether two sides' neighbouring additions meet at a line's edge whatever
+//! whether two sides' neighbouring changes meet at a line's edge whatever
 //! the switches — the composition's `LineTextWithheld` — masked as a
 //! `withheld` item.
 //! A fork's text can change after the merge, so the record keeps each
@@ -84,8 +84,8 @@ use crate::halt::Halt;
 use crate::publication::owned_by;
 
 use super::compose::{
-    Choice, Gap, GapId, GapKind, Options, Placement, Resolution, ResolvedBy, Run, RunCounts,
-    SideIx, Spot, ValueLog,
+    Choice, Gap, GapId, GapKind, Options, Placement, Removed, Resolution, ResolvedBy, Run,
+    RunCounts, SideIx, Spot, ValueLog,
 };
 use super::landings;
 use super::reads::{self, last_component, origin_of, OnEnd, Reader, Refusal, Role, Side};
@@ -117,14 +117,16 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// twice nearest the gap's composed place, and moves no gap the rules
 /// settled; `KeepBoth` confirms a gap's placement as composed, never
 /// putting back a copy the dedup dropped; and a one-sided addition another
-/// side's meets at a line's edge is a `line` gap, unsettled, read off the
-/// base text between them whatever the value switches (skep #1173).
-/// [`verify`] composes under this build's rules whatever version a record
-/// names, so a record written under an earlier set can verify `Differs`
-/// where the sets part — and so can a record naming this set but holding no
-/// `line` gap where this build composes one, the name standing for records
-/// composed with the line rule and without it: its gaps numbered otherwise,
-/// its choices name other gaps.
+/// side's addition meets at a line's edge, or a removal another side alone
+/// made with no words of its own in its place, is a `line` gap, unsettled,
+/// read off the base text between them whatever the value switches, the
+/// removal named in its `removed` (skep #1173, #1176). [`verify`] composes
+/// under this build's rules whatever version a record names, so a record
+/// written under an earlier set can verify `Differs` where the sets part —
+/// and so can a record naming this set but holding no `line` gap where this
+/// build composes one, the name standing for records composed with the line
+/// rule, with its removal pairs and without either: its gaps numbered
+/// otherwise, its choices name other gaps.
 pub const RULES: &str = "merge-rules-4";
 
 /// Returns the `by` member: this library's crate and version.
@@ -680,10 +682,10 @@ impl Record {
     /// cannot read — a gap naming a side past the one byte a side is
     /// numbered by among them; a missing `landed`, `claims`, `retries`,
     /// `replaces`, `by`, `values.applied`, `values.retyped` or `answers`, or
-    /// a gap's missing `spots`, reads as its empty value, a side's missing
-    /// `arranged` as [`SideState::Unrecorded`], and `rules` is not read:
-    /// [`verify`] composes under this build's [`RULES`]. A member this build
-    /// does not know is left unread.
+    /// a gap's missing `spots` or `removed`, reads as its empty value, a
+    /// side's missing `arranged` as [`SideState::Unrecorded`], and `rules` is
+    /// not read: [`verify`] composes under this build's [`RULES`]. A member
+    /// this build does not know is left unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
             return None;
@@ -877,7 +879,9 @@ pub struct Deduped {
 /// Returns one gap as the record spells it (§4, `gaps`).
 ///
 /// A `moves` gap with spots carries `spots`, each `{side, after, before}`
-/// (CM-I33); every other gap carries none.
+/// (CM-I33), and a `line` gap a lone removal meets carries `removed`, each
+/// `{side, after, before}` too (skep #1176); every other gap carries
+/// neither.
 fn gap_to_value(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
@@ -925,6 +929,19 @@ fn gap_to_value(g: &Gap) -> Value {
             })
             .collect();
     }
+    if !g.removed.is_empty() {
+        gap["removed"] = g
+            .removed
+            .iter()
+            .map(|s| {
+                json!({
+                    "side": s.side.0,
+                    "after": s.after.as_ref().map(ToString::to_string),
+                    "before": s.before.as_ref().map(ToString::to_string),
+                })
+            })
+            .collect();
+    }
     gap
 }
 
@@ -947,7 +964,8 @@ fn side_run_from_value(v: &Value) -> Option<(SideIx, Run)> {
 /// Returns the gap a JSON object spells, its runs' origins by [`origin_of`].
 ///
 /// A gap with no `spots` reads with none, as one written before a `moves`
-/// gap carried them does.
+/// gap carried them does, and a gap with no `removed` reads with none, as
+/// one written before a `line` gap named its lone removals does.
 fn gap_from_value(v: &Value) -> Option<Gap> {
     let kind = match v["kind"].as_str()? {
         "order" => GapKind::Order,
@@ -992,6 +1010,16 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
             })
             .collect::<Option<Vec<_>>>()?,
     };
+    let removed = match &v["removed"] {
+        Value::Null => Vec::new(),
+        removed => removed
+            .as_array()?
+            .iter()
+            .map(|s| {
+                Some(Removed { side: side_ix(&s["side"])?, after: anchor(&s["after"])?, before: anchor(&s["before"])? })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    };
     Some(Gap {
         id: GapId(v["id"].as_u64()? as u32),
         kind,
@@ -1002,6 +1030,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         settled: v["settled"].as_bool()?,
         resolved_by,
         spots,
+        removed,
     })
 }
 
@@ -1618,7 +1647,7 @@ pub enum Verdict {
     /// a run a side windows, met as a `withheld` item, or as the `withheld`
     /// a read by identity answers, where the value rule reads the run's
     /// values or the line rule reads it among the text that decides whether
-    /// two sides' neighbouring additions meet at a line's edge, whatever the
+    /// two sides' neighbouring changes meet at a line's edge, whatever the
     /// value switches — the composition's [`Refusal::LineTextWithheld`]; the
     /// landed member, or the draft, withheld or not registered; or the draft
     /// side, or the draft landed in, as of the position the record names for

@@ -439,7 +439,7 @@
 //! all but `base_disagrees`), `two_drafts`, `over_cap {n, cap}`,
 //! `not_owner {addr}`, `no_merge`, `nothing_to_undo {draft, why}` — the
 //! rest under `merge_refused {arm, …}`, a window withheld in the text the
-//! line rule reads between two sides' additions among them, `arm`
+//! line rule reads between two sides' changes among them, `arm`
 //! `line_text_withheld {doc, after, before}` and never a side's
 //! `unreadable` (skep #1174); the board's verdicts verbatim,
 //! `arrangement_moved` with its `site.as_of` and `site.current` among them;
@@ -1356,8 +1356,8 @@ impl Shell {
     ///    `two_drafts`, `unreadable`, `no_such_document`, `merge_refused`
     ///    with its arm — `side_moved` where a side changed while the
     ///    composition read it, `line_text_withheld` naming the `doc` and
-    ///    the two additions' anchors where the text the line rule reads
-    ///    between them holds a window onto a document the session may not
+    ///    the pair's anchors where the text the line rule reads between two
+    ///    changes holds a window onto a document the session may not
     ///    read, whatever the switches, nothing composed — the board's
     ///    verdicts verbatim; at a re-open at the
     ///    draft side or of a fork landed in another draft, the read of the
@@ -2813,12 +2813,15 @@ fn owed_detail(parts: &[WindowPart], given: &[WindowPart], misfits: &[Misfit], l
 
 /// Returns one gap left at its default (`shapes`' `MergeDefault`).
 ///
-/// A gap with spots names them, as the report's gap does.
-fn default_json(g: &Gap) -> Value {
+/// A gap with spots names them, and a `line` gap a removal meets names
+/// that removal, as the report's gap does.
+pub(super) fn default_json(g: &Gap) -> Value {
     let v = gap_json(g);
     let mut default = json!({"id": v["id"], "kind": v["kind"], "after": v["after"], "before": v["before"], "placed": v["placed"]});
-    if let Some(spots) = v.get("spots") {
-        default["spots"] = spots.clone();
+    for member in ["spots", "removed"] {
+        if let Some(named) = v.get(member) {
+            default[member] = named.clone();
+        }
     }
     default
 }
@@ -2887,7 +2890,9 @@ fn run_json(run: &Run, side: Option<SideIx>, family: Family) -> Value {
 /// Returns one gap of the report (`shapes`' `MergeGap`).
 ///
 /// A `moves` gap with spots carries `spots`, each holder's `GapSpot`
-/// (CM-I33); every other gap carries none.
+/// (CM-I33), and a `line` gap another side's removal meets carries
+/// `removed`, each removal's `GapRemoved` (skep #1176); every other gap
+/// carries neither.
 pub(super) fn gap_json(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
@@ -2923,6 +2928,9 @@ pub(super) fn gap_json(g: &Gap) -> Value {
     });
     if !g.spots.is_empty() {
         gap["spots"] = g.spots.iter().map(|s| json!({"side": s.side.0, "after": s.after.as_ref().map(ToString::to_string), "before": s.before.as_ref().map(ToString::to_string)})).collect();
+    }
+    if !g.removed.is_empty() {
+        gap["removed"] = g.removed.iter().map(|s| json!({"side": s.side.0, "after": s.after.as_ref().map(ToString::to_string), "before": s.before.as_ref().map(ToString::to_string)})).collect();
     }
     gap
 }

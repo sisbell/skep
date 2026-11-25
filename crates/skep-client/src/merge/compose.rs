@@ -5,27 +5,29 @@
 //! and the run counts go out; every value read is made through a closure
 //! the caller supplies, so a test needs no board. `compose_asking`'s
 //! closure is told beside each run which rule asks it (`Ask`) — for the
-//! line rule, which pair of additions — so a caller whose read is refused
+//! line rule, which pair of changes — so a caller whose read is refused
 //! can say which.
 //! The record's §1.4 states the composition in seven steps, and the seven
 //! private functions `removals`, `spine_of`, `additions`, `placement`,
 //! `gaps`, `splice` and `report` are those steps in that order, with
-//! `collision_regions` feeding `gaps` and `resolve` applying step 7's
-//! resolutions ahead of the splice. Before them `claim_identities` finds
-//! each fresh identity several sides hold: at one spot it is kept once, by
-//! the holder whose keeping breaks no holder's own order (`Kept::of`),
-//! whichever side is listed first — a holder that orders it otherwise, or
-//! sets words of its own beside it, keeping its copy at a gap that asks,
-//! where the splice lays it once — and at two or more it is a `moves` gap
-//! with spots (CM-I33), the merger's choice of holder applied before the
-//! walk. §2's rules decide each gap's kind and its default — the sides'
-//! reorders folded into the spine in the order listed (`fold`), and two
-//! sides' neighbouring additions met at a line's edge, which `line_edges`
-//! decides inside `gaps`, whatever the switches, off as much of the base
-//! text between them as the answer needs, never a run of it past that
-//! (skep #1173, #1174); §5's value rule reads bytes at a shared gap (the
-//! dedup) and, switched on, before the walk (the retype), logging each run
-//! either takes out of M.
+//! `collision_regions` and `lone_removals` feeding `gaps` and `resolve`
+//! applying step 7's resolutions ahead of the splice. Before them
+//! `claim_identities` finds each fresh identity several sides hold: at one
+//! spot it is kept once, by the holder whose keeping breaks no holder's own
+//! order (`Kept::of`), whichever side is listed first — a holder that
+//! orders it otherwise, or sets words of its own beside it, keeping its
+//! copy at a gap that asks, where the splice lays it once — and at two or
+//! more it is a `moves` gap with spots (CM-I33), the merger's choice of
+//! holder applied before the walk. §2's rules decide each gap's kind and
+//! its default — the sides' reorders folded into the spine in the order
+//! listed (`fold`), and two sides' neighbouring changes met at a line's
+//! edge — two additions, or an addition and a removal one side alone made
+//! with no words of its own in its place (`lone_removals`) — which
+//! `line_edges` decides inside `gaps`, whatever the switches, off as much
+//! of the base text between them as the answer needs, never a run of it
+//! past that (skep #1173, #1174, #1176); §5's value rule reads bytes at a
+//! shared gap (the dedup) and, switched on, before the walk (the retype),
+//! logging each run either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms —
 //! the record on the trunk, where every member was minted against the one
@@ -62,6 +64,7 @@
 //! Nothing here dials, reads or writes. The one crate this file links is
 //! `skep-address`, for the address form the anchors are reported in.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Level, Nat, Tumbler};
@@ -318,19 +321,25 @@ pub enum GapKind {
     /// placement, every other holder's copy left out, its [`Gap::spots`]
     /// naming each holder's spot. The same identity at one spot is no gap.
     Moves,
-    /// One side's addition next in M to another side's at a line's edge:
-    /// unsettled, the default its own place (skep #1173).
+    /// One side's addition next in M to another side's change at a line's
+    /// edge: unsettled, the default its own place (skep #1173, #1176).
     ///
-    /// The two stand at different spots with only surviving base text
-    /// between them, one inside a line and the other right after that
-    /// line's break, or one at a line's start — the document's start among
-    /// them — and the other inside that line; a line break is the byte
-    /// `\n`. Each of the two held by one side alone is a `line` gap, and
-    /// words two or more sides added at one spot stay an `order` gap. Two
-    /// additions inside one line ask nothing, nor do two a whole line or
-    /// more apart, nor two the reads of whose base text between them
-    /// `values` does not answer one item a position, nor an addition whose
-    /// anchors do not both stand together.
+    /// The change is another side's addition, or a stretch of base material
+    /// one other side alone removed with no words of its own in its place,
+    /// which stands in M as a point where its bytes were. The two stand at
+    /// different places with only surviving base text between them, one
+    /// inside a line and the other right after that line's break, or one at
+    /// a line's start — the document's start among them — and the other
+    /// inside that line; a line break is the byte `\n`. Each addition of the
+    /// two held by one side alone is a `line` gap, a removal beside it named
+    /// in its [`Gap::removed`], and words two or more sides added at one spot
+    /// stay an `order` gap. Two changes inside one line ask nothing, nor do
+    /// two a whole line or more apart — a removal from a line's start beside
+    /// an addition right after that line's break among them — nor two the
+    /// reads of whose base text between them `values` does not answer one
+    /// item a position, nor an addition whose anchors do not both stand
+    /// together. A removal stands whatever the merger chooses: the gap's
+    /// choices place the addition.
     Line,
 }
 
@@ -387,6 +396,14 @@ pub struct Gap {
     ///
     /// Empty at every other gap.
     pub spots: Vec<Spot>,
+    /// Each removal that meets a `line` gap's words at a line's edge, in
+    /// M's order (skep #1176).
+    ///
+    /// Each is a stretch of base material another side alone removed with no
+    /// words of its own in its place. It stands whatever the merger chooses,
+    /// since the gap's choices place its words alone. Empty at every other
+    /// gap, and at a `line` gap that only another side's addition meets.
+    pub removed: Vec<Removed>,
 }
 
 /// Where one side placed the words a `moves` gap with spots contests.
@@ -401,6 +418,21 @@ pub struct Spot {
     /// The base position the side's placement follows, `None` at the start.
     pub after: Option<Address>,
     /// The base position the side's placement precedes, `None` at the end.
+    pub before: Option<Address>,
+}
+
+/// A removal a `line` gap names: base material one side alone removed.
+///
+/// It is read as a gap's place is, by the surviving base positions M holds
+/// either side of where its bytes were (skep #1176).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removed {
+    /// The side that removed it.
+    pub side: SideIx,
+    /// The surviving base position M holds just before it, `None` at M's
+    /// start.
+    pub after: Option<Address>,
+    /// The surviving base position M holds just after it, `None` at M's end.
     pub before: Option<Address>,
 }
 
@@ -468,9 +500,10 @@ pub struct Composed {
     /// where a side's order is chosen at a spine's `moves` gap — then every
     /// gap only a resolution makes. A one-sided addition between two
     /// surviving anchors that stand together asks nothing and is not listed,
-    /// save one next to another side's at a line's edge ([`GapKind::Line`]),
-    /// nor is a fresh identity several sides placed at one spot in one
-    /// order, one side's words there an in-order part of another's.
+    /// save one next to another side's addition or lone removal at a line's
+    /// edge ([`GapKind::Line`]), nor is a fresh identity several sides placed
+    /// at one spot in one order, one side's words there an in-order part of
+    /// another's.
     pub gaps: Vec<Gap>,
     /// The run counts.
     pub counts: RunCounts,
@@ -539,13 +572,18 @@ pub enum InPlaceOp {
 /// neither the other sides' reorders nor its earlier side's. `values`
 /// answers a side's run with its items: the value rule compares them, and
 /// the line rule reads through the first side listed as much of the
-/// surviving base text between two sides' neighbouring additions as its
-/// answer needs ([`GapKind::Line`]) — the position before the first, the
-/// text's last byte and its first 4,096 positions, read on from them only
-/// where a longer line leaves the answer open — whatever the value rule's
-/// switches; a run asked may be a part of a run the side holds; `None`
-/// leaves the rule that asked unfired there. The composition writes
-/// nothing and dials nothing (merge record §1.4, §7).
+/// surviving base text between two sides' neighbouring changes — two
+/// additions, or an addition and a removal one side alone made with no
+/// words of its own in its place — as its answer needs
+/// ([`GapKind::Line`]) — the position before the first, the text's last
+/// byte and its first 4,096 positions, read on from them only where a
+/// longer line leaves the answer open, and of the removals beside one
+/// addition the nearest first, a farther one weighed only where the nearer
+/// one's reads showed no break that parts it from the addition, a run whose
+/// every position an earlier read answered not asked again — whatever the
+/// value rule's switches; a run asked may be a part of a run the side
+/// holds; `None` leaves the rule that asked unfired there. The composition
+/// writes nothing and dials nothing (merge record §1.4, §7).
 ///
 /// Before the walk, a fresh identity two or more sides hold is kept by one
 /// of them. Where every holder placed it at one spot — the nearest base
@@ -618,23 +656,24 @@ pub fn compose_runs(
 /// [`compose_asking`]'s closure is told it beside each run, so its caller
 /// can say which rule a read it could not answer was for: the value rule's
 /// comparison of a run, or the line rule's read of the text that decides
-/// whether two sides' neighbouring additions meet at a line's edge, the
-/// pair named by its two anchors as the report names a gap's (`anchors_at`;
-/// skep #1174).
+/// whether two sides' neighbouring changes meet at a line's edge — two
+/// additions, or an addition and a removal one side alone made — the pair
+/// named by its two anchors as the report names a gap's or a removal's
+/// (`anchors_at`; skep #1174, #1176).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::merge) enum Ask {
     /// The value rule's: the dedup's comparison at a gap, or the retype's.
     Value,
-    /// The line rule's, for the pair of additions between `after` and
+    /// The line rule's, for the pair of changes between `after` and
     /// `before`.
     Line {
         /// The surviving base position M holds just before the first of
-        /// the two, as that addition's gap names it ([`Gap::after`]);
-        /// `None` at M's start.
+        /// the two, as that addition's gap names it ([`Gap::after`]), or
+        /// that removal's ([`Removed::after`]); `None` at M's start.
         after: Option<Address>,
         /// The surviving base position M holds just after the second, as
-        /// that addition's gap names it ([`Gap::before`]); `None` at M's
-        /// end.
+        /// that addition's gap names it ([`Gap::before`]), or that
+        /// removal's ([`Removed::before`]); `None` at M's end.
         before: Option<Address>,
     },
 }
@@ -648,7 +687,7 @@ pub(in crate::merge) type AskedValues<'a> = dyn Fn(SideIx, &Run, &Ask) -> Option
 /// Composes as [`compose_runs`] does, each read told the rule that asks it.
 ///
 /// `values` is told beside each run whether the value rule or the line
-/// rule asks it, and for the line rule the pair of additions the read
+/// rule asks it, and for the line rule the pair of changes the read
 /// decides ([`Ask`]); [`compose_runs`] is this with a closure that answers
 /// alike whatever it is told.
 ///
@@ -738,10 +777,11 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
     };
     let (stretches, placed) = layout.place(&claimed.kept);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
+    let lone = |stretches: &[Stretch]| lone_removals(r, &removed_by, &removed, &spine_pos, stretches);
     let first = after_claims + moves.len() as u32;
     let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
     let (mut entries, mut applied) =
-        gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, &by_value);
+        gaps(r, chain, &spine, &stretches, &placed, &regions, &lone(&stretches), first, options, values, &by_value);
     if let SpineOrder::Chosen { numbering, .. } = order {
         // A side's order chosen at a spine's `moves` gap: every gap numbered
         // as the walk at the order given numbered it, which a holder's
@@ -751,14 +791,15 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
         // A holder chosen at a gap with spots: the gaps numbered as the walk
         // at the claims' defaults numbers its own. Only the moved words'
         // stretches differ between the two, so the removals, the spine and
-        // the collision regions are this walk's. That walk's line rule reads
-        // the base text as this one's does, so a `line` gap at the defaults
-        // is one there too and keeps its number; the dedup changes no kind,
-        // run or place, so that walk's dedup reads no value.
+        // the collision regions are this walk's, and the lone removals are
+        // those that walk's stretches leave. That walk's line rule reads the
+        // base text as this one's does, so a `line` gap at the defaults is
+        // one there too and keeps its number; the dedup changes no kind, run
+        // or place, so that walk's dedup reads no value.
         let (stretches, placed) = layout.place(defaults);
         let none = |_: SideIx, _: &Run| -> Option<Vec<Item>> { None };
         let (at_defaults, _) =
-            gaps(r, chain, &spine, &stretches, &placed, &regions, first, options, values, &none);
+            gaps(r, chain, &spine, &stretches, &placed, &regions, &lone(&stretches), first, options, values, &none);
         number_as(&mut entries, &mut applied, &at_defaults, &claimed.moved(), first);
     }
     let ignored = resolve(r, &mut entries, &mut moves, &claimed.claims, &options.resolutions, &in_base, &spine_pos);
@@ -1964,8 +2005,9 @@ fn additions(seqs: &[Vec<usize>], in_base: &[Option<usize>]) -> Vec<Stretch> {
 /// `home` is the gap of the spine it lands in (gap `g` lies before the
 /// spine's `g`-th survivor, `0` the start), `kind` `None` for an addition
 /// between two anchors that stand together, which asks nothing where it is
-/// one-sided and meets no other side's at a line's edge (`line_edges`), and
-/// `key` the spot it sorts by there, its anchors' (`stretch_key`).
+/// one-sided and meets no other side's addition or lone removal at a line's
+/// edge (`line_edges`), and `key` the spot it sorts by there, its anchors'
+/// (`stretch_key`).
 #[derive(Clone, Copy)]
 struct Placed {
     kind: Option<GapKind>,
@@ -2163,6 +2205,63 @@ fn collision_regions(
     out
 }
 
+/// A stretch of base material one side alone removed with no words of its
+/// own in its place, as the line rule weighs it (skep #1176).
+///
+/// It stands in M as a point where its bytes were: `home` the spine gap
+/// after the nearest surviving base position to its left, as a collision's
+/// region stands, and `key` its first and last base indices, which order it
+/// among the gaps there.
+#[derive(Clone, Copy)]
+struct LoneRemoval {
+    side: usize,
+    home: usize,
+    key: (i64, i64),
+}
+
+/// Returns the stretches of the base one side alone removed and set no
+/// words of its own in place of, in M's order (skep #1176).
+///
+/// Each is a maximal run of base indices `removed_by` marks removed by one
+/// side and by no other. One the side set words in place of — a stretch of
+/// its own whose anchors stand either side of the run — is no lone
+/// removal: the line rule weighs those words, an addition, instead.
+fn lone_removals(
+    r: &Refinement,
+    removed_by: &[Vec<bool>],
+    removed: &[bool],
+    spine_pos: &[Option<usize>],
+    stretches: &[Stretch],
+) -> Vec<LoneRemoval> {
+    let by_one = |bi: usize| -> Option<usize> {
+        let mut by = (0..removed_by.len()).filter(|&side| removed_by[side][bi]);
+        let side = by.next()?;
+        by.next().is_none().then_some(side)
+    };
+    let mut out = Vec::new();
+    let mut bi = 0;
+    while bi < r.base.len() {
+        let Some(side) = by_one(bi) else {
+            bi += 1;
+            continue;
+        };
+        let first = bi;
+        while bi < r.base.len() && by_one(bi) == Some(side) {
+            bi += 1;
+        }
+        let last = bi - 1;
+        let typed_over = stretches.iter().any(|st| {
+            st.side == side && st.x.is_none_or(|x| x < first) && st.y.is_none_or(|y| y > last)
+        });
+        if !typed_over {
+            let home = after_left_survivor(first.checked_sub(1), removed, spine_pos);
+            out.push(LoneRemoval { side, home, key: (first as i64, last as i64) });
+        }
+    }
+    out.sort_by_key(|lone| (lone.home, lone.key));
+    out
+}
+
 // ── step 5: the gaps ──────────────────────────────────────────────────────
 
 /// One side's material at a gap.
@@ -2181,7 +2280,8 @@ struct Group {
 ///
 /// It holds its number and its kind, the spine gap it lands in, the spot it
 /// sorts by there, the groups by side in the default order, how they are
-/// placed, and whether and by whom it is settled.
+/// placed, whether and by whom it is settled, and the lone removals that
+/// meet its words at a line's edge (`line_edges`).
 struct Entry {
     id: Option<GapId>,
     kind: Option<GapKind>,
@@ -2191,15 +2291,19 @@ struct Entry {
     placed: Placement,
     settled: bool,
     resolved_by: Option<ResolvedBy>,
+    removed: Vec<LoneRemoval>,
 }
 
-/// Returns step 5's gaps (merge record §1.4, §2 R1, §5; skep #1173).
+/// Returns step 5's gaps (merge record §1.4, §2 R1, §5; skep #1173,
+/// #1176).
 ///
 /// The stretches that landed at one spot are grouped by side, each group in
 /// its side's own order; the collisions at one spine gap are one
 /// `collision` gap, a region no side filled listed too; the gaps are put in
-/// M's order, the order `splice` lays them in, and two sides' neighbouring
-/// additions met at a line's edge are `line` gaps (`line_edges`, its reads
+/// M's order, the order `splice` lays them in, and an addition met at a
+/// line's edge by another side's neighbouring addition, or by one of
+/// `lone`, the removals one side alone made with no words of its own in
+/// their place (`lone_removals`), is a `line` gap (`line_edges`, its reads
 /// through `lines`); then the groups go in the order rule's order — a spot
 /// two sides added at is an `order` gap, unsettled, where it would otherwise
 /// be no gap or an `anchor` — and the dedup reads through `values` where it
@@ -2217,6 +2321,7 @@ fn gaps(
     stretches: &[Stretch],
     placed: &[Placed],
     regions: &[Region],
+    lone: &[LoneRemoval],
     first: u32,
     options: &Options,
     lines: &AskedValues<'_>,
@@ -2242,6 +2347,7 @@ fn gaps(
                     placed: if p.before { Placement::Before } else { Placement::After },
                     settled: false,
                     resolved_by: None,
+                    removed: Vec::new(),
                 });
                 entries.len() - 1
             }
@@ -2282,11 +2388,12 @@ fn gaps(
                 placed: Placement::After,
                 settled: false,
                 resolved_by: None,
+                removed: Vec::new(),
             });
         }
     }
     entries.sort_by_key(|e| (e.home, e.key));
-    line_edges(r, spine, &mut entries, lines);
+    line_edges(r, spine, &mut entries, lone, lines);
     // The order rule: a spot two sides added at is an `order` gap where it
     // would otherwise be no gap or an `anchor`, the groups by the commit of
     // their first run — inside the document's chain the address order, a
@@ -2346,44 +2453,74 @@ fn gaps(
     (entries, applied)
 }
 
-/// How far into the text between two additions the line rule first reads.
+/// How far into the text between a pair's two changes the line rule first
+/// reads.
 ///
 /// A read of this many positions finds the break of any line shorter than
-/// it. The rule's first reads over two additions ask at most this many
-/// positions of the text between them and two more, whatever the text's
-/// length; it reads on only where a line longer than this leaves its
-/// answer open (`meet_at_a_line_edge`).
+/// it. The rule's first reads over a pair ask at most this many positions
+/// of the text between them and two more, whatever the text's length; it
+/// reads on only where a line longer than this leaves its answer open
+/// (`meet_at_a_line_edge`).
 pub(super) const LINE_READ: u64 = 4096;
 
-/// Marks each addition another side's meets at a line's edge a `line` gap
-/// (skep #1173).
+/// Marks each addition another side's change meets at a line's edge a
+/// `line` gap (skep #1173, #1176).
 ///
 /// `entries` are in M's order. Two neighbours among those that lay words
 /// are a pair where they lie in different spine gaps, so that only
 /// surviving base text stands between them in M, neither has a kind, their
 /// groups are of two sides or more, and one at least is held by one side
 /// alone — two held by several sides are `order` gaps whatever the text.
-/// The first of a pair stands at a line's start where the base position
-/// just before it is a line break, or where it lies at the document's
-/// start. The pair meets at a line's edge where the base text M lays
-/// between the two holds one line break, its last byte, and the first does
-/// not stand at a line's start — one inside a line, the other right after
-/// its break — or where that text holds none and the first does — one at a
-/// line's start, the other inside that line. Each of the two held by one
-/// side alone is then a `line` gap. `lines` reads what decides it through
+/// A removal of `lone`, in M's order too, is a pair with its nearest
+/// neighbour before it and its nearest after it among the entries that lay
+/// words, where that neighbour lies in another spine gap, has no kind, and
+/// is held by one other side alone; removals stand beside each other in M
+/// as points, so another removal between them parts nothing. The first of a
+/// pair stands at a line's start where the base position just before it is
+/// a line break, or where it lies at the document's start. The pair meets
+/// at a line's edge where the base text M lays between the two holds one
+/// line break, its last byte, and the first does not stand at a line's
+/// start — one inside a line, the other right after its break — or where
+/// that text holds none and the first does — one at a line's start, the
+/// other inside that line. Each addition of the two held by one side alone
+/// is then a `line` gap, and the removal of a pair is named in its gap
+/// ([`Gap::removed`]), in M's order. `lines` reads what decides it through
 /// the first side listed, which holds every surviving base position
 /// (`meet_at_a_line_edge`), each read told the pair it decides: the first
-/// addition's `after` anchor and the second's `before`, as the report
-/// names each gap's (`anchors_at`).
+/// change's `after` anchor and the second's `before`, as the report names
+/// each gap's and each removal's (`anchors_at`). The pairs of two additions
+/// are weighed first, in M's order.
 ///
-/// Which runs a pair's first reads ask is the entries' alone, never the
-/// values': every pair is found on the kinds `placement` gave, the marks
-/// made once every pair is weighed, and every first read of a pair asked
-/// before any is weighed. A pair reads on past them only where they
-/// answered one item a position and left it undecided, so a reader
-/// answering no run, or every run with no items, marks no gap and is asked
-/// no further read.
-fn line_edges(r: &Refinement, spine: &[usize], entries: &mut [Entry], lines: &AskedValues<'_>) {
+/// The removals that pair with one addition are weighed walking outward
+/// from it, the nearest first on each side, those at one spot weighed as
+/// one, since a pair's answer is its two spots'. The texts of one walk nest:
+/// each farther one holds the nearer one's, so a break the nearer one's
+/// reads showed before its text's last byte — or anywhere in it, walking
+/// after the addition, where each text ends at its own removal — parts
+/// every farther removal too, and the walk ends there, unread. It ends as
+/// well at a pair whose reads did not answer one item a position. Every
+/// position a read answered is kept for the rest of the rule
+/// (`LineReads`), so a farther pair asks only the text the nearer ones'
+/// reads did not reach and the position before its removal: a walk reads
+/// the text out from its addition to the break that ends it, a line's
+/// worth or two, however many removals share one addition (skep #1176).
+///
+/// Which runs a pair's first reads ask is the entries' and the removals'
+/// alone, never the values', save a walk's past its nearest removal: every
+/// pair is found on the kinds `placement` gave, the marks made once every
+/// pair is weighed, and every first read of a pair asked before any is
+/// weighed, or answered from the positions kept. A pair reads on past
+/// them, and a walk goes on past its pair, only where they answered one
+/// item a position and left it undecided, so a reader answering no run, or
+/// every run with no items, marks no gap and is asked no further read.
+fn line_edges(
+    r: &Refinement,
+    spine: &[usize],
+    entries: &mut [Entry],
+    lone: &[LoneRemoval],
+    lines: &AskedValues<'_>,
+) {
+    let reads = LineReads::new(lines);
     let alone = |e: &Entry| e.groups.len() == 1;
     let laying: Vec<usize> =
         (0..entries.len()).filter(|&i| !entries[i].groups.is_empty()).collect();
@@ -2395,45 +2532,171 @@ fn line_edges(r: &Refinement, spine: &[usize], entries: &mut [Entry], lines: &As
         if !apart || held.len() < 2 || !(alone(p) || alone(q)) {
             continue;
         }
-        let before = p.home.checked_sub(1).map(|at| r.last_position(r.base[spine[at]]));
-        let text = r.coalesce(spine[p.home..q.home].iter().map(|&bi| r.base[bi]));
-        let ask = Ask::Line {
-            after: anchors_at(r, spine, p.home).0,
-            before: anchors_at(r, spine, q.home).1,
-        };
-        let read = |side: SideIx, run: &Run| lines(side, run, &ask);
-        if meet_at_a_line_edge(r.side_ix[0], before, &text, &read) {
+        if meet_between(r, spine, p.home, q.home, &reads).meets {
             marked.extend(pair.iter().copied().filter(|&i| alone(&entries[i])));
         }
     }
+    // A removal lies before every entry at its spot or past it, so it is
+    // walked to from the first entry that lays words at or past its spot
+    // and from the last before it; `past(i)` is the first removal past
+    // entry `i`.
+    let place = |i: usize| (entries[i].home, entries[i].key);
+    let past = |i: usize| lone.partition_point(|l| (l.home, l.key) <= place(i));
+    let mut answered: Vec<(usize, LoneRemoval)> = Vec::new();
+    for (k, &i) in laying.iter().enumerate() {
+        let e = &entries[i];
+        if e.kind.is_some() || !alone(e) {
+            continue;
+        }
+        let (side, home) = (e.groups[0].side, e.home);
+        let from = k.checked_sub(1).map_or(0, |j| past(laying[j]));
+        let to = laying.get(k + 1).map_or(lone.len(), |&j| past(j));
+        let at = past(i);
+        // Before the addition, each removal the first of its pair: the
+        // texts share their last byte.
+        let mut weighed: Option<(usize, Edge)> = None;
+        for removal in lone[from..at].iter().rev().filter(|l| l.side != side && l.home < home) {
+            let edge = match weighed {
+                Some((spot, edge)) if spot == removal.home => edge,
+                Some((_, edge)) if !edge.answered || edge.broken => break,
+                _ => meet_between(r, spine, removal.home, home, &reads),
+            };
+            weighed = Some((removal.home, edge));
+            if edge.meets {
+                answered.push((i, *removal));
+            }
+        }
+        // After it, the addition the first: each text ends at its removal.
+        let mut weighed: Option<(usize, Edge)> = None;
+        for removal in lone[at..to].iter().filter(|l| l.side != side && l.home > home) {
+            let edge = match weighed {
+                Some((spot, edge)) if spot == removal.home => edge,
+                Some((_, edge)) if !edge.answered || edge.broken || edge.ends_in_break => break,
+                _ => meet_between(r, spine, home, removal.home, &reads),
+            };
+            weighed = Some((removal.home, edge));
+            if edge.meets {
+                answered.push((i, *removal));
+            }
+        }
+    }
+    answered.sort_by_key(|(i, removal)| (*i, removal.home, removal.key));
     for i in marked {
         entries[i].kind = Some(GapKind::Line);
     }
+    for (i, removal) in answered {
+        entries[i].kind = Some(GapKind::Line);
+        entries[i].removed.push(removal);
+    }
 }
 
-/// Returns whether two additions meet at a line's edge (`line_edges`).
+/// Returns what the reads showed of the changes in the spine gaps `first`
+/// and `second` at a line's edge, `first` the earlier (`line_edges`).
 ///
-/// `text` is the base text M lays between them, as runs, and `before` the
-/// base position just before the first, none at the document's start;
-/// `lines` reads them through `head`. The answer is decided by three
-/// facts: whether the first stands at a line's start — `before` a line
-/// break, or none — whether the text's last byte is a break, and whether a
-/// break stands before that last byte; the two meet where the first two
-/// facts differ and no such break stands, so the text is read whole only
-/// where they meet. The first reads, asked together, are `before`, the
-/// text's first `LINE_READ` positions and its last byte; where those leave
-/// the answer open, the text is read on from them, each read twice as long
-/// as the one before, until a break or the last byte. So every position
-/// read is one the answer turns on, the same for every reader, and a run
-/// of the text past them is never read (skep #1174). A read answering
-/// anything but one item a position, or none, decides nothing: the answer
-/// is `false`.
+/// The text between them is the surviving base text M lays from the spine
+/// gap `first` to `second`, and the position before is the last of the
+/// survivor just before `first`, none at the document's start; each read
+/// is told the pair by the first's `after` anchor and the second's `before`
+/// (`Ask::Line`).
+fn meet_between(r: &Refinement, spine: &[usize], first: usize, second: usize, lines: &LineReads<'_>) -> Edge {
+    let before = first.checked_sub(1).map(|at| r.last_position(r.base[spine[at]]));
+    let text = r.coalesce(spine[first..second].iter().map(|&bi| r.base[bi]));
+    let ask = Ask::Line {
+        after: anchors_at(r, spine, first).0,
+        before: anchors_at(r, spine, second).1,
+    };
+    let read = |side: SideIx, run: &Run| lines.read(side, run, &ask);
+    meet_at_a_line_edge(r.side_ix[0], before, &text, &read)
+}
+
+/// The line rule's reads of the base text, every position's item kept once
+/// a read answers it (`line_edges`; skep #1176).
+///
+/// A run whose every position is kept is answered from them and asked
+/// nothing; any other is asked whole, as the pair spells it, so the runs
+/// asked are among those the rule asks keeping nothing, never a run cut
+/// otherwise, and a read answering anything but one item a position keeps
+/// none. The rule reads through the first side listed alone, and an item
+/// at an I-address is the same at every read, so a kept item is the one a
+/// read asked again answers.
+struct LineReads<'a> {
+    /// The reads, as [`compose_asking`]'s `values`.
+    lines: &'a AskedValues<'a>,
+    /// Each origin's items kept, by I-position.
+    kept: RefCell<HashMap<Address, HashMap<u64, Item>>>,
+}
+
+impl<'a> LineReads<'a> {
+    /// Returns the reads through `lines`, nothing kept yet.
+    fn new(lines: &'a AskedValues<'a>) -> LineReads<'a> {
+        LineReads { lines, kept: RefCell::new(HashMap::new()) }
+    }
+
+    /// Returns `run`'s items, kept from earlier reads or read now as `ask`
+    /// tells; `None` where the read answers none.
+    fn read(&self, side: SideIx, run: &Run, ask: &Ask) -> Option<Vec<Item>> {
+        let held: Option<Vec<Item>> = self
+            .kept
+            .borrow()
+            .get(&run.origin)
+            .and_then(|at| (run.i_start..run.reach()).map(|p| at.get(&p).cloned()).collect());
+        if held.is_some() {
+            return held;
+        }
+        let items = (self.lines)(side, run, ask)?;
+        if items.len() as u64 == run.width {
+            let mut kept = self.kept.borrow_mut();
+            let at = kept.entry(run.origin.clone()).or_default();
+            for (p, item) in (run.i_start..).zip(&items) {
+                at.insert(p, item.clone());
+            }
+        }
+        Some(items)
+    }
+}
+
+/// What the line rule's reads showed of the text between two changes
+/// (`meet_at_a_line_edge`).
+///
+/// A fact the reads did not show is `false`, and a read that answered
+/// anything but one item a position shows nothing at all.
+#[derive(Clone, Copy, Default)]
+struct Edge {
+    /// The two meet at a line's edge.
+    meets: bool,
+    /// Every read answered one item a position.
+    answered: bool,
+    /// A line break stands in the text before its last byte.
+    broken: bool,
+    /// The text's last byte is a line break.
+    ends_in_break: bool,
+}
+
+/// Returns whether two changes meet at a line's edge, with what the reads
+/// showed of the text between them (`line_edges`).
+///
+/// The two are additions, or an addition and a lone removal, which stands
+/// where its bytes were. `text` is the base text M lays between them, as
+/// runs, and `before` the base position just before the first, none at the
+/// document's start; `lines` reads them through `head`. The answer is
+/// decided by three facts: whether the first stands at a line's start —
+/// `before` a line break, or none — whether the text's last byte is a
+/// break, and whether a break stands before that last byte; the two meet
+/// where the first two facts differ and no such break stands, so the text
+/// is read whole only where they meet. The first reads, asked together, are
+/// `before`, the text's first `LINE_READ` positions and its last byte;
+/// where those leave the answer open, the text is read on from them, each
+/// read twice as long as the one before, until a break or the last byte.
+/// So every position read is one the answer turns on, the same for every
+/// reader, and a run of the text past them is never read (skep #1174). A
+/// read answering anything but one item a position, or none, decides
+/// nothing: they do not meet, and the reads show nothing.
 fn meet_at_a_line_edge(
     head: SideIx,
     before: Option<Run>,
     text: &[Run],
     lines: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
-) -> bool {
+) -> Edge {
     let is_break = |item: &Item| item.as_slice() == b"\n";
     // Every run asked, stopping at a read that answers none; the items, or
     // none where a run answers another count than its width.
@@ -2446,7 +2709,7 @@ fn meet_at_a_line_edge(
         fits.then(|| answers.concat())
     };
     let width = text.iter().map(|run| run.width).fold(0, u64::saturating_add);
-    let Some(last) = width.checked_sub(1) else { return false };
+    let Some(last) = width.checked_sub(1) else { return Edge::default() };
     let opening = last.min(LINE_READ);
     // The first reads, in the text's order, every one asked before any is
     // weighed.
@@ -2456,13 +2719,19 @@ fn meet_at_a_line_edge(
     let start = match start {
         None => true,
         Some(Some(items)) => is_break(&items[0]),
-        Some(None) => return false,
+        Some(None) => return Edge::default(),
     };
     let (Some(opened), Some(ending)) = (opened, ending) else {
-        return false;
+        return Edge::default();
     };
-    if is_break(&ending[0]) == start || opened.iter().any(is_break) {
-        return false;
+    let shown = Edge {
+        meets: false,
+        answered: true,
+        broken: opened.iter().any(is_break),
+        ends_in_break: is_break(&ending[0]),
+    };
+    if shown.ends_in_break == start || shown.broken {
+        return shown;
     }
     let (mut read_to, mut asked) = (opening, LINE_READ);
     while read_to < last {
@@ -2470,10 +2739,11 @@ fn meet_at_a_line_edge(
         let to = read_to.saturating_add(asked).min(last);
         match read(&runs_over(text, read_to, to)) {
             Some(items) if !items.iter().any(is_break) => read_to = to,
-            _ => return false,
+            Some(_) => return Edge { broken: true, ..shown },
+            None => return Edge::default(),
         }
     }
-    true
+    Edge { meets: true, ..shown }
 }
 
 /// Returns the runs holding positions `from..to` of `text`, counted from 0.
@@ -2840,7 +3110,9 @@ fn splice(r: &Refinement, entries: &[Entry], spine: &[usize]) -> Vec<PlacedRun> 
 /// It lists every gap with its kind, its anchors as M holds them, the runs
 /// contested with their sides, whether it is settled and by whom — by
 /// number, the `moves` gaps first, those with spots naming each holder's,
-/// then the others in the order of their default places in M.
+/// then the others in the order of their default places in M, a `line` gap
+/// naming each lone removal that meets its words by that removal's own
+/// anchors, wherever a move puts the gap.
 fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], spine: &[usize]) -> Vec<Gap> {
     let mut out: Vec<Gap> = claims
         .iter()
@@ -2866,6 +3138,7 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
                     before: h.spot.1.and_then(|bi| r.first_address(r.base[bi])),
                 })
                 .collect(),
+            removed: Vec::new(),
         })
         .collect();
     out.extend(moves.iter().map(|m| Gap {
@@ -2878,6 +3151,7 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
         settled: m.settled,
         resolved_by: m.resolved_by.clone(),
         spots: Vec::new(),
+        removed: Vec::new(),
     }));
     for entry in entries {
         let (Some(id), Some(kind)) = (entry.id, entry.kind) else { continue };
@@ -2896,6 +3170,14 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
             settled: entry.settled,
             resolved_by: entry.resolved_by.clone(),
             spots: Vec::new(),
+            removed: entry
+                .removed
+                .iter()
+                .map(|lone| {
+                    let (after, before) = anchors_at(r, spine, lone.home);
+                    Removed { side: r.side_ix[lone.side], after, before }
+                })
+                .collect(),
         });
     }
     out.sort_by_key(|g| g.id);
@@ -2907,8 +3189,8 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], claims: &[Claim], 
 /// They are the address of the last position of the surviving base
 /// material just before it and of the first just after it, `None` at M's
 /// start and at its end: the anchors a gap there is reported with
-/// ([`Gap::after`], [`Gap::before`]), and a line read's pair is told
-/// (`Ask::Line`).
+/// ([`Gap::after`], [`Gap::before`]), a lone removal there is named with
+/// ([`Removed`]), and a line read's pair is told (`Ask::Line`).
 fn anchors_at(r: &Refinement, spine: &[usize], home: usize) -> (Option<Address>, Option<Address>) {
     let home = home.min(spine.len());
     (

@@ -82,10 +82,12 @@
 //! material or the same spot — "same material" known exactly by run
 //! identity, so a move is not a touch and an identical addition at one spot
 //! is not a difference, while one identity two sides placed at two spots
-//! is (CM-I33) — or met at one line's edge, an addition inside a line and
+//! is (CM-I33) — or met at one line's edge, a change inside a line and
 //! another side's right after its break, or one at a line's start and
-//! another side's inside that line (the owner's ruling of 2026-11-24; skep
-//! #1173). Seven kinds of gap carry it, and the rules settle one:
+//! another side's inside that line, each change an addition or a removal
+//! one side alone made with no words of its own in its place, one of the
+//! two at least an addition (the owner's ruling of 2026-11-24; skep #1173,
+//! #1176). Seven kinds of gap carry it, and the rules settle one:
 //!
 //! * `order` — two or more sides added at one spot: unsettled, the commit
 //!   order shown as the default, each side's runs together.
@@ -116,14 +118,22 @@
 //!   they share otherwise or each set words of their own beside them, each
 //!   such side's group listing every word it placed and M laying each once.
 //! * `line` — one side's addition whose anchors stand together, next in M
-//!   to another side's at a line's edge, only surviving base text between
-//!   them: unsettled, the default its own place. The line rule reads as
-//!   much of that text as decides it, a line break the byte `\n`, through
-//!   the first side listed — its last byte, the position before the first
-//!   addition and the text's first 4,096 positions, more only where a
-//!   longer line leaves it open; two additions inside one line, or a whole
-//!   line or more apart, ask nothing, and words two or more sides added at
-//!   one spot stay an `order` gap.
+//!   to another side's change at a line's edge, only surviving base text
+//!   between them: unsettled, the default its own place. The change is
+//!   another side's addition, or a removal one other side alone made with
+//!   no words of its own in its place, which stands in M as a point where
+//!   its bytes were and which the gap names under `removed`, each
+//!   `{side, after, before}` ([`Removed`]); the removal stands whatever the
+//!   merger chooses, the choices placing the addition. The line rule reads
+//!   as much of that text as decides it, a line break the byte `\n`,
+//!   through the first side listed — its last byte, the position before
+//!   the first change and the text's first 4,096 positions, more only where
+//!   a longer line leaves it open, the removals beside one addition weighed
+//!   from the nearest outward until a break parts them from it; two changes
+//!   inside one line, or a whole line or more apart — a removal from a
+//!   line's start beside an addition after its break among them — ask
+//!   nothing, and words two or more sides added at one spot stay an `order`
+//!   gap.
 //!
 //! Beside them the value rule (§5), the client's and optional: the same
 //! bytes added by two sides at one spot are kept once, the earlier side's
@@ -135,15 +145,15 @@
 //! back, and the record then lists each retyped run M no longer holds under
 //! `values.retyped`, with its side. The rule reads the values of the runs it
 //! compares, and the line rule reads, whatever the value rule's switches,
-//! the text that decides whether two sides' neighbouring additions meet at
-//! a line's edge — the same positions for every reader, no run of the base
+//! the text that decides whether two sides' neighbouring changes meet at a
+//! line's edge — the same positions for every reader, no run of the base
 //! text between them past those read (skep #1174) — a run a side windows
 //! from another document among either. Where the reader may not read that
 //! document the composition refuses naming it: at the value rule's read
 //! [`Refusal::Unreadable`], at the line rule's [`Refusal::LineTextWithheld`]
-//! with the two additions' anchors, its ways on a share of the document or
-//! its words published; [`verify`] answers [`Verdict::Unreadable`] naming
-//! it, and no switch keeps the line rule from its read.
+//! with the pair's anchors, its ways on a share of the document or its
+//! words published; [`verify`] answers [`Verdict::Unreadable`] naming it,
+//! and no switch keeps the line rule from its read.
 
 mod compose;
 pub mod journal;
@@ -160,7 +170,7 @@ mod tests;
 
 pub use compose::{
     base_of, compose_runs, script, Choice, Composed, Gap, GapId, GapKind, InPlaceOp, Item, Options,
-    PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, Spot, ValueLog,
+    PlacedRun, Placement, Removed, ResolvedBy, Resolution, Run, RunCounts, SideIx, Spot, ValueLog,
 };
 pub use land::{
     land, record_published, replaced, resume, Landed, Landing, Merger, Replaced, SHOT_BODY_BUDGET,

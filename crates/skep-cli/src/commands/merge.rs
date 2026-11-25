@@ -84,13 +84,13 @@
 //! it). The board's refusal is exit 1, a halt exit 3. A `withheld` refusal —
 //! a document the merger may not read; a window onto one in the text the
 //! composition reads, under every switch, to tell whether two sides'
-//! additions meet at a line's edge (skep #1174); or an origin a write's run
-//! windows — names the document, the second the two additions' places in
-//! the merged text and the ways on, a share of the document or its words
-//! published, the third the positions of its words in the list the write
-//! sends, and the command says beside it what the run did: nothing
-//! composed; the merge composed, and nothing published or merged; nothing
-//! taken back or out.
+//! changes meet at a line's edge (skep #1174, #1176); or an origin a
+//! write's run windows — names the document, the second the two changes'
+//! places in the merged text and the ways on, a share of the document or
+//! its words published, the third the positions of its words in the list
+//! the write sends, and the command says beside it what the run did:
+//! nothing composed; the merge composed, and nothing published or merged;
+//! nothing taken back or out.
 //!
 //! **The journal.** A merge record is kept only in a private document: a
 //! journal is a private document of the merger's own, a published one is
@@ -184,8 +184,12 @@
 //! position the composition stands at, where every side that can change
 //! held the state it was read in — `landed`, and to
 //! each gap a `default` — its placement as this run composed it, in
-//! `--resolve`'s own spelling, so a merger copies it and varies it. A draft
-//! landing's `landed` carries the draft, the write's `position`, the
+//! `--resolve`'s own spelling, so a merger copies it and varies it. A
+//! `line` gap that another side's removal meets at a line's edge carries
+//! the record's `removed`, each removal `{side, after, before}` by the
+//! surviving positions either side of it, and the talk names each beside
+//! the gap's place and says it stands whatever is chosen (skep #1176). A
+//! draft landing's `landed` carries the draft, the write's `position`, the
 //! `record`, `head_moved` (the newer head told, else null) and `fresh`
 //! (whether this run staged the draft, as the library's landing answers it:
 //! false for `--into` and for a landing found standing) — a landing found
@@ -974,7 +978,7 @@ fn say_composed(merged: &Merged) {
         let ids: Vec<String> =
             merged.composed.ignored.iter().map(|r| r.gap.0.to_string()).collect();
         talk(format!(
-            "not applied: the resolution of gap {} — it names no gap of this report, a gap the rules settled, a choice its kind cannot take, or a gap the order chosen at a moves gap removes",
+            "not applied: the resolution of gap {} — it names no gap of this report, a gap the rules settled, a choice the gap cannot take, or a gap the order chosen at a moves gap removes",
             ids.join(", ")
         ));
     }
@@ -1389,7 +1393,8 @@ fn default_lines(merged: &Merged) -> Vec<String> {
 }
 
 /// Returns the line naming one gap's default: its kind, where it stands
-/// ([`place_of`]), as placed.
+/// ([`place_of`]) — at a `line` gap a removal meets, beside that removal —
+/// as placed.
 fn default_line(g: &Gap) -> String {
     format!(
         "left at its default: gap {} ({}) {}, placed {}",
@@ -1404,12 +1409,15 @@ fn default_line(g: &Gap) -> String {
 ///
 /// It is its number, its kind, where it stands ([`place_of`]) and its
 /// default in `--resolve`'s spelling — at a gap with spots, beside them the
-/// choices that take one side's place instead (CM-I33).
+/// choices that take one side's place instead (CM-I33); at a `line` gap a
+/// removal meets, that the removal stands whatever is chosen, since the
+/// choices place the gap's words alone (skep #1176).
 fn choice_named(g: &Gap) -> String {
-    let takes = if g.spots.is_empty() {
-        ""
-    } else {
-        " — order:<side> or keep:<side> takes that side's place"
+    let takes = match (g.spots.is_empty(), g.removed.len()) {
+        (false, _) => " — order:<side> or keep:<side> takes that side's place",
+        (true, 0) => "",
+        (true, 1) => " — the removal stands whatever is chosen",
+        (true, _) => " — the removals stand whatever is chosen",
     };
     format!(
         "gap {} ({}) {}, default {}{takes}",
@@ -1425,14 +1433,16 @@ fn choice_named(g: &Gap) -> String {
 /// A gap is where its anchors put it; a `moves` gap has none. One with
 /// spots — one set of words two sides placed at two places (CM-I33) — is
 /// at each side's place, and a spine's is no place but the side's order the
-/// spine took.
+/// spine took. A `line` gap a removal meets stands beside the words each
+/// removal took, read by the surviving positions either side of them
+/// (skep #1176).
 fn place_of(g: &Gap) -> String {
     let at = |after: &Option<Address>, before: &Option<Address>| match (after, before) {
         (Some(after), _) => format!("after {after}"),
         (None, Some(before)) => format!("before {before}"),
         (None, None) => "at the document's start".to_string(),
     };
-    match (g.kind, &g.placed) {
+    let place = match (g.kind, &g.placed) {
         _ if !g.spots.is_empty() => {
             g.spots.iter().map(|s| format!("side {} {}", s.side.0, at(&s.after, &s.before))).collect::<Vec<_>>().join(", ")
         }
@@ -1441,7 +1451,24 @@ fn place_of(g: &Gap) -> String {
             format!("in side {}'s order", sides.join(","))
         }
         _ => at(&g.after, &g.before),
+    };
+    if g.removed.is_empty() {
+        return place;
     }
+    let removals: Vec<String> = g
+        .removed
+        .iter()
+        .map(|r| {
+            let words = format!("the words side {} removed", r.side.0);
+            match (&r.after, &r.before) {
+                (Some(after), Some(before)) => format!("{words} between {after} and {before}"),
+                (None, Some(before)) => format!("{words} before {before}"),
+                (Some(after), None) => format!("{words} after {after}"),
+                (None, None) => words,
+            }
+        })
+        .collect();
+    format!("{place}, beside {}", removals.join(" and "))
 }
 
 /// Returns the lines naming each place the merge kept once (the merge

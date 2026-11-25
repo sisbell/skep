@@ -49,7 +49,8 @@
 //! taken and composed again with the gap they meet there, words moved
 //! since the composition refusing the landing `gap_edited` until composed
 //! again, and the default landed naming both places, each record verifying
-//! `Equal`; words both
+//! `Equal`; a `line` gap a removal meets crossing with its `removed`, its
+//! default too (skep #1176); words both
 //! sides added alike at one spot kept once, named in the report's and the
 //! landing's `deduped`, the record keeping the rule's placement;
 //! `resolutions` refused where they name no gap, a gap twice, a gap the
@@ -212,6 +213,9 @@ fn assert_report_declared(report: &Value) {
         }
         for spot in gap["spots"].as_array().into_iter().flatten() {
             crate::shapes::assert_declared("GapSpot", spot);
+        }
+        for removal in gap["removed"].as_array().into_iter().flatten() {
+            crate::shapes::assert_declared("GapRemoved", removal);
         }
     }
     for place in report["deduped"].as_array().unwrap() {
@@ -526,9 +530,10 @@ fn a_window_withheld_crosses_as_typed_data_naming_the_origin_and_its_words() {
 ///
 /// The library's `LineTextWithheld` is `merge_refused` with the arm
 /// `line_text_withheld`, `doc` the document the window opens on and
-/// `after` and `before` the two additions' outer anchors as the gap report
-/// spells them, `null` at an edge — never the `unreadable {doc}` a side
-/// the session may not read answers, which still crosses so (skep #1174);
+/// `after` and `before` the pair's outer anchors as the gap report spells
+/// them — a gap's, or a removal's its `removed` names — `null` at an edge —
+/// never the `unreadable {doc}` a side the session may not read answers,
+/// which still crosses so (skep #1174, #1176);
 /// the session stands (the mutants that cross it as `unreadable`, or drop
 /// an anchor).
 #[test]
@@ -2762,6 +2767,7 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
         settled: false,
         resolved_by: None,
         spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(7)), before: None }],
+        removed: vec![],
     };
     let read = |gap: &Gap, image: &[(&Address, u64, u64)]| {
         let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
@@ -2777,6 +2783,36 @@ fn a_gap_with_spots_reads_moved_only_where_one_other_holders_place_alone_holds_i
     assert_eq!(read(&gap, &[(&e, 1, 8), (&z, 1, 3)]), vec![], "not whole");
     let settled = Gap { settled: true, resolved_by: Some(ResolvedBy::Person), ..gap.clone() };
     assert_eq!(read(&settled, &[(&e, 1, 8), (&z, 1, 5)]), vec![], "a settled gap");
+}
+
+/// A `line` gap a removal meets crosses naming it, with no daemon behind it
+/// (skep #1176): over "ab\ncd\n", the head removing "b" and the side adding
+/// "x" right after line 1's break, the report's gap is a `line` gap whose
+/// `removed` names the head's removal between `E·1` and `E·3`, each a
+/// `GapRemoved`, and the default the landing lists names it too (the mutant
+/// that drops the member from either answer fails it).
+#[test]
+fn a_line_gap_a_removal_meets_crosses_naming_it_and_its_default_too() {
+    use skep_client::merge::{compose_runs, Item, Options, Run, SideIx};
+    let e = parse_address("1.0.1.0.1").unwrap();
+    let at = |n: u64| format!("1.0.1.0.1.0.1.{n}");
+    let bytes = b"ab\ncd\nx";
+    let values = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+        (run.i_start..run.reach()).map(|p| bytes.get(p as usize - 1).map(|b| vec![*b])).collect()
+    };
+    let head = vec![Run::new(e.clone(), 1, 1), Run::new(e.clone(), 3, 4)];
+    let side = vec![Run::new(e.clone(), 1, 3), Run::new(e.clone(), 7, 1), Run::new(e.clone(), 4, 3)];
+    let composed = compose_runs(&[Run::new(e.clone(), 1, 6)], &e, &[(SideIx(0), head), (SideIx(1), side)], None, &Options::default(), &values);
+    let [reported] = composed.gaps.iter().map(super::super::merge::gap_json).collect::<Vec<Value>>().try_into().expect("one gap");
+    crate::shapes::assert_declared("MergeGap", &reported);
+    let removed = json!([{"side": 0, "after": at(1), "before": at(3)}]);
+    assert_eq!((reported["kind"].as_str(), &reported["removed"]), (Some("line"), &removed), "{reported}");
+    for removal in reported["removed"].as_array().unwrap() {
+        crate::shapes::assert_declared("GapRemoved", removal);
+    }
+    let default = super::super::merge::default_json(&composed.gaps[0]);
+    crate::shapes::assert_declared("MergeDefault", &default);
+    assert_eq!(default["removed"], removed, "{default}");
 }
 
 /// Checks the landing's reading of a choice off a draft's image, with no
@@ -2818,6 +2854,7 @@ fn a_choice_is_read_off_the_draft_by_its_runs_their_order_and_their_spot() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let (base, ra, rb) = ((&e, 1, 7), (&d, 1, 5), (&s, 1, 4));
     let cells = [
@@ -2848,6 +2885,7 @@ fn a_choice_is_read_off_the_draft_by_its_runs_their_order_and_their_spot() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     for image in [vec![(&e, 1, 7)], vec![(&e, 3, 5), (&e, 1, 2)], vec![]] {
         for placed in [order(&[0]), order(&[1]), order(&[0, 1]), Placement::Omitted, Placement::After] {
@@ -2866,6 +2904,7 @@ fn a_choice_is_read_off_the_draft_by_its_runs_their_order_and_their_spot() {
         settled: false,
         resolved_by: None,
         spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(8)), before: None }],
+        removed: vec![],
     };
     let side_spot = [(&e, 1, 8), (&z, 1, 5)];
     let head_spot = [(&e, 1, 4), (&z, 1, 5), (&e, 5, 4)];
@@ -2916,6 +2955,7 @@ fn an_edits_choice_is_read_off_the_draft_only_where_it_holds_one_of_the_gaps() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let base = (&e, 1, 7);
     // The order gap: `a` the head's D·1..5, `b` the side's S·1..4.
@@ -2994,6 +3034,7 @@ fn a_word_two_sides_placed_alike_is_read_once() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let base = (&e, 1, 7);
     let (rq, ra, rb) = ((&q, 1, 3), (&d, 1, 5), (&s, 1, 4));
@@ -3070,6 +3111,7 @@ fn a_gap_with_spots_is_named_where_its_words_moved_since_the_composition() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let quote = Gap {
         id: GapId(2),
@@ -3081,6 +3123,7 @@ fn a_gap_with_spots_is_named_where_its_words_moved_since_the_composition() {
         settled: false,
         resolved_by: None,
         spots: vec![Spot { side: SideIx(0), after: Some(at(4)), before: Some(at(5)) }, Spot { side: SideIx(1), after: Some(at(7)), before: None }],
+        removed: vec![],
     };
     let read = |quote: &Gap, chosen: &BTreeMap<usize, Placement>, image: &[(&Address, u64, u64)]| {
         let image: Vec<Held> = image.iter().map(|(origin, i, w)| Held::new((*origin).clone(), *i, *w)).collect();
@@ -3127,6 +3170,7 @@ fn the_resolutions_are_checked_against_the_composed_gaps() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let order = Gap {
         id: GapId(2),
@@ -3138,6 +3182,7 @@ fn the_resolutions_are_checked_against_the_composed_gaps() {
         settled: false,
         resolved_by: None,
         spots: vec![],
+        removed: vec![],
     };
     let gaps = [spine, order];
     let checked = |resolutions: Value| super::super::merge::checked_resolutions(&gaps, resolutions.as_object().unwrap());

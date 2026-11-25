@@ -916,6 +916,7 @@ fn the_record_round_trips_and_names_its_type() {
             settled: true,
             resolved_by: Some(ResolvedBy::Agent),
             spots: vec![],
+            removed: vec![],
         },
         Gap {
             id: GapId(2),
@@ -927,6 +928,7 @@ fn the_record_round_trips_and_names_its_type() {
             settled: true,
             resolved_by: Some(ResolvedBy::Answer(a(&format!("{DOC1}.0.1.7")))),
             spots: vec![],
+            removed: vec![],
         },
         Gap {
             id: GapId(3),
@@ -938,6 +940,7 @@ fn the_record_round_trips_and_names_its_type() {
             settled: true,
             resolved_by: Some(ResolvedBy::Rule),
             spots: vec![],
+            removed: vec![],
         },
     ];
     merged.record.values.applied = vec![GapId(1)];

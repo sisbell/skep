@@ -17,7 +17,13 @@
 //! beside lines after its break, the mirror at a line's start and at the
 //! document's start, the additions it leaves unasked, its choices, its
 //! numbers under a holder's choice and a chosen order, a read of another
-//! count of items, and the rule over generated lines; a word both
+//! count of items, and the rule over generated lines; a removal one side
+//! alone made beside another side's addition there (skep #1176) — inside a
+//! line beside an addition after its break, the mirror, the pairs it leaves
+//! unasked, a removal at a line's start met past a nearer one, many
+//! removals beside one addition read a line or two from it, many inside
+//! one line reading it once, the addition's choices with the removal
+//! standing, and the record keeping the removal the gap names; a word both
 //! groups at a place kept once list no copy the dedup dropped; words two
 //! sides added at one spot, over every order of them, asking exactly where
 //! neither side's words hold the other's in order and laid once; three
@@ -2091,6 +2097,292 @@ fn the_line_rule_reads_on_exactly_as_far_as_its_answer_needs() {
     assert!(met > 50, "the rule met in {met} cases");
 }
 
+// ── a removal beside a line's edge (skep #1176) ──────────────────────────
+
+/// A side of the lined base removing `D·from–to` and keeping the rest.
+fn removing(from: u64, to: u64) -> Vec<Run> {
+    let mut side = Vec::new();
+    if from > 1 {
+        side.push(rd(1, from - 1));
+    }
+    if to < 35 {
+        side.push(rd(to + 1, 35 - to));
+    }
+    side
+}
+
+/// The removal beside lines: the head removes "eads " (`D·10–14`) inside
+/// line 2, and the side adds "h1\nh2 The\n" (`D·36–45`) right after line
+/// 2's break.
+fn removal_beside_lines() -> Vec<(SideIx, Vec<Run>)> {
+    two(removing(10, 14), adding_after(29, rd(36, 10)))
+}
+
+/// The removal `D·10–14` as a `line` gap names it: by `side`, between
+/// `D·9` and `D·15`.
+fn removed_inside_line_2(side: u8) -> Vec<Removed> {
+    vec![Removed { side: SideIx(side), after: Some(d_at(9)), before: Some(d_at(15)) }]
+}
+
+/// A removal inside a line beside another side's addition right after its
+/// break asks: the addition is a `line` gap, unsettled, at its own place,
+/// naming the removal by its side and its anchors `D·9` and `D·15`, and M
+/// is as composed with no rule, whatever the value rule's switches and
+/// whichever side is listed first; read by no value, nothing asks (the
+/// mutant that weighs no removal answers no gap).
+#[test]
+fn a_removal_inside_a_line_beside_an_addition_after_its_break_is_a_line_gap_naming_it() {
+    let m = vec![rd(1, 9), rd(15, 15), rd(36, 10), rd(30, 6)];
+    for options in [Options::default(), Options { dedup: false, ..Options::default() }] {
+        let c = compose_lined(&removal_beside_lines(), &options);
+        assert_eq!(runs(&c), m, "{options:?}: M at the defaults");
+        assert_eq!(kinds(&c), vec![(GapKind::Line, false)], "{options:?}");
+        assert_eq!(anchors(&c), vec![(Some(29), Some(30))], "{options:?}");
+        assert_eq!(gap_runs(&c), vec![vec![(1, rd(36, 10))]], "{options:?}");
+        assert_eq!(
+            (c.gaps[0].placed.clone(), c.gaps[0].resolved_by.clone()),
+            (Placement::After, None),
+            "{options:?}"
+        );
+        assert_eq!(c.gaps[0].removed, removed_inside_line_2(0), "{options:?}");
+    }
+    let swapped =
+        compose_lined(&two(adding_after(29, rd(36, 10)), removing(10, 14)), &Options::default());
+    assert_eq!(runs(&swapped), m, "the side listed first adds: M");
+    assert_eq!(kinds(&swapped), vec![(GapKind::Line, false)], "the side listed first adds");
+    assert_eq!(swapped.gaps[0].removed, removed_inside_line_2(1), "the side listed first adds");
+    let c = compose(&lined(), &removal_beside_lines());
+    assert_eq!((runs(&c), kinds(&c)), (m, vec![]), "no value read, nothing asked");
+}
+
+/// The mirror asks too: an addition at a line's start beside another
+/// side's removal inside that line — after `D·4`, line 2's start, beside
+/// `D·10–14` — and at the document's start beside a removal inside line 1,
+/// `D·2–3`.
+#[test]
+fn an_addition_at_a_lines_start_beside_a_removal_inside_that_line_is_a_line_gap() {
+    for (start, (from, to), place, (after, before)) in
+        [(4, (10, 14), (Some(4), Some(5)), (9, 15)), (0, (2, 3), (None, Some(1)), (1, 4))]
+    {
+        let sides = two(adding_after(start, rd(36, 10)), removing(from, to));
+        let c = compose_lined(&sides, &Options::default());
+        let say = format!("after D·{start}, D·{from}–{to} removed");
+        assert_eq!(kinds(&c), vec![(GapKind::Line, false)], "{say}");
+        assert_eq!(anchors(&c), vec![place], "{say}");
+        assert_eq!(
+            c.gaps[0].removed,
+            vec![Removed { side: SideIx(1), after: Some(d_at(after)), before: Some(d_at(before)) }],
+            "{say}"
+        );
+        assert_eq!(runs(&c), runs(&compose(&lined(), &sides)), "{say}: M at the defaults");
+    }
+}
+
+/// A removal and an addition apart from one line's edge ask nothing:
+/// `D·10–14` beside an addition after `D·35`, two lines on; a removal from
+/// line 2's start, `D·5–9`, beside an addition right after its break, a
+/// whole line apart; `D·10–14` beside an addition after `D·25`, inside
+/// line 2; a removal inside line 1, `D·2–3`, beside an addition after line
+/// 2's break. Nor does a side's removal beside its own addition, nor a
+/// removal its side set words in place of: that rewrite is an addition,
+/// which asks beside the other side's as two additions do, naming no
+/// removal (the mutant that weighs a rewritten removal names it).
+#[test]
+fn a_removal_and_an_addition_apart_from_one_lines_edge_ask_nothing() {
+    for ((from, to), at) in [((10, 14), 35), ((5, 9), 29), ((10, 14), 25), ((2, 3), 29)] {
+        let c = compose_lined(
+            &two(removing(from, to), adding_after(at, rd(36, 10))),
+            &Options::default(),
+        );
+        assert_eq!(kinds(&c), vec![], "D·{from}–{to} removed, an addition after D·{at}");
+    }
+    let own = vec![rd(1, 9), rd(15, 15), rd(36, 10), rd(30, 6)];
+    let c = compose_lined(&two(lined(), own), &Options::default());
+    assert_eq!(kinds(&c), vec![], "one side's removal beside its own addition");
+    let rewrite = vec![rd(1, 9), rd(60, 2), rd(15, 21)];
+    let c = compose_lined(&two(rewrite, adding_after(29, rd(36, 10))), &Options::default());
+    assert_eq!(
+        kinds(&c),
+        vec![(GapKind::Line, false), (GapKind::Line, false)],
+        "a rewrite inside line 2"
+    );
+    assert!(c.gaps.iter().all(|g| g.removed.is_empty()), "no removal named: {:?}", c.gaps);
+}
+
+/// A removal farther from an addition than another removal still meets it:
+/// one side removes "tw" from line 2's start (`D·5–6`) and "ea" inside it
+/// (`D·10–11`), the other adds "x" inside that line, after `D·25`. The
+/// nearer removal, inside the line, meets nothing, and the walk goes on
+/// past it, no break between: the farther one, at the line's start, meets
+/// the addition inside that line, and the gap names it alone (the mutants
+/// that weigh only a removal's nearest neighbour among the changes, or end
+/// the walk at a pair that does not meet, ask nothing).
+#[test]
+fn a_removal_at_a_lines_start_meets_an_addition_inside_it_past_a_nearer_removal() {
+    let sides = two(vec![rd(1, 4), rd(7, 3), rd(12, 24)], adding_after(25, rd(60, 1)));
+    let c = compose_lined(&sides, &Options::default());
+    assert_eq!(runs(&c), vec![rd(1, 4), rd(7, 3), rd(12, 14), rd(60, 1), rd(26, 10)], "M");
+    assert_eq!(kinds(&c), vec![(GapKind::Line, false)]);
+    assert_eq!(anchors(&c), vec![(Some(25), Some(26))]);
+    assert_eq!(
+        c.gaps[0].removed,
+        vec![Removed { side: SideIx(0), after: Some(d_at(4)), before: Some(d_at(7)) }]
+    );
+}
+
+/// Many removals beside one addition are read a line or two from it: over
+/// 2,000 lines of "ab\n", one side removes every line's "a" and the other
+/// adds "x" after the last line's break, which meets nothing, or after line
+/// 1's "b", which meets the removals on either side of it, at the
+/// document's start and right after line 1's break. Each walk from the
+/// addition stops at the first break its reads show, so the line rule asks
+/// at most `LINE_READ` + 2 positions a side, however many removals share
+/// the addition (the mutant that weighs every removal beside it reads each
+/// one's text, millions of positions).
+#[test]
+fn many_removals_beside_one_addition_are_read_a_line_or_two_from_it() {
+    let lines = 2000u64;
+    let n = 3 * lines;
+    let bytes: Vec<u8> = b"ab\n".iter().copied().cycle().take(n as usize).collect();
+    let x = n + 10;
+    let asked = std::cell::Cell::new(0u64);
+    let values = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+        asked.set(asked.get() + run.width);
+        (run.i_start..run.reach())
+            .map(|p| match p {
+                p if p == x => Some(vec![b'x']),
+                p if (1..=n).contains(&p) => Some(vec![bytes[p as usize - 1]]),
+                _ => None,
+            })
+            .collect()
+    };
+    let removing: Vec<Run> = (0..lines).map(|k| rd(3 * k + 2, 2)).collect();
+    let at_end = vec![rd(1, n), rd(x, 1)];
+    let inside = vec![rd(1, 2), rd(x, 1), rd(3, n - 2)];
+    for (adding, expected, removed) in [
+        (at_end, vec![], vec![]),
+        (
+            inside,
+            vec![(GapKind::Line, false)],
+            vec![
+                Removed { side: SideIx(0), after: None, before: Some(d_at(2)) },
+                Removed { side: SideIx(0), after: Some(d_at(3)), before: Some(d_at(5)) },
+            ],
+        ),
+    ] {
+        asked.set(0);
+        let sides = two(removing.clone(), adding);
+        let c = compose_runs(&[rd(1, n)], &d(), &sides, None, &Options::default(), &values);
+        assert_eq!(kinds(&c), expected, "{:?}", c.gaps);
+        assert_eq!(c.gaps.iter().flat_map(|g| g.removed.clone()).collect::<Vec<_>>(), removed);
+        assert!(asked.get() <= 2 * (LINE_READ + 2), "{} positions asked", asked.get());
+        assert_eq!(runs(&c), runs(&compose(&[rd(1, n)], &sides)), "M at the defaults");
+    }
+}
+
+/// Many removals inside one line beside one addition read that line once:
+/// over one line of "ab" 500 times, one side removes every "a" and the
+/// other adds "x" right after the line's break. Every removal but the one
+/// at the line's start meets the addition, and the gap names the 499 in
+/// M's order; the walk reaches each farther one through the nearer ones'
+/// text, already read, so the line rule asks the line's positions once,
+/// at most its width and two more, however many pairs share them (the
+/// mutant that keeps no read asks each pair's text again, about 125,000
+/// positions).
+#[test]
+fn many_removals_inside_one_line_beside_one_addition_read_the_line_once() {
+    let pairs = 500u64;
+    let n = 2 * pairs + 1;
+    let mut bytes = b"ab".repeat(pairs as usize);
+    bytes.push(b'\n');
+    let x = n + 10;
+    let asked = std::cell::Cell::new(0u64);
+    let values = |_: SideIx, run: &Run| -> Option<Vec<Item>> {
+        asked.set(asked.get() + run.width);
+        (run.i_start..run.reach())
+            .map(|p| match p {
+                p if p == x => Some(vec![b'x']),
+                p if (1..=n).contains(&p) => Some(vec![bytes[p as usize - 1]]),
+                _ => None,
+            })
+            .collect()
+    };
+    let removing: Vec<Run> = (0..pairs).map(|k| rd(2 * k + 2, 1)).chain([rd(n, 1)]).collect();
+    let sides = two(removing, vec![rd(1, n), rd(x, 1)]);
+    let c = compose_runs(&[rd(1, n)], &d(), &sides, None, &Options::default(), &values);
+    assert_eq!(kinds(&c), vec![(GapKind::Line, false)], "{:?}", c.gaps);
+    assert_eq!(anchors(&c), vec![(Some(n), None)]);
+    let removed: Vec<Removed> = (1..pairs)
+        .map(|k| Removed { side: SideIx(0), after: Some(d_at(2 * k)), before: Some(d_at(2 * k + 2)) })
+        .collect();
+    assert_eq!(c.gaps[0].removed, removed, "each removal but the line's first, in M's order");
+    assert!(asked.get() <= n + 2, "{} positions asked over a line of {n}", asked.get());
+    assert_eq!(runs(&c), runs(&compose(&[rd(1, n)], &sides)), "M at the defaults");
+}
+
+/// A `line` gap a removal asks takes the addition's choices: `KeepOnly` and
+/// `Order` of the adding side keep it where it stands, `After` and `Before`
+/// move it, `Omit` leaves it out, each settling the gap by the chooser;
+/// `KeepBoth` and `KeepOnly` of the remover are no choice there and stand
+/// in `ignored`. The removal stands in every M, and the gap names it
+/// wherever the addition goes.
+#[test]
+fn a_line_gap_a_removal_asks_takes_the_additions_choices_and_the_removal_stands() {
+    let sides = removal_beside_lines();
+    let at_defaults = vec![rd(1, 9), rd(15, 15), rd(36, 10), rd(30, 6)];
+    for (choice, m, place) in [
+        (Choice::KeepOnly(SideIx(1)), at_defaults.clone(), (Some(29), Some(30))),
+        (Choice::Order(vec![SideIx(1)]), at_defaults.clone(), (Some(29), Some(30))),
+        (Choice::After(d_at(9)), vec![rd(1, 9), rd(36, 10), rd(15, 21)], (Some(9), Some(15))),
+        (Choice::Before(d_at(1)), vec![rd(36, 10), rd(1, 9), rd(15, 21)], (None, Some(1))),
+        (Choice::Omit, vec![rd(1, 9), rd(15, 21)], (Some(29), Some(30))),
+    ] {
+        let c = compose_lined(&sides, &resolve(1, choice.clone()));
+        assert_eq!(runs(&c), m, "{choice:?}: the removal stands");
+        assert_eq!(kinds(&c), vec![(GapKind::Line, true)], "{choice:?}");
+        assert_eq!(anchors(&c), vec![place], "{choice:?}");
+        assert_eq!(c.gaps[0].resolved_by, Some(ResolvedBy::Person), "{choice:?}");
+        assert_eq!(c.gaps[0].removed, removed_inside_line_2(0), "{choice:?}: the removal named");
+        assert!(c.ignored.is_empty(), "{choice:?}");
+    }
+    for choice in [Choice::KeepBoth, Choice::KeepOnly(SideIx(0))] {
+        let c = compose_lined(&sides, &resolve(1, choice.clone()));
+        assert_eq!(
+            (runs(&c), kinds(&c)),
+            (at_defaults.clone(), vec![(GapKind::Line, false)]),
+            "{choice:?}"
+        );
+        assert_eq!(c.ignored.len(), 1, "{choice:?}");
+    }
+}
+
+/// A record keeps the removal a `line` gap names: a merge that left the
+/// addition beside `D·10–14` out reads back from its JSON with its
+/// `removed`, spelled `{side, after, before}`, and its options compose
+/// again to the same M and gaps; a gap no removal asks carries no
+/// `removed`, and one spelled with none reads with none, as a record
+/// written before a gap named its removals (the mutants that drop the
+/// removal on the write or refuse a gap without it fail the round trip or
+/// the read).
+#[test]
+fn a_record_keeps_the_removal_a_line_gap_names() {
+    let first = compose_lined(&removal_beside_lines(), &resolve(1, Choice::Omit));
+    let record = recorded(&first);
+    assert_eq!(record.gaps, first.gaps, "the gaps read back, the removal and all");
+    let mut v = record.to_value();
+    assert_eq!(
+        v["gaps"][0]["removed"],
+        serde_json::json!([{"side": 0, "after": d_at(9).to_string(), "before": d_at(15).to_string()}])
+    );
+    let again = compose_lined(&removal_beside_lines(), &record.options());
+    assert_eq!((runs(&again), &again.gaps), (runs(&first), &first.gaps));
+    let plain = recorded(&compose_lined(&rewrite_beside_lines(), &Options::default())).to_value();
+    assert!(plain["gaps"][0].get("removed").is_none(), "a gap no removal asks carries none: {plain}");
+    v["gaps"][0].as_object_mut().expect("a gap object").remove("removed");
+    let read = Record::from_value(&v).expect("a gap with no removed reads");
+    assert!(read.gaps[0].removed.is_empty(), "{:?}", read.gaps);
+}
+
 // ── the record's re-statement ────────────────────────────────────────────
 
 /// The record a landing of `c` writes, read back from its JSON.
@@ -2131,7 +2423,8 @@ type Values<'a> = &'a dyn Fn(SideIx, &Run) -> Option<Vec<Item>>;
 /// It is the record's re-statement law (merge record §4), over every
 /// unsettled shape of gap — an order gap, a cut, a corner beside one
 /// survivor or between two, a collision of no, one and two groups, a
-/// `line` gap over the lined base read through its bytes (skep #1173). Each
+/// `line` gap over the lined base read through its bytes, beside another
+/// side's addition and beside its removal (skep #1173, #1176). Each
 /// gap is moved after or before every base position, or not moved, then
 /// ordered, kept or omitted, the move given first or last; the options its
 /// record re-states, its gaps read back from its JSON, compose again to the
@@ -2140,7 +2433,7 @@ type Values<'a> = &'a dyn Fn(SideIx, &Run) -> Option<Vec<Item>>;
 #[test]
 fn a_record_recomposes_every_place_and_choice_its_merger_made() {
     let lines = text(LINED);
-    let shapes: [(&str, Vec<Run>, _, Values<'_>); 9] = [
+    let shapes: [(&str, Vec<Run>, _, Values<'_>); 10] = [
         (
             "(b)",
             base(),
@@ -2185,6 +2478,7 @@ fn a_record_recomposes_every_place_and_choice_its_merger_made() {
             &unread,
         ),
         ("a line's edge", lined(), rewrite_beside_lines(), &lines),
+        ("a removal at a line's edge", lined(), removal_beside_lines(), &lines),
     ];
     let picks = [
         None,
@@ -3547,8 +3841,9 @@ fn a_run_names_its_positions_and_the_options_default_as_ruled() {
 /// composition, the shot's value reads, the draft landing's read of its
 /// draft and the take-backs' reads; `LineTextWithheld` the composition's
 /// read of the text that decides the line rule, naming beside the document
-/// the two additions' place — each by its anchor, or the document's edge —
-/// and the ways on, a share or the words published (skep #1174);
+/// the place of the pair of changes — each by its anchor, or the document's
+/// edge — and the ways on, a share or the words published (skep #1174,
+/// #1176);
 /// `WindowWithheld` the shot's, the draft landing's, the take-backs' and
 /// the restore's writes, naming beside the document the words refused — a
 /// stretch by its first and last position, a stretch of one by that
@@ -3564,7 +3859,7 @@ fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder
             .to_string()
     };
     let between = line(Some("1.0.1.0.64.0.1.1"), Some("1.0.1.0.64.0.1.3"));
-    assert_eq!(between, "1.0.2.0.70 is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' additions meet at a line's edge — the first after 1.0.1.0.64.0.1.1, the second before 1.0.1.0.64.0.1.3: the merge composes once 1.0.2.0.70 is shared with this reader or its words are published");
+    assert_eq!(between, "1.0.2.0.70 is not readable to this reader (withheld), and a window onto it stands in the text the merge reads, whatever its switches, to tell whether two sides' changes meet at a line's edge — the first after 1.0.1.0.64.0.1.1, the second before 1.0.1.0.64.0.1.3: the merge composes once 1.0.2.0.70 is shared with this reader or its words are published");
     let edges = line(None, None);
     assert!(edges.contains("— the first at the document's start, the second at its end:"), "{edges}");
     for said in [&between, &edges] {

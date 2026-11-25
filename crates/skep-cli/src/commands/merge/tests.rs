@@ -1,4 +1,4 @@
-use skep_client::merge::{Flag, Spot};
+use skep_client::merge::{Flag, Removed, Spot};
 
 use super::*;
 
@@ -62,6 +62,7 @@ fn gap_at(kind: GapKind, after: Option<Address>, placed: Placement, spots: Vec<S
         settled: false,
         resolved_by: None,
         spots,
+        removed: Vec::new(),
     }
 }
 
@@ -160,6 +161,49 @@ fn a_gap_needing_a_choice_is_named_where_it_stands() {
             Vec::new()
         )),
         "gap 2 (line) after 1.0.1.0.1.0.1.25, default after:1.0.1.0.1.0.1.25"
+    );
+}
+
+/// A `line` gap a removal meets is named beside the words each removal
+/// took, by the surviving positions either side of them, and its choice
+/// says the removal stands whatever is chosen, the choices placing the
+/// gap's words alone (skep #1176): a removal between `D·4` and `D·7`, one
+/// with no position before it, and two, the second with no position after
+/// it (the mutants that name the gap by its anchor alone, or leave the
+/// removal's standing unsaid, fail each).
+#[test]
+fn a_line_gap_beside_a_removal_names_the_words_removed_and_that_they_stand() {
+    let removal = |after: Option<&str>, before: Option<&str>| Removed {
+        side: SideIx(0),
+        after: after.map(a),
+        before: before.map(a),
+    };
+    let line = |removed: Vec<Removed>| Gap {
+        runs: vec![(SideIx(1), skep_client::merge::Run::new(a("1.0.1.0.1"), 20, 3))],
+        removed,
+        ..gap_at(GapKind::Line, Some(a("1.0.1.0.1.0.1.8")), Placement::After, Vec::new())
+    };
+    let one = line(vec![removal(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.7"))]);
+    assert_eq!(
+        choice_named(&one),
+        "gap 2 (line) after 1.0.1.0.1.0.1.8, beside the words side 0 removed between 1.0.1.0.1.0.1.4 and 1.0.1.0.1.0.1.7, default after:1.0.1.0.1.0.1.8 — the removal stands whatever is chosen"
+    );
+    assert_eq!(
+        default_line(&one),
+        "left at its default: gap 2 (line) after 1.0.1.0.1.0.1.8, beside the words side 0 removed between 1.0.1.0.1.0.1.4 and 1.0.1.0.1.0.1.7, placed after:1.0.1.0.1.0.1.8"
+    );
+    let at_start = line(vec![removal(None, Some("1.0.1.0.1.0.1.3"))]);
+    assert_eq!(
+        choice_named(&at_start),
+        "gap 2 (line) after 1.0.1.0.1.0.1.8, beside the words side 0 removed before 1.0.1.0.1.0.1.3, default after:1.0.1.0.1.0.1.8 — the removal stands whatever is chosen"
+    );
+    let two = line(vec![
+        removal(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.7")),
+        removal(Some("1.0.1.0.1.0.1.9"), None),
+    ]);
+    assert_eq!(
+        choice_named(&two),
+        "gap 2 (line) after 1.0.1.0.1.0.1.8, beside the words side 0 removed between 1.0.1.0.1.0.1.4 and 1.0.1.0.1.0.1.7 and the words side 0 removed after 1.0.1.0.1.0.1.9, default after:1.0.1.0.1.0.1.8 — the removals stand whatever is chosen"
     );
 }
 
@@ -408,6 +452,7 @@ fn a_default_of_a_gap_holding_no_runs_is_a_choice_the_command_takes_back() {
         settled: false,
         resolved_by: None,
         spots: Vec::new(),
+        removed: Vec::new(),
     };
     let spelled = |g: &Gap| {
         let default = default_of(g);
@@ -450,6 +495,7 @@ fn a_place_kept_once_names_the_copy_kept_and_where_the_other_stays() {
         settled: true,
         resolved_by: Some(ResolvedBy::Rule),
         spots: Vec::new(),
+        removed: Vec::new(),
     };
     let mut record = Record {
         doc: doc.clone(),

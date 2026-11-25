@@ -21,10 +21,11 @@
 //! end — the head's own image where the base is the head, else imaged
 //! whole; each side imaged whole; the shared material joined by the core
 //! over the lists; the values where the value rule has work, and as much of
-//! the base text between two sides' neighbouring additions as the line rule
+//! the base text between two sides' neighbouring changes — two additions,
+//! or an addition and a removal one side alone made — as the line rule
 //! needs — the same positions for every reader, no run of it past them —
-//! whatever the switches (skep #1173, #1174), read through the side that
-//! holds them; and the prior
+//! whatever the switches (skep #1173, #1174, #1176), read through the side
+//! that holds them; and the prior
 //! records for the key, so a standing record is known before anything is
 //! written (§3, idempotence).
 //! Every `image` past the run budget is re-asked in halves and the parts
@@ -128,10 +129,10 @@
 //! draft's or a fork's words refuses it whole (`retrieve_i`), each naming
 //! that document, so it refuses where a value is read: where the value rule
 //! compares it, [`Refusal::Unreadable`], and where it stands in the text
-//! that decides whether two sides' neighbouring additions meet at a line's
+//! that decides whether two sides' neighbouring changes meet at a line's
 //! edge, which the line rule reads whatever the value rule's switches,
-//! [`Refusal::LineTextWithheld`], naming the two additions' anchors too —
-//! the first such read in the walk's order. A `withheld` or
+//! [`Refusal::LineTextWithheld`], naming the pair's anchors too — the first
+//! such read in the walk's order. A `withheld` or
 //! a `doc_not_registered` at a read of several documents — the join's
 //! `compare`, the read by identity — names the document the board's
 //! `site.addr` names, and one naming none this client parses is the
@@ -261,7 +262,7 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 /// [`Refusal::NotAPosition`], and [`Refusal::HistoryBusy`] past the bounded
 /// retries — a composition naming no position meets none of the four; a
 /// window onto a document the reader may not read in the text that decides
-/// whether two sides' neighbouring additions meet at a line's edge,
+/// whether two sides' neighbouring changes meet at a line's edge,
 /// [`Refusal::LineTextWithheld`] naming it and the pair's anchors, under
 /// every switch — then the prior records' reads' refusals, which
 /// `record::current` answers.

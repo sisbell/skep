@@ -511,8 +511,8 @@ fn later_line(act: &Held) -> String {
 ///
 /// The library's three `withheld` refusals name the document and the code —
 /// `WindowWithheld` the positions of its words in the state the write sends
-/// too, `LineTextWithheld` the place in the merged text of the two
-/// additions whose line edge its words decide and the ways on — the same at
+/// too, `LineTextWithheld` the place in the merged text of the two changes
+/// whose line edge its words decide and the ways on — the same at
 /// every act (SP-10); the step is what the run says beside them — what it
 /// did, and what it did not, before the refusal.
 #[derive(Clone, Copy)]
@@ -609,8 +609,8 @@ fn journal_published(journal: &Address) -> String {
 /// detail naming the draft, the position and the ways on (PUB-8.32).
 /// The three `withheld` refusals — a
 /// document the reader may not read, a window onto one in the text the
-/// line rule reads between two sides' additions with the two additions'
-/// anchors and the ways on (skep #1174), an origin a write's run windows and
+/// line rule reads between two sides' changes with the pair's anchors and
+/// the ways on (skep #1174, #1176), an origin a write's run windows and
 /// its words' positions in the state the write sends — name what was
 /// refused alone, so their detail says beside it what `step` did and did
 /// not do ([`Step::outcome`]). The session's end keeps its own

@@ -166,7 +166,7 @@ fn a_window_withheld_is_the_boards_refusal_naming_the_words_and_the_steps_outcom
 /// board's refusal naming the window, its place and the ways on.
 ///
 /// The composition's `LineTextWithheld` is `withheld`, exit 1, its detail
-/// the library's words — the document, the two additions' anchors or the
+/// the library's words — the document, the pair's anchors or the
 /// document's edge, the line rule read whatever the switches, a share of
 /// the document or its words published — with "nothing was composed"
 /// beside them, the composition the one step that meets it (skep #1174).

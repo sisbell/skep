@@ -86,14 +86,15 @@
 //! another side's right after its break, or one at a line's start and
 //! another side's inside that line, each change an addition or a removal
 //! one side alone made with no words of its own in its place, one of the
-//! two at least an addition (the owner's ruling of 2026-11-24; skep #1173,
-//! #1176). Seven kinds of gap carry it, and the rules settle one:
+//! two at least an addition, and neither a change the other side also made
+//! (the owner's ruling of 2026-11-24; skep #1173, #1176). Seven kinds of
+//! gap carry it, and the rules settle one:
 //!
 //! * `order` — two or more sides added at one spot: unsettled, the commit
 //!   order shown as the default, each side's runs together.
 //! * `anchor` — an addition beside a removal, one anchor surviving and the
 //!   adding side's own removal overlapping nothing another side removed:
-//!   settled, placed beside the survivor.
+//!   settled, placed beside the survivor — save at a line's edge, `line`.
 //! * `corner` — an addition whose anchors are both gone: unsettled, the
 //!   default after the nearest surviving base position to its left.
 //! * `cut` — an addition whose anchors the spine's order parts — at a cut
@@ -117,21 +118,25 @@
 //!   of another's, and at an `order` gap where the sides order the words
 //!   they share otherwise or each set words of their own beside them, each
 //!   such side's group listing every word it placed and M laying each once.
-//! * `line` — one side's addition whose anchors stand together, next in M
-//!   to another side's change at a line's edge, only surviving base text
-//!   between them: unsettled, the default its own place. The change is
-//!   another side's addition, or a removal one other side alone made with
-//!   no words of its own in its place, which stands in M as a point where
-//!   its bytes were and which the gap names under `removed`, each
-//!   `{side, after, before}` ([`Removed`]); the removal stands whatever the
-//!   merger chooses, the choices placing the addition. The line rule reads
-//!   as much of that text as decides it, a line break the byte `\n`,
-//!   through the first side listed — its last byte, the position before
-//!   the first change and the text's first 4,096 positions, more only where
-//!   a longer line leaves it open, the removals beside one addition weighed
-//!   from the nearest outward until a break parts them from it; two changes
-//!   inside one line, or a whole line or more apart — a removal from a
-//!   line's start beside an addition after its break among them — ask
+//! * `line` — one side's addition, between two anchors that stand together
+//!   or R2's beside a removal, next in M to another side's change at a
+//!   line's edge, only surviving base text between them: unsettled, the
+//!   default its own place. The change is another side's addition, or a
+//!   removal one other side alone made with no words of its own in its
+//!   place, which stands in M as a point where its bytes were and which the
+//!   gap names under `removed`, each `{side, after, before}` ([`Removed`]);
+//!   the removal stands whatever the merger chooses, the choices placing
+//!   the addition. Neither change is one the other's side also made: a word
+//!   kept once is each holder's that placed it, whichever keeps its copy,
+//!   so a side whose every change the other made too asks nothing. A cut, a
+//!   corner and a collision ask already, and none is one of a pair. The
+//!   line rule reads as much of that text as decides it, a line break the
+//!   byte `\n`, through the first side listed — its last byte, the position
+//!   before the first change and the text's first 4,096 positions, more only
+//!   where a longer line leaves it open, the removals beside one addition
+//!   weighed from the nearest outward until a break parts them from it; two
+//!   changes inside one line, or a whole line or more apart — a removal from
+//!   a line's start beside an addition after its break among them — ask
 //!   nothing, and words two or more sides added at one spot stay an `order`
 //!   gap.
 //!

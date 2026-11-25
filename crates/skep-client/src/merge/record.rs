@@ -116,17 +116,20 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// last naming it standing; a move takes the placement of a run placed
 /// twice nearest the gap's composed place, and moves no gap the rules
 /// settled; `KeepBoth` confirms a gap's placement as composed, never
-/// putting back a copy the dedup dropped; and a one-sided addition another
-/// side's addition meets at a line's edge, or a removal another side alone
-/// made with no words of its own in its place, is a `line` gap, unsettled,
-/// read off the base text between them whatever the value switches, the
-/// removal named in its `removed` (skep #1173, #1176). [`verify`] composes
-/// under this build's rules whatever version a record names, so a record
-/// written under an earlier set can verify `Differs` where the sets part —
-/// and so can a record naming this set but holding no `line` gap where this
-/// build composes one, the name standing for records composed with the line
-/// rule, with its removal pairs and without either: its gaps numbered
-/// otherwise, its choices name other gaps.
+/// putting back a copy the dedup dropped; and a one-sided addition — R2's
+/// `anchor` beside a removal among them — another side's addition meets at
+/// a line's edge, or a removal another side alone made with no words of its
+/// own in its place, is a `line` gap, unsettled, read off the base text
+/// between them whatever the value switches, the removal named in its
+/// `removed`, neither change one the other's side also made, a word kept
+/// once counted as each holder's that placed it (skep #1173, #1176).
+/// [`verify`] composes under this build's rules whatever version a record
+/// names, so a record written under an earlier set can verify `Differs`
+/// where the sets part — and so can a record naming this set whose `line`
+/// gaps this build composes otherwise, the name standing for records
+/// composed with the line rule and without it, with its removal pairs, its
+/// anchors and its words kept once each holder's, and without them: its
+/// gaps numbered otherwise, its choices name other gaps.
 pub const RULES: &str = "merge-rules-4";
 
 /// Returns the `by` member: this library's crate and version.

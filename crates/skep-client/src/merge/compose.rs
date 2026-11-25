@@ -21,11 +21,13 @@
 //! holder applied before the walk. §2's rules decide each gap's kind and
 //! its default — the sides' reorders folded into the spine in the order
 //! listed (`fold`), and two sides' neighbouring changes met at a line's
-//! edge — two additions, or an addition and a removal one side alone made
-//! with no words of its own in its place (`lone_removals`) — which
-//! `line_edges` decides inside `gaps`, whatever the switches, off as much
-//! of the base text between them as the answer needs, never a run of it
-//! past that (skep #1173, #1174, #1176); §5's value rule reads bytes at a
+//! edge — two additions, R2's `anchor` among them, or an addition and a
+//! removal one side alone made with no words of its own in its place
+//! (`lone_removals`), each a change the other side did not also make, a
+//! word kept once counted as each holder's that placed it (`Placers`) —
+//! which `line_edges` decides inside `gaps`, whatever the switches, off as
+//! much of the base text between them as the answer needs, never a run of
+//! it past that (skep #1173, #1174, #1176); §5's value rule reads bytes at a
 //! shared gap (the dedup) and, switched on, before the walk (the retype),
 //! logging each run either takes out of M.
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
@@ -287,7 +289,8 @@ pub enum GapKind {
     /// An addition beside a removal, one of its anchors surviving (R2).
     ///
     /// The adding side's own removal overlaps nothing another side removed:
-    /// settled, placed beside the survivor.
+    /// settled, placed beside the survivor, save where another side's change
+    /// meets it at a line's edge, a `line` gap with that place its default.
     Anchor,
     /// An addition whose anchors are both gone: unsettled (R3).
     ///
@@ -333,13 +336,18 @@ pub enum GapKind {
     /// inside that line; a line break is the byte `\n`. Each addition of the
     /// two held by one side alone is a `line` gap, a removal beside it named
     /// in its [`Gap::removed`], and words two or more sides added at one spot
-    /// stay an `order` gap. Two changes inside one line ask nothing, nor do
-    /// two a whole line or more apart — a removal from a line's start beside
-    /// an addition right after that line's break among them — nor two the
-    /// reads of whose base text between them `values` does not answer one
-    /// item a position, nor an addition whose anchors do not both stand
-    /// together. A removal stands whatever the merger chooses: the gap's
-    /// choices place the addition.
+    /// stay an `order` gap. An addition beside a removal is one too, R2's
+    /// place beside its surviving anchor its default. Each of the two is a
+    /// change the other's side did not also make: a word several sides placed
+    /// alike is each one's, whichever keeps the copy M lays, so a side whose
+    /// every change the other side made too asks nothing. Two changes inside
+    /// one line ask nothing, nor do two a whole line or more apart — a
+    /// removal from a line's start beside an addition right after that
+    /// line's break among them — nor two the reads of whose base text
+    /// between them `values` does not answer one item a position, nor a pair
+    /// one of which is a cut, a corner or a collision, which asks already. A
+    /// removal stands whatever the merger chooses: the gap's choices place
+    /// the addition.
     Line,
 }
 
@@ -611,11 +619,13 @@ pub enum InPlaceOp {
 /// the splice and the coalesce, the report with the resolutions applied —
 /// applied ahead of the splice, so M holds them. A holder chosen at a gap
 /// with spots moves the words to its spot, which can raise a gap there or
-/// leave none at the default spot; every other gap keeps the number it has
-/// at the default, the first gap of the walk at the defaults with its kind,
-/// its place in the spine and the same runs besides the moved words, and
-/// any other gap, one the moved words make, is numbered after that walk's
-/// last. A spine's `moves` gap resolved by `Choice::Order` of the side
+/// leave none at the default spot; every other gap that stands keeps the
+/// number it has at the default, the first gap of the walk at the defaults
+/// with its kind, its place in the spine and the same runs besides the
+/// moved words; a gap the moved words make is numbered after that walk's
+/// last, and one they unmake — a `line` gap whose partner they were among
+/// them — leaves its number unused, a choice naming it standing in
+/// `ignored`. A spine's `moves` gap resolved by `Choice::Order` of the side
 /// whose order the spine took is settled, nothing walked again. With no
 /// `spine_hint`, one resolved by `Choice::Order` of the other side walks the
 /// whole composition again, that side's reorder applied first and every
@@ -775,13 +785,14 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
         spine: &spine,
         spine_pos: &spine_pos,
     };
-    let (stretches, placed) = layout.place(&claimed.kept);
+    let laid = layout.place(&claimed.kept);
     let regions = collision_regions(r, &removed_by, &removed, &spine_pos);
-    let lone = |stretches: &[Stretch]| lone_removals(r, &removed_by, &removed, &spine_pos, stretches);
+    let lone =
+        |laid: &Laid<'_>| lone_removals(r, &removed_by, &removed, &spine_pos, &laid.stretches);
     let first = after_claims + moves.len() as u32;
     let by_value = |side: SideIx, run: &Run| values(side, run, &Ask::Value);
     let (mut entries, mut applied) =
-        gaps(r, chain, &spine, &stretches, &placed, &regions, &lone(&stretches), first, options, values, &by_value);
+        gaps(r, chain, &spine, &laid, &regions, &lone(&laid), first, options, values, &by_value);
     if let SpineOrder::Chosen { numbering, .. } = order {
         // A side's order chosen at a spine's `moves` gap: every gap numbered
         // as the walk at the order given numbered it, which a holder's
@@ -793,13 +804,24 @@ fn walk(walking: &Walking<'_>, order: SpineOrder<'_>) -> (Composed, Numbering) {
         // stretches differ between the two, so the removals, the spine and
         // the collision regions are this walk's, and the lone removals are
         // those that walk's stretches leave. That walk's line rule reads the
-        // base text as this one's does, so a `line` gap at the defaults is
-        // one there too and keeps its number; the dedup changes no kind, run
-        // or place, so that walk's dedup reads no value.
-        let (stretches, placed) = layout.place(defaults);
+        // base text as this one's does, so a `line` gap there that still
+        // stands here keeps its number, and one the moved words partnered
+        // stands here no more, its number left unused; the dedup changes no
+        // kind, run or place, so that walk's dedup reads no value.
+        let at_defaults = layout.place(defaults);
         let none = |_: SideIx, _: &Run| -> Option<Vec<Item>> { None };
-        let (at_defaults, _) =
-            gaps(r, chain, &spine, &stretches, &placed, &regions, &lone(&stretches), first, options, values, &none);
+        let (at_defaults, _) = gaps(
+            r,
+            chain,
+            &spine,
+            &at_defaults,
+            &regions,
+            &lone(&at_defaults),
+            first,
+            options,
+            values,
+            &none,
+        );
         number_as(&mut entries, &mut applied, &at_defaults, &claimed.moved(), first);
     }
     let ignored = resolve(r, &mut entries, &mut moves, &claimed.claims, &options.resolutions, &in_base, &spine_pos);
@@ -1389,6 +1411,13 @@ struct Kept {
     joins: HashMap<StretchAt, StretchAt>,
     /// Each stretch's fragments before any shared one was taken out of it.
     whole: HashMap<StretchAt, Vec<usize>>,
+    /// Each side's shared fragments it gave up to another holder's copy.
+    ///
+    /// A holder that gives its copy up placed those words all the same:
+    /// the line rule counts them as its words wherever the keeper's copy is
+    /// laid (`Placers`), so which holder keeps a word decides nothing it
+    /// asks.
+    given_up: Vec<HashSet<usize>>,
 }
 
 /// Where a shared fragment is kept, and what that asks.
@@ -1457,8 +1486,9 @@ impl Kept {
     /// where a side holding none of the words set words of its own at the
     /// holder's place, which the copy is asked against there (R1). Every
     /// other holder gives up its copy, which laid at the keeper's place keeps
-    /// that holder's order; the splice lays each fragment once. Where every
-    /// candidate breaks an order, the
+    /// that holder's order; the splice lays each fragment once, and
+    /// `given_up` keeps it as that holder's word, a change it made all the
+    /// same. Where every candidate breaks an order, the
     /// holders' words around the fragment cannot be laid in every holder's
     /// order, and the stretches that would come out of order, each broken
     /// holder's copy in them, join the keeper's gap, which asks: an `order`
@@ -1634,7 +1664,7 @@ impl Kept {
             .collect();
         let whole = stretches.into_iter().map(|st| ((st.side, st.x, st.y), st.frags)).collect();
         let joins = joins.into_iter().map(|(from, (to, _))| (from, to)).collect();
-        Kept { seqs, spots, joins, whole }
+        Kept { seqs, spots, joins, whole, given_up: strip }
     }
 }
 
@@ -2026,13 +2056,25 @@ struct Layout<'a> {
     spine_pos: &'a [Option<usize>],
 }
 
+/// One walk's additions as `Layout::place` lays them out over one `Kept`.
+///
+/// It holds the stretches, the placement of each, and the shared words each
+/// side of that same `Kept` gave up to another holder's copy, which the line
+/// rule counts as that side's (`Placers`).
+struct Laid<'k> {
+    stretches: Vec<Stretch>,
+    /// Each stretch's placement, parallel to `stretches`.
+    placed: Vec<Placed>,
+    given_up: &'k [HashSet<usize>],
+}
+
 impl Layout<'_> {
-    /// Returns step 3's additions over `kept` and step 4's placements.
+    /// Returns step 3's additions over `kept` with step 4's placements.
     ///
     /// A keeper's stretch `kept` places at a common spot is placed by that
     /// spot's anchors, and a stretch that joins another's gap takes that
     /// stretch's placement (`Kept::of`), so the two group as one gap.
-    fn place(&self, kept: &Kept) -> (Vec<Stretch>, Vec<Placed>) {
+    fn place<'k>(&self, kept: &'k Kept) -> Laid<'k> {
         let mut stretches = additions(&kept.seqs, self.in_base);
         let ids: Vec<StretchAt> = stretches.iter().map(|st| (st.side, st.x, st.y)).collect();
         for (st, id) in stretches.iter_mut().zip(&ids) {
@@ -2062,7 +2104,7 @@ impl Layout<'_> {
         for (i, j) in joined {
             placed[i] = at_own[j];
         }
-        (stretches, placed)
+        Laid { stretches, placed, given_up: &kept.given_up }
     }
 }
 
@@ -2297,14 +2339,15 @@ struct Entry {
 /// Returns step 5's gaps (merge record §1.4, §2 R1, §5; skep #1173,
 /// #1176).
 ///
-/// The stretches that landed at one spot are grouped by side, each group in
-/// its side's own order; the collisions at one spine gap are one
-/// `collision` gap, a region no side filled listed too; the gaps are put in
-/// M's order, the order `splice` lays them in, and an addition met at a
+/// The stretches `laid` holds that landed at one spot are grouped by side,
+/// each group in its side's own order; the collisions at one spine gap are
+/// one `collision` gap, a region no side filled listed too; the gaps are put
+/// in M's order, the order `splice` lays them in, and an addition met at a
 /// line's edge by another side's neighbouring addition, or by one of
 /// `lone`, the removals one side alone made with no words of its own in
 /// their place (`lone_removals`), is a `line` gap (`line_edges`, its reads
-/// through `lines`); then the groups go in the order rule's order — a spot
+/// through `lines`, a side's words there counting the shared ones `laid`
+/// says it gave up); then the groups go in the order rule's order — a spot
 /// two sides added at is an `order` gap, unsettled, where it would otherwise
 /// be no gap or an `anchor` — and the dedup reads through `values` where it
 /// is on, each line read told the pair it decides (`Ask::Line`). The gaps
@@ -2318,8 +2361,7 @@ fn gaps(
     r: &Refinement,
     chain: &HashSet<usize>,
     spine: &[usize],
-    stretches: &[Stretch],
-    placed: &[Placed],
+    laid: &Laid<'_>,
     regions: &[Region],
     lone: &[LoneRemoval],
     first: u32,
@@ -2328,7 +2370,7 @@ fn gaps(
     values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>,
 ) -> (Vec<Entry>, Vec<GapId>) {
     let mut entries: Vec<Entry> = Vec::new();
-    for (st, p) in stretches.iter().zip(placed) {
+    for (st, p) in laid.stretches.iter().zip(&laid.placed) {
         let key = p.key;
         let found = entries.iter().position(|e| {
             e.home == p.home
@@ -2393,7 +2435,7 @@ fn gaps(
         }
     }
     entries.sort_by_key(|e| (e.home, e.key));
-    line_edges(r, spine, &mut entries, lone, lines);
+    line_edges(r, spine, &mut entries, lone, laid.given_up, lines);
     // The order rule: a spot two sides added at is an `order` gap where it
     // would otherwise be no gap or an `anchor`, the groups by the commit of
     // their first run — inside the document's chain the address order, a
@@ -2466,16 +2508,26 @@ pub(super) const LINE_READ: u64 = 4096;
 /// Marks each addition another side's change meets at a line's edge a
 /// `line` gap (skep #1173, #1176).
 ///
-/// `entries` are in M's order. Two neighbours among those that lay words
-/// are a pair where they lie in different spine gaps, so that only
-/// surviving base text stands between them in M, neither has a kind, their
-/// groups are of two sides or more, and one at least is held by one side
-/// alone — two held by several sides are `order` gaps whatever the text.
-/// A removal of `lone`, in M's order too, is a pair with its nearest
-/// neighbour before it and its nearest after it among the entries that lay
-/// words, where that neighbour lies in another spine gap, has no kind, and
-/// is held by one other side alone; removals stand beside each other in M
-/// as points, so another removal between them parts nothing. The first of a
+/// `entries` are in M's order. The rule weighs an entry that has no kind or
+/// is R2's `anchor`, an addition beside a removal, whose place R2 settles
+/// and whose line's edge it leaves to this rule; never a cut, a corner or a
+/// collision, which asks already. Two neighbours among those that lay
+/// words are a pair where they lie in different spine gaps, so that only
+/// surviving base text stands between them in M, both are weighed, one at
+/// least is held by one side alone — two held by several sides are `order`
+/// gaps whatever the text — and they hold the changes of two sides, each
+/// one the other did not also make: some side placed at one of the two a
+/// word another side did not place there, and that other placed at the
+/// other a word the first did not. A side's words at an entry count the
+/// shared ones it gave up to the keeper's copy laid there (`given_up`;
+/// `Placers`), so which holder keeps a word decides no pair, and a side
+/// whose every change another side made too meets no line's edge. A removal
+/// of `lone`, in M's order too, is a pair with its nearest neighbour before
+/// it and its nearest after it among the entries that lay words, where that
+/// neighbour lies in another spine gap, is weighed, and is held by one
+/// other side alone, which placed there a word the remover did not;
+/// removals stand beside each other in M as points, so another removal
+/// between them parts nothing. The first of a
 /// pair stands at a line's start where the base position just before it is
 /// a line break, or where it lies at the document's start. The pair meets
 /// at a line's edge where the base text M lays between the two holds one
@@ -2518,18 +2570,20 @@ fn line_edges(
     spine: &[usize],
     entries: &mut [Entry],
     lone: &[LoneRemoval],
+    given_up: &[HashSet<usize>],
     lines: &AskedValues<'_>,
 ) {
     let reads = LineReads::new(lines);
     let alone = |e: &Entry| e.groups.len() == 1;
+    let weighable = |e: &Entry| matches!(e.kind, None | Some(GapKind::Anchor));
+    let placers = Placers::of(entries, given_up);
     let laying: Vec<usize> =
         (0..entries.len()).filter(|&i| !entries[i].groups.is_empty()).collect();
     let mut marked: Vec<usize> = Vec::new();
     for pair in laying.windows(2) {
         let (p, q) = (&entries[pair[0]], &entries[pair[1]]);
-        let held: HashSet<usize> = p.groups.iter().chain(&q.groups).map(|g| g.side).collect();
-        let apart = p.home < q.home && p.kind.is_none() && q.kind.is_none();
-        if !apart || held.len() < 2 || !(alone(p) || alone(q)) {
+        let apart = p.home < q.home && weighable(p) && weighable(q);
+        if !apart || !(alone(p) || alone(q)) || !placers.two_sides_changed(pair[0], pair[1]) {
             continue;
         }
         if meet_between(r, spine, p.home, q.home, &reads).meets {
@@ -2545,17 +2599,20 @@ fn line_edges(
     let mut answered: Vec<(usize, LoneRemoval)> = Vec::new();
     for (k, &i) in laying.iter().enumerate() {
         let e = &entries[i];
-        if e.kind.is_some() || !alone(e) {
+        if !weighable(e) || !alone(e) {
             continue;
         }
         let (side, home) = (e.groups[0].side, e.home);
+        // A removal whose side placed here not every word the addition
+        // lays: never the adding side's own, which placed them all.
+        let other = |l: &&LoneRemoval| placers.beyond(i, side, l.side);
         let from = k.checked_sub(1).map_or(0, |j| past(laying[j]));
         let to = laying.get(k + 1).map_or(lone.len(), |&j| past(j));
         let at = past(i);
         // Before the addition, each removal the first of its pair: the
         // texts share their last byte.
         let mut weighed: Option<(usize, Edge)> = None;
-        for removal in lone[from..at].iter().rev().filter(|l| l.side != side && l.home < home) {
+        for removal in lone[from..at].iter().rev().filter(|l| other(l) && l.home < home) {
             let edge = match weighed {
                 Some((spot, edge)) if spot == removal.home => edge,
                 Some((_, edge)) if !edge.answered || edge.broken => break,
@@ -2568,7 +2625,7 @@ fn line_edges(
         }
         // After it, the addition the first: each text ends at its removal.
         let mut weighed: Option<(usize, Edge)> = None;
-        for removal in lone[at..to].iter().filter(|l| l.side != side && l.home > home) {
+        for removal in lone[at..to].iter().filter(|l| other(l) && l.home > home) {
             let edge = match weighed {
                 Some((spot, edge)) if spot == removal.home => edge,
                 Some((_, edge)) if !edge.answered || edge.broken || edge.ends_in_break => break,
@@ -2587,6 +2644,67 @@ fn line_edges(
     for (i, removal) in answered {
         entries[i].kind = Some(GapKind::Line);
         entries[i].removed.push(removal);
+    }
+}
+
+/// Each side's words at each entry, as the line rule reads them (skep
+/// #1173, #1176).
+///
+/// A side's words at an entry are its group's, and every word the entry
+/// lays that the side gave up to another holder's copy (`Kept::given_up`):
+/// a holder that gave its copy up placed those words all the same, so
+/// which holder keeps a word decides nothing the rule asks.
+struct Placers(Vec<Vec<(usize, HashSet<usize>)>>);
+
+impl Placers {
+    /// Returns each side's words at each of `entries`, `given_up` each
+    /// side's shared words given up to another holder's copy.
+    fn of(entries: &[Entry], given_up: &[HashSet<usize>]) -> Placers {
+        let mut givers: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (side, gave) in given_up.iter().enumerate() {
+            for &f in gave {
+                givers.entry(f).or_default().push(side);
+            }
+        }
+        let at = |e: &Entry| {
+            let mut words: Vec<(usize, HashSet<usize>)> =
+                e.groups.iter().map(|g| (g.side, g.frags.iter().copied().collect())).collect();
+            for f in e.groups.iter().flat_map(|g| g.frags.iter().copied()) {
+                for &side in givers.get(&f).into_iter().flatten() {
+                    match words.iter_mut().find(|(s, _)| *s == side) {
+                        Some((_, held)) => {
+                            held.insert(f);
+                        }
+                        None => words.push((side, HashSet::from([f]))),
+                    }
+                }
+            }
+            words
+        };
+        Placers(entries.iter().map(at).collect())
+    }
+
+    /// Returns whether side `x` placed at entry `i` a word side `z` did not
+    /// place there.
+    fn beyond(&self, i: usize, x: usize, z: usize) -> bool {
+        let words = |side: usize| self.0[i].iter().find(|(s, _)| *s == side).map(|(_, w)| w);
+        match (words(x), words(z)) {
+            (None, _) => false,
+            (Some(xs), None) => !xs.is_empty(),
+            (Some(xs), Some(zs)) => xs.iter().any(|f| !zs.contains(f)),
+        }
+    }
+
+    /// Returns whether entries `p` and `q` hold the changes of two sides,
+    /// each one the other did not also make.
+    ///
+    /// Some side placed at `p` a word another did not place there, and that
+    /// other placed at `q` a word the first did not.
+    fn two_sides_changed(&self, p: usize, q: usize) -> bool {
+        let sides: Vec<usize> = self.0[p].iter().chain(&self.0[q]).map(|(s, _)| *s).collect();
+        sides.iter().any(|&x| {
+            sides.iter().any(|&z| x != z && self.beyond(p, x, z) && self.beyond(q, z, x))
+        })
     }
 }
 

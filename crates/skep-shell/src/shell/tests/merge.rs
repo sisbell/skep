@@ -2366,24 +2366,25 @@ fn a_choice_over_a_panel_of_the_whole_draft_opened_before_the_compose_is_read_of
     sd.shutdown();
 }
 
-/// Stages the family with words both sides add alike: D deletes "the "
-/// and adds " jumps", E.2 "fox jumps", and S writes "so " at its start and
-/// " jumps" at its end, E.1.1 "so the fox jumps". The merge of E.2 with
-/// E.1.1 over E.1 meets S's "so " beside the head's removal, gap 1, an
-/// `anchor` gap, and the two " jumps" at one spot, gap 2, an `order` gap the
-/// value rule's dedup keeps once — E.2's copy, minted first — so M, "so fox
-/// jumps", is no head's text and its shot is no inert one.
+/// Stages the family with words both sides add alike: D deletes the "f" of
+/// "fox" and adds " jumps", E.2 "the ox jumps", and S writes "sly " before
+/// "fox" and " jumps" at its end, E.1.1 "the sly fox jumps". The merge of
+/// E.2 with E.1.1 over E.1 meets S's "sly " beside the head's removal, gap
+/// 1, an `anchor` gap inside the one line, whose edge no other change meets,
+/// and the two " jumps" at one spot, gap 2, an `order` gap the value rule's
+/// dedup keeps once — E.2's copy, minted first — so M, "the sly ox jumps",
+/// is no head's text and its shot is no inert one.
 fn kept_once(g: &Ground) -> Family {
     let write = |doc: &str, ordinal: u64, words: &str| {
         g.op(json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [words], "as_of": g.position()}));
     };
     let head = |d: &str| {
-        g.op(json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "1"}, "width": "4", "as_of": g.position()}));
-        write(d, 4, " jumps");
+        g.op(json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "5"}, "width": "1", "as_of": g.position()}));
+        write(d, 7, " jumps");
     };
     let side = |s: &str| {
-        write(s, 1, "so ");
-        write(s, 11, " jumps");
+        write(s, 5, "sly ");
+        write(s, 12, " jumps");
     };
     family_with(g, head, side)
 }
@@ -2392,15 +2393,15 @@ fn kept_once(g: &Ground) -> Family {
 /// both answers, and take no resolution, against the daemon (the merge
 /// record's §5, case (g); skep #1145).
 ///
-/// Composed into a fresh draft, the merge of E.2 with E.1.1 lands "so fox
-/// jumps": gap 1 the `anchor` gap and gap 2 the `order` gap, both settled
+/// Composed into a fresh draft, the merge of E.2 with E.1.1 lands "the sly
+/// ox jumps": gap 1 the `anchor` gap and gap 2 the `order` gap, both settled
 /// `rule`, gap 2 placed `[0]`, and `deduped` names gap 2 alone, the head's
 /// copy kept and E.1.1's " jumps" dropped, as gap 2's runs name it. The
 /// re-open names the same. A resolution at either gap — the anchor's
 /// `omit` or `keep_both`, the kept-once gap's `keep_both`, both sides'
 /// order or the side's copy alone — is refused `malformed_args` naming
-/// `resolutions`, nothing sent; with none, `merge.land` lands E.3 "so fox
-/// jumps" with no default and the same `deduped`, and the merged arm's
+/// `resolutions`, nothing sent; with none, `merge.land` lands E.3 "the sly
+/// ox jumps" with no default and the same `deduped`, and the merged arm's
 /// record keeps gap 2 `rule` and `values.applied` naming it (the mutants
 /// that drop `deduped` from either answer, apply an unchecked resolution,
 /// or refuse only at a kept-once `order` gap, letting the anchor's through).
@@ -2410,12 +2411,12 @@ fn words_both_sides_added_alike_are_kept_once_named_in_both_answers_and_take_no_
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let f = kept_once(&g);
-    assert_eq!((g.text(&f.e2, 9), g.text(&f.e11, 16)), ("fox jumps".to_string(), "so the fox jumps".to_string()), "the premise: the sides' texts");
+    assert_eq!((g.text(&f.e2, 12), g.text(&f.e11, 17)), ("the ox jumps".to_string(), "the sly fox jumps".to_string()), "the premise: the sides' texts");
     let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
     assert_report_declared(&report);
     assert_eq!(report["outcome"].as_str(), Some("landed"), "{report}");
     let fresh = report["into"].as_str().expect("the fresh draft").to_string();
-    assert_eq!(g.text(&fresh, 12), "so fox jumps", "the words added alike, once");
+    assert_eq!(g.text(&fresh, 16), "the sly ox jumps", "the words added alike, once");
     let gaps = report["gaps"].as_array().unwrap();
     let settled: Vec<Value> = gaps.iter().map(|gp| json!([gp["id"], gp["kind"], gp["settled"], gp["resolved_by"]])).collect();
     assert_eq!(settled, [json!([1, "anchor", true, "rule"]), json!([2, "order", true, "rule"])], "{report}");
@@ -2442,7 +2443,7 @@ fn words_both_sides_added_alike_are_kept_once_named_in_both_answers_and_take_no_
     }
     let e3 = format!("{}.3", f.edition);
     assert_eq!((landed["outcome"].as_str(), landed["member"].as_str(), &landed["defaults"], &landed["deduped"]), (Some("landed"), Some(e3.as_str()), &json!([]), &report["deduped"]), "{landed}");
-    assert_eq!(g.text(&e3, 12), "so fox jumps");
+    assert_eq!(g.text(&e3, 16), "the sly ox jumps");
     // The record keeps the rule's placement.
     let merged = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
     assert_report_declared(&merged);

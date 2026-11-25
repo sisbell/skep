@@ -2278,12 +2278,12 @@ fn a_fresh_landing_reads_the_standing_record_when_it_lands_never_the_composition
 /// repeat of the identical request). The composition landed fresh in
 /// `F`, `F` undone, the same composition landed again with no draft
 /// named: the undo's record is the merger's newest for the key, so the
-/// stage's id names it — its stem over `<key>@<P>~<link>` — and the
-/// board's memo never answers it with `F`. A stage and a landing commit,
-/// the new draft holding M with its marker while `F` keeps the head's
-/// text the undo restored; the record's ids carry the new draft's stem
-/// and its `replaces` names the undo's record. A call after it answers
-/// that landing, nothing written.
+/// stage's id names it — its stem over `<key>@<P>~<link>^<q>`, q the first
+/// landing's position — and the board's memo never answers it with `F`. A
+/// stage and a landing commit, the new draft holding M with its marker
+/// while `F` keeps the head's text the undo restored; the record's ids
+/// carry the new draft's stem and its `replaces` names the undo's record.
+/// A call after it answers that landing, nothing written.
 #[test]
 fn a_fresh_landing_after_its_take_back_in_one_session_stages_a_draft_of_its_own() {
     let (dialer, board, signer) = open(draft_landing_world());
@@ -2291,7 +2291,7 @@ fn a_fresh_landing_after_its_take_back_in_one_session_stages_a_draft_of_its_own(
     let fresh_landing = || draft_landing(&session, &signer, None);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     let landed = land(&board, &merged, fresh_landing()).expect("landed fresh");
-    let Landed::Draft { into: f, .. } = landed.clone() else { panic!("{landed:?}") };
+    let Landed::Draft { into: f, position: first, .. } = landed.clone() else { panic!("{landed:?}") };
     let undone = undo(&board, merger(&session, &signer), &f, &a(K), None, None).expect("undone").record.expect("the undo's record");
     let head = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
     assert_eq!(dialer.world().docs.get(&f.to_string()).unwrap().runs, head, "the premise: the undo restored the head's text");
@@ -2302,8 +2302,8 @@ fn a_fresh_landing_after_its_take_back_in_one_session_stages_a_draft_of_its_own(
     assert!(staged, "staged by this call: {relanded:?}");
     assert_eq!(
         dialer.frames("stage")[0]["id"].as_str(),
-        Some(landing_id(&format!("{}@{}~{undone}", merged.key.text(), merged.as_of), "stage").as_str()),
-        "the stage's id names the record the landing follows"
+        Some(landing_id(&format!("{}@{}~{undone}^{first}", merged.key.text(), merged.as_of), "stage").as_str()),
+        "the stage's id names the record the landing follows and the latest landing of the merge"
     );
     let stage_at = dialer.world().rows.iter().rev().find(|r| r.op == "stage").unwrap().at;
     let stem = Stem::of(&format!("{}:{f2}@{stage_at}", merged.key.text()));
@@ -2369,6 +2369,96 @@ fn a_fresh_landing_taken_back_with_its_record_unwritten_stands_no_more() {
         drop(w);
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(r.to_string().as_str()), "{withdrawal}: R replaced");
     }
+}
+
+/// A LANDING TAKEN BACK WITH NO RECORD IS NEVER ANSWERED FROM THE MEMO
+/// (wire.md §Correlation and idempotency: the board answers an id it has
+/// acknowledged in the session with that acknowledgment, running nothing).
+/// The composition landed while the board was too busy to find the
+/// journal, so the landing's record went unwritten, then taken back by an
+/// undo, which found no record to replace and wrote none: no record of the
+/// key moved, and the same composition is landed again in the session.
+/// (a) With no draft named: the stage's id names the landing taken back —
+/// its stem over `<key>@<P>^<L>` — so a stage and a landing commit, the
+/// new draft holding M with its marker, `F` keeping what the undo restored,
+/// and the record naming the new draft (the mutant that spells the stage
+/// over the key, P and the record alone is answered the memo's `F` and
+/// refused). (b) Into `S`: the one write's id is the first call's, and the
+/// memo's acknowledgment at the first landing's position is refused,
+/// naming `S` and that position — nothing committed, no record written,
+/// `S` as the undo left it, no record of the key standing (the mutant that
+/// takes every acknowledgment as this landing writes a record of a landing
+/// the board has taken back).
+#[test]
+fn a_landing_taken_back_with_no_record_is_never_answered_from_the_memo() {
+    let wrote = |dialer: &Scripted| {
+        dialer.ops().into_iter().filter(|o| ["stage", "set_arrangement", "insert", "make_link"].contains(&o.as_str())).collect::<Vec<_>>()
+    };
+    let head = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+    // (a) A fresh landing.
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    too_busy_for_the_find(&mut dialer.world());
+    let cut = land(&board, &merged, draft_landing(&session, &signer, None));
+    assert!(matches!(cut, Err(Refusal::Halt(Halt::Halt(_)))), "(a): the premise, the landing's record unwritten: {cut:?}");
+    dialer.world().scan_busy = 0;
+    let (f, l) = {
+        let w = dialer.world();
+        let row = w.rows.iter().rev().find(|r| r.op == "set_arrangement").expect("the landing's row");
+        (row.docs[0].clone(), row.at)
+    };
+    let undone = undo(&board, merger(&session, &signer), &a(&f), &a(K), None, None).expect("undone");
+    assert_eq!(undone.record, None, "(a): the premise, no record to replace: {undone:?}");
+    assert_eq!(dialer.world().docs.get(&f).unwrap().runs, head, "(a): the premise, the undo restored the head's text");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let relanded = land(&board, &merged, draft_landing(&session, &signer, None)).expect("(a): landed again");
+    let Landed::Draft { into: g, position, staged, .. } = relanded.clone() else { panic!("{relanded:?}") };
+    assert!(staged && g.to_string() != f, "(a): a draft of its own, staged by this call: {relanded:?}");
+    assert_eq!(dialer.frames("stage").len(), 1, "(a): one stage: {:?}", dialer.ops());
+    assert_eq!(
+        dialer.frames("stage")[0]["id"].as_str(),
+        Some(landing_id(&format!("{}@{}^{l}", merged.key.text(), merged.as_of), "stage").as_str()),
+        "(a): the stage's id names the landing taken back"
+    );
+    let w = dialer.world();
+    assert!(w.rows.len() > rows, "(a): committed, never the memo's answers to the first landing");
+    assert_eq!(w.docs.get(&g.to_string()).unwrap().runs, draft_m(), "(a): the new draft holds M");
+    assert_eq!(w.standing(&g.to_string()).1.map(|m| m.at), Some(position), "(a): its marker");
+    assert_eq!(w.docs.get(&f).unwrap().runs, head, "(a): F keeps what the undo restored");
+    drop(w);
+    let standing = current(&board, Some(session.token()), &a(K), &merged.key).expect("(a): the lookup").expect("(a): a record");
+    assert_eq!(standing.landed, Some(RecordLanding::Draft { draft: g.clone(), position }), "(a): the record names the new landing");
+    // (b) Into `S`.
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    too_busy_for_the_find(&mut dialer.world());
+    let cut = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))));
+    assert!(matches!(cut, Err(Refusal::Halt(Halt::Halt(_)))), "(b): the premise, the landing's record unwritten: {cut:?}");
+    dialer.world().scan_busy = 0;
+    let l = dialer.world().standing(S).1.expect("(b): the premise, S marks the landing").at;
+    let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+    assert_eq!(undone.record, None, "(b): the premise, no record to replace: {undone:?}");
+    let left = dialer.world().docs.get(S).unwrap().runs.clone();
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let again = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))));
+    let Err(Refusal::Halt(Halt::Halt(face))) = &again else { panic!("(b): refused: {again:?}") };
+    assert!(face.state.contains(S) && face.state.contains(&format!("position {l}")), "(b): the draft and the memo's position named: {face:?}");
+    assert_eq!(
+        dialer.frames("set_arrangement")[0]["id"].as_str(),
+        Some(landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "draft").as_str()),
+        "(b): the premise, the first call's id"
+    );
+    assert_eq!(wrote(&dialer), ["set_arrangement"], "(b): the one write asked, nothing of a record: {:?}", dialer.ops());
+    let w = dialer.world();
+    assert_eq!(w.rows.len(), rows, "(b): nothing committed");
+    assert_eq!(w.docs.get(S).unwrap().runs, left, "(b): S as the undo left it");
+    assert_eq!(w.standing(S).1, None, "(b): no marker");
+    drop(w);
+    assert_eq!(current(&board, Some(session.token()), &a(K), &merged.key).expect("(b): the lookup"), None, "(b): no record of the key");
 }
 
 /// A FRESH LANDING FINDS ITS LANDING STANDING IN ANY DRAFT ITS RECORDS NAME

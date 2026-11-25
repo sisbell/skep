@@ -3,9 +3,10 @@
 //! Each composes the face a step's refusal carries: the board's head owed
 //! before the shot ([`head_owed`]); an act standing with its record
 //! unwritten ([`record_owed`]), for an [`Unwritten`] reason and a journal's
-//! [`Unfit`] check; a board refusal of this library's own frame
-//! ([`own_fault`]); and an answer of a shape this client cannot read
-//! ([`shape_face`]).
+//! [`Unfit`] check; a draft landing's write answered from the board's memo
+//! of an earlier landing that stands no more ([`memo_landing_gone`]); a
+//! board refusal of this library's own frame ([`own_fault`]); and an answer
+//! of a shape this client cannot read ([`shape_face`]).
 
 use serde_json::Value;
 use skep_address::Address;
@@ -24,6 +25,22 @@ pub(super) fn head_owed(cause: String) -> Halt {
         "this board has no H.1 yet, so the merge cannot land",
         cause,
         "retry once the board has written its head; nothing was written",
+    )
+}
+
+/// Faces a draft landing's write answered from the board's memo of an
+/// earlier landing that stands no more in `into` as this composition's.
+///
+/// The acknowledgment names `at`, the position of an earlier call's write
+/// under the same id in this session, which the board answered without
+/// running anything (wire.md §Correlation and idempotency), and the draft
+/// as it stands holds no landing of this composition there
+/// (`Writer::land_into_draft`, the end-to-end check). Nothing was written.
+pub(super) fn memo_landing_gone(into: &Address, at: u64) -> Halt {
+    Halt::face(
+        format!("this session landed this merge in {into} at position {at} already, and that landing no longer stands there as this composition's"),
+        format!("the board answered the landing's write from its memo of that earlier write under the same id, running nothing; since it, the landing was taken back, another landing took its mark, it placed another composition's list of the same head and sides, or the board reclaimed position {at} with no record of it standing — nothing was written"),
+        "compose the merge again and land it: a composition reads the board as it stands, and its writes carry ids of their own",
     )
 }
 

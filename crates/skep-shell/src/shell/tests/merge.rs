@@ -1727,6 +1727,66 @@ fn a_draft_with_no_recorded_base_is_read_by_its_rows_at_a_re_open_and_after_an_u
     sd.shutdown();
 }
 
+/// Checks that a compose naming no `into` re-opens a landing the library
+/// finds standing and cannot judge, never landing it a second time.
+///
+/// Against the daemon (skep #914): E.1.1's merge, then E.1.2's, land in X,
+/// a draft never staged, and `merge.undo` takes E.1.2's back by X's rows,
+/// E.1.1's landing standing again. E.1.1 composed with no `into` re-opens
+/// X at E.1.1's position, nothing written. The board then reclaims its
+/// history past the undo, so the walk of X's rows needs past states it no
+/// longer answers — the library's `baseless_landing` refused
+/// `history_reclaimed`, its landing answering the record's position — and
+/// the same compose re-opens X at that position still, nothing written and
+/// X's rows as they stood (the mutant that reads X's mark again on the land
+/// side, which reads the reclaim as no landing standing, lands the merge in
+/// X a second time).
+#[test]
+fn a_landing_the_library_cannot_judge_is_re_opened_never_made_a_second_time() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let e12 = another_daughter(&g, &f, " later");
+    let x = g.draft("the hen");
+    let x1 = merged_into(&g, &f, &f.e11, &x)["position"].as_u64().expect("E.1.1's landing");
+    merged_into(&g, &f, &e12, &x);
+    undo_once(&g, &g.session);
+    assert_holds_the_merge(&g, &x, "E.1.1's merge standing again in X");
+    let compose = || g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11})).unwrap_or_else(|r| panic!("{r}"));
+    let reopened = |report: &Value| (report["outcome"].as_str().map(str::to_string), report["into"].as_str().map(str::to_string), report["position"].as_u64(), report["fresh"].as_bool());
+    let expected = (Some("reopened".to_string()), Some(x.clone()), Some(x1), Some(false));
+    let before = g.position();
+    let report = compose();
+    assert_report_declared(&report);
+    assert_eq!(reopened(&report), expected, "the guard: E.1.1's landing standing by X's rows: {report}");
+    assert_eq!(g.position(), before, "the guard: nothing written");
+    // The floor rises past the undo: bulk inserts rotate the journal's
+    // segment, then three checkpoints retain two and reclaim below the
+    // oldest kept.
+    let filler = g.draft("filler");
+    let bulk = "z".repeat(262_144);
+    for _ in 0..3 {
+        for _ in 0..3 {
+            g.op(json!({"op": "insert", "doc": filler, "at": {"subspace": "1", "ordinal": "1"}, "values": [bulk], "as_of": g.position()}));
+        }
+        sd.daemon().service_the_checkpoint_now();
+    }
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let walked = skep_client::merge::baseless_landing(&entry.board, Some(&entry.token), &parse_address(&x).unwrap());
+    assert!(matches!(walked, Err(Library::HistoryReclaimed { .. })), "the premise: X's rows' walk needs a reclaimed state: {walked:?}");
+    let before = g.position();
+    let rows = arrangement_rows(&g, &x, 0).len();
+    let report = compose();
+    assert_report_declared(&report);
+    assert_eq!(reopened(&report), expected, "never a second landing: {report}");
+    assert_eq!(g.position(), before, "nothing written");
+    assert_eq!(arrangement_rows(&g, &x, 0).len(), rows, "X's rows as they stood");
+    assert_holds_the_merge(&g, &x, "X as it stood");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks that the landing, the undo, the withdrawal and a compose into the
 /// draft are refused over the draft's held lines, a burst held behind
 /// them, against the daemon (§3c.4, THE HELD-LINES GATE; skep #849).

@@ -28,9 +28,10 @@ use super::writer::{Stem, Writer};
 /// A fresh draft landing looks for this composition's landing standing in a
 /// draft the merger's records of the key name ([`Writer::found_standing`]),
 /// then for a landing begun and never recorded, before its journal's check
-/// and its stage, with `shoot` on or off ([`Writer::landing_begun`]), then
-/// reads every document M windows ([`Writer::windows_readable`]) before the
-/// stage. A journal named is checked once, after the read-first steps and
+/// and its stage, with `shoot` on or off ([`Writer::check_landing_begun`],
+/// whose answer the stage is spelled over), then reads every document M
+/// windows ([`Writer::windows_readable`]) before the stage. A journal named
+/// is checked once, after the read-first steps and
 /// before the landing's first write ([`Writer::check_journal`]); a landing
 /// found standing writes nothing before its record and checks none. The
 /// record a draft landing made now answers by is the newest record of the
@@ -140,9 +141,7 @@ pub(super) fn walk(
                     // merger's and never recorded is named, nothing staged
                     // or written, at a landing and a resume alike: never a
                     // second landing, and never finished unasked (PUB-8.32).
-                    if let Some((draft, position)) = writer.landing_begun(merged, &newest)? {
-                        return Err(Refusal::LandingBegun { draft, position });
-                    }
+                    let none_begun = writer.check_landing_begun(merged, &newest)?;
                     if !shoot {
                         return Ok(None);
                     }
@@ -150,7 +149,7 @@ pub(super) fn walk(
                     // one write's source gate refuses nothing past it.
                     writer.windows_readable(merged)?;
                     check_journal()?;
-                    let (fresh, at) = writer.stage(merged, &newest)?;
+                    let (fresh, at) = writer.stage(merged, &newest, &none_begun)?;
                     let text = format!("{}:{fresh}@{at}", merged.key.text());
                     (fresh, at, text, true)
                 }

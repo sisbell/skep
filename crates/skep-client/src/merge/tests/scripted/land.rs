@@ -2387,3 +2387,46 @@ fn a_landing_whose_list_cannot_be_read_back_is_never_made_a_second_time() {
         "the premise: N asked as of the landing, and refused: {ops:?}"
     );
 }
+
+/// A landing whose draft's mark cannot be read is never made a second time.
+///
+/// The draft landing's merge lands in `P`, a draft the board records no
+/// base for, its record written; `P` is re-arranged since by a row naming
+/// no merge, and the board's history floor rises to the landing, so the
+/// walk of `P`'s rows needs the state before the landing, which is
+/// reclaimed (skep #914). A fresh landing of the same composition and a
+/// `resume` naming no draft each answer the landing at the position its
+/// record names, nothing staged or written (the `land` module's doc, **A
+/// fresh landing found standing**). The mutant that passes over a draft
+/// whose mark cannot be read finds `P` recorded, so no landing begun, and
+/// stages a second draft, landing the merge twice.
+#[test]
+fn a_landing_whose_drafts_mark_cannot_be_read_is_never_made_a_second_time() {
+    let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+    let p = "1.0.1.0.67";
+    let mut w = draft_landing_world();
+    w.doc(p, false, ACCOUNT, vec![run(D, 1, 11)]);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(p)))).expect("in P");
+    let (at, record) = landing_of(&landed);
+    let typed = dialer.world().position;
+    let plain = frames::set_arrangement(p, &shot_runs(&[run(D, 1, 5)]), typed, None, None, None, None);
+    let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
+        panic!("closed")
+    };
+    assert!(acked_at(&ack).is_some(), "the premise: re-arranged: {ack}");
+    dialer.world().floor = Some(at);
+    let mark = baseless_landing(&board, Some(session.token()), &a(p));
+    assert!(matches!(mark, Err(Refusal::HistoryReclaimed { .. })), "the premise: P's mark cannot be read: {mark:?}");
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let found = Landed::Draft { into: a(p), position: at, record, head_moved: None, staged: false };
+    let fresh = || draft_landing(&session, &signer, None);
+    assert_eq!(land(&board, &merged, fresh()), Ok(found.clone()), "the landing, never a second one");
+    assert_eq!(resume(&board, &merged, fresh()), Ok(Some(found)), "resumed");
+    let ops = dialer.ops();
+    assert!(ops.iter().all(|o| !writes.contains(&o.as_str())), "nothing staged or written: {ops:?}");
+    assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+}

@@ -19,8 +19,8 @@ use crate::merge::compose::Run;
 use crate::merge::landings::Landings;
 use crate::merge::reads::{first_difference, runs_of, stretches, Family, Merged, Refusal, Side};
 
-use super::faults::{own_fault, own_fault_face, shape_face};
-use super::records::Newest;
+use super::faults::{memo_landing_gone, own_fault, own_fault_face, shape_face};
+use super::records::{Newest, NoneBegun};
 use super::writer::{Stem, Writer};
 
 impl Writer<'_> {
@@ -30,19 +30,24 @@ impl Writer<'_> {
     /// per-session id `<stem>.stage`, its [`Stem`] over `<key>@<P>`, P the
     /// position the merge was composed at, or over `<key>@<P>~<link>` where
     /// `newest`, the merger's newest record for the key, stands — `<link>`
-    /// its link, the record the landing's own will replace. A retry of the
-    /// same landing reads the same newest record, so it is answered its
-    /// stage again where its one write was never sent — one made after that
-    /// write finds the landing first, standing with its record
-    /// ([`Writer::found_standing`]) or begun without it
-    /// ([`Writer::landing_begun`]), and stages nothing; one composed after a
-    /// take-back stages afresh, and so does the same composition landed again
-    /// after its landing was taken back, whose newest record is the
-    /// take-back's. The board mints a private draft of the merger's account
-    /// holding the head by identity and records the head as its base, so the
-    /// write that follows re-records that base on the same head. A private
-    /// draft's mint, it carries no `attest` and reads no head (the `land`
-    /// module's doc).
+    /// its link, the record the landing's own will replace — and `^<q>`
+    /// after either where `begun`, the check that no landing of the merge
+    /// stands begun ([`Writer::check_landing_begun`]), read one, q the
+    /// position of the latest landing of the merge in a draft of the
+    /// merger's own. A retry of the same landing reads the same newest record
+    /// and the same rows, so it is answered its stage again where its one
+    /// write was never sent — one made after that write finds the landing
+    /// first, standing with its record ([`Writer::found_standing`]) or begun
+    /// without it, and stages nothing; one composed after a take-back stages
+    /// afresh, and so does the same composition landed again after its
+    /// landing was taken back: its newest record is the take-back's, and
+    /// where neither the landing's record nor the take-back's was written,
+    /// the latest landing row is that landing's, past every row the earlier
+    /// stage's id named. The board mints a private draft of the merger's
+    /// account holding the head by identity and records the head as its
+    /// base, so the write that follows re-records that base on the same head.
+    /// A private draft's mint, it carries no `attest` and reads no head (the
+    /// `land` module's doc).
     ///
     /// # Errors
     ///
@@ -53,12 +58,20 @@ impl Writer<'_> {
     /// `version`); an answer of a shape this client does not know,
     /// faced; the death signal, [`Refusal::SessionEnded`]; a dial fault; the
     /// board's other refusals verbatim — `mint_home_first` among them.
-    pub(super) fn stage(&self, merged: &Merged, newest: &Newest) -> Result<(Address, u64), Refusal> {
+    pub(super) fn stage(
+        &self,
+        merged: &Merged,
+        newest: &Newest,
+        begun: &NoneBegun,
+    ) -> Result<(Address, u64), Refusal> {
         let head = &merged.inputs.head;
-        let text = match newest.link() {
+        let mut text = match newest.link() {
             None => format!("{}@{}", merged.key.text(), merged.as_of),
             Some(link) => format!("{}@{}~{link}", merged.key.text(), merged.as_of),
         };
+        if let Some(latest) = begun.latest() {
+            text.push_str(&format!("^{latest}"));
+        }
         let id = Stem::of(&text).id("stage");
         let frame = frames::stage(&head.to_string(), Some(&id));
         let v = self.answered_write(&frame, "staging a fresh draft")?;
@@ -89,30 +102,40 @@ impl Writer<'_> {
     /// base and the marker are recorded; a private draft's write, it reads no
     /// head (the `land` module's doc). A write refused `arrangement_moved` is
     /// said in words read off the draft as it stands ([`Writer::moved_words`]),
-    /// `newest` the record they name. With `shoot` off nothing is sent: the
-    /// draft is read as it stands, and it answers the position of this merge's
-    /// landing as the board marks it ([`Writer::marked_landing`]) where that
-    /// landing placed M whole, the draft read as of it (`holds_merge`), so an
-    /// edit made in the draft since changes nothing; or `None` where the board
-    /// marks no landing of this merge — a take-back cleared it, none was made,
-    /// or the draft's marker is the one its stage copied from the draft it was
-    /// staged from — or the landing it marks placed another list. Where the
-    /// list it placed cannot be read back, the board having reclaimed the
-    /// mark's position since the draft was edited, it answers the mark where a
-    /// record of the merger's own of the key stands for it
-    /// ([`Newest::standing_in`]), and `None` where none does: a landing no
-    /// record names is recorded only where it can be judged (#914 F16).
+    /// `newest` the record they name. With `shoot` off nothing is sent: it
+    /// answers the position of this composition's landing standing in the
+    /// draft as the residue walk finds it ([`Writer::landing_found`]), or
+    /// `None`.
+    ///
+    /// **The end-to-end check.** The write commits past every read this call
+    /// made, the draft's `doc_metadata` just before it among them, and so
+    /// does its one re-ask, which the board answers from its memo of the
+    /// first ask's commit. An acknowledgment at or below the highest position
+    /// those reads answered is therefore the board's memo of an earlier
+    /// call's write under the same id, nothing run now (wire.md §Correlation
+    /// and idempotency): a composition landed again in its session with no
+    /// record moved since, the landing's own record unwritten. It is taken
+    /// as this landing only where that landing stands in the draft as this
+    /// composition's, as the residue walk finds one, at the acknowledged
+    /// position; else the call is refused with nothing written — the landing
+    /// taken back since, its mark another landing's, its list another
+    /// composition's of the same head and sides, or its list past reading
+    /// with no record of it standing — never answered as landed.
     ///
     /// # Errors
     ///
     /// The draft's reads' refusals — its `doc_metadata`, read as it stands,
     /// [`Refusal::NoSuchDocument`] naming the draft where the board does not
-    /// register it, the reads of its rows and past states, with `shoot` off,
-    /// on a draft with no recorded base ([`Writer::marked_landing`]), and its
-    /// image as of the landing's position but a reclaimed one,
-    /// [`Refusal::HistoryBusy`] past the bounded retries among them — and a
-    /// draft minted after `as_of`, faced, naming the way out; the board's
-    /// `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
+    /// register it, the reads of its rows and past states, with `shoot` off
+    /// or at an acknowledgment from the memo, on a draft with no recorded
+    /// base ([`Writer::marked_landing`]), and its image as of the landing's
+    /// position but a reclaimed one, [`Refusal::HistoryBusy`] past the
+    /// bounded retries among them — and a draft minted after `as_of`, faced,
+    /// naming the way out; an acknowledgment from the board's memo of an
+    /// earlier write whose landing does not stand in the draft as this
+    /// composition's at that position, faced naming the draft and the
+    /// position, nothing written, the way on to compose the merge again; the
+    /// board's `arrangement_moved` as its verdict, [`Refusal::Halt`] with the
     /// `Refused` re-said in [`Writer::moved_words`]'s words — this merge's
     /// own landing named where it moved the draft after `as_of`, else the
     /// draft that changed after the merge was composed and nothing merged —
@@ -145,23 +168,7 @@ impl Writer<'_> {
     ) -> Result<Option<(u64, Option<Address>)>, Refusal> {
         let head = &merged.inputs.head;
         if !shoot {
-            // The residue walk: the landing the board marks in the draft as
-            // it stands, then M as that landing placed it — never the
-            // draft's words alone.
-            let meta = self.reader.metadata(into, None)?;
-            let Some(at) = self.marked_landing(merged, into, &meta)? else {
-                return Ok(None);
-            };
-            return match self.holds_merge(merged, into, at, meta.arranged_at.position()) {
-                Ok(held) => Ok(held.then_some((at, None))),
-                // The list it placed cannot be read back: the landing a
-                // record of the key stands for is answered, one no record
-                // names judged by nothing and recorded never (#914 F16).
-                Err(Refusal::HistoryReclaimed { .. }) => {
-                    Ok(newest.standing_in(into, at).map(|_| (at, None)))
-                }
-                Err(e) => Err(e),
-            };
+            return Ok(self.landing_found(merged, into, newest)?.map(|at| (at, None)));
         }
         let target: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
         // The base to record: the head's pair, only where the board records
@@ -204,6 +211,12 @@ impl Writer<'_> {
         );
         let v = self.answered_write(&frame, "landing the merge in the draft")?;
         if let Some(at) = acked_at(&v) {
+            // THE END-TO-END CHECK: an acknowledgment at or below a position
+            // this call read is the memo of an earlier call's write, taken
+            // only where its landing stands as this composition's.
+            if at <= self.reader.as_of() && self.landing_found(merged, into, newest)? != Some(at) {
+                return Err(memo_landing_gone(into, at).into());
+            }
             let head_moved = match acked_head_moved(&v) {
                 Some(h) => Some(parse_address(h).ok_or_else(|| shape_face("set_arrangement", &v))?),
                 None => None,
@@ -278,6 +291,52 @@ impl Writer<'_> {
         })
     }
 
+    /// Returns the position of this composition's landing standing in
+    /// `into`, as the residue walk finds it.
+    ///
+    /// The draft's `doc_metadata` is read as it stands, and the landing is
+    /// the one the board marks there ([`Writer::marked_landing`]) where that
+    /// landing placed M whole, the draft read as of its mark
+    /// (`holds_merge`), so an edit made in the draft since changes nothing.
+    /// `None` where the board marks no landing of this merge — a take-back
+    /// cleared it, none was made, or the draft's marker is the one its stage
+    /// copied from the draft it was staged from — or the landing it marks
+    /// placed another list. Where the list it placed cannot be read back, the
+    /// board having reclaimed the mark's position since the draft was edited,
+    /// it answers the mark where a record of the merger's own of the key
+    /// stands for it ([`Newest::standing_in`]), and `None` where none does: a
+    /// landing no record names is recorded only where it can be judged (#914
+    /// F16). It is the residue walk's answer and the end-to-end check's test
+    /// of an acknowledgment from the memo ([`Writer::land_into_draft`]).
+    ///
+    /// # Errors
+    ///
+    /// The draft's `doc_metadata` read's, [`Refusal::NoSuchDocument`] naming
+    /// the draft where the board does not register it; on a draft with no
+    /// recorded base the reads of its rows and past states
+    /// ([`Writer::marked_landing`]); its image as of the mark but a reclaimed
+    /// one; [`Refusal::HistoryBusy`] past the bounded retries among them —
+    /// each as itself (SP-14).
+    fn landing_found(
+        &self,
+        merged: &Merged,
+        into: &Address,
+        newest: &Newest,
+    ) -> Result<Option<u64>, Refusal> {
+        let meta = self.reader.metadata(into, None)?;
+        let Some(at) = self.marked_landing(merged, into, &meta)? else {
+            return Ok(None);
+        };
+        match self.holds_merge(merged, into, at, meta.arranged_at.position()) {
+            Ok(held) => Ok(held.then_some(at)),
+            // The list it placed cannot be read back: the landing a record of
+            // the key stands for is answered, one no record names judged by
+            // nothing and recorded never (#914 F16).
+            Err(Refusal::HistoryReclaimed { .. }) => Ok(newest.standing_in(into, at).map(|_| at)),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Returns whether the landing at `at` placed M whole in `into`.
     ///
     /// It reads `into` as it stood at `at`, the position the board marks this
@@ -285,9 +344,11 @@ impl Writer<'_> {
     /// change nothing: a landing stands until it is taken back (skep #914),
     /// and the test is of the list it placed, which tells this composition's
     /// landing from one of another composition of the same head and sides —
-    /// the key holds no choice. A `resume` naming the draft, a fresh landing
-    /// looking for its own ([`Writer::found_standing`]) and the words of a
-    /// refused landing all judge a landing by it.
+    /// the key holds no choice. A `resume` naming the draft and the
+    /// end-to-end check of an acknowledgment from the memo
+    /// ([`Writer::landing_found`]), a fresh landing looking for its own
+    /// ([`Writer::found_standing`]) and the words of a refused landing all
+    /// judge a landing by it.
     ///
     /// `arranged_at` is the draft's own as the caller's `doc_metadata` read
     /// it. Where it is `at`, the text has not changed since the landing, so

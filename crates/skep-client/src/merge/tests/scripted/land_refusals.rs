@@ -1370,7 +1370,8 @@ fn a_landing_writes_stem_is_the_digest_of_its_text_at_one_width() {
 /// its frame: the shot lands the trunk's next member, a landing into `T`
 /// and a fresh one each land M with its record, and a second call over
 /// each writes nothing; the fresh draft undone, the fresh arm stages a
-/// draft of its own under the id naming the undo's record.
+/// draft of its own under the id naming the undo's record and the landing
+/// taken back.
 #[test]
 fn a_many_sided_merge_lands_in_every_arm_under_ids_the_wire_admits() {
     // The premise: the cap, held at parse.
@@ -1443,7 +1444,7 @@ fn a_many_sided_merge_lands_in_every_arm_under_ids_the_wire_admits() {
         dialer.clear();
         assert_eq!(land(&board, &merged, landing()).expect("landed again"), as_found(&landed), "{cell}");
         assert_eq!(dialer.world().rows.len(), rows, "{cell}: nothing written twice");
-        if let (Landed::Draft { into: f, .. }, "a fresh draft") = (&landed, cell) {
+        if let (Landed::Draft { into: f, position: first, .. }, "a fresh draft") = (&landed, cell) {
             let undone = undo(&board, merger(&session, &signer), f, &a(K), None, None).expect("undone").record.expect("the undo's record");
             dialer.clear();
             let relanded = land(&board, &merged, landing()).expect("landed fresh again");
@@ -1451,8 +1452,8 @@ fn a_many_sided_merge_lands_in_every_arm_under_ids_the_wire_admits() {
             assert_ne!(f2, f, "a draft of its own");
             assert_eq!(
                 dialer.frames("stage")[0]["id"].as_str(),
-                Some(landing_id(&format!("{text}@{}~{undone}", merged.as_of), "stage").as_str()),
-                "the stage's id names the undo's record"
+                Some(landing_id(&format!("{text}@{}~{undone}^{first}", merged.as_of), "stage").as_str()),
+                "the stage's id names the undo's record and the latest landing of the merge"
             );
             fixed_width(&dialer, "fresh again");
         }

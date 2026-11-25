@@ -159,9 +159,11 @@
 //! the states ignored that names a draft landing no take-back of theirs
 //! replaces (`skep_client::merge::landed_draft`): that draft is read as
 //! `into` is, refused `not_owner` where it is published or another
-//! account's. Found by the key, its marker naming this merge is the
-//! re-open, else the landing goes into that draft, the library's
-//! same-landing rule (skep #790); found with the states ignored, the call
+//! account's. Found by the key, it is the re-open, at the position the
+//! library answers it at: the board's mark of that landing, or the position
+//! its record names where the walk of a draft with no recorded base needs a
+//! past state the board has reclaimed — a landing the library cannot judge
+//! is never made a second time; found with the states ignored, the call
 //! goes on as one naming that draft as `into` — the re-open where its
 //! marker names the side, or at a fork moved since the landing over it,
 //! with what it replaced — else the landing goes into it, a record of its
@@ -1390,14 +1392,17 @@ impl Shell {
     ///    person's that no record of theirs names, nothing staged or written
     ///    — then, where none stands, of the merge with the states
     ///    ignored (`landed_draft`): a halt's face, `session_died`; where
-    ///    either names a draft landing,
+    ///    the first answers a draft, that draft's `doc_metadata` read, as
+    ///    `into`'s in step 4, `not_owner` among them, then the re-open's read
+    ///    of its image (`Shell::whole_draft`), as step 3's reads, nothing
+    ///    landed; where the second names a draft landing,
     ///    that draft's read, as `into`'s in step 4, `not_owner` among them,
-    ///    and, where the record found with the states ignored names it and
-    ///    its marker names the side, the composition on the marker's head
-    ///    and the re-open's reads as in step 5, the person's record of the
-    ///    landing the marker marks read through that draft; where the landing
-    ///    goes into that draft in a fresh one's place, the write door's again
-    ///    for it, `held_lines` among them, nothing landed; then the landing's
+    ///    and, where its marker names the side, the composition on the
+    ///    marker's head and the re-open's reads as in step 5, the person's
+    ///    record of the landing the marker marks read through that draft;
+    ///    where the landing goes into that draft in a fresh one's place, the
+    ///    write door's again for it, `held_lines` among them, nothing
+    ///    landed; then the landing's
     ///    (`skep_client::merge::land`): the board's
     ///    `arrangement_moved` verbatim, nothing landed; `merge_refused`
     ///    with `landing_begun` for a landing begun since that first read,
@@ -1545,8 +1550,11 @@ impl Shell {
         // the key is another, their newest record of the merge with the
         // states ignored that names a draft landing no take-back of theirs
         // replaces (`lib::landed_draft`). That draft is read as `into` is,
-        // untrusted. Found by the key, its marker naming this merge is the
-        // re-open; else it is landed into, the same landing (skep #790).
+        // untrusted. Found by the key, it is the re-open at the position the
+        // library answers: its mark's, or its record's where the walk of a
+        // draft with no recorded base needs a past state the board has
+        // reclaimed — a landing the library cannot judge is never made a
+        // second time, and no second read of the mark here overrules it.
         // Found with the states ignored, the call goes on as one naming it:
         // its marker naming the side re-opens it or, at a fork moved since,
         // is landed over with what it replaces; else it is landed into. The
@@ -1560,21 +1568,15 @@ impl Shell {
         let mut landing_into = into.clone();
         if landing_into.is_none() {
             if let Some(standing) = lib::resume(&session.board, &merged, lib::Landing::Draft { merger, into: None, journal: None }).map_err(|r| self.merge_refusal(&session, r))? {
-                let lib::Landed::Draft { into: prior, .. } = standing else {
+                let lib::Landed::Draft { into: prior, position, .. } = standing else {
                     return Err(Refusal::from(Halt::face(
                         "the draft landing answered no draft",
                         "`skep_client::merge::resume` with a draft landing answers `Landed::Draft` or none on every path",
                         "report it: the shell's merge row is behind the library",
                     )));
                 };
-                let facts = self.landing_target(&session, &signed.account, &prior)?;
-                let mark = self.standing_mark(&session, &prior, facts, MarkRead::Land)?;
-                if mark.as_ref().is_some_and(|m| names_side(form.side(), &prior, m) && m.head == merged.inputs.head.to_string()) {
-                    let at = mark.as_ref().and_then(|m| m.at);
-                    return self.reopened(&session, key, form, merged, &prior, at);
-                }
-                over = mark;
-                landing_into = Some(prior);
+                self.landing_target(&session, &signed.account, &prior)?;
+                return self.reopened(&session, key, form, merged, &prior, Some(position));
             } else if let Some(prior) = self.landed_draft(&session, &signed.account, &kind, &merged)?.as_ref().and_then(draft_landing).map(|(draft, _)| draft.clone()) {
                 let facts = self.landing_target(&session, &signed.account, &prior)?;
                 let mark = self.standing_mark(&session, &prior, facts, MarkRead::Land)?;

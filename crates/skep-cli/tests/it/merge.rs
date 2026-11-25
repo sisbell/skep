@@ -84,9 +84,11 @@
 //! `--head` the head the shot composed on, `--new` naming the fresh draft
 //! `landing_begun` and `--into` it landing it with its record, each run
 //! that takes it on saying what it found and never that it landed or
-//! published now; and a `--withdraw` of a draft with no recorded base,
-//! which carries no marker, naming the `--undo` that takes its landing
-//! back.
+//! published now, and a `--new` stopped in the merger's earlier draft
+//! naming `--into` that draft in place of `--new`; and a `--withdraw` of a
+//! draft with no recorded base, which carries no marker, naming the
+//! `--undo` that takes its landing back, and an `--undo` there of a merge
+//! landed twice naming the landing its rows leave standing again.
 
 use std::path::{Path, PathBuf};
 
@@ -1350,7 +1352,8 @@ impl Edited {
     ///
     /// `r` is a landing over `L`: it is in `L`, `fresh` false, its
     /// `landed.replaced` the person's insertion — ordinal 1 and width 3 — and
-    /// the talk names the stretch and the `--undo` that puts it back.
+    /// the talk names the stretch, as the earlier landing's words and
+    /// whatever was written in `L` since, and the `--undo` that puts it back.
     ///
     /// # Panics
     ///
@@ -1361,7 +1364,7 @@ impl Edited {
         assert_eq!((v["landed"]["draft"].as_str(), v["landed"]["fresh"].clone()), (Some(l), json!(false)), "landed in L: {v}");
         assert_eq!(v["landed"]["replaced"], json!([{"ordinal": 1, "width": 3, "origin": l, "i_start": 1}]), "the person's insertion: {v}");
         assert!(r.err.contains(&format!("this landing replaced 1 stretch of {l} as it stood at position {}", v["as_of"])), "{}", r.err);
-        assert!(r.err.contains(&format!("ordinals 1–3; skep merge --undo {l} --kind {kind} puts them back")), "{}", r.err);
+        assert!(r.err.contains(&format!("— the earlier landing's words and whatever was written in it since: ordinals 1–3; skep merge --undo {l} --kind {kind} puts them back")), "{}", r.err);
         v
     }
 }
@@ -1394,6 +1397,45 @@ fn a_fork_edited_since_its_landing_lands_over_the_draft_naming_what_it_replaced(
     let undone = report(&rig.merge(&["--undo", &e.l, "--kind", &e.kind]));
     assert_eq!(undone["draft"].as_str(), Some(e.l.as_str()), "{undone}");
     assert_eq!(rig.image(&token, &addr(&e.l), 14), e.held, "L as it stood before the landing, \"zz \" and all");
+    session.close().expect("close");
+}
+
+/// A `--new` landing stopped in the merger's earlier draft names `--into`
+/// that draft in place of `--new` (SP-10).
+///
+/// The fork is merged `--new` into a fresh draft L and both sides are
+/// edited since ([`Edited`]), so `--new` lands in L, never a fresh draft.
+/// Every class-scan permit held, its record step stops, the journal's find
+/// refused busy past its reissues: exit 3, nothing on stdout, the talk
+/// naming `--into L` in place of `--new`, a pair the grammar takes (the
+/// mutant that says `--into L` alone, which the grammar refuses beside
+/// `--new`, fails it). Let go, `--fork F --into L` lands the merged list
+/// there again and writes a record of its own.
+#[test]
+fn a_new_landing_stopped_in_an_earlier_draft_names_into_in_place_of_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let e = Edited::new(&rig, &session, None);
+    let before = rig.read(&token, &frames::find_links_ftt(&e.kind, &e.l))["addrs"].clone();
+    let permits: Vec<_> = std::iter::from_fn(|| rig._daemon.daemon().try_hold_scan_permit()).collect();
+    assert!(!permits.is_empty(), "the premise: the board's class-scan permits held");
+    let r = e.merge(&rig, &["--new"]);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    let l = e.l.as_str();
+    assert!(
+        r.err.contains(&format!("the merge stands in {l} with its record unwritten: run this again with --into {l} in place of --new, which lands the merged list there again and writes its record")),
+        "the way on in a pair the grammar takes: {}",
+        r.err
+    );
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&e.kind, l))["addrs"], before, "no record written");
+    drop(permits);
+    let v = report(&e.merge(&rig, &["--into", l]));
+    assert_eq!((v["landed"]["draft"].as_str(), &v["landed"]["replaced"]), (Some(l), &json!([])), "L holds the merged list already: {v}");
+    let link = v["landed"]["record"].as_str().expect("the record, written now").to_string();
+    assert!(!before.as_array().expect("the links").iter().any(|x| x.as_str() == Some(link.as_str())), "a record of its own: {v}");
     session.close().expect("close");
 }
 
@@ -1581,6 +1623,72 @@ fn a_withdrawal_of_a_draft_with_no_recorded_base_names_the_undo_that_takes_its_l
     let content = set["set"].as_array().expect("the span set").iter().find(|s| s["start"].as_str() == Some("1.1"));
     let width = content.map_or(0, |s| s["width"].as_str().and_then(|w| w.strip_prefix("0.")).and_then(|w| w.parse::<u64>().ok()).expect("a content width"));
     assert_eq!(width, 0, "F as minted, empty: {set}");
+    session.close().expect("close");
+}
+
+/// An undo in a draft with no recorded base names the landing standing
+/// again.
+///
+/// Skep #914 with #790: F, minted by `create_new_document`, carries no base
+/// and so no marker (N4). The race's daughter is merged `--into F`, then
+/// again — the same landing, its record the first's. `--undo F` takes the
+/// second write back and leaves the first landing standing by F's rows: the
+/// report's `record` and `marker` are null and F still holds M, while the
+/// talk names the merge standing again at the first landing's position and
+/// the `--undo` that takes it back, never that the merge is taken out or
+/// that no record of the landing stood (the mutant that reads no landing
+/// after the undo fails it). `--undo F` again takes that landing back, its
+/// record replaced, F empty as minted, the talk saying the merge is taken
+/// out; a third has nothing to undo, exit 1.
+#[test]
+fn an_undo_in_a_draft_with_no_recorded_base_names_the_landing_standing_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind_s = rig.draft().to_string();
+    let (d, _base, _head, daughter) = rig.race(&session);
+    let f = rig.draft();
+    let (d_s, f_s, daughter_s) = (d.to_string(), f.to_string(), daughter.to_string());
+    let land = || report(&rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--into", &f_s]));
+    let v = land();
+    let m = runs_of(&v);
+    assert_eq!(rig.image(&token, &f, 11), m, "the premise: F holds M");
+    let meta = rig.read(&token, &frames::doc_metadata(&f_s));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "the premise: no base, no marker: {meta}");
+    let first = v["landed"].clone();
+    let second = land()["landed"].clone();
+    assert!(second["position"].as_u64() > first["position"].as_u64() && second["record"] == first["record"], "the premise: the same landing: {second}");
+
+    // --UNDO F: the second write taken back, the first landing standing again.
+    let r = rig.merge(&["--undo", &f_s, "--kind", &kind_s]);
+    let v = report(&r);
+    assert_eq!((&v["record"], v["case"].as_str(), &v["marker"]), (&Value::Null, Some("feed"), &Value::Null), "{v}");
+    assert_eq!(rig.image(&token, &f, 11), m, "F still holds M");
+    let at = first["position"].as_u64().expect("the first landing's position");
+    let undone_at = v["position"].as_u64().expect("the write's position");
+    assert!(
+        r.err.contains(&format!("took the merge back out of {f} at position {undone_at}: the draft is back to how it stood before the merge; {f} records no base, so none moved, and the merge landed in it before, at position {at}, stands in it again")),
+        "{}",
+        r.err
+    );
+    assert!(r.err.contains(&format!("--undo {f} again takes that merge back as a step of its own; no record was written: the merge standing again keeps the record that stood")), "{}", r.err);
+    assert!(!r.err.contains("and the merge is taken out") && !r.err.contains("no record of the landing stood"), "the merge stands in F: {}", r.err);
+
+    // --UNDO F AGAIN: that landing taken back, its record replaced.
+    let r = rig.merge(&["--undo", &f_s, "--kind", &kind_s]);
+    let v = report(&r);
+    let link = v["record"].as_str().expect("the replacing record").to_string();
+    assert!(r.err.contains(&format!("{f} records no base, so none moved, and the merge is taken out; the record's link is {link}")), "{}", r.err);
+    let set = rig.read(&token, &frames::span_set(&f_s));
+    let content = set["set"].as_array().expect("the span set").iter().find(|s| s["start"].as_str() == Some("1.1"));
+    let width = content.map_or(0, |s| s["width"].as_str().and_then(|w| w.strip_prefix("0.")).and_then(|w| w.parse::<u64>().ok()).expect("a content width"));
+    assert_eq!(width, 0, "F as minted, empty: {set}");
+
+    // A THIRD: nothing to undo.
+    let r = rig.merge(&["--undo", &f_s, "--kind", &kind_s]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains(&format!("nothing_to_undo:nothing to undo: the merge in {f} was already taken back")), "{}", r.err);
     session.close().expect("close");
 }
 

@@ -414,6 +414,71 @@ fn a_take_backs_refusals_name_this_commands_own_ways_on() {
     );
 }
 
+/// An undo by a draft's rows says what those rows leave standing (skep
+/// #914): a landing standing again, by its position, with the `--undo` that
+/// takes it back as a step of its own and its record kept; with none
+/// standing, the merge taken out; with the read refused, that it was not
+/// read and why, in one clause and no act. A draft with no recorded base
+/// carries no marker, so none of the three says the merge is out where it
+/// may stand (the mutant that ignores the read fails it); an undo by the
+/// marker says the marker it put back, `rows` unread.
+#[test]
+fn an_undo_by_a_drafts_rows_says_what_they_leave_standing() {
+    let undone = Undone {
+        draft: a("1.0.1.0.72"),
+        position: 90,
+        record: None,
+        restored: None,
+        marker: None,
+    };
+    let earlier = MergeMarker {
+        sides: vec!["1.0.1.0.64.1.1".into()],
+        head: "1.0.1.0.64.2".into(),
+        head_copied: Some(15),
+        at: Some(80),
+    };
+    let back = "took the merge back out of 1.0.1.0.72 at position 90: the draft is back to how it stood before the merge; 1.0.1.0.72 records no base, so none moved";
+    assert_eq!(
+        undone_line(&undone, Some(&Ok(Some(earlier.clone())))),
+        format!("{back}, and the merge landed in it before, at position 80, stands in it again — a draft with no recorded base carries no marker, its rows say which landing stands; --undo 1.0.1.0.72 again takes that merge back as a step of its own; no record was written: the merge standing again keeps the record that stood, where one stood")
+    );
+    assert_eq!(
+        undone_line(&undone, Some(&Ok(None))),
+        format!("{back}, and the merge is taken out; no record of the landing stood, so none was written")
+    );
+    let reclaimed = Refusal::HistoryReclaimed {
+        at: 79,
+        floor: Some(85),
+    };
+    assert_eq!(
+        undone_line(&undone, Some(&Err(reclaimed))),
+        format!("{back}, and the merge is taken out; whether a merge landed in it before stands in it again was not read: the board no longer answers position 79 (history_reclaimed); no record was written")
+    );
+    let recorded = Undone {
+        record: Some(a("1.0.1.0.70.0.2.3")),
+        ..undone.clone()
+    };
+    let ended = Refusal::SessionEnded(Halt::face(
+        "the session ended while walking the change feed",
+        "the board answered closed",
+        "run this again",
+    ));
+    let said = undone_line(&recorded, Some(&Err(ended)));
+    assert!(
+        said.ends_with("was not read: the session ended while walking the change feed; the record's link is 1.0.1.0.70.0.2.3"),
+        "the refusal's first line alone, never its act: {said}"
+    );
+    let marked = Undone {
+        restored: Some((a("1.0.1.0.64.2"), 15)),
+        marker: Some(earlier),
+        ..undone
+    };
+    assert_eq!(
+        undone_line(&marked, None),
+        "took the merge back out of 1.0.1.0.72 at position 90: the draft is back to how it stood before the merge, its base is 1.0.1.0.64.2 at 15 positions again, and the merge it carried then stands in it again, marked at position 80; no record was written: the merge standing again keeps the record that stood, where one stood"
+    );
+}
+
 /// The help says `--into` replaces what the draft held and that
 /// `--undo` puts it back, and refuses a draft of another account while
 /// taking its fork (the mutant that says "a side of another account is

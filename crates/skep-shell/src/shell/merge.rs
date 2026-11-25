@@ -2226,12 +2226,14 @@ impl Shell {
     /// the library taking the latest; with no person present, against the
     /// landing's or the put-back's alone (`Shell::own_ack`). `marker` is the
     /// marker the draft carries again, the one it carried before the
-    /// landing, or null. The composition goes with its landing; where a
-    /// later landing set one aside for the landing standing again — `marker`,
-    /// or on a draft with no recorded base the landing its rows leave
-    /// standing, read after the undo — that one stands in its place, so the
-    /// next `merge.undo(session)` takes that landing back (skep #981). With
-    /// `{draft, withdrawal}` it is the withdrawal's undo instead
+    /// landing, or null — always null on a draft with no recorded base,
+    /// which carries none, whatever landing its rows leave standing (the
+    /// library's `baseless_landing` reads it). The composition goes with its
+    /// landing; where a later landing set one aside for the landing standing
+    /// again — `marker`, or on a draft with no recorded base the landing its
+    /// rows leave standing, read after the undo — that one stands in its
+    /// place, so the next `merge.undo(session)` takes that landing back (skep
+    /// #981). With `{draft, withdrawal}` it is the withdrawal's undo instead
     /// ([`Shell::merge_unwithdraw`]).
     ///
     /// The undo takes back the composition's own landing alone (skep #1050):

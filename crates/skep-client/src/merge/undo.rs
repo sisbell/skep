@@ -374,7 +374,9 @@ pub struct Undone {
     /// stood with its own `at`: an earlier landing's, or the one the draft's
     /// stage copied (P2). `None` where the draft carried none, the marker
     /// cleared, and where the undo went by the draft's rows, which carry no
-    /// marker.
+    /// marker: the landing those rows leave standing — the one that stood
+    /// when the landing taken back was made, where one did — is
+    /// [`baseless_landing`](super::baseless_landing)'s to read (skep #914).
     pub marker: Option<MergeMarker>,
 }
 

@@ -59,14 +59,16 @@
 //! a draft side moved since the merger's own landing of the merge, so the
 //! key is another, lands in the draft the merger's newest record of the
 //! merge naming a draft landing names, no take-back of theirs replacing it,
-//! found with the states ignored (`landed_draft`), its `fresh` false, and
-//! where the merge landed in a draft of the merger's that no record of theirs
-//! names — a landing cut off before its record — lands nothing and stages
-//! nothing, refused `landing_begun` naming the draft, exit 1, for `--into`
-//! that draft in place of `--new` to land it with its record, or `--undo`
-//! it; and the report then
-//! carries the landing, naming a newer version published since where the
-//! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
+//! found with the states ignored (`landed_draft`), its `fresh` false — over
+//! whatever that draft holds now, that landing's words, edits made in it
+//! since or another merge landed there since, each stretch it replaces
+//! named under `landed.replaced` — and where the merge landed in a draft of
+//! the merger's that no record of theirs names — a landing cut off before
+//! its record — lands nothing and stages nothing, refused `landing_begun`
+//! naming the draft, exit 1, for `--into` that draft in place of `--new` to
+//! land it with its record, or `--undo` it; and the report then carries the
+//! landing, naming a newer version published since where the board tells
+//! one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
 //! left open — at a `moves` gap with spots, one set of words two sides
 //! placed at two places, `order:⟨side⟩` or `keep:⟨side⟩` takes that side's
 //! placement (CM-I33). Every choice names a gap by its number in the report
@@ -116,21 +118,26 @@
 //!
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
-//! the merge landed in it — its words and its base restored, the merge
-//! taken out and the merge it carried before put back where it carried one
-//! (skep #964), in one write typed against the landing's position, or the
-//! latest write that put the landing's marker back where only a take-back
-//! and its undo moved the words since, so a draft changed since is refused
-//! with nothing changed — and `--withdraw ⟨S⟩` takes the merge out and
-//! keeps the words, the draft's next version then an ordinary one. Each
-//! prints one JSON document carrying the act, the draft, the write's
-//! position, the replacing record's link and the case, the undo's with the
-//! base restored and the marker the draft carries again; where there is
-//! nothing to undo or take out the library's reason is the refusal, exit 1,
-//! and nothing was sent — an inherited marker's said naming `--withdraw`,
-//! which takes it out, and a withdrawal's of a draft carrying no marker
-//! naming `--undo`, which takes back a landing in a draft with no recorded
-//! base, a draft that never carries one.
+//! the merge landed in it — its words restored and its base where it
+//! records one, the merge taken out, and the merge it carried before
+//! standing again where it carried one: its marker put back (skep #964),
+//! or on a draft with no recorded base, which carries none, the landing
+//! its rows leave standing (skep #914), read after the undo and named in
+//! the talk with the `--undo` that takes it back as a step of its own — in
+//! one write typed against the landing's position, or the latest write that
+//! put the landing's marker back where only a take-back and its undo moved
+//! the words since, so a draft changed since is refused with nothing
+//! changed — and `--withdraw ⟨S⟩` takes the merge out and keeps the words,
+//! the draft's next version then an ordinary one. Each prints one JSON
+//! document carrying the act, the draft, the write's position, the
+//! replacing record's link and the case, the undo's with the base restored
+//! and the marker the draft carries again — null on a draft with no
+//! recorded base whatever its rows leave standing, which the talk alone
+//! names; where there is nothing to undo or take out the library's reason
+//! is the refusal, exit 1, and nothing was sent — an inherited marker's
+//! said naming `--withdraw`, which takes it out, and a withdrawal's of a
+//! draft carrying no marker naming `--undo`, which takes back a landing in
+//! a draft with no recorded base, a draft that never carries one.
 //!
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
@@ -149,9 +156,10 @@
 //! name gaps of this composition alone ([`refused_landing`]). A
 //! landing stopped by a halt or the session's end says the run that takes
 //! it on where its write stands with its record unwritten: at `--publish`
-//! the `--head` the merge composed on, at a landing into a draft named or
-//! over the merger's earlier one `--into` that draft, and at a fresh one
-//! `--new`, which names the draft the landing stands in.
+//! the `--head` the merge composed on, at a landing into a draft named
+//! `--into` that draft, at a `--new` landing over the merger's earlier one
+//! `--into` that draft in place of `--new`, and at a fresh one `--new`,
+//! which names the draft the landing stands in.
 //!
 //! **A daughter is reported, never retried (decision 17).** Where the head
 //! moved under a shot that names no daughter — a `--draft` or a `--fork`
@@ -197,33 +205,35 @@
 //! is said in the talk as found and never as made: at `--new` a `landed`
 //! with `fresh` false and no `replaced`, at `--publish` one whose `position`
 //! is at or below `as_of` — and, where the
-//! landing goes over the merger's own landing of the merge with a moved
-//! side, `replaced`: each stretch of the draft as it stood at the
-//! composition's position that the landing replaced, `{ordinal, width,
-//! origin, i_start}`, `[]` where the merge carries all it held, the talk
-//! naming them and the `--undo` that puts them back (the owner's ruling of
-//! 2026-11-20). For `--into` that landing is the one standing in the draft
-//! named, read by the draft's mark — its marker, or with no recorded base
-//! the landing standing by its `set_arrangement` rows, which a restore or
-//! any other re-arrangement neither ends nor brings back (skep #914) —
+//! landing goes into the draft of the merger's own earlier landing of the
+//! merge, a side having moved since it, `replaced`: each stretch of the
+//! draft as it stood at the composition's position that the landing
+//! replaced, `{ordinal, width, origin, i_start}`, `[]` where the merge
+//! carries all it held, the talk naming them and the `--undo` that puts
+//! them back (the owner's ruling of 2026-11-20). For `--into` that is the
+//! draft named, where the landing standing in it, read by the draft's mark —
+//! its marker, or with no recorded base the landing standing by its
+//! `set_arrangement` rows, which a restore or any other re-arrangement
+//! neither ends nor brings back (skep #914) — is that earlier landing,
 //! whatever the merge landed in since (`standing_landing`); for `--new` it
-//! is the one the merger's newest record of the merge naming a draft landing
-//! names, no take-back of theirs replacing it, in the draft it lands in.
+//! is the draft the merger's newest record of the merge naming a draft
+//! landing names, no take-back of theirs replacing it, whatever that draft
+//! holds now.
 //! `--json` is every command's flag and changes nothing here:
 //! the report is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_client::address::parse_address;
-use skep_client::board::{Board, Scope};
+use skep_client::board::{Board, MergeMarker, Scope};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
-    compose, head_of, journal, land, landed_draft, replaced, standing_landing, undo, unwithdraw,
-    withdraw, Answers, Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
-    Merger, Misfit, NoUndo, Options, Placement, Record, RecordLanding, Refusal, Replaced,
-    Resolution, ResolvedBy, Side, SideIx, SideState, SupersedeCause, Undone, Unwithdrawn,
+    baseless_landing, compose, head_of, journal, land, landed_draft, replaced, standing_landing,
+    undo, unwithdraw, withdraw, Answers, Choice, Family, Flag, Gap, GapId, GapKind, Inputs, Landed,
+    Landing, Merged, Merger, Misfit, NoUndo, Options, Placement, Record, RecordLanding, Refusal,
+    Replaced, Resolution, ResolvedBy, Side, SideIx, SideState, SupersedeCause, Undone, Unwithdrawn,
     WindowPart, Withdrawn,
 };
 use skep_client::publication::OriginAnswer;
@@ -358,7 +368,14 @@ fn run(
                 talk(format!("taking the merge back out of {draft} at {}", board.dialed()));
                 let undone = undo(board, merger, draft, &asked.kind, None, asked.journal.as_ref())
                     .map_err(|r| refused_taking_out(draft, r, Step::Undo))?;
-                say_undone(&undone);
+                // A draft with no recorded base carries no marker: the landing
+                // its rows leave standing is read after the undo, a refusal of
+                // that read stopping nothing, the undo standing (skep #914).
+                let rows = undone
+                    .restored
+                    .is_none()
+                    .then(|| baseless_landing(board, Some(token), draft));
+                talk(undone_line(&undone, rows.as_ref()));
                 undone_value(&undone)
             }
             Act::Unwithdraw(draft, withdrawal) => {
@@ -470,7 +487,10 @@ fn run(
                 merged.inputs.head
             ),
             (_, Some(draft)) => format!(
-                "where the stop came after the landing's write, the merge stands in {draft} with its record unwritten: run this again with --into {draft}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since"
+                "where the stop came after the landing's write, the merge stands in {draft} with its record unwritten: run this again with --into {draft}{}, which lands the merged list there again and writes its record, replacing any edit made in {draft} since",
+                // A `--new` that found the merger's earlier draft names it
+                // in `--new`'s place: the grammar refuses the two together.
+                if matches!(landing, Land::New) { " in place of --new" } else { "" }
             ),
             (_, None) => "where the stop came after the landing's write, the merge stands in a fresh draft of yours with its record unwritten: run this again with --new, which names that draft (landing_begun), then with --into that draft in place of --new, which lands the merged list there again and writes its record".to_string(),
         };
@@ -856,30 +876,66 @@ fn unwithdrawn_value(unwithdrawn: &Unwithdrawn, withdrawal: u64) -> Value {
     })
 }
 
-/// Says the talk after an undo: the draft is back to how it stood before
-/// the merge, its base — where the board records one — taken back.
+/// Returns the talk after an undo.
 ///
-/// The merge is taken out, or the one the draft carried before it stands
-/// again where the undo put its marker back (skep #964), and the record's
-/// link is named where one was written.
-fn say_undone(undone: &Undone) {
+/// The draft is back to how it stood before the merge, its base — where
+/// the board records one — taken back, and the record's link is named
+/// where one was written. The merge the draft carried before stands again
+/// where the undo put its marker back (skep #964). On a draft with no
+/// recorded base, which carries no marker, `rows` is the read made after the
+/// undo of the landing its rows leave standing (`baseless_landing`; skep
+/// #914): that landing is named with the `--undo` that takes it back as a
+/// step of its own, and where the read was refused the talk says so and
+/// why. Else the merge is taken out. `rows` is `None` where the undo went by
+/// the draft's marker, which `undone` answers itself.
+fn undone_line(undone: &Undone, rows: Option<&Result<Option<MergeMarker>, Refusal>>) -> String {
     let Undone { draft, position, record, restored, marker } = undone;
     let base = match restored {
         Some((base, extent)) => format!(", its base is {base} at {extent} positions again"),
         None => format!("; {draft} records no base, so none moved"),
     };
-    let merge = match marker {
-        None => format!(", and the merge is taken out{}", record_said(record.as_ref())),
-        Some(earlier) => format!(
-            ", and the merge it carried then stands in it again{}{}",
-            earlier.at.map(|at| format!(", marked at position {at}")).unwrap_or_default(),
-            match record {
-                Some(link) => format!("; the record's link is {link}"),
-                None => "; no record was written: the merge standing again keeps the record that stood, where one stood".to_string(),
-            }
-        ),
+    // A landing standing again keeps the record that stood for it, where no
+    // record was written.
+    let kept = match record {
+        Some(link) => format!("; the record's link is {link}"),
+        None => "; no record was written: the merge standing again keeps the record that stood, where one stood".to_string(),
     };
-    talk(format!("took the merge back out of {draft} at position {position}: the draft is back to how it stood before the merge{base}{merge}"));
+    let at = |at: Option<u64>, how: &str| {
+        at.map(|at| format!(", {how} position {at}"))
+            .unwrap_or_default()
+    };
+    let merge = match (marker, rows) {
+        (Some(earlier), _) => {
+            format!(", and the merge it carried then stands in it again{}{kept}", at(earlier.at, "marked at"))
+        }
+        (None, Some(Ok(Some(earlier)))) => format!(
+            ", and the merge landed in it before{}, stands in it again — a draft with no recorded base carries no marker, its rows say which landing stands; --undo {draft} again takes that merge back as a step of its own{kept}",
+            at(earlier.at, "at")
+        ),
+        (None, Some(Err(e))) => format!(
+            ", and the merge is taken out; whether a merge landed in it before stands in it again was not read: {}{}",
+            unread(e),
+            record.as_ref().map_or_else(|| "; no record was written".to_string(), |link| format!("; the record's link is {link}"))
+        ),
+        (None, Some(Ok(None)) | None) => {
+            format!(", and the merge is taken out{}", record_said(record.as_ref()))
+        }
+    };
+    format!("took the merge back out of {draft} at position {position}: the draft is back to how it stood before the merge{base}{merge}")
+}
+
+/// Returns why the read of a draft's rows after an undo gave no answer, as
+/// one clause.
+///
+/// A past state the board has reclaimed is named by its position; any other
+/// refusal by the first line of its words.
+fn unread(e: &Refusal) -> String {
+    match e {
+        Refusal::HistoryReclaimed { at, .. } => {
+            format!("the board no longer answers position {at} (history_reclaimed)")
+        }
+        e => e.to_string().lines().next().unwrap_or_default().to_string(),
+    }
 }
 
 /// Says the talk after a withdrawal: the merge is taken out, the words
@@ -1001,11 +1057,12 @@ fn say_composed(merged: &Merged) {
 /// and, where the board told a newer head, that a newer version was
 /// published since the merge was composed and the merge landed against the
 /// head it composed on, so a merge composed again includes it; and, where
-/// the landing went over the merger's earlier landing of the merge, the
-/// stretches it replaced, `stretches`, and the `--undo` under `kind` that
-/// puts them back. A landing `found` — made before this run's composition
-/// and found standing, nothing written now — is said as found: the version
-/// that already holds the merge, or the draft it already stands in.
+/// the landing went into the draft of the merger's earlier landing of the
+/// merge, the stretches it replaced, `stretches`, and the `--undo` under
+/// `kind` that puts them back. A landing `found` — made before this run's
+/// composition and found standing, nothing written now — is said as found:
+/// the version that already holds the merge, or the draft it already stands
+/// in.
 fn say_landed(
     merged: &Merged,
     landed: &Landed,
@@ -1087,8 +1144,10 @@ fn say_landed(
 
 /// Returns the line naming what a landing replaced in `draft`.
 ///
-/// The landing went over an earlier landing of the merge, and `stretches`
-/// are positions of `draft` as it stood at `as_of`.
+/// The landing went into the draft of an earlier landing of the merge, over
+/// what the draft held at `as_of` — that landing's words, and whatever was
+/// written in it since: edits, or another merge landed there — and
+/// `stretches` are positions of `draft` as it stood then.
 fn replaced_line(draft: &Address, as_of: u64, stretches: &[Replaced], kind: &Address) -> String {
     if stretches.is_empty() {
         return format!("this landing replaced nothing of {draft}: the merge carries all it held at position {as_of}");
@@ -1102,7 +1161,7 @@ fn replaced_line(draft: &Address, as_of: u64, stretches: &[Replaced], kind: &Add
         .collect();
     let n = stretches.len();
     format!(
-        "this landing replaced {n} stretch{} of {draft} as it stood at position {as_of} — the earlier landing's words and any edits made in it since: {}; skep merge --undo {draft} --kind {kind} puts them back",
+        "this landing replaced {n} stretch{} of {draft} as it stood at position {as_of} — the earlier landing's words and whatever was written in it since: {}; skep merge --undo {draft} --kind {kind} puts them back",
         if n == 1 { "" } else { "es" },
         named.join(", ")
     )

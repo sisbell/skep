@@ -2073,23 +2073,26 @@ fn what_a_landing_replaces_is_each_stretch_m_does_not_carry() {
         origin: a(origin),
         i_start,
     };
-    assert_eq!(replaced_stretches(&held, &m), vec![stretch(1, 3, l, 1), stretch(8, 2, l, 4)]);
     assert_eq!(
-        replaced_stretches(&[run(l, 1, 2), run(x, 5, 3)], &m),
+        replaced_stretches(&held, &m, &mut |_| {}),
+        vec![stretch(1, 3, l, 1), stretch(8, 2, l, 4)]
+    );
+    assert_eq!(
+        replaced_stretches(&[run(l, 1, 2), run(x, 5, 3)], &m, &mut |_| {}),
         vec![stretch(1, 5, l, 1)],
         "one stretch across the boundary"
     );
     assert_eq!(
-        replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 4), run(D, 8, 4)]),
+        replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 4), run(D, 8, 4)], &mut |_| {}),
         vec![stretch(5, 3, D, 5)],
         "the run's middle"
     );
     assert_eq!(
-        replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 11)]),
+        replaced_stretches(&[run(D, 1, 11)], &[run(D, 1, 11)], &mut |_| {}),
         Vec::<Replaced>::new(),
         "carried whole"
     );
-    assert_eq!(replaced_stretches(&[], &m), Vec::<Replaced>::new(), "an empty draft");
+    assert_eq!(replaced_stretches(&[], &m, &mut |_| {}), Vec::<Replaced>::new(), "an empty draft");
 }
 
 /// A fork arranged since its draft landing is another key.

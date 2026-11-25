@@ -4708,3 +4708,4 @@ mod kept_places {
 use crate::ceremony::handshake::{handshake, Session, Site};
 
 mod scripted;
+mod walks;

@@ -219,7 +219,9 @@
 //! are no row's — the panel reads those on the words the shot re-inserts
 //! and counts them (`Panel::edition_links`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::OnceCell;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::Value;
 use skep_address::Address;
@@ -976,7 +978,7 @@ fn stray_words(inputs: &Inputs, pieces: &[Run], twins: &[Record]) -> Vec<Run> {
 /// Returns the indices of `runs` widest first, runs of one width in their
 /// order: the order held runs take their kept places in, so a run takes
 /// its place before any run it encloses.
-fn widest_first(runs: &[Run]) -> Vec<usize> {
+pub(super) fn widest_first(runs: &[Run]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..runs.len()).collect();
     order.sort_by_key(|&k| std::cmp::Reverse(runs[k].width));
     order
@@ -985,12 +987,12 @@ fn widest_first(runs: &[Run]) -> Vec<usize> {
 /// The kept places held runs have taken in one draft: V-spans, keyed by
 /// their first ordinal, no two of which overlap.
 #[derive(Debug, Default)]
-struct TakenPlaces(BTreeMap<u64, u64>);
+pub(super) struct TakenPlaces(BTreeMap<u64, u64>);
 
 impl TakenPlaces {
     /// Takes the V-span `width` wide at `at`, answering whether it took it:
     /// it takes nothing where the span overlaps a place already taken.
-    fn take(&mut self, at: u64, width: u64) -> bool {
+    pub(super) fn take(&mut self, at: u64, width: u64) -> bool {
         // No two taken spans overlap, so the only one that can reach into
         // this span is the one opening last before its end.
         let free = self.0.range(..at.saturating_add(width)).next_back().is_none_or(|(start, taken)| start.saturating_add(*taken) <= at);
@@ -1001,23 +1003,226 @@ impl TakenPlaces {
     }
 }
 
-/// Returns where `image` arranges `run`: each piece of it as its V-ordinal,
-/// first I-ordinal and width, and the V-ordinals it stands whole at, both
-/// in V-order.
-fn arranged_in(image: &[IRun], run: &Run) -> (Vec<(u64, u64, u64)>, Vec<u64>) {
-    let chain = run.chain();
-    let mut pieces: Vec<(u64, u64, u64)> = Vec::new();
-    let mut wholes: Vec<u64> = Vec::new();
-    for r in image.iter().filter(|r| r.prefix == chain) {
-        let (lo, hi) = (run.i_start.max(r.first), run.reach().min(r.first + r.width));
-        if lo < hi {
-            pieces.push((r.ordinal + (lo - r.first), lo, hi - lo));
-            if lo == run.i_start && hi == run.reach() {
-                wholes.push(r.ordinal + (lo - r.first));
+/// One chain's runs in an image, by first ordinal: an interval index.
+///
+/// A run holds some position of a span exactly where it opens before the
+/// span's reach and reaches past its start. The runs opening before a reach
+/// are a prefix of `runs`, one search away. Of that prefix, the runs
+/// reaching past a start are found from the last back: `reached` says
+/// whether one is left, and `furthest` finds it, passing over each block of
+/// runs that all end at or before the start without reading them. So a run
+/// enclosing many others is found from any of them without a read of the
+/// runs between.
+struct ChainRuns {
+    /// Each run as its first ordinal, its reach and its index in the image,
+    /// sorted by the three in that order.
+    runs: Vec<(u64, u64, usize)>,
+    /// The furthest reach of `runs[..= i]`, for each `i`: the running
+    /// maximum.
+    reached: Vec<u64>,
+    /// The furthest reach of each block of `runs`, as a tree: the run at `i`
+    /// is node `furthest.len() / 2 + i`, and node `n` holds the further of
+    /// nodes `2n` and `2n + 1`. A node no run stands under holds zero, and
+    /// more leaves than runs keep every prefix's end under the root.
+    furthest: Vec<u64>,
+}
+
+impl ChainRuns {
+    /// Returns the index of `runs`, one chain's runs in any order.
+    ///
+    /// One sort and two passes: `O(n log n)` comparisons for `n` runs.
+    /// `steps` is charged one for every comparison, run and node.
+    fn of(mut runs: Vec<(u64, u64, usize)>, steps: &mut impl FnMut(u64)) -> ChainRuns {
+        runs.sort_unstable_by(|a, b| {
+            steps(1);
+            a.cmp(b)
+        });
+        let leaves = (runs.len() + 1).next_power_of_two();
+        let mut reached: Vec<u64> = Vec::with_capacity(runs.len());
+        let mut furthest = vec![0; 2 * leaves];
+        for (i, &(_, reach, _)) in runs.iter().enumerate() {
+            steps(1);
+            reached.push(reach.max(reached.last().copied().unwrap_or(0)));
+            furthest[leaves + i] = reach;
+        }
+        for node in (1..leaves).rev() {
+            steps(1);
+            furthest[node] = furthest[2 * node].max(furthest[2 * node + 1]);
+        }
+        ChainRuns { runs, reached, furthest }
+    }
+
+    /// Returns the image indices of the runs meeting `[start, reach)`.
+    ///
+    /// A run meets the span where it holds some position of it, and the
+    /// runs come last by first ordinal first.
+    ///
+    /// One search for the prefix, `O(log n)` of `n` runs; then each run
+    /// answered costs `O(1 + log d)` nodes, `d` the runs passed over since
+    /// the one answered before it. So `k` runs standing together in `runs`,
+    /// as a disjoint chain's do, cost `O(log n + k)`, and a run enclosing
+    /// them from further back `O(log n)` more. `steps` is charged one for
+    /// every run and node read.
+    fn meeting(&self, start: u64, reach: u64, steps: &mut impl FnMut(u64)) -> Vec<usize> {
+        let mut met = Vec::new();
+        if start >= reach {
+            return met;
+        }
+        let mut end = self.runs.partition_point(|&(first, _, _)| {
+            steps(1);
+            first < reach
+        });
+        while end > 0 {
+            steps(1);
+            if self.reached[end - 1] <= start {
+                break;
+            }
+            let Some(at) = self.last_reaching(end, start, steps) else { break };
+            met.push(self.runs[at].2);
+            end = at;
+        }
+        met
+    }
+
+    /// Returns the last of `runs[..end]` reaching past `start`, if any.
+    ///
+    /// It climbs from `end`, reading at each level the block that ends
+    /// where the climb stands, nearest first, until one holds such a run,
+    /// then descends to the last run under it reaching so far.
+    fn last_reaching(&self, end: usize, start: u64, steps: &mut impl FnMut(u64)) -> Option<usize> {
+        let leaves = self.furthest.len() / 2;
+        let mut node = leaves + end;
+        while node > 1 {
+            if node % 2 == 1 {
+                steps(1);
+                if self.furthest[node - 1] > start {
+                    node -= 1;
+                    while node < leaves {
+                        steps(1);
+                        node = 2 * node + usize::from(self.furthest[2 * node + 1] > start);
+                    }
+                    return Some(node - leaves);
+                }
+            }
+            node /= 2;
+        }
+        None
+    }
+}
+
+/// Where one image arranges the runs of a selection, answered by search.
+///
+/// It holds the image's runs on each chain the selection names, a
+/// [`ChainRuns`] apiece, so a held run's places cost a search of its chain
+/// and not a read of the image. A chain's spelling is formatted once, for
+/// the first held run of its origin.
+struct ByChain<'a> {
+    /// The image.
+    image: &'a [IRun],
+    /// The selection.
+    selection: &'a [Run],
+    /// The place in `chains` of each held run's chain, parallel to the
+    /// selection.
+    chain_of: Vec<usize>,
+    /// The chains the selection names.
+    chains: Vec<ChainRuns>,
+}
+
+impl<'a> ByChain<'a> {
+    /// Returns the index of `image` for the runs of `selection`.
+    ///
+    /// One pass of the selection names the chains, one of the image sorts
+    /// its runs onto them, a run of no width onto none, and each chain is
+    /// indexed: `O(n + m log m)` for `n` held runs and `m` image runs.
+    /// `steps` is charged one for every run read and every step of
+    /// [`ChainRuns::of`].
+    fn of(image: &'a [IRun], selection: &'a [Run], steps: &mut impl FnMut(u64)) -> ByChain<'a> {
+        let mut origins: HashMap<&Address, usize> = HashMap::new();
+        let mut named: HashMap<String, usize> = HashMap::new();
+        let mut chain_of = Vec::with_capacity(selection.len());
+        for run in selection {
+            steps(1);
+            chain_of.push(match origins.entry(&run.origin) {
+                Entry::Occupied(known) => *known.get(),
+                Entry::Vacant(origin) => {
+                    let next = named.len();
+                    *origin.insert(*named.entry(run.chain()).or_insert(next))
+                }
+            });
+        }
+        let mut runs: Vec<Vec<(u64, u64, usize)>> = vec![Vec::new(); named.len()];
+        for (at, r) in image.iter().enumerate() {
+            steps(1);
+            if let Some(&chain) = named.get(&r.prefix) {
+                let reach = r.first + r.width;
+                if r.first < reach {
+                    runs[chain].push((r.first, reach, at));
+                }
             }
         }
+        let chains = runs.into_iter().map(|runs| ChainRuns::of(runs, steps)).collect();
+        ByChain { image, selection, chain_of, chains }
     }
-    (pieces, wholes)
+
+    /// Returns where the image arranges the selection's run at `k`.
+    ///
+    /// It answers each piece of the run as its V-ordinal, first I-ordinal
+    /// and width, and the V-ordinals the run stands whole at, both in
+    /// V-order: the image's order.
+    ///
+    /// One search of the run's chain ([`ChainRuns::meeting`]), and the runs
+    /// it answers sorted back into the image's order. `steps` is charged
+    /// one for every step of the search, every comparison of the sort and
+    /// every run answered.
+    ///
+    /// # Panics
+    ///
+    /// Where `k` is no index of the selection.
+    fn arranged(&self, k: usize, steps: &mut impl FnMut(u64)) -> (Vec<(u64, u64, u64)>, Vec<u64>) {
+        let run = &self.selection[k];
+        let mut pieces: Vec<(u64, u64, u64)> = Vec::new();
+        let mut wholes: Vec<u64> = Vec::new();
+        let mut met = self.chains[self.chain_of[k]].meeting(run.i_start, run.reach(), steps);
+        met.sort_unstable_by(|a, b| {
+            steps(1);
+            a.cmp(b)
+        });
+        for r in met.into_iter().map(|at| &self.image[at]) {
+            steps(1);
+            let (lo, hi) = (run.i_start.max(r.first), run.reach().min(r.first + r.width));
+            if lo < hi {
+                pieces.push((r.ordinal + (lo - r.first), lo, hi - lo));
+                if lo == run.i_start && hi == run.reach() {
+                    wholes.push(r.ordinal + (lo - r.first));
+                }
+            }
+        }
+        (pieces, wholes)
+    }
+}
+
+/// Returns which copy of its run each held run is.
+///
+/// For the held run at each index it answers how many copies of the run
+/// the selection holds before it, and whether it holds one after. Both are
+/// read off one map from a run to the indices it is held at, ascending: the
+/// count is the index's rank in its run's list, and a later copy is held
+/// where the index is not that list's last. Two passes, `steps` charged one
+/// for each run in each.
+fn copies_of(selection: &[Run], steps: &mut impl FnMut(u64)) -> Vec<(usize, bool)> {
+    let mut held: HashMap<&Run, Vec<usize>> = HashMap::new();
+    for (k, run) in selection.iter().enumerate() {
+        steps(1);
+        held.entry(run).or_default().push(k);
+    }
+    let mut copies = vec![(0, false); selection.len()];
+    for at in held.values() {
+        for (rank, &k) in at.iter().enumerate() {
+            steps(1);
+            copies[k] = (rank, rank + 1 < at.len());
+        }
+    }
+    copies
 }
 
 /// Places the held runs in the image: each whole at one V-ordinal, in
@@ -1045,7 +1250,7 @@ fn arranged_in(image: &[IRun], run: &Run) -> (Vec<(u64, u64, u64)>, Vec<u64>) {
 /// its occurrences by. A place the run gains since the panel's reads is the
 /// re-read's to take (the module's doc, **The second places**).
 pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
-    place_runs(image, selection, |_, _| 1)
+    place_runs(image, selection, |_, _, _| 1, &mut |_| {})
 }
 
 /// Places the held runs as a later read does, over `first`, the enumeration
@@ -1056,30 +1261,55 @@ pub fn place_selection(image: &[IRun], selection: &[Run]) -> Vec<Placement> {
 /// whole place it stands at. Without it, at a held panel's re-open, a run
 /// `first` carries at several takes as many as `first` carried, and any
 /// other run the one [`place_selection`] gives it.
-fn place_again(image: &[IRun], selection: &[Run], first: &Enumeration, grows: bool) -> Vec<Placement> {
-    place_runs(image, selection, |k, standing| match first.placed.get(k) {
-        Some(Placement::Places(held)) if !grows => held.len(),
-        Some(Placement::Places(_)) => usize::MAX,
-        _ if grows && standing > arranged_in(&first.image, &selection[k]).1.len() => usize::MAX,
-        _ => 1,
-    })
+///
+/// `first`'s image is indexed as the draft's is ([`ByChain`]), once, at the
+/// first run asked of it, and each run's places in it are one search.
+/// `steps` is charged as [`place_runs`] charges it, for both images.
+pub(super) fn place_again(image: &[IRun], selection: &[Run], first: &Enumeration, grows: bool, steps: &mut impl FnMut(u64)) -> Vec<Placement> {
+    let shown = OnceCell::new();
+    place_runs(
+        image,
+        selection,
+        |k, standing, steps| match first.placed.get(k) {
+            Some(Placement::Places(held)) if !grows => held.len(),
+            Some(Placement::Places(_)) => usize::MAX,
+            _ if grows && standing > shown.get_or_init(|| ByChain::of(&first.image, selection, steps)).arranged(k, steps).1.len() => usize::MAX,
+            _ => 1,
+        },
+        steps,
+    )
 }
 
 /// Places each held run as [`place_selection`] does, then lets a run take
 /// further whole places.
 ///
 /// `most` answers how many places the run at an index may stand at, given
-/// how many it stands whole at now. Only a run's last held copy takes more,
-/// so the k-th copy keeps the k-th place, each in V-order through the same
-/// [`TakenPlaces`], so none lies inside a place a held run took.
-fn place_runs(image: &[IRun], selection: &[Run], most: impl Fn(usize, usize) -> usize) -> Vec<Placement> {
+/// how many it stands whole at now, charging what it reads to the `steps`
+/// handed it. Only a run's last held copy takes more, so the k-th copy keeps
+/// the k-th place, each in V-order through the same [`TakenPlaces`], so none
+/// lies inside a place a held run took.
+///
+/// **Cost.** The image is indexed once by chain ([`ByChain`]) and each held
+/// run's places are one search of its chain, in each pass; which copy of
+/// its run a held run is, and whether a later one is held, are read off one
+/// map of the selection ([`copies_of`]). So `n` held runs over an image of
+/// `m` cost `O((n + m) log (n + m))`, and `O(log m)` at most for each image
+/// run a search answers, whatever share of either one chain holds. A run
+/// held `h` times is searched for `h` times, each copy answered every place
+/// the run stands at. `steps` is charged one for every run read, every
+/// comparison of a sort or a search and every node of an index, so a test
+/// holds the walk to that bound by count; [`place_selection`] hands in a
+/// closure that counts nothing.
+pub(super) fn place_runs<S: FnMut(u64)>(image: &[IRun], selection: &[Run], most: impl Fn(usize, usize, &mut S) -> usize, steps: &mut S) -> Vec<Placement> {
+    let by_chain = ByChain::of(image, selection, steps);
+    let copies = copies_of(selection, steps);
     let mut taken = TakenPlaces::default();
     let mut out = vec![Placement::Absent; selection.len()];
     let order = widest_first(selection);
     for &k in &order {
         let run = &selection[k];
-        let (pieces, wholes) = arranged_in(image, run);
-        let occurrence = selection[..k].iter().filter(|s| *s == run).count();
+        let (pieces, wholes) = by_chain.arranged(k, steps);
+        let (occurrence, _) = copies[k];
         out[k] = match wholes.iter().copied().find(|&at| taken.take(at, run.width)).or_else(|| wholes.get(occurrence).copied()) {
             Some(ordinal) => Placement::Whole { ordinal },
             None if pieces.is_empty() => Placement::Absent,
@@ -1089,11 +1319,12 @@ fn place_runs(image: &[IRun], selection: &[Run], most: impl Fn(usize, usize) -> 
     for &k in &order {
         let run = &selection[k];
         let Placement::Whole { ordinal } = out[k] else { continue };
-        if selection[k + 1..].contains(run) {
+        let (_, later) = copies[k];
+        if later {
             continue;
         }
-        let (_, wholes) = arranged_in(image, run);
-        let limit = most(k, wholes.len());
+        let (_, wholes) = by_chain.arranged(k, steps);
+        let limit = most(k, wholes.len(), steps);
         let mut places = vec![ordinal];
         for at in wholes {
             if places.len() >= limit {
@@ -1419,7 +1650,7 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
         also.push(AlsoImage { draft: draft.clone(), extent, image });
     }
     let placed = match first {
-        Some(first) => place_again(&image, &inputs.selection, first, !strict),
+        Some(first) => place_again(&image, &inputs.selection, first, !strict, &mut |_| {}),
         None => place_selection(&image, &inputs.selection),
     };
     if strict {

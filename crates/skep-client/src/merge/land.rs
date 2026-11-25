@@ -356,6 +356,8 @@
 //! [`windows::retwin`]: super::windows::retwin
 //! [`journal::check`]: super::journal::check
 
+use std::collections::HashMap;
+
 use skep_address::Address;
 
 use crate::board::{Board, Token};
@@ -752,7 +754,7 @@ pub fn replaced(
     }
     let held = runs_of(&image.runs)?;
     let m: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
-    Ok(replaced_stretches(&held, &m))
+    Ok(replaced_stretches(&held, &m, &mut |_| {}))
 }
 
 /// Returns each maximal stretch of `held` whose content `m` carries none of.
@@ -761,20 +763,32 @@ pub fn replaced(
 /// `held` is a draft's runs in V order and `m` the merged list's: a
 /// position is carried where some run of `m` holds its I-address, wherever
 /// in `m`. Stretches that meet across a run boundary are one.
-pub(super) fn replaced_stretches(held: &[Run], m: &[Run]) -> Vec<Replaced> {
+///
+/// **Cost.** `m`'s I-extents are joined once into a union per origin
+/// ([`Carried`]), and each held run is answered by one search of its
+/// origin's pieces and a walk of the pieces it meets:
+/// `O((|held| + |m|) log |m|)` and the stretches answered, whatever share of
+/// the runs one origin holds. `steps` is charged one for every run read,
+/// every comparison of a sort or a search and every piece walked, so a test
+/// holds the walk to that bound by count; [`replaced`] hands in a closure
+/// that counts nothing.
+pub(super) fn replaced_stretches(
+    held: &[Run],
+    m: &[Run],
+    steps: &mut impl FnMut(u64),
+) -> Vec<Replaced> {
+    let carried = Carried::of(m, steps);
     let mut out: Vec<Replaced> = Vec::new();
     let mut ordinal = 1u64;
     for run in held {
-        let mut carried: Vec<(u64, u64)> = m
-            .iter()
-            .filter(|r| r.origin == run.origin)
-            .map(|r| (r.i_start.max(run.i_start), r.reach().min(run.reach())))
-            .filter(|(lo, hi)| lo < hi)
-            .collect();
-        carried.sort_unstable();
+        steps(1);
         let mut cursor = run.i_start;
         let mut gaps: Vec<(u64, u64)> = Vec::new();
-        for (lo, hi) in carried {
+        for &(lo, hi) in carried.reaching_past(run, steps) {
+            steps(1);
+            if lo >= run.reach() {
+                break;
+            }
             if lo > cursor {
                 gaps.push((cursor, lo));
             }
@@ -798,4 +812,69 @@ pub(super) fn replaced_stretches(held: &[Run], m: &[Run]) -> Vec<Replaced> {
         ordinal += run.width;
     }
     out
+}
+
+/// The union of a run list's I-extents, by origin.
+///
+/// It holds every position some run of the list holds. Each origin's
+/// pieces are ranges of its ordinals, a start and a reach apiece: its runs'
+/// extents, joined where they overlap or abut. So the pieces of one origin
+/// are disjoint, no two abut, and both their starts and their reaches
+/// ascend, which is what lets one search find the first piece reaching past
+/// an ordinal. It is the shape the store's source gate asks a base's runs in
+/// (`skep-arrangement`'s `RunUnion`), spelled over the merge's own run.
+struct Carried<'m>(HashMap<&'m Address, Vec<(u64, u64)>>);
+
+impl<'m> Carried<'m> {
+    /// Returns the union of `m`'s I-extents.
+    ///
+    /// One pass groups the runs' extents by origin, a run of no width
+    /// holding none; each origin's are sorted by start and joined in one
+    /// pass: `O(|m| log |m|)` comparisons. `steps` is charged one for every
+    /// run read, every comparison and every extent joined.
+    fn of(m: &'m [Run], steps: &mut impl FnMut(u64)) -> Carried<'m> {
+        let mut by_origin: HashMap<&Address, Vec<(u64, u64)>> = HashMap::new();
+        for run in m {
+            steps(1);
+            if run.i_start < run.reach() {
+                by_origin.entry(&run.origin).or_default().push((run.i_start, run.reach()));
+            }
+        }
+        for extents in by_origin.values_mut() {
+            extents.sort_unstable_by(|a, b| {
+                steps(1);
+                a.cmp(b)
+            });
+            // Each extent joins the piece before it where it opens at or
+            // before that piece's reach, and opens a piece of its own
+            // otherwise; the pieces are written over the list's head.
+            let mut last = 0;
+            for at in 1..extents.len() {
+                steps(1);
+                let (start, reach) = extents[at];
+                if start <= extents[last].1 {
+                    extents[last].1 = extents[last].1.max(reach);
+                } else {
+                    last += 1;
+                    extents[last] = (start, reach);
+                }
+            }
+            extents.truncate(last + 1);
+        }
+        Carried(by_origin)
+    }
+
+    /// Returns `run`'s origin's pieces from the first reaching past its start.
+    ///
+    /// They come in order, and the pieces `run` meets are those at the
+    /// answer's head that open before its reach. One search, the reaches
+    /// ascending: `steps` is charged one for each piece it compares.
+    fn reaching_past(&self, run: &Run, steps: &mut impl FnMut(u64)) -> &[(u64, u64)] {
+        let Some(pieces) = self.0.get(&run.origin) else { return &[] };
+        let from = pieces.partition_point(|&(_, reach)| {
+            steps(1);
+            reach <= run.i_start
+        });
+        &pieces[from..]
+    }
 }

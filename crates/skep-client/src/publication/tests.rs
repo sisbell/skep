@@ -6171,3 +6171,5 @@ fn a_region_past_the_wire_list_cap_is_read_in_chunks_of_it() {
     assert_eq!(widths((0..=cap).map(|k| (1 + k, 1)).collect()), [1], "adjacent spans are one");
     assert!(widths(Vec::new()).is_empty(), "no span, no read");
 }
+
+mod walks;

@@ -33,11 +33,21 @@
 //! tail, so this suite stages, commits and reads, and nothing more. SP-21 is
 //! kept as it stands: the re-window removes the draft-native run by a
 //! `ContentRemove`, and R keeps the address it removed.
+//!
+//! THE ONE PASS. The link store's composite stages that pair, for every
+//! kept place of a draft, as one staging body and ONE record
+//! (`stage_substitute`: the check by identity, the placement and the
+//! removal). The suite's last test composes the shot with it in one
+//! transaction and holds it to the pair above, shape by shape: the same
+//! draft, the same member, the same R and the same store where the pair
+//! commits, one record fewer; refused, with nothing written, where the
+//! pair's check refuses.
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
-    head_lock_key, stage_delete_at, stage_publish, stage_reinstate_at, trunk_head, trunk_of,
-    AsOf, DeleteError, Deposit, HasM5, PublishError, ReinstateError, Run, Shot, ShotRun, Vstream,
+    head_lock_key, stage_delete_at, stage_publish, stage_reinstate_at, stage_substitute,
+    trunk_head, trunk_of, AsOf, DeleteError, Deposit, HasM5, PublishError, ReinstateError,
+    Replacement, Run, Shot, ShotRun, SubstituteError, Substitution, Vstream,
 };
 use skep_content::HasContent;
 use skep_kernel::{Kernel, Seq, TxnError};
@@ -408,5 +418,155 @@ fn the_named_span_is_re_windowed_whether_a_whole_run_of_the_draft_or_a_piece_of_
             "{what}: the fresh run holds the place"
         );
         assert_eq!(bytes_of(&s, &member), vec![b"b".to_vec()], "{what}: the member reads b");
+    }
+}
+
+/// The one-pass composite's refusal: the shot's own, or the substitution's.
+#[derive(Debug)]
+enum OnePass {
+    Publish(PublishError),
+    Substitute(SubstituteError),
+}
+
+/// THE COMPOSITE AS THE LINK STORE STAGES IT: one transaction over the keys
+/// [`rewindow`] takes, whose closure stages the shot of `shot`'s one
+/// draft-native run and then the substitution of the fresh run for it at
+/// the place the client read — the check by identity, the placement and the
+/// removal one staging body. Returns the member and the one commit's `Seq`;
+/// an `Err` commits nothing.
+fn rewindow_in_one_pass(
+    k: &Kernel<World>,
+    draft: &Address,
+    shot: &Shot,
+    kept: &SpanSet,
+) -> Result<(Address, Seq), TxnError<OnePass>> {
+    let doc = pdoc();
+    let keys = [
+        head_lock_key(&doc),
+        M3State::content_lock_key(&trunk_of(&doc)),
+        M3State::content_lock_key(draft),
+    ];
+    let readable = readable_by(PrincipalId(1));
+    k.transact(&keys, |stg| {
+        let (member, pairing) =
+            stage_publish(stg, P1, &doc, shot, &readable).map_err(OnePass::Publish)?;
+        let [minted] = pairing.as_slice() else {
+            panic!("one draft-native run, one minted piece: {pairing:?}");
+        };
+        let piece = Replacement { from: minted.from.clone(), to: minted.to.clone() };
+        let entries = [Substitution { index: 0, at: place_of(kept), pieces: Some(vec![piece]) }];
+        stage_substitute(stg, P1, draft, &entries, &mut |_| {}).map_err(OnePass::Substitute)?;
+        Ok(member)
+    })
+}
+
+/// What a re-window leaves, read off one snapshot.
+#[derive(Clone, Debug, PartialEq)]
+struct Left {
+    /// The draft's runs.
+    draft: Vec<Run>,
+    /// The draft's bytes, position by position.
+    bytes: Vec<Vec<u8>>,
+    /// What R keeps of the draft beyond what it arranges.
+    removed: SpanSet,
+    /// The member's runs.
+    member: Vec<Run>,
+    /// The edition's head.
+    head: Option<Address>,
+    /// How many values the store holds.
+    stored: usize,
+}
+
+/// Returns what `k`'s head holds of a re-window ([`Left`]).
+fn left(k: &Kernel<World>) -> Left {
+    let s = k.snapshot();
+    Left {
+        draft: content_runs_of(&s, &doc1()),
+        bytes: bytes_of(&s, &doc1()),
+        removed: s.world().m5().deletions(&doc1()),
+        member: content_runs_of(&s, &vdoc()),
+        head: trunk_head(s.world().m3(), &pdoc()),
+        stored: s.world().content().len(),
+    }
+}
+
+/// ONE PASS FOR THE PAIR. The invariant: the substitution the link store
+/// stages leaves a draft exactly as the design's pair does — "a `reinstate`
+/// of the fresh I-run at the run's place and a `delete` of the draft-native
+/// run" — and refuses where the pair's check by identity refuses. Five
+/// shapes, each built twice and re-windowed once by each composite: the
+/// named span a piece of a run and a whole run of its own, which commit; and
+/// the draft moved, split and deleted under the place since it was read,
+/// which refuse. Where they commit, the draft's runs and bytes, R, the
+/// member, the edition's head and the store are the same, each draft's
+/// arranged-at position is its own commit's, and the one pass took ONE
+/// position fewer — its one record where the pair is a placement and a
+/// removal. Where they refuse, the one pass answers `Moved` at the entry,
+/// and nothing is written under either.
+#[test]
+fn the_one_pass_re_window_leaves_what_the_placement_and_the_removal_leave_and_refuses_where_they_refuse() {
+    type Step = fn(&Kernel<World>);
+    let abc: Step = |k| {
+        insert_abc(k);
+    };
+    let apart: Step = |k| {
+        let vs = Vstream::new(k);
+        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared, now(k)).expect("a at ca(1)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"c")], Deposit::Undeclared, now(k)).expect("c at ca(2)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"b")], Deposit::Undeclared, now(k)).expect("b at ca(3), between");
+    };
+    let moved: Step = |k| {
+        Vstream::new(k).rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)], now(k)).expect("a | b → b a: b first");
+    };
+    let split: Step = |k| {
+        Vstream::new(k).insert(P1, &doc1(), vp(1, 3), vec![val(b"x")], Deposit::Undeclared, now(k)).expect("a b x c: x inside the named b c");
+    };
+    let deleted: Step = |k| {
+        Vstream::new(k).delete(P1, &doc1(), vp(1, 2), n(1), now(k)).expect("a c: b gone");
+    };
+    // The shape, how the draft is built, the named run's start and width,
+    // and what the draft takes after the place is read.
+    let cells: [(&str, Step, u32, u32, Option<Step>); 5] = [
+        ("a piece of a run", abc, 2, 1, None),
+        ("a whole run", apart, 3, 1, None),
+        ("moved", abc, 2, 1, Some(moved)),
+        ("split", abc, 2, 2, Some(split)),
+        ("deleted", abc, 2, 1, Some(deleted)),
+    ];
+    for (what, build, start, width, disturb) in cells {
+        let (pair, one) = (mem_kernel(), mem_kernel());
+        build(&pair);
+        build(&one);
+        let named = Run::new(ca(start), n(width)).expect("the named run");
+        let kept = pair.snapshot().world().m5().project(&doc1(), &coverage_of(&named));
+        assert_eq!(kept, one.snapshot().world().m5().project(&doc1(), &coverage_of(&named)), "{what}: one place, read off either");
+        if let Some(disturb) = disturb {
+            disturb(&pair);
+            disturb(&one);
+        }
+        let stood = left(&one);
+        let before = one.current_seq();
+        assert_eq!((left(&pair), pair.current_seq()), (stood.clone(), before), "{what}: the two worlds stand alike before the act");
+        let shot = shot_of(&doc1(), &ca(start), width);
+        match (rewindow(&pair, &doc1(), &shot, &kept), rewindow_in_one_pass(&one, &doc1(), &shot, &kept)) {
+            (Ok((member, by_pair)), Ok((same, in_one))) => {
+                assert!(disturb.is_none(), "{what}: a disturbed draft is refused");
+                assert_eq!(member, same, "{what}: the one member");
+                assert_eq!(left(&one), left(&pair), "{what}: the draft, R, the member, the head and the store, alike");
+                assert_ne!(left(&one), stood, "{what}: and the draft re-windowed");
+                assert_eq!((one.current_seq(), pair.current_seq()), (in_one, by_pair), "{what}: each one commit");
+                assert_eq!(in_one.0 + 1, by_pair.0, "{what}: one record where the pair is a placement and a removal");
+                assert_eq!(one.snapshot().world().m5().arranged_at(&doc1()), Some(in_one), "{what}: the draft moved once, at its commit");
+                assert_eq!(pair.snapshot().world().m5().arranged_at(&doc1()), Some(by_pair), "{what}");
+            }
+            (Err(TxnError::Rejected(Refused::Moved { .. })), Err(TxnError::Rejected(OnePass::Substitute(refused)))) => {
+                assert!(disturb.is_some(), "{what}: an undisturbed draft is re-windowed");
+                assert_eq!(refused, SubstituteError::Moved { index: 0 }, "{what}: refused at the entry, by identity");
+                assert_eq!((left(&one), one.current_seq()), (stood.clone(), before), "{what}: nothing written by the one pass");
+                assert_eq!((left(&pair), pair.current_seq()), (stood, before), "{what}: nor by the pair");
+            }
+            (_, Err(TxnError::Rejected(OnePass::Publish(e)))) => panic!("{what}: the shot itself refused: {e:?}"),
+            (by_pair, in_one) => panic!("{what}: the two composites answered apart: {by_pair:?} / {in_one:?}"),
+        }
     }
 }

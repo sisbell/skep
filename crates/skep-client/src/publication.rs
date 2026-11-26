@@ -78,9 +78,11 @@
 //!    (PUB-3.8). Its reads are made once, at the open, over every candidate
 //!    of every identity, and the panel is re-decided at each answer from
 //!    them alone (`Panel::composed`).
-//! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
-//!    the in-lock reads, each against its cap, from the worst-case table the
-//!    daemon prices by, pinned equal to it.
+//! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body and the
+//!    values, the request's own shape, each against its cap; and the
+//!    in-lock reads and the staged bytes as THE BOARD prices them, asked of
+//!    the board in one read (`publish_cost`) and held to the budgets it
+//!    answers with them — summed nowhere here, and no table copied.
 //! 4. [`request`](mod@request) — THE RE-READ (§5.6, §5.7) and THE REQUEST (§5.7): the
 //!    enumeration read again over the same held selection and composed
 //!    under the answers carried onto its windows, every test over what the
@@ -146,8 +148,8 @@ pub use enumerate::{enumerate, enumerate_again, is_formatting, is_formatting_typ
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use parts::{answers_onto, compose_part, parts_of, renamed, Answer as OriginAnswer, OwedAnswer, Part, PartComposition, PartKey, Window};
 pub use panel::{count, inherited, panel, Count, Destination, FoldCounts, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
-pub use price::{price, OriginalShape, Price, Term};
-pub use request::{build, originals_of, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
+pub use price::{Price, Shape, Term};
+pub use request::{build, build_unpriced, originals_of, price, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, LineageCause, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a

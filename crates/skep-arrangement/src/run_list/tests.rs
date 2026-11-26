@@ -832,3 +832,101 @@ fn the_counted_width_reads_each_run_once() {
     assert_eq!(count, 3);
     assert_eq!(l.total_width(), n(9));
 }
+
+/// The one walk's answer for `sites`, each an ordinal and the runs asked of
+/// it, with the steps it charged.
+fn held_at(l: &RunList, sites: &[(u32, Vec<Run>)]) -> (Vec<bool>, u64) {
+    let ordinals: Vec<Nat> = sites.iter().map(|(at, _)| n(*at)).collect();
+    let mut count = 0u64;
+    let held = l.arranges_each(ordinals.iter().zip(sites).map(|(at, (_, asked))| (at, asked.iter())), &mut |steps| count += steps);
+    (held, count)
+}
+
+#[test]
+fn a_site_is_held_where_the_list_arranges_exactly_its_runs_whatever_the_run_boundaries() {
+    // Positions 1–4 `ca(1..)`, 5–6 `vca(1..)`, 7–9 `ca(9..)`.
+    let l = list(vec![run(&ca(1), 4), run(&vca(1), 2), run(&ca(9), 3)]);
+    let one = |at: u32, asked: Vec<Run>| held_at(&l, &[(at, asked)]).0[0];
+    assert!(one(2, vec![run(&ca(2), 2)]), "a piece of a run");
+    assert!(one(1, vec![run(&ca(1), 1), run(&ca(2), 3)]), "two I-adjacent runs asked where the list holds one");
+    assert!(one(4, vec![run(&ca(4), 1), run(&vca(1), 2), run(&ca(9), 1)]), "across three runs of the list");
+    assert!(one(7, vec![run(&ca(9), 3)]), "the last run, to the end");
+    assert!(!one(3, vec![run(&ca(4), 2)]), "the address stands one position on");
+    assert!(!one(1, vec![run(&ca(2), 1), run(&ca(1), 1)]), "the addresses in another order");
+    assert!(!one(4, vec![run(&ca(4), 2)]), "another address among them");
+    assert!(!one(8, vec![run(&ca(10), 3)]), "reaching past the last position");
+    assert!(!one(10, vec![run(&ca(12), 1)]), "opening past it");
+    assert!(!one(0, vec![run(&ca(1), 1)]), "ordinal 0 lies before every run");
+    assert!(!one(2, vec![]), "no run asked is no arrangement");
+    assert!(!RunList::default().arranges_each([(&n(1), [&run(&ca(1), 1)])], &mut |_| {})[0], "the empty list holds nothing");
+    // Every site of one walk is answered on its own: one not held between
+    // two that are.
+    let (held, _) = held_at(&l, &[(1, vec![run(&ca(1), 2)]), (3, vec![run(&vca(1), 2)]), (5, vec![run(&vca(1), 2)])]);
+    assert_eq!(held, vec![true, false, true]);
+    // A site the cursor has passed is not held, whatever stands there.
+    let (held, _) = held_at(&l, &[(5, vec![run(&vca(1), 2)]), (1, vec![run(&ca(1), 2)])]);
+    assert_eq!(held, vec![true, false]);
+}
+
+#[test]
+fn the_one_walk_reads_each_run_once_and_stops_with_its_last_site() {
+    let l = list(vec![run(&ca(1), 4), run(&vca(1), 2), run(&ca(9), 3)]);
+    // Two sites, the second in the last run: three runs read, two sites,
+    // two runs compared.
+    let (held, count) = held_at(&l, &[(2, vec![run(&ca(2), 2)]), (7, vec![run(&ca(9), 1)])]);
+    assert_eq!((held, count), (vec![true, true], 3 + 2 + 2));
+    // One site in the first run: the walk reads that run and no other.
+    let (held, count) = held_at(&l, &[(1, vec![run(&ca(1), 1), run(&ca(2), 1)])]);
+    assert_eq!((held, count), (vec![true], 1 + 1 + 2));
+    // Two sites in one run read it once.
+    let (held, count) = held_at(&l, &[(1, vec![run(&ca(1), 1)]), (3, vec![run(&ca(3), 2)])]);
+    assert_eq!((held, count), (vec![true, true], 1 + 2 + 2));
+}
+
+#[test]
+fn the_one_walk_answers_what_a_position_by_position_read_answers_on_generated_lists() {
+    let mut gen = Gen(0x0123_4567_89ab_cdef);
+    for (runs, sites) in [(1usize, 1usize), (7, 3), (40, 16), (300, 64), (1_500, 256)] {
+        let l = generated_list(&mut gen, runs);
+        let held = positions(&l);
+        // Sites ascending and apart, each one to five positions wide; the
+        // runs asked are the addresses standing there, cut at boundaries of
+        // the generator's choosing, and one site in four asks its runs one
+        // position on.
+        let mut asked: Vec<(u32, Vec<Run>)> = Vec::new();
+        let mut reach = 1usize;
+        for k in 0..sites {
+            let slack = (held.len() + 1).saturating_sub(reach) / (sites - k);
+            let at = reach + gen.below(slack as u64 + 1) as usize;
+            let width = 1 + gen.below(5) as usize;
+            let from = if gen.below(4) == 0 { at + 1 } else { at };
+            let mut site: Vec<Run> = Vec::new();
+            for addr in held.iter().skip(from - 1).take(width) {
+                if gen.below(2) == 0 {
+                    extend_or_push_run(&mut site, run(addr, 1));
+                } else {
+                    site.push(run(addr, 1));
+                }
+            }
+            asked.push((at as u32, site));
+            reach = at + width;
+        }
+        // The answer read position by position, the list's own `point`.
+        let want: Vec<bool> = asked
+            .iter()
+            .map(|(at, site)| {
+                let addrs: Vec<Address> = site.iter().flat_map(|run| run.addrs().collect::<Vec<_>>()).collect();
+                !addrs.is_empty() && addrs.iter().enumerate().all(|(k, addr)| l.point(&n(*at + k as u32)).as_ref() == Some(addr))
+            })
+            .collect();
+        let (got, count) = held_at(&l, &asked);
+        assert_eq!(got, want, "{runs} runs, {sites} sites");
+        assert!(want.iter().any(|held| *held) && (sites < 8 || want.iter().any(|held| !*held)), "{runs} runs: the case holds both answers");
+        let compared: usize = asked.iter().map(|(_, site)| site.len()).sum();
+        assert!(count <= (l.run_count() + sites + compared) as u64, "{runs} runs, {sites} sites: {count} steps");
+        // Each site alone, on a walk of its own, answers the same.
+        for ((at, site), want) in asked.iter().zip(&want) {
+            assert_eq!(held_at(&l, &[(*at, site.clone())]).0, vec![*want], "{runs} runs: the site at {at} alone");
+        }
+    }
+}

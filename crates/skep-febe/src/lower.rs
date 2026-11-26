@@ -632,10 +632,9 @@ impl Lower for PublicationError {
                 RejectCode::StrayPlaceUnrecorded,
                 Some(FaultSite { index: Some(index), addr: Some(draft), ..FaultSite::default() }),
             ),
-            // The re-window's placement and removal lower through M5's
-            // tables, so they read as `reinstate`'s and `delete`'s.
+            // The re-window's gate and its placed runs' verdicts lower
+            // through M5's table, so they read as `reinstate`'s.
             PublicationError::Reinstate(e) => e.lower(),
-            PublicationError::Delete(e) => e.lower(),
         }
     }
 

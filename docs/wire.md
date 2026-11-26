@@ -1777,6 +1777,24 @@ same tag — an answer, never a rejection.
 {"as_of":9,"resp":"universal_grants","rows":[]}
 ```
 
+**`publish_cost`** — publish_cost (§Arrangement): what a publication is
+priced at, before it is sent. The five figures of the price a `publish`
+is refused `publication_over_budget` on (§The publish shot and
+head-float, the in-lock reads' budget) — `homes`, your link-holding
+homes; `entries`, the `links`, `originals`, `read_with` and `supersede`
+entries, summed; `rewindow`, per draft the commit re-windows its content
+runs and the pieces its lists place, summed; `fence`, one per
+re-inserted run; `staged_bytes`, the bytes the commit would stage — and
+the two budgets they are held to: `read_budget`, which `homes × entries
++ rewindow + fence` is held to, and `byte_budget`, which `staged_bytes`
+is. Each is a JSON integer. The answer is the same shape inside the
+budgets and past them: the read never answers `publication_over_budget`.
+
+<!-- wire: response publish_cost -->
+```json
+{"as_of":9,"byte_budget":67108864,"entries":4,"fence":1613,"homes":3,"read_budget":65536,"resp":"publish_cost","rewindow":5780,"staged_bytes":2471033}
+```
+
 **`key_set`** — key_set: an account's credential table (§Identity
 reads). `enrolled` and `retired` entries ride in fingerprint order;
 `anchor` per entry is the flag the fingerprint was ENROLLED under,
@@ -2100,8 +2118,8 @@ its in-lock reads and its staged bytes, `publication_over_budget` (the reads the
 makes under the daemon's serialization lock, priced AHEAD of the lock
 off a lock-free snapshot — the caller's link-holding home count × the
 links, originals, read-with and supersede entries, plus, per draft the
-commit re-windows, the pieces its lists place × the runs its run-list
-holds while they are placed, plus one per re-inserted run — past M7's
+commit re-windows, its content runs and the pieces its lists place,
+plus one per re-inserted run — past M7's
 `MAX_PUBLICATION_READS` = 65536; or the
 bytes the commit would stage, priced from M7's worst-case table off the
 request — a record per piece a run mints, a copy at its slots' spans and
@@ -2418,15 +2436,14 @@ DRAFT's OWN kept places — `also_places`, one entry per `also` draft
 re-windowed, each a list parallel to `runs` the same way, read off that
 draft's image — and the shot's ONE commit then RE-WINDOWS EVERY NAMED
 DRAFT at its own places, after the records: the rendering draft first,
-then each `also` draft in `also`'s order, each over the working state
-the one before it left. For each place it checks
+then each `also` draft in `also`'s order. For each place it checks
 that the draft still arranges that run's identity at that place, by
 identity — the V-span of the run's width at the place resolves to
 exactly the run's addresses, in its order — and replaces it THERE by
-the fresh run the member holds, a `reinstate` of the fresh run at the
-place and a `delete` of the draft's own run behind it, piece by piece
-at each piece's offset, applied in turn inside the transaction so
-positions stay true: each re-windowed draft reads the same bytes at
+the fresh run the member holds. Every place of a draft is checked on
+one pass over its arrangement, and all of them are replaced by one
+record of that draft, a run a piece, each as wide as the words it
+replaces, so no place moves another: each re-windowed draft reads the same bytes at
 every position afterwards and arranges the member's identity where it
 arranged its own, at every principal, with no client step between the
 version and the re-window and no crash that leaves a draft showing
@@ -2449,9 +2466,10 @@ run's identity twice is re-windowed at the place the
 request names and left standing at the other, which the twin fence
 meets at its own publication; a run named twice in `runs` with a place
 on each re-windows both onto the one fresh run the first entry minted.
-Each list is walked in `runs`' order over what the entries before it
-left, so of two places in one list whose V-spans overlap the later is
-refused `kept_place_moved`, its words already re-windowed; a client names
+Every place of a draft is judged against the draft as it stood before
+any of them was replaced, and the entry that answers is the earliest in
+`runs`' order that fails, so of two places in one list whose V-spans
+overlap the later is refused `kept_place_moved`; a client names
 no place overlapping another in its list, a run lying inside a place
 another entry names taking none, that entry's re-window covering its
 words.
@@ -2482,7 +2500,7 @@ draft, in a draft's `also_places` entry for a stray run that draft
 arranges; the commit reads every
 correspondence record the caller may read whose `to` covers the run,
 wherever homed — one record, a piece of one at its offset, or several
-adjoining records piece by piece, the two slots of a record being of
+adjoining records a piece each, the two slots of a record being of
 one width — checks that the draft still arranges the record's `from`
 words at the place, by identity as above, and re-windows them there
 onto the record's `to` in the same transaction: the member places the
@@ -2702,17 +2720,17 @@ the one commit makes under the daemon's serialization lock — the claim
 read per `links` entry and per `originals` entry, the presence read per
 `read_with` entry and the claim read per `supersede` entry, each over
 the caller's link-holding homes; the twin fence's stab per re-inserted
-run; and the re-window's run-list steps, each placed piece's check,
-placement and removal walking and copying the draft's run-list — are
+run; and the re-window's run-list steps, one walk of each re-windowed
+draft's run-list that checks every kept place and one record that
+replaces them, a step a run and a step a piece — are
 PRICED BEFORE THE LOCK IS TAKEN, off a lock-free snapshot of the head:
 the caller's link-holding home count × (`links` entries + `originals`
 entries + `read_with` entries + `supersede` entries), plus, per draft the
 commit re-windows — the rendering draft where `places` carries a place,
-each `also` draft where its `also_places` entry does — the pieces its
-lists place × (its content run count + the runs those pieces can add:
-one where a place is no run start of the draft, one where a place's
-reach is neither a run start nor the draft's end, and one per piece of a
-run past its first), plus one per re-inserted run, against
+each `also` draft where its `also_places` entry does — its content run
+count and the pieces its lists place, summed (a place that cuts a run of
+the draft adds nothing: the draft's run-list is walked once, whatever
+its places number), plus one per re-inserted run, against
 `MAX_PUBLICATION_READS` = 65536 (16 × `MAX_SLOT_SPANS`) — a run no list
 places costs the re-window nothing, and a piece is a run's share of the
 pairing, or a stray run's per record covering it — AND THE STAGED
@@ -2720,8 +2738,9 @@ BYTES, the price's fifth term (the link-sets design §5.6, M6): the
 bytes the one commit
 would stage, priced from the worst-case table off the request — per
 draft-native run its placement and its correspondence record, per piece
-the pairing cuts it into, and its values; per kept place the
-re-window's two records per piece, a stray place's per record covering
+the pairing cuts it into, and its values; per draft the commit
+re-windows its one record of kept places, and per kept place that
+record's change per piece, a stray place's per record covering
 it; per `links` entry its copy at the spans its slots spell (an address
 as its unit span, an I-span as itself, a member-position span as up to
 the fewer of its width and the request's runs) and its claim; a
@@ -2741,20 +2760,24 @@ The counts may move between the pricing and the commit: the budget is
 conservative by design, a request it admits may cost a little more
 under the lock and one it refuses would have cost at least its price.
 What the reads admit: 4096 entries over 16 link-holding homes, 1024
-over 64, 256 over 256; one typed word — one placed run on the draft's
-run boundaries — in a draft of up to 65,000 runs, a first publication
-of a draft of 255 runs placed run for run, or 16 placed runs in a draft
-of 4,000; the terms share the one budget. What the bytes refuse that the
+over 64, 256 over 256; one typed word — one placed run — in a draft of
+up to 65,534 runs; 1,613 placed pieces in a draft of 4,167 runs, at
+5,780 steps and 1,613 fence stabs; a first publication placed run for
+run of a draft of up to 21,845 runs, three steps a run — the run, its
+piece, its fence stab — which is past the 4096 runs one request's list
+carries; the terms share the one budget. What the bytes refuse that the
 caps alone do not: a request within the 8 MiB body can command far more
 staged bytes than one
 transaction holds — a `links` entry's member-position slot is up to
 4096 stored spans for 36 bytes of body, a stored span is about ten
 times its spelling, and a run re-supplying the positions of many
-earlier runs is re-windowed piece by piece — so the price, not the
+earlier runs is re-windowed a piece each — so the price, not the
 body cap, is what keeps a publication's staging inside the budget. The
 same board prices the same request the same, so the act that exists is
 a narrower request — fewer entries, narrower slots, or fewer places —
-which the ceremony prices before the act. Off the same
+which the ceremony prices before the act: `publish_cost` (§Arrangement)
+answers a request's five figures and the two budgets, by the function
+this refusal reads, to a client that asks before it sends. Off the same
 snapshot, a request whose `links` name an `old` has its BASE read too:
 the runs the member its `base` names arranges over its positions
 1..`base_extent`, which (3) leaves out of what a successor must cover. A
@@ -2871,8 +2894,8 @@ commits nothing:
 | `already_published` | permanent | `addr` = the member the words were published into | a draft-native run overlaps the `from` of a correspondence record homed in the draft (the twin fence, above) — read inside the transaction, after the shot's own table through the source gate and ahead of the count and the existence walk |
 | `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
-| `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
-| `kept_place_moved` | permanent | `index` = the `runs` entry, `addr` = the draft | the draft `addr` names — the rendering `draft`, or a draft `also` names — no longer arranges the entry's draft words at the kept place the request carries for it in that draft's list (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, draft by draft (the rendering draft first, then each `also` draft in `also`'s order) and entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
+| `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
+| `kept_place_moved` | permanent | `index` = the `runs` entry, `addr` = the draft | the draft `addr` names — the rendering `draft`, or a draft `also` names — no longer arranges the entry's draft words at the kept place the request carries for it in that draft's list (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, draft by draft (the rendering draft first, then each `also` draft in `also`'s order), the earliest failing entry in `runs`' order answering; a published document named as the `draft` answers `published_target` instead, ahead of every entry's check |
 | `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft | a kept place in the draft `addr` names stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at that draft's re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
@@ -4658,6 +4681,40 @@ and one read-with:
 <!-- wire: request publish -->
 ```json
 {"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.69.0.2.1","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","originals":[{"old":"1.0.1.0.69.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.64"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.69.0.1.1","origin":"1.0.1.0.69","width":"2"}]}
+```
+
+**`publish_cost`** — THE PRICE OF A PUBLICATION, asked before the act: a
+read that carries a `publish`'s members — `doc`, or `mint` with
+`account`; `claim`; `base` and `base_extent`; `draft`, `also` and
+`keep_base`; `runs`; `places` and `also_places`; `links`, `retract`,
+`originals`, `read_with` and `supersede` — each parsed as `publish`
+parses it, so a frame is priced exactly where it would be admitted, and
+one the codec refuses as a `publish` is refused here the same,
+`malformed`. It carries no `attest`: a price is signed by no one, and
+the member is an unknown field here as on every read. It answers what
+the daemon prices that `publish` at over the state the read pins (§The
+publish shot and head-float, the in-lock reads' budget), by the function
+its `publication_over_budget` refusal reads, so the figures are that
+refusal's own — answered whether or not a budget is passed. It writes
+nothing: no position moves and the change feed gains no row; it takes no
+write permit and no lock, so the board may move between a price and the
+`publish`, which the daemon prices again ahead of its own lock. The
+drafts the frame names — `draft`, then each of `also`, in that order —
+are document arguments: the answer states each re-windowed draft's run
+count, so one you may not read answers `withheld`, `site.addr` that
+draft; and so, by derivation, is the home of each `originals` entry,
+whose stored type the bytes are priced from. The `homes` are the
+session's principal's; a guest holds no account and is priced with none.
+→ `publish_cost` (§The response envelope): `homes`, `entries`,
+`rewindow`, `fence`, `staged_bytes`, the budgets `read_budget` and
+`byte_budget`, and `as_of`. A client admits a request where `homes ×
+entries + rewindow + fence` is at most `read_budget` and `staged_bytes`
+at most `byte_budget`, by the answer's own numbers, and keeps no copy of
+either budget. This example prices the publication above:
+
+<!-- wire: request publish_cost -->
+```json
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.69.0.2.1","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish_cost","originals":[{"old":"1.0.1.0.69.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.64"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.69.0.1.1","origin":"1.0.1.0.69","width":"2"}]}
 ```
 
 ### Media — the reference cell and its door (lane A; the fence) and the upload (lane B)

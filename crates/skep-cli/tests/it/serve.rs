@@ -1020,7 +1020,8 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
 /// words, a published set the edition is read with: `publication.open`
 /// answers the panel — the notes row OFF with its one link, the counts at
 /// the default, `windows` empty, the price under its caps — and
-/// `publication.count` with the row ON counts ⟨l⟩ one up with no dial;
+/// `publication.count` with the row ON counts ⟨l⟩ one up with one dial, the
+/// board asked its price;
 /// `publication.confirm` is acknowledged `{member, at, via: answer}` with
 /// the `publication` event's `sent` then `acknowledged`, and the feed row's
 /// `docs` name the member, the draft and the notes; a second `open` finds no
@@ -1075,15 +1076,16 @@ fn f5b_the_publication_family_over_the_bridge() {
     assert_eq!((rows[0]["home"].as_str(), rows[0]["kind"].as_str(), rows[0]["links"].clone()), (Some(notes.as_str()), Some("notes"), json!([link])), "{panel}");
     assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{panel}");
     assert_eq!((panel["windows"].clone(), panel["read_with"].clone(), panel["price"]["over"].clone()), (json!([]), json!({set.clone(): true}), json!([])), "{panel}");
-    // THE COUNT with the row ON: ⟨l⟩ one up, no dial.
+    // THE COUNT with the row ON: ⟨l⟩ one up, and one dial — the board asked
+    // what it prices the request at.
     let log_before = signed.get("/bridge/log").2.len();
     let counted = signed.result("publication.count", json!({"session": session, "switches": {"on": [notes]}}));
     assert_eq!(counted["count"]["l"], 1, "{counted}");
     let (_, _, log) = signed.get("/bridge/log");
     let log: Value = serde_json::from_slice(&log).unwrap();
     // A signed session's probe reads `/health` on a clock of its own.
-    let dials_after_count = log.as_array().unwrap().iter().rev().take_while(|e| e["call"] != "publication.open").filter(|e| e["kind"] == "dial" && e["path"] != "/health").count();
-    assert_eq!(dials_after_count, 0, "the count is pure local: {} bytes of log before, no dial after the open", log_before);
+    let dials_after_count: Vec<&Value> = log.as_array().unwrap().iter().rev().take_while(|e| e["call"] != "publication.open").filter(|e| e["kind"] == "dial" && e["path"] != "/health").collect();
+    assert_eq!(dials_after_count.iter().map(|e| (e["method"].as_str(), e["path"].as_str(), e["status"].as_u64())).collect::<Vec<_>>(), [(Some("POST"), Some("/op"), Some(200))], "the count dials once after the open, for the board's price: {} bytes of log before", log_before);
     // THE CONFIRM: acknowledged, the two events, the feed row.
     let before = position();
     let acked = signed.result("publication.confirm", json!({"session": session, "switches": {"on": [notes]}}));

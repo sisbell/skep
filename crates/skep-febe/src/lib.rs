@@ -41,7 +41,10 @@
 //! card holds the one rule M10 performs on another component's behalf: the
 //! any-principal read's fold-filter re-derives the grant fold's issuer test
 //! as a projection over rows, because the world hands its universal index
-//! raw ([`PublicationWorld::universal_grant_index`]).
+//! raw ([`PublicationWorld::universal_grant_index`]). A fourth read of a
+//! publication, [`Op::PublishCost`], is forwarded and not composed: its
+//! answer is M7's whole — the price M7's own refusal reads
+//! (`skep_links::price_publication_reads`), computed over that snapshot.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a

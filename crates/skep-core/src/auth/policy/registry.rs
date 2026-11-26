@@ -209,6 +209,7 @@ pub fn deposits_registry_link(op: &Op) -> bool {
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::PublishCost { .. }
         | Op::UniversalGrants
         | Op::Insert { .. }
         | Op::Delete { .. }

@@ -346,6 +346,47 @@ fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Bl
     })
 }
 
+/// The forward cursor of one walk of a run-list: the run in hand, at its
+/// V-start.
+///
+/// It is what [`RunList::arranges_each`] judges every site on. The cursor
+/// reads the list's runs in V-order and never moves back, so the runs it
+/// has read are the walk's whole cost however many positions it is asked.
+struct Cursor<'l> {
+    /// The runs the walk has not read yet.
+    runs: Runs<'l>,
+    /// The run in hand and the ordinal it stands at: none before the first
+    /// run is read.
+    hand: Option<(&'l Run, Nat)>,
+    /// The ordinal the next run read stands at: the one prefix sum.
+    next: Nat,
+}
+
+impl<'l> Cursor<'l> {
+    /// Moves forward to the run holding `ord` and returns it with `ord`'s
+    /// offset in it.
+    ///
+    /// `None` where the list ends before `ord`, and where the cursor
+    /// already stands past it. `steps` is charged one for every run read.
+    fn seek(&mut self, ord: &Nat, steps: &mut impl FnMut(u64)) -> Option<(&'l Run, Nat)> {
+        loop {
+            if let Some((run, v_start)) = &self.hand {
+                if ord < v_start {
+                    return None;
+                }
+                if *ord < v_start + &run.width {
+                    return Some((*run, ord - v_start));
+                }
+            }
+            let run = self.runs.next()?;
+            steps(1);
+            let v_reach = &self.next + &run.width;
+            let v_start = std::mem::replace(&mut self.next, v_reach);
+            self.hand = Some((run, v_start));
+        }
+    }
+}
+
 impl RunList {
     /// Returns `n(d)` for this subspace: the total arranged width.
     pub(crate) fn total_width(&self) -> Nat {
@@ -511,8 +552,11 @@ impl RunList {
     /// past `at + width` of the change before it — the first `at` is at
     /// least 1, and the last change's `at + width` is at most `n + 1`. Two
     /// changes may touch, and two placements may name one ordinal, the
-    /// earlier's runs then standing before the later's. The op that stages
-    /// the record judges all of it ([`Vstream::edit`](crate::Vstream::edit)).
+    /// earlier's runs then standing before the later's. The body that
+    /// stages the record judges all of it
+    /// ([`Vstream::edit`](crate::Vstream::edit), by its changes' shapes;
+    /// [`stage_substitute`](crate::stage_substitute), whose places it holds
+    /// apart before the record is built).
     /// Outside it the walk is total all the same, as the fold's panic-free
     /// promise requires ([`apply_m5`](crate::M5State::apply_m5)): a change
     /// whose site the walk has passed is made where the walk stands, one
@@ -577,6 +621,79 @@ impl RunList {
             }
         }
         RunList(out.into_iter().collect())
+    }
+
+    /// Returns, for each site of `sites`, whether the list arranges exactly
+    /// the site's runs over the positions that open at its ordinal — every
+    /// site answered in one walk (§1).
+    ///
+    /// A site is an ordinal and the runs asked of it, in order. It is held
+    /// where the positions from the ordinal on, as many as the runs are
+    /// wide together, are arranged, and map to the runs' addresses in the
+    /// runs' order and to nothing else: the check by identity, by
+    /// membership at the place alone. Run boundaries decide nothing — two
+    /// I-adjacent runs asked where the list holds one run, and one run asked
+    /// where an edit left the list two, answer alike — so each side's
+    /// addresses are compared stretch by stretch, a stretch ending where
+    /// either side's run does. A site asking no run is not held: no piece
+    /// is no arrangement. Neither is one that opens at ordinal 0, or reaches
+    /// past the last arranged position.
+    ///
+    /// **One walk.** The list's runs are read once, in V-order, on one
+    /// cursor that only moves forward: it reads on to the run a site opens
+    /// in, compares the site's runs there, and stands where the comparison
+    /// ended for the next site. A site judged from the head of the list —
+    /// the prefix-sum walk [`locate`](RunList::locate) and the clip make a
+    /// call — costs the runs left of it, so that way a list of sites costs
+    /// runs × sites; here the walk stops with the last site, and reads no
+    /// run past it.
+    ///
+    /// `steps` is charged one for every run of the list the walk reads, one
+    /// for every site and one for every run of a site it compares: at most
+    /// `#runs + #sites + Σ #runs asked`, whatever the sites hold.
+    ///
+    /// **Precondition.** `sites` are ascending and apart — each ordinal at
+    /// or past the reach of the site before it. Outside it the walk is
+    /// total all the same: a site the cursor has passed is answered not
+    /// held, whatever the list arranges there.
+    pub(crate) fn arranges_each<'r, S>(
+        &self,
+        sites: impl IntoIterator<Item = (&'r Nat, S)>,
+        steps: &mut impl FnMut(u64),
+    ) -> Vec<bool>
+    where
+        S: IntoIterator<Item = &'r Run>,
+    {
+        let mut cursor = Cursor { runs: self.iter(), hand: None, next: Nat::one() };
+        let mut held = Vec::new();
+        for (at, asked) in sites {
+            steps(1);
+            // The next position of the site still to compare.
+            let mut here = at.clone();
+            let mut any = false;
+            let mut same = true;
+            'site: for piece in asked {
+                steps(1);
+                any = true;
+                // How many of the piece's positions are compared already.
+                let mut done = Nat::zero();
+                while done < piece.width {
+                    let Some((run, offset)) = cursor.seek(&here, steps) else {
+                        same = false;
+                        break 'site;
+                    };
+                    if run.addr_at(&offset) != piece.addr_at(&done) {
+                        same = false;
+                        break 'site;
+                    }
+                    let stretch = std::cmp::min(&run.width - &offset, &piece.width - &done);
+                    here += &stretch;
+                    done += stretch;
+                }
+            }
+            held.push(any && same);
+        }
+        held
     }
 
     /// Returns the list transposed at the cuts' ordinals (§1; ASN-0119).

@@ -27,7 +27,7 @@ use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
-use skep_arrangement::{DeleteError, PublishError, ReinstateError, SeatError};
+use skep_arrangement::{PublishError, ReinstateError, SeatError};
 use skep_namespace::MintError;
 
 // Ownership: every op that deposits into a home document's link subspace
@@ -636,13 +636,14 @@ pub enum PlanFault {
 /// own home — the fresh mark's gate, mint and seat where a rest stands,
 /// then the retraction's gate and mint; then THE RE-WINDOW, per re-windowed draft — the rendering
 /// draft at the request's `places`, then each draft `also` names at its
-/// `also_places` entry, in `also`'s order — and within each per `runs`
-/// entry that carries a kept place there, in `runs`' order: for a stray run
-/// the read of the records the caller may read, wherever homed
-/// (`StrayPlaceUnrecorded`, naming the draft), the check by identity
-/// (`KeptPlaceMoved`, naming the draft), then the placement's own verdicts
-/// (`Reinstate`) and the removal's (`Delete`) as the fresh run is put at the
-/// place and the draft-native piece taken out behind it.
+/// `also_places` entry, in `also`'s order — and within each the draft's
+/// gate first (`Reinstate` carrying `PublishedTarget` where the draft named
+/// is a published document), then the earliest `runs` entry carrying a kept
+/// place there that fails a check, in `runs`' order: for a stray run the
+/// read of the records the caller may read, wherever homed
+/// (`StrayPlaceUnrecorded`, naming the draft), then the check by identity
+/// (`KeptPlaceMoved`, naming the draft), then a placed run's own verdicts
+/// (`Reinstate`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationError {
     /// The shot's own refusal, as `publish` states it — and, at the mint
@@ -713,15 +714,14 @@ pub enum PublicationError {
         /// rendering `draft` or the named `also` draft projects to.
         draft: Address,
     },
-    /// The re-window's placement of a fresh run at a kept place was refused —
-    /// `reinstate`'s own verdict, `PublishedTarget` where the draft named is
-    /// a published document, `TooManyRuns` where the draft's run-list is at
-    /// its budget; the rest are made unreachable by the check ahead of it.
+    /// A draft's re-window was refused with a verdict `reinstate` names for
+    /// a run placed by identity: `PublishedTarget` where the draft named is
+    /// a published document, answered ahead of every kept place's check;
+    /// `NotContentSubspace` for a place outside the content subspace, which
+    /// the wire's codec refuses first; the rest — the draft's registration
+    /// and owner, a placed run's shape, origin and stored value — are made
+    /// unreachable by the shot's admission and its staging.
     Reinstate(ReinstateError),
-    /// The re-window's removal of the draft-native piece behind the fresh run
-    /// was refused — `delete`'s own verdict, made unreachable but for a
-    /// published draft by the check and the placement ahead of it.
-    Delete(DeleteError),
 }
 
 impl From<PublishError> for PublicationError {
@@ -745,12 +745,6 @@ impl From<SeatError> for PublicationError {
 impl From<ReinstateError> for PublicationError {
     fn from(e: ReinstateError) -> Self {
         PublicationError::Reinstate(e)
-    }
-}
-
-impl From<DeleteError> for PublicationError {
-    fn from(e: DeleteError) -> Self {
-        PublicationError::Delete(e)
     }
 }
 
@@ -1047,7 +1041,6 @@ impl fmt::Display for PublicationError {
                 "publication: no correspondence record the caller may read names run {index}'s identity whole as its published words, so its kept place in the draft {draft} re-windows nothing"
             ),
             PublicationError::Reinstate(e) => write!(f, "publication: the re-window's placement refused: {e}"),
-            PublicationError::Delete(e) => write!(f, "publication: the re-window's removal refused: {e}"),
         }
     }
 }
@@ -1059,7 +1052,6 @@ impl Error for PublicationError {
             PublicationError::Mint(e) => Some(e),
             PublicationError::Seat(e) => Some(e),
             PublicationError::Reinstate(e) => Some(e),
-            PublicationError::Delete(e) => Some(e),
             _ => None,
         }
     }

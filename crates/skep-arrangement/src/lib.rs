@@ -109,7 +109,8 @@
 //! The three write-path refusals of the version-chain model run here
 //! (PUB-kickoff D2b), at the transact, as typed errors beside the ownership
 //! gate — the in-place advance refusal `PublishedTarget` on
-//! `insert`/`copy`/`reinstate`/`delete`/`rearrange`/`edit`
+//! `insert`/`copy`/`reinstate`/`delete`/`rearrange`/`edit` and on the
+//! substitution's staging body
 //! (PUB-2.11), the
 //! private-member refusal `PrivateVersionOfPublished` and the versionless
 //! sibling `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9), the
@@ -151,7 +152,9 @@
 //! identity was and its `runs` entry ([`Pairing`]) — so a composite in the
 //! link store stages the shot, its correspondence records in each named
 //! draft and each named draft's re-window at its kept places under one
-//! transaction. The
+//! transaction: the re-window is [`stage_substitute`], the identity-checked
+//! substitution, which checks every kept place of a draft on one walk of
+//! its run-list and stages them as one record. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
 //! memberless document named as its own base, carrying the deposits it took
@@ -229,8 +232,9 @@ mod run;
 // search.
 mod run_union;
 // The implicit-position run-list: splice, contract, reorder, the one-walk
-// splice of several changes, the merge condition and its one accumulator,
-// the mapping blocks, the lazy walks.
+// splice of several changes, the one-walk check of several places by
+// identity, the merge condition and its one accumulator, the mapping
+// blocks, the lazy walks.
 mod run_list;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
@@ -272,12 +276,13 @@ pub use chain::{
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, EditError, InsertError, PublishError, RearrangeError, ReinstateError,
-    SeatError, StageError, VersionError,
+    SeatError, StageError, SubstituteError, VersionError,
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, AsOf, Change, Edit, Edited, MintedRun, Pairing, Placed, PublishWorld,
-    SetMerge, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    stage_reinstate_at, stage_substitute, AsOf, Change, Edit, Edited, MintedRun, Pairing, Placed,
+    PublishWorld, Replacement, SetMerge, Substitution, Vstream, MAX_COPY_RESOLVE_STEPS,
+    MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

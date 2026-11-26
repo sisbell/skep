@@ -230,6 +230,7 @@ pub fn deposits_credential_link(op: &Op) -> bool {
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::PublishCost { .. }
         | Op::UniversalGrants
         | Op::Insert { .. }
         | Op::Delete { .. }

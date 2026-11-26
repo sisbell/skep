@@ -437,6 +437,55 @@ pub enum EditError {
     Content(ContentError),
 }
 
+/// SUBSTITUTE rejection: the verdicts of the identity-checked substitution,
+/// the staging body that replaces the runs a draft arranges at each place
+/// of a list by the runs given for them.
+///
+/// The destination's three come first, ahead of every entry, as the
+/// in-place edits judge them: `DocNotRegistered`, `NotOwner` carrying the
+/// destination, and `PublishedTarget` — PUB-2.11's refusal, the face of
+/// [`InsertError::PublishedTarget`], with no deposit form. There is no
+/// `ArrangementMoved`: the body takes no typed state, its check by identity
+/// being the stricter one.
+///
+/// Every other verdict is one entry's, and names it by the `index` the
+/// caller gave it ([`Substitution::index`](crate::Substitution)): the
+/// first check that entry fails, in this order — `NotContentSubspace` (its
+/// place lies outside `s_C`), `Unrecorded` (the caller handed it no
+/// pieces), `Moved` (the draft does not arrange exactly its pieces' runs at
+/// its place, or the place overlaps the place of an entry before it), then,
+/// per run it puts in, REINSTATE's three on a run placed by identity:
+/// `BadRun` (its start is no content element), `SourceNotRegistered` (the
+/// document that minted it is not registered) and `DanglingSource` (an
+/// address it names holds no stored value, every address probed). Which
+/// entry answers when several fail is stated on
+/// [`stage_substitute`](crate::stage_substitute) and only there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubstituteError {
+    /// `doc` is not a registered document.
+    DocNotRegistered,
+    /// The caller is not `doc`'s effective owner (ω); carries `doc`.
+    NotOwner(Address),
+    /// `doc`'s document is published: a substitution edits in place.
+    PublishedTarget,
+    /// The place of the entry `index` is not in the content subspace `s_C`.
+    NotContentSubspace { index: usize },
+    /// The entry `index` came with no pieces: the caller holds no record of
+    /// what its place arranges.
+    Unrecorded { index: usize },
+    /// The draft does not arrange exactly the runs of the entry `index` at
+    /// its place, or that place overlaps the place of an entry before it.
+    Moved { index: usize },
+    /// A run the entry `index` puts in starts at no content element.
+    BadRun { index: usize },
+    /// The document that minted a run the entry `index` puts in is not
+    /// registered.
+    SourceNotRegistered { index: usize },
+    /// An address a run the entry `index` puts in names holds no stored
+    /// value.
+    DanglingSource { index: usize },
+}
+
 /// PUBLISH rejection (PUB-2.33, PUB-8.1): the shot's verdicts.
 ///
 /// Which one wins when several apply is stated on
@@ -868,6 +917,39 @@ impl Error for EditError {
         }
     }
 }
+
+impl fmt::Display for SubstituteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SubstituteError::DocNotRegistered => "substitute: doc is not a registered document",
+            SubstituteError::NotOwner(_) => {
+                "substitute: the caller is not the document's effective owner (ω)"
+            }
+            SubstituteError::PublishedTarget => {
+                "substitute: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
+            SubstituteError::NotContentSubspace { .. } => {
+                "substitute: an entry's place is not in the content subspace s_C"
+            }
+            SubstituteError::Unrecorded { .. } => {
+                "substitute: an entry came with no pieces — no record names what its place arranges"
+            }
+            SubstituteError::Moved { .. } => {
+                "substitute: the document does not arrange an entry's runs at its place, or the place overlaps an earlier entry's — nothing was changed"
+            }
+            SubstituteError::BadRun { .. } => {
+                "substitute: a run put in is not a content run"
+            }
+            SubstituteError::SourceNotRegistered { .. } => {
+                "substitute: the document that minted a run put in is not registered"
+            }
+            SubstituteError::DanglingSource { .. } => {
+                "substitute: a run put in names an I-address with no stored value (S3★)"
+            }
+        })
+    }
+}
+impl Error for SubstituteError {}
 
 impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

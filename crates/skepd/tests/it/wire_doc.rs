@@ -67,7 +67,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 53] = [
+const OP_NAMES: [&str; 54] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -121,10 +121,11 @@ const OP_NAMES: [&str; 53] = [
     "out_claims",
     "edition_claims",
     "universal_grants",
+    "publish_cost",
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 52 ops appear.
+/// value), is tagged with the marker's own op name — and every op appears.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -494,6 +495,12 @@ fn fixture(name: &str) -> Response {
             as_of: Seq(9),
         },
         "universal_grants_empty" => Response::UniversalGrants { rows: Vec::new(), as_of: Seq(9) },
+        // The price of a publication: the five figures, a member each, the
+        // two budgets beside them.
+        "publish_cost" => Response::PublishCost {
+            price: skep_links::ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033 },
+            as_of: Seq(9),
+        },
         "rejected" => Response::Rejected(Rejection {
             op: OpKind::Insert,
             code: RejectCode::Unauthenticated,
@@ -534,9 +541,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 29 response shapes every client must decode; each must appear as a
+/// The 30 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 29] = [
+const REQUIRED_SHAPES: [&str; 30] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -565,6 +572,7 @@ const REQUIRED_SHAPES: [&str; 29] = [
     "doc_metadata",
     "edition_claims",
     "universal_grants",
+    "publish_cost",
     "rejected",
 ];
 
@@ -1472,6 +1480,73 @@ fn doc_states_the_staged_bytes_term_of_the_publication_price() {
     assert!(codes.contains("its in-lock reads and its staged bytes, `publication_over_budget`"), "§Rejection codes names the second cause");
     assert!(codes.contains(&format!("past the kernel's `MAX_TXN_BYTES` = {}", skep_links::ReadPrice::BYTE_BUDGET)), "§Rejection codes states the figure");
     assert!(shot.contains("| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS`, or the bytes its commit would stage past the kernel's `MAX_TXN_BYTES`"), "the table row's second cause");
+}
+
+/// THE PRICE READ. §Arrangement's `publish_cost` row and §The response
+/// envelope's entry carry what a client builds on. The row: the members are
+/// a `publish`'s, each parsed as `publish` parses it; no `attest`; the
+/// figures are the refusal's own, by the one function, answered whether or
+/// not a budget is passed; nothing is written and neither a permit nor a
+/// lock is taken; the named drafts are document arguments and an
+/// `originals` entry's home one by derivation; a guest is priced with no
+/// homes; and the rule a client admits a request by. The entry: the five
+/// figures with what each counts, the two budgets with what each is held
+/// to, and that the read never answers the refusal. The entry's example is
+/// a price a client admits by that rule, its two budgets the daemon's own
+/// and its re-window the budget paragraph's worked figure — a draft's runs
+/// and the pieces placed, summed — and the budget paragraph points a client
+/// at the read. The daemon's answers are pinned in `publication_reads.rs`;
+/// this pins that the contract says so.
+#[test]
+fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() {
+    let row = op_row("publish_cost");
+    for fact in [
+        "a read that carries a `publish`'s members",
+        "each parsed as `publish` parses it",
+        "one the codec refuses as a `publish` is refused here the same, `malformed`",
+        "It carries no `attest`",
+        "by the function its `publication_over_budget` refusal reads",
+        "answered whether or not a budget is passed",
+        "It writes nothing: no position moves and the change feed gains no row",
+        "it takes no write permit and no lock",
+        "which the daemon prices again ahead of its own lock",
+        "are document arguments",
+        "one you may not read answers `withheld`, `site.addr` that draft",
+        "by derivation, is the home of each `originals` entry",
+        "a guest holds no account and is priced with none",
+        "A client admits a request where `homes × entries + rewindow + fence` is at most `read_budget` and `staged_bytes` at most `byte_budget`",
+        "keeps no copy of either budget",
+    ] {
+        assert!(row.contains(fact), "the publish_cost row says {fact:?}: {row}");
+    }
+    let entry = prose_after("\n## The response envelope", "\n**`publish_cost`** —", &["\n<!-- wire:"]);
+    for fact in [
+        "`homes`, your link-holding homes",
+        "`entries`, the `links`, `originals`, `read_with` and `supersede` entries, summed",
+        "`rewindow`, per draft the commit re-windows its content runs and the pieces its lists place, summed",
+        "`fence`, one per re-inserted run",
+        "`staged_bytes`, the bytes the commit would stage",
+        "`read_budget`, which `homes × entries + rewindow + fence` is held to",
+        "`byte_budget`, which `staged_bytes` is",
+        "Each is a JSON integer",
+        "the read never answers `publication_over_budget`",
+    ] {
+        assert!(entry.contains(fact), "§The response envelope's publish_cost entry says {fact:?}: {entry}");
+    }
+    let example = blocks().into_iter().find(|(kind, name, _)| kind == "response" && name == "publish_cost").map(|(_, _, body)| body).expect("the entry's example");
+    let example: serde_json::Value = serde_json::from_str(&example).expect("the example is JSON");
+    let figure = |member: &str| example[member].as_u64().unwrap_or_else(|| panic!("`{member}` an integer: {example}"));
+    assert_eq!((figure("read_budget"), figure("byte_budget")), (skep_links::ReadPrice::BUDGET as u64, skep_links::ReadPrice::BYTE_BUDGET), "the example's budgets are the daemon's");
+    let reads = figure("homes") * figure("entries") + figure("rewindow") + figure("fence");
+    assert!(reads <= figure("read_budget") && figure("staged_bytes") <= figure("byte_budget"), "the example is a price a client admits: {reads} reads");
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    assert_eq!((figure("rewindow"), figure("fence")), (4_167 + 1_613, 1_613), "the example's re-window and fence are the budget paragraph's worked figure");
+    for fact in [
+        "1,613 placed pieces in a draft of 4,167 runs, at 5,780 steps and 1,613 fence stabs",
+        "`publish_cost` (§Arrangement) answers a request's five figures and the two budgets, by the function this refusal reads, to a client that asks before it sends",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
 }
 
 /// THE ELEVEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):
@@ -2937,7 +3012,8 @@ fn doc_states_the_received_frame_the_pending_frame_the_reads_budget_and_the_fenc
         "**The in-lock reads' budget**".to_string(),
         "PRICED BEFORE THE LOCK IS TAKEN".to_string(),
         "the caller's link-holding home count × (`links` entries + `originals` entries + `read_with` entries + `supersede` entries), plus, per draft the commit re-windows".to_string(),
-        "the pieces its lists place × (its content run count + the runs those pieces can add".to_string(),
+        "its content run count and the pieces its lists place, summed".to_string(),
+        "a place that cuts a run of the draft adds nothing".to_string(),
         "plus one per re-inserted run, against".to_string(),
         "a run no list places costs the re-window nothing".to_string(),
         format!("`MAX_PUBLICATION_READS` = {} (16 × `MAX_SLOT_SPANS`)", skep_links::MAX_PUBLICATION_READS),

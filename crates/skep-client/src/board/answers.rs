@@ -269,6 +269,59 @@ pub fn link_value(v: &Value) -> Option<Option<LinkValue>> {
     Some(Some(LinkValue { from: slot(0)?, to: slot(1)?, ty: slot(2)?, at: v["at"].as_u64() }))
 }
 
+/// The board's price of a publication: a `publish_cost` answer (wire.md
+/// §The response envelope).
+///
+/// The five figures are the terms of the price the board refuses a
+/// `publish` on, each as the board counted it, and the two budgets are the
+/// ones the board holds them to. They are read here and summed nowhere but
+/// in [`PublishCost::reads`], the one total the answer leaves to its
+/// reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishCost {
+    /// The caller's link-holding homes.
+    pub homes: u64,
+    /// The `links`, `originals`, `read_with` and `supersede` entries.
+    pub entries: u64,
+    /// The re-window's steps.
+    pub rewindow: u64,
+    /// The twin fence's stabs, one per re-inserted run.
+    pub fence: u64,
+    /// The bytes the commit would stage.
+    pub staged_bytes: u64,
+    /// The budget the reads are held to.
+    pub read_budget: u64,
+    /// The budget the staged bytes are held to.
+    pub byte_budget: u64,
+}
+
+impl PublishCost {
+    /// Returns the in-lock reads: `homes × entries + rewindow + fence`,
+    /// saturating — the total the board holds to `read_budget`.
+    pub fn reads(&self) -> u64 {
+        self.homes.saturating_mul(self.entries).saturating_add(self.rewindow).saturating_add(self.fence)
+    }
+}
+
+/// Decodes a `publish_cost` answer; `None` for a document that is no
+/// `publish_cost` answer or lacks one of its seven figures as a
+/// non-negative integer.
+pub fn publish_cost(v: &Value) -> Option<PublishCost> {
+    if v["resp"].as_str() != Some("publish_cost") {
+        return None;
+    }
+    let figure = |member: &str| v[member].as_u64();
+    Some(PublishCost {
+        homes: figure("homes")?,
+        entries: figure("entries")?,
+        rewindow: figure("rewindow")?,
+        fence: figure("fence")?,
+        staged_bytes: figure("staged_bytes")?,
+        read_budget: figure("read_budget")?,
+        byte_budget: figure("byte_budget")?,
+    })
+}
+
 /// One row of a `count_v_by_home` answer (wire.md §The response envelope,
 /// `homes`): a home and how many of its distinct active links touch the
 /// region.

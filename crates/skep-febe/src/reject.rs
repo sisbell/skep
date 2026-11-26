@@ -638,8 +638,8 @@ pub enum RejectCode {
     /// The daemon's own cell, raised ahead of its serialization lock off a
     /// lock-free snapshot: the caller's link-holding home count ×
     /// (`links` + `originals` + `read_with` + `supersede` entries), plus
-    /// the re-window's steps — per draft the commit re-windows, the pieces
-    /// its lists place × the runs its run-list holds while they are placed
+    /// the re-window's steps — per draft the commit re-windows, its content
+    /// runs and the pieces its lists place, summed
     /// — plus the twin fence's stab per re-inserted run, past M7's
     /// `MAX_PUBLICATION_READS` — the reads the composite makes under the
     /// lock, bounded before it is taken. `detail` names the price's four

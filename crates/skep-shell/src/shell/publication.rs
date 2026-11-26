@@ -9,10 +9,11 @@
 //! `confirm`, and hands back DATA — every member a code, a kind or an
 //! address, never a string a person reads (the strings `ux/copy.md`'s and
 //! the UI lane's). `open` reads the draft's base and types its standing
-//! (**The base**), runs the library's `enumerate` → `panel` and prices the
+//! (**The base**), runs the library's `enumerate` → `panel`, builds the
 //! request as it would stand with every private row OFF, every window part
 //! a record names taken by its counterpart and every other kept private —
-//! the widest request the default switches make — and answers the panel
+//! the widest request the default switches make — asks the board its price
+//! (one read, `publish_cost`) and answers the panel
 //! `{rows, formatting, read_with, count, price, windows, parts, inherited,
 //! merge_records, edition_links, p3_stands, standing?, head?, left_behind,
 //! hold?}`
@@ -40,11 +41,12 @@
 //! row's fold and whether P3 stands — from the open's reads alone, and
 //! answers `{count, price, rows, formatting, windows, parts, edition_links,
 //! p3_stands}` with the four numbers and
-//! the price over the rows as switched, PURE LOCAL — no frame sent, the
-//! price the panel's request re-priced with the entries the switches add,
-//! each end spelled by its stored slot's shape (an address form, an I-span
-//! form, the member-position form for a span on the draft's own words);
-//! `confirm` runs the re-read, the build, the price's verdict, the send and
+//! the price over the rows as switched — the panel's request with the
+//! entries the switches add, each end spelled as the build spells it over
+//! the request's runs, and the BOARD asked what it prices that request at:
+//! ONE frame, `publish_cost`, the count's only read, so a board that cannot
+//! be asked answers the call its fault and no price is guessed;
+//! `confirm` runs the re-read, the build with its own price read, the price's verdict, the send and
 //! the landed test, and answers ONCE with the acknowledgment, the
 //! re-statement — a moved base, standing or merge marker, a window part
 //! named since, an entry the board refused by its lineage among what it
@@ -989,7 +991,8 @@ impl Shell {
         let signed = self.signed(&session, Write::unjudged("publication.open"))?;
         let key = Self::family_key(&session);
         let (state, hold) = self.open_panel(&session, &signed, OpenArgs { draft, also, doc, mint, claim, selection, notes, readable_drafts, published, merge_landing: false })?;
-        let answer = panel_json(&state, hold);
+        let price = panel_price(&signed.publisher(&session), &state).map_err(|f| self.fault(&session, "publication.open", f))?;
+        let answer = panel_json(&state, &price, hold);
         self.publications.stand(key, state);
         Ok(answer)
     }
@@ -1209,20 +1212,24 @@ impl Shell {
     /// Answers `publication.count(session, {switches, answers})`.
     ///
     /// It answers `{count, price, rows, formatting, windows, parts,
-    /// edition_links, p3_stands}` off the standing panel, pure local: the
+    /// edition_links, p3_stands}` off the standing panel: the
     /// panel re-keyed by the answers at the windows' parts from the open's
     /// reads alone — the rows and their candidates with each row's fold and
     /// its two folds by type, the formatting line, the windows, what each
     /// part's answer brings, whether P3 stands — the four numbers as the
-    /// switches and the answers stand now, and the price re-run over the
-    /// rows as switched (the module doc).
+    /// switches and the answers stand now, and the price of the rows as
+    /// switched, which the board is asked in the call's one frame (the
+    /// module doc). Nothing is written, and the panel stands as it stood
+    /// where the price's read fails.
     ///
     /// # Errors
     ///
     /// In this order: the arguments' form (`confirmed_form`);
     /// `malformed_args` naming `session`, then `session_ended`; `no_panel`
     /// where no panel stands under the session's board and principal; then
-    /// the arguments against the panel (`confirmed_args`).
+    /// the arguments against the panel (`confirmed_args`); then
+    /// [`Shell::signed_within_call`]'s; then the price read's fault, as
+    /// `publication.open` maps a read's.
     pub(super) fn publication_count(&self, args: &Value) -> Result<Value, Refusal> {
         let (on, destinations, raw_answers) = Self::confirmed_form(args)?;
         let session = self.session(&args["session"])?;
@@ -1234,9 +1241,11 @@ impl Shell {
         state.enumeration = state.enumeration.composed(&state.inputs, &state.answers, &state.left_out);
         state.panel = state.panel.composed(&state.inputs, &state.enumeration);
         let count = lib::count(&state.panel, &state.switches, &state.inputs);
+        let signed = self.signed_within_call(&session, "publication.count")?;
+        let price = panel_price(&signed.publisher(&session), &state).map_err(|f| self.fault(&session, "publication.count", f))?;
         let answer = json!({
             "count": count_json(&count),
-            "price": price_json(&local_price(&state)),
+            "price": price_json(&price),
             "rows": state.panel.rows.iter().map(|r| row_json(&state.enumeration, r)).collect::<Vec<_>>(),
             "formatting": formatting_json(&state.enumeration, &state.panel.formatting),
             "windows": state.enumeration.windows.iter().map(window_json).collect::<Vec<_>>(),
@@ -1833,13 +1842,15 @@ pub(super) fn pricing_confirmed(e: &lib::Enumeration) -> Confirmed {
 }
 
 /// Returns the request the open prices the count over: the widest the
-/// defaults make (`pricing_confirmed`), `None` where it is inert.
+/// defaults make (`pricing_confirmed`), `None` where it is inert. It is
+/// built with no price asked: the panel's price is the board's of this
+/// request as switched ([`panel_price`]), asked where it is answered.
 ///
 /// # Errors
 ///
 /// The build's faults.
 fn widest(p: &Publisher<'_>, inputs: &lib::Inputs, e: &lib::Enumeration, panel: &lib::Panel) -> Result<Option<lib::Request>, Fault> {
-    Ok(match lib::build(p, inputs, e, panel, &pricing_confirmed(e))? {
+    Ok(match lib::build_unpriced(p, inputs, e, panel, &pricing_confirmed(e))? {
         Built::Request(request) => Some(*request),
         Built::Inert(_) => None,
     })
@@ -1880,66 +1891,27 @@ fn part_key(text: &str) -> Option<PartKey> {
     Some(PartKey { run: run.parse().ok()?, part: part.parse().ok()? })
 }
 
-/// Returns the price of the standing panel as switched, pure local.
+/// Returns the price of the standing panel as switched: the board's, asked
+/// of the board in ONE read.
 ///
 /// It is the panel's request (`PanelState`'s `base`: the open's, or the one a
-/// later re-read built) with the entries the switches add — the formatting
-/// line's marks into the member, each switched-on row's links into its
-/// destination — the job list's retractions and the count's read-withs,
-/// re-priced through the library's own price over the body as built;
-/// `Price::default()`, which admits, where that build was inert or found
-/// nothing of the selection. An end is spelled by its stored slot's shape: the
-/// address form where every span is a unit span, the member-position form where
-/// any span lies on the draft's own words (priced as the request would spell
-/// it), the I-span form otherwise — an upper bound, as the price is.
-fn local_price(state: &PanelState) -> lib::Price {
-    let Some(base) = &state.base else { return lib::Price::default() };
-    let mut request = base.clone();
-    let e = &state.enumeration;
-    let panel = &state.panel;
-    let draft_chain = format!("{}.0.1", state.inputs.draft);
-    let spell = |slot: &[LinkSpan]| -> lib::End {
-        if slot.is_empty() || slot.iter().all(LinkSpan::is_unit) {
-            return lib::End::Addrs(slot.iter().map(|s| s.start.clone()).collect());
-        }
-        let spans: Vec<lib::ISpan> = slot.iter().filter_map(lib::ISpan::of).collect();
-        if spans.len() != slot.len() {
-            return lib::End::Addrs(slot.iter().map(|s| s.start.clone()).collect());
-        }
-        if spans.iter().any(|s| s.chain == draft_chain) {
-            return lib::End::Member(spans.iter().map(|s| (s.first, s.width)).collect());
-        }
-        lib::End::Spans(spans)
-    };
-    let mut entries = Vec::new();
-    let mut add = |candidate: usize, home: lib::EntryHome| {
-        let c = &e.candidates[candidate];
-        entries.push(lib::Entry { home, from: spell(&c.value.from), to: spell(&c.value.to), ty: spell(&c.value.ty), old: Some(c.link.clone()), candidate });
-    };
-    for &mark in &panel.formatting.marks {
-        add(mark, lib::EntryHome::Member);
-    }
-    for row in &panel.rows {
-        if matches!(row.kind, RowKind::Public { .. }) || !state.switches.on.contains(&row.home) {
-            continue;
-        }
-        let home = match state.switches.destination(&row.home) {
-            Destination::Member => lib::EntryHome::Member,
-            Destination::Set(set) => lib::EntryHome::Set(set),
-        };
-        for &i in &row.links {
-            add(i, home.clone());
-        }
-    }
-    request.entries = entries;
-    let job_list = panel.formatting.job_list();
-    request.retract = job_list.iter().map(|r| r.mark.clone()).collect();
-    request.originals = lib::originals_of(&job_list);
-    let count = lib::count(panel, &state.switches, &state.inputs);
-    request.read_with = count.read_with.clone();
-    request.count = count;
-    let homes = e.homes.len() + state.inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.priced(homes, &e.image, &e.also)
+/// later re-read built) with the lists the switches decide taken again —
+/// the formatting line's marks into the member, each switched-on row's links
+/// into its destination, the job list's retractions and the count's
+/// read-withs, each entry's ends spelled as the build spells them
+/// (`Request::switched`) — priced by the library ([`lib::price()`]): the
+/// request's own shape judged there, and the board asked what it prices the
+/// request at. `Price::default()`, which admits, where that build was inert
+/// or found nothing of the selection: there is no request to ask about, and
+/// no frame is sent.
+///
+/// # Errors
+///
+/// The price read's faults: no price is guessed where the board cannot be
+/// asked.
+fn panel_price(p: &Publisher<'_>, state: &PanelState) -> Result<lib::Price, Fault> {
+    let Some(base) = &state.base else { return Ok(lib::Price::default()) };
+    lib::price(p, &base.switched(&state.inputs, &state.enumeration, &state.panel, &state.switches))
 }
 
 // ── The shapes, as the page reads them ───────────────────────────────────
@@ -2116,7 +2088,7 @@ fn unrecorded_json(why: Unrecorded) -> &'static str {
 }
 
 /// Returns the panel as `publication.open` answers it.
-fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
+fn panel_json(state: &PanelState, price: &lib::Price, hold: Option<Value>) -> Value {
     let e = &state.enumeration;
     let panel = &state.panel;
     let count = lib::count(panel, &state.switches, &state.inputs);
@@ -2126,7 +2098,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "formatting": formatting_json(e, &panel.formatting),
         "read_with": Value::Object(read_with),
         "count": count_json(&count),
-        "price": price_json(&local_price(state)),
+        "price": price_json(price),
         "windows": e.windows.iter().map(window_json).collect::<Vec<_>>(),
         "parts": panel.parts.iter().map(part_counts_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),

@@ -259,7 +259,8 @@ pub(super) fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) ->
 /// 2. Then the derived list (the media record's "each I-span confined to one
 ///    derived document"; PUB-6.38; M-I2 (a)): the documents the read derives
 ///    rather than names — [`Op::derived_doc_arguments`], the read by
-///    identity's. The derivation refuses the op's shape on its way — a span
+///    identity's, and the price read's, the home of each original it
+///    names. The read by identity's derivation refuses the op's shape on its way — a span
 ///    with no element position at its start, or of zero width, the first
 ///    such span answering, its width checked ahead of its start — which is
 ///    the one refusal this consult raises that is not `Withheld`: by address
@@ -434,6 +435,7 @@ impl Op {
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => WriteConsult::NotTaken,
         }
     }
@@ -516,6 +518,7 @@ impl Op {
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => None,
         }
     }
@@ -600,6 +603,7 @@ impl Op {
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => None,
         }
     }

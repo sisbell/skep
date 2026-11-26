@@ -204,11 +204,32 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (Op::OutClaims { x: doc(), view: View::Active }, true),
         (Op::EditionClaims { target: doc() }, true),
         (Op::UniversalGrants, true),
+        // The price read: a publication's members, its rendering draft and
+        // an `also` draft named, an original among its deposits.
+        (
+            Op::PublishCost {
+                target: PublishTarget::Document(doc()),
+                shot: Shot {
+                    base: None,
+                    draft: Some(addr(&[1, 0, 1, 0, 2])),
+                    also: vec![addr(&[1, 0, 1, 0, 3])],
+                    keep_base: false,
+                    runs: vec![],
+                },
+                places: vec![],
+                also_places: vec![],
+                deposits: PublishDeposits {
+                    originals: vec![skep_links::OriginalEntry { old: addr(&[1, 0, 1, 0, 4, 0, 2, 1]), rest: vec![] }],
+                    ..PublishDeposits::default()
+                },
+            },
+            true,
+        ),
     ]
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 33 reads and 20 writes (the publish
+/// (`is_write == !is_read`), with 34 reads and 20 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
 /// the staging act, `stage`, the seventeenth — B3-S10; the landing,
@@ -223,13 +244,13 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 /// read the twenty-ninth and thirtieth, AUTH-6.38–6.40; the count by home
 /// the thirty-first, the link-sets design's W10 (a); the retracted-links
 /// read the thirty-second, the design's lane 7; the line read the
-/// thirty-third, skep #1075).
+/// thirty-third, skep #1075; the price read the thirty-fourth).
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 53);
+    assert_eq!(ops.len(), 54);
     let reads = ops.iter().filter(|(_, r)| *r).count();
-    assert_eq!(reads, 33);
+    assert_eq!(reads, 34);
     for (op, expect_read) in &ops {
         assert_eq!(op.is_read(), *expect_read);
         assert_eq!(op.is_write(), !*expect_read);
@@ -251,7 +272,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 53);
+    assert_eq!(seen.len(), 54);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -363,6 +384,17 @@ fn doc_arguments_run_in_declaration_order() {
     // names none — its documents are DERIVED (the test below).
     let op = Op::ContentFrontier { doc: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d2]);
+    // The price read names its drafts: the rendering draft, then each
+    // `also` draft, in the request's order — and no draft named, none.
+    let priced = |draft: Option<Address>, also: Vec<Address>| Op::PublishCost {
+        target: PublishTarget::Document(doc()),
+        shot: Shot { base: None, draft, also, keep_base: false, runs: vec![] },
+        places: vec![],
+        also_places: vec![],
+        deposits: PublishDeposits::default(),
+    };
+    assert_eq!(priced(Some(d2.clone()), vec![d3.clone(), d1.clone()]).doc_arguments(), vec![&d2, &d3, &d1]);
+    assert!(priced(None, vec![]).doc_arguments().is_empty(), "a shot naming no draft names no document");
     for (op, is_read) in all_ops() {
         let names_a_document = !op.doc_arguments().is_empty();
         let expects = is_read
@@ -387,15 +419,17 @@ fn doc_arguments_run_in_declaration_order() {
 
 /// THE DERIVED-ARGUMENT LIST (the media record's "EACH I-SPAN CONFINED TO
 /// ONE DERIVED DOCUMENT"; PUB-6.38; M-I2 (a)), pinned over the whole `Op`
-/// domain: the read by identity alone derives documents — `document_of` of
+/// domain: the read by identity derives documents — `document_of` of
 /// each span's start, in span order, one per span, a version member's
-/// element deriving the member — and every other op, read or write,
+/// element deriving the member — and so does the price read, the home of
+/// each of its `originals` entries, in the list's order — and every other
+/// op, read or write,
 /// derives none. THE SHAPE REFUSAL rides the derivation: a start that is no
 /// element position — a node's, an account's, a document's own — and a zero
 /// width are each refused by the span's INDEX, the first fault in span
 /// order speaking, and the list is never built past it.
 #[test]
-fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index() {
+fn the_read_by_identity_and_the_price_read_derive_documents_and_a_spans_shape_is_refused_by_index() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
     let d2 = addr(&[1, 0, 1, 0, 64]);
     let member = addr(&[1, 0, 1, 0, 64, 1]);
@@ -429,11 +463,25 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
     // The first fault in span order speaks, whichever kind it is.
     let op = Op::RetrieveI { spans: vec![ispan(&[1, 0, 1, 0, 1, 0, 1, 1], 0), ispan(&[1], 1)] };
     assert_eq!(op.derived_doc_arguments(), Err((0, ISpanFault::EmptyWidth)));
+    // The price read derives each original's home, an address that is no
+    // element's deriving none.
+    let original = |old: &[u32]| skep_links::OriginalEntry { old: addr(old), rest: vec![] };
+    let op = Op::PublishCost {
+        target: PublishTarget::Document(doc()),
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+        places: vec![],
+        also_places: vec![],
+        deposits: PublishDeposits {
+            originals: vec![original(&[1, 0, 1, 0, 64, 0, 2, 7]), original(&[1, 0, 1]), original(&[1, 0, 1, 0, 1, 0, 2, 1])],
+            ..PublishDeposits::default()
+        },
+    };
+    assert_eq!(op.derived_doc_arguments(), Ok(vec![d2.clone(), d1.clone()]), "each original's home, in the list's order");
     for (op, _) in all_ops() {
         let derives = !matches!(op.derived_doc_arguments(), Ok(ref v) if v.is_empty());
         assert_eq!(
             derives,
-            matches!(op, Op::RetrieveI { .. }),
+            matches!(op, Op::RetrieveI { .. } | Op::PublishCost { .. }),
             "{:?}: the derived-argument row",
             op.kind()
         );

@@ -559,9 +559,9 @@ where
 /// minted with its correspondence records and the draft re-windowed at its
 /// kept places — "a `reinstate` of the fresh I-run at the run's place and a
 /// `delete` of the draft-native run, staged in the same commit and applied
-/// in turn so positions stay true"
-/// ([`stage_reinstate_at`](crate::stage_reinstate_at),
-/// [`stage_delete_at`](crate::stage_delete_at)) — a transaction that "either
+/// in turn so positions stay true", staged for every kept place of a draft
+/// as one record ([`stage_substitute`](crate::stage_substitute)) — a
+/// transaction that "either
 /// stands whole or not at all" (the link-sets design, §5.7). Its bound is
 /// [`PublishWorld`], so such a caller names one trait.
 ///

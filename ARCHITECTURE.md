@@ -837,7 +837,9 @@ each ceremony:
   `publication/parts.rs` THE WINDOW PARTS, the draft-free rules of a
   window's parts that this family and the merge library's shot both call;
   `publication/panel.rs` the panel's data and the count;
-  `publication/price.rs` the price against the caps;
+  `publication/price.rs` the price — the request's own shape against its
+  caps, and the reads and the staged bytes as the board prices them, asked
+  of the board (`publish_cost`) and summed nowhere here;
   `publication/request.rs` the re-read and the request, the windows taken
   as given; `publication/send.rs` the send and the refusal family;
   `publication/landed.rs` the twin pre-check and the landed test — its unit
@@ -1400,6 +1402,10 @@ positional changes to one draft staged as one record, which the wire
 reaches under two names — and `ops/set_arrangement.rs` holds the three
 terms a merge's landing rides it with, the head, the base to record and
 the merge, judged and recorded for the edit that names them.
+`ops/substitute.rs` holds no operation: it is one staging body, the
+identity-checked substitution a publication stages for each draft it
+re-windows — its check of several places on one walk is `run_list.rs`'s,
+and its record the edit's.
 Its `test-hooks`
 feature (default off) compiles in `seat_link`, the test-only twin of the
 link seat; `scripts/gate-full.sh` checks the library and its docs without
@@ -1471,8 +1477,8 @@ it, `writes/publication/plan.rs` holds the request members and the
 deposit plan, the one function the composite stages from and the
 daemon's composer signs from, `writes/publication/sizes.rs` the
 worst-case table, the staged bytes per entry kind as the kernel prices
-them, the price of a request's staged bytes from it and the maximal and
-the reachable request's sums, and `writes/publication/stray.rs` the
+them, and the price of a request's staged bytes from it, and
+`writes/publication/stray.rs` the
 stray places' record read, which turns a run of the document's own
 identity back into the draft words the re-window checks and replaces.
 

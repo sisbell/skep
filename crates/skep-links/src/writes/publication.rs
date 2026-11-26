@@ -26,8 +26,9 @@
 //! [`AlsoPlaces`] entry, in `also`'s order — for each run a list carries a
 //! kept place for, the check that that draft still arranges the run's
 //! identity at that place and its replacement there by the fresh run it
-//! became, a placement and a removal ([`stage_reinstate_at`],
-//! [`stage_delete_at`], M5's) — a named draft's run's pieces read off the
+//! became, every place of a draft checked on one walk of its run-list and
+//! staged as one record ([`stage_substitute`], M5's) — a named draft's
+//! run's pieces read off the
 //! pairing, whichever draft is re-windowed; a stray run's — one of published
 //! identity, the document's own or another document's, re-composed by
 //! reference to a record's `to` — off the correspondence records the caller
@@ -50,8 +51,8 @@
 //! Beside the composite sits its price, [`price_publication_reads`]: the
 //! reads the composite makes under the lock — the plan's per home and
 //! entry, the twin fence's per re-inserted run — the re-window's run-list
-//! steps per document it re-windows, the pieces its lists place × the runs
-//! its run-list holds while they are placed, and, its fifth term, the bytes
+//! steps per document it re-windows, its content runs and the pieces its
+//! lists place, summed, and, its fifth term, the bytes
 //! it would stage, priced from the child module `sizes` — the worst-case
 //! bytes per entry kind as the kernel prices them, the table a panel prices
 //! a request's records from before the act, over the pieces each run is cut
@@ -62,11 +63,11 @@
 
 use std::collections::BTreeMap;
 
-use skep_address::{document_of, shift, validate, Address, Nat, SpanSet, Tumbler};
+use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
-    head_lock_key, ordinal_vspan, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, stage_seat_link, trunk_head, trunk_of, AsOf, Caller, HasM5, M5State,
-    Pairing, PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
+    head_lock_key, shot_admission, stage_publish, stage_seat_link, stage_substitute, trunk_head,
+    trunk_of, Caller, HasM5, M5State, Pairing, PublishWorld, ReinstateError, Replacement, Run,
+    Shot, ShotRun, SubstituteError, Substitution, VPos,
 };
 use skep_kernel::{LockKey, Seq, Staging, TxnError, MAX_TXN_BYTES};
 use skep_namespace::{first_version_address, HasM3, M3State};
@@ -88,8 +89,7 @@ use crate::LinkWorld;
 // the member-position end's one function.
 mod plan;
 // The worst-case table: the staged bytes per entry kind as the kernel
-// prices them, the price of a request's staged bytes from it, and the
-// maximal and the reachable request's sums against the transaction budget.
+// prices them, and the price of a request's staged bytes from it.
 mod sizes;
 // The stray places: the record read that turns a run of published identity,
 // re-composed by reference to a record's `to`, back into the draft words
@@ -107,9 +107,8 @@ pub use plan::{
 pub use sizes::{
     price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
     COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES,
-    KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES,
-    REACHABLE_PUBLICATION_BYTES, REINSERTED_VALUE_BYTES, REQUEST_BODY_BYTES, RETRACTION_BYTES,
-    SHOT_BYTES,
+    KEPT_PLACE_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+    REQUEST_BODY_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
 };
 
 /// The kept places of one draft `also` names (the wire's `also_places`
@@ -163,29 +162,44 @@ fn also_places_by_draft(also_places: &[AlsoPlaces]) -> BTreeMap<Address, &AlsoPl
     by_draft
 }
 
-/// Returns THE RE-WINDOWS the commit makes, in its order: each draft, as the
-/// document it projects to, beside the kept places it is re-windowed at —
-/// the rendering draft at `places` where it carries a place, then each
-/// `also` draft at its `also_places` entry where one carries a place, in
-/// `also`'s order; none for a shot naming no rendering draft.
+/// One document the commit re-windows: a draft, as the document it projects
+/// to, beside every list that carries a kept place for it, in the commit's
+/// order.
+///
+/// One list for every request the wire admits — the rendering draft's
+/// `places`, or an `also` draft's own entry. Two where a request below the
+/// codec names one document twice, as its rendering draft and among `also`
+/// or twice in `also`: the document is still re-windowed once, at the
+/// places of both lists.
+type Rewindow<'a> = (Address, Vec<&'a [Option<VPos>]>);
+
+/// Returns THE RE-WINDOWS the commit makes, in its order: each document it
+/// re-windows once ([`Rewindow`]), by its first list — the rendering draft
+/// at `places` where it carries a place, then each `also` draft at its
+/// `also_places` entry where one carries a place, in `also`'s order; none
+/// for a shot naming no rendering draft.
 ///
 /// The one sequence step 9 of [`stage_publication`] stages, the lock set
-/// takes each draft's content key by and the reads' price prices, read off
+/// takes each draft's content key by and the two prices price, read off
 /// `by_draft` ([`also_places_by_draft`]); a list with no place re-windows
 /// nothing and is left out. Request arithmetic.
 fn rewindows<'a>(
     shot: &Shot,
     places: &'a [Option<VPos>],
     by_draft: &BTreeMap<Address, &'a AlsoPlaces>,
-) -> Vec<(Address, &'a [Option<VPos>])> {
+) -> Vec<Rewindow<'a>> {
     let Some(rendering) = shot.draft_document() else { return Vec::new() };
-    let mut out = Vec::new();
+    let mut out: Vec<Rewindow<'a>> = Vec::new();
+    let mut add = |draft: Address, list: &'a [Option<VPos>]| match out.iter_mut().find(|(held, _)| *held == draft) {
+        Some((_, lists)) => lists.push(list),
+        None => out.push((draft, vec![list])),
+    };
     if places.iter().any(Option::is_some) {
-        out.push((rendering, places));
+        add(rendering, places);
     }
     for draft in shot.also.iter().map(trunk_of) {
         if let Some(entry) = by_draft.get(&draft) {
-            out.push((draft, entry.places.as_slice()));
+            add(draft, entry.places.as_slice());
         }
     }
     out
@@ -216,14 +230,12 @@ pub struct ReadPrice {
     /// The re-window's steps, summed over every document the commit
     /// re-windows — the rendering draft where `places` carries a place, each
     /// `also` draft whose `also_places` entry carries one, two lists naming
-    /// one document one term: the pieces its lists place × the runs its
-    /// run-list holds while they are placed — its content runs, and the
-    /// runs those pieces can add. Each piece's check, placement and removal
-    /// walk and copy that run-list, and each piece cutting a run lengthens
-    /// it for the pieces after; a run no list places costs nothing here,
-    /// the re-window passing it by, and `0` is a shot that re-windows
-    /// nothing. Where the request is priced past the budget with no cut
-    /// counted, the cuts are not walked for, and this is that lower bound.
+    /// one document one term: its content runs, and the pieces its lists
+    /// place. The commit walks the document's run-list once for all of its
+    /// places, compares each piece on that walk and puts every one in by
+    /// one record, so a place adds its pieces and nothing for the runs it
+    /// cuts; a run no list places adds no piece, and `0` is a shot that
+    /// re-windows nothing.
     pub rewindow: usize,
     /// The twin fence's stabs: one per re-inserted run, of whichever named
     /// draft — each run one stab of its own draft's records
@@ -284,20 +296,14 @@ impl ReadPrice {
 /// no request path carries — has no account and so no homes. The entries
 /// and the fence's stabs are request arithmetic, the stabs counted off the
 /// one grouping the fence walks ([`Shot::reinserted_runs_by_draft`]). The
-/// re-window is priced per document the commit re-windows, in three reads:
+/// re-window is priced per document the commit re-windows, in two reads:
 /// THE PIECES each placed run is cut into — the pairing's bound for a
 /// draft-native run, one stab of every home's records for a stray — read
 /// once beside the staged bytes, which [`price_staged_bytes`] prices off
-/// the same pieces from the table; THE RUNS, each re-windowed document's
-/// content run count by M5's one map lookup; and THE CUTS, last, read only
-/// where the price stands inside the budget without them — one walk of each
-/// re-windowed document's run-list for its run starts and its end, each
-/// placed run counting a cut where its place is no run start, one where its
-/// reach is neither a run start nor the end, and one per piece past its
-/// first. Each re-windowed document's walk is at most its run count, which
-/// the term already charges once per placed piece, so what the cuts walk is
-/// inside the budget; a price past the budget without them walks nothing and
-/// answers that lower bound, past it all the same.
+/// the same pieces from the table; and THE RUNS, each re-windowed
+/// document's content run count by M5's one map lookup. No run-list is
+/// walked for the price: a place that cuts a run costs the commit nothing a
+/// step a piece does not cover.
 ///
 /// The counts may move between this read and the composite's own, where
 /// the transport takes its lock after it (the survey's C8): the budget is
@@ -323,8 +329,8 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
     };
     let pieces = sizes::run_pieces(world, shot, |index| sizes::placed_in(places, also_places, index) > 0);
     let by_draft = also_places_by_draft(also_places);
-    let terms = RewindowTerm::of(world.m5(), shot, &rewindows(shot, places, &by_draft), &pieces);
-    let mut price = ReadPrice {
+    let rewindows = rewindows(shot, places, &by_draft);
+    ReadPrice {
         homes,
         entries: deposits
             .links
@@ -332,100 +338,33 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .saturating_add(deposits.originals.len())
             .saturating_add(deposits.read_with.len())
             .saturating_add(deposits.supersede.len()),
-        rewindow: terms.iter().map(|term| term.steps(0)).fold(0usize, usize::saturating_add),
-        fence: shot.reinserted_runs_by_draft().iter().map(|(_, runs)| runs.len()).fold(0usize, usize::saturating_add),
-        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces),
-    };
-    if !price.reads_over_budget() {
-        price.rewindow = terms
+        rewindow: rewindows
             .iter()
-            .map(|term| term.steps(term.cuts(world.m5(), shot, &pieces)))
-            .fold(0usize, usize::saturating_add);
+            .map(|rewindow| rewindow_steps(world.m5(), shot, rewindow, &pieces))
+            .fold(0usize, usize::saturating_add),
+        fence: shot.reinserted_runs_by_draft().iter().map(|(_, runs)| runs.len()).fold(0usize, usize::saturating_add),
+        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows),
     }
-    price
 }
 
-/// One document the commit re-windows, as the reads' price charges it: the
-/// lists that re-window it, the pieces they place and its content runs.
-struct RewindowTerm<'a> {
-    /// The document, as the drafts its lists name project to it.
-    draft: Address,
-    /// Every list that re-windows it, in the commit's order.
-    lists: Vec<&'a [Option<VPos>]>,
-    /// The pieces its lists place, summed: [`sizes::RunPieces::pieces`] of
-    /// each run a list carries a place at.
-    pieces: usize,
-    /// Its content run count, read off the snapshot.
-    runs: usize,
-}
-
-impl<'a> RewindowTerm<'a> {
-    /// Returns one term per document `rewindows` names — two lists naming
-    /// one document summed into one term, at its first place — each with
-    /// its pieces and its run count.
-    fn of(
-        m5: &M5State,
-        shot: &Shot,
-        rewindows: &[(Address, &'a [Option<VPos>])],
-        pieces: &[sizes::RunPieces],
-    ) -> Vec<RewindowTerm<'a>> {
-        let mut terms: Vec<RewindowTerm<'a>> = Vec::new();
-        let mut index: BTreeMap<&Address, usize> = BTreeMap::new();
-        for &(ref draft, list) in rewindows {
-            let k = *index.entry(draft).or_insert_with(|| {
-                let runs = m5.content_run_count(draft);
-                terms.push(RewindowTerm { draft: draft.clone(), lists: Vec::new(), pieces: 0, runs });
-                terms.len() - 1
-            });
-            let placed = placed_runs(shot, list)
-                .map(|(index, _, _)| usize::try_from(pieces[index].pieces()).unwrap_or(usize::MAX))
-                .fold(0usize, usize::saturating_add);
-            let term = &mut terms[k];
-            term.lists.push(list);
-            term.pieces = term.pieces.saturating_add(placed);
-        }
-        terms
-    }
-
-    /// Returns the term's steps where its pieces can add `cuts` runs:
-    /// pieces × (runs + cuts), saturating.
-    fn steps(&self, cuts: usize) -> usize {
-        self.pieces.saturating_mul(self.runs.saturating_add(cuts))
-    }
-
-    /// Returns THE CUTS: the runs the pieces placed can add to the
-    /// document's run-list, read by one walk of it.
-    ///
-    /// A piece's placement and the removal of the words it replaces leave
-    /// the run-list as long as it was where the run's place opens a run of
-    /// the document and its reach opens one or closes the document, and
-    /// longer by a run at each end that cuts a run instead; a run of several
-    /// pieces leaves a run between each two. So each placed run counts one
-    /// where its place is no run start, one where its reach is neither a run
-    /// start nor past the last position, and its pieces past the first —
-    /// read off the snapshot's run starts, which the replacements before it
-    /// keep, since a placed piece is published identity no draft-native
-    /// neighbour merges with. `0` for runs placed whole, run for run.
-    fn cuts(&self, m5: &M5State, shot: &Shot, pieces: &[sizes::RunPieces]) -> usize {
-        let mut starts: Vec<Nat> = Vec::with_capacity(self.runs);
-        let mut end = Nat::from(1u32);
-        for run in m5.content_runs(&self.draft) {
-            starts.push(end.clone());
-            end += run.width();
-        }
-        let opens_a_run = |ordinal: &Nat| starts.binary_search(ordinal).is_ok();
-        let mut cuts = 0usize;
-        for list in &self.lists {
-            for (index, place, entry) in placed_runs(shot, list) {
-                let reach = &place.ordinal + entry.run.width();
-                let cut = usize::from(!opens_a_run(&place.ordinal))
-                    + usize::from(reach < end && !opens_a_run(&reach))
-                    + usize::try_from(pieces[index].pieces().saturating_sub(1)).unwrap_or(usize::MAX);
-                cuts = cuts.saturating_add(cut);
-            }
-        }
-        cuts
-    }
+/// Returns the steps of one document's re-window, as the reads' price
+/// charges them: its content runs and the pieces its lists place, summed,
+/// saturating.
+///
+/// The runs are the document's content run count, one map lookup off the
+/// snapshot; the pieces [`sizes::RunPieces::pieces`] of each run a list
+/// carries a place at, summed over the document's lists. It is what the
+/// commit walks for the document: one walk of its run-list, which checks
+/// every place and is made once whatever the places number, and a step a
+/// piece compared and put in.
+fn rewindow_steps(m5: &M5State, shot: &Shot, rewindow: &Rewindow<'_>, pieces: &[sizes::RunPieces]) -> usize {
+    let (draft, lists) = rewindow;
+    let placed = lists
+        .iter()
+        .flat_map(|list| placed_runs(shot, list))
+        .map(|(index, _, _)| usize::try_from(pieces[index].pieces()).unwrap_or(usize::MAX))
+        .fold(0usize, usize::saturating_add);
+    m5.content_run_count(draft).saturating_add(placed)
 }
 
 /// Returns the runs `list` carries a place at, each with its index and its
@@ -603,14 +542,18 @@ impl From<EmitCoreError> for PublicationError {
 /// 9. THE RE-WINDOW, last (`stage_rewindow`), of EVERY NAMED DRAFT at its
 ///    own kept places (the design's §5.7 (viii), the Nelson way): first THE
 ///    RENDERING DRAFT at `places`, then EACH `also` DRAFT at its
-///    `also_places` entry, in `also`'s order — each re-window reading the
-///    working world the ones before it left, so a draft re-windowed second
-///    sees the first's replacements. Within one draft, for each `runs` entry
+///    `also_places` entry, in `also`'s order — each document once: two
+///    lists naming one document, which no request the wire admits does,
+///    re-window it at the places of both, the later list's entries behind
+///    the earlier's. Within one draft, for each `runs` entry
 ///    that carries a kept place in that draft's list — the V-position the
 ///    run held in THAT draft when the client composed the request, outside
-///    the signed preimage as `draft` is — in `runs`' order, the check that
-///    the draft still arranges that run's draft words at that place, then
-///    their replacement there by the published identity, piece by piece: a
+///    the signed preimage as `draft` is — the check that
+///    the draft still arranges that run's draft words at that place, every
+///    place checked on one walk of the draft's run-list and the earliest
+///    failing entry in `runs`' order answering, then
+///    their replacement there by the published identity, all of the draft's
+///    places in one record, a run a piece: a
 ///    named draft's entry's pieces are the pairing's for that entry
 ///    (`piece.index == index`), the fresh runs it became — THE SAME PIECES
 ///    whichever named draft is re-windowed at the entry, the rendering draft
@@ -683,10 +626,11 @@ impl From<EmitCoreError> for PublicationError {
 /// `NotOwner`) and its `Mint` and `Seat` — and `Plan(SlotTooLarge)` where a
 /// member-position end resolves to more spans than a slot holds, which the
 /// request's own run count cannot tell ahead of the mint — then the
-/// re-window's (`StrayPlaceUnrecorded` and `KeptPlaceMoved` with the entry
-/// and the draft, `Reinstate`, `Delete` — `stage_rewindow` states which are
-/// reachable), the rendering draft's first and then each `also` draft's in
-/// `also`'s order. An `Err` commits nothing of the transaction.
+/// re-window's (`Reinstate` carrying a draft's gate, then `StrayPlaceUnrecorded`
+/// and `KeptPlaceMoved` with the entry and the draft — `stage_rewindow`
+/// states which are reachable), the rendering draft's first and then each
+/// `also` draft's in `also`'s order. An `Err` commits nothing of the
+/// transaction.
 ///
 /// # Panics
 ///
@@ -777,12 +721,10 @@ where
     //    fresh mark where one stands, then the retraction.
     stage_originals(stg, readable, caller, &plan.originals)?;
     // 9. The re-window, last: the rendering draft at `places`, then each
-    //    `also` draft at its own list, in `also`'s order, each over the
-    //    working world the ones before it left — every stray read at the
-    //    caller's own visibility class.
-    let trunk = trunk_of(doc);
-    for (draft, list) in rewindows(shot, places, &also_places_by_draft(also_places)) {
-        stage_rewindow(stg, readable, caller, &draft, &trunk, shot, list, &pairing)?;
+    //    `also` draft at its own list, in `also`'s order, each document
+    //    once — every stray read at the caller's own visibility class.
+    for rewindow in rewindows(shot, places, &also_places_by_draft(also_places)) {
+        stage_rewindow(stg, readable, caller, &rewindow, shot, &pairing)?;
     }
     Ok((member, pairing))
 }
@@ -932,26 +874,30 @@ where
 }
 
 /// Stages one draft's re-window at its kept places: for each `runs` entry
-/// that carries a place in `places`, the check that `draft` still arranges
-/// that run's draft words there, and their replacement there by the
-/// published identity.
+/// that carries a place in one of `lists`, the check that `draft` still
+/// arranges that run's draft words there, and their replacement there by
+/// the published identity — every place checked on one walk of the draft's
+/// run-list, and all of them staged as one record.
 ///
 /// It is the link-sets design's "re-window of `D` at its kept places,
 /// checked by identity — and of every draft the request names beside it,
-/// each at its own kept places" (§5.7 (viii)), the S-gate's composite, with
-/// THE STRAY PLACES beside it, run once per re-windowed draft: `draft` the
+/// each at its own kept places" (§5.7 (viii)), with THE STRAY PLACES beside
+/// it, run once per re-windowed document ([`Rewindow`]): `draft` the
 /// rendering draft with the request's `places`, or a draft `also` names with
 /// its `also_places` entry's list — the pieces the same whichever draft is
-/// re-windowed, the check and the replacement asked of `draft` alone. For
-/// each entry of `shot.runs` with a place in `places`, in `runs`' order —
+/// re-windowed, the check and the replacement asked of `draft` alone. Two
+/// steps:
 ///
-/// THE PIECES: each entry is re-windowed as pieces, a draft-native `from`
-///     beside the published `to` it stands for, of one width. A NAMED
-///     DRAFT's entry's — of `draft`'s own identity, or of another named
-///     draft's which `draft` arranges by identity — are its pieces of the
-///     pairing [`stage_publish`] returned — the fresh runs it became, or an
-///     earlier entry's where it placed the identity by reference — tiling
-///     the run from its start in I-order ([`Pairing`]'s contract). A STRAY entry's — a run of
+/// THE PIECES, gathered for every entry of `shot.runs` with a place in a
+///     list, list by list and in `runs`' order, refusing nothing yet: each
+///     entry is re-windowed as pieces, a draft-native `from` beside the
+///     published `to` it stands for, of one width. A NAMED DRAFT's entry's
+///     — of `draft`'s own identity, or of another named draft's which
+///     `draft` arranges by identity — are its pieces of the pairing
+///     [`stage_publish`] returned — the fresh runs it became, or an earlier
+///     entry's where it placed the identity by reference — tiling the run
+///     from its start in I-order ([`Pairing`]'s contract), found by two
+///     binary searches (`plan::pieces_at`). A STRAY entry's — a run of
 ///     published identity no pairing holds, the document's own trunk's or
 ///     ANY other document's, re-composed by the client by reference to a
 ///     correspondence record's `to` where the draft still arranges that
@@ -962,185 +908,107 @@ where
 ///     every correspondence record the caller may read whose `to` covers
 ///     the entry's span, wherever homed — the draft's, an `also` draft's, a
 ///     granted draft's — each cut to the piece it covers and mapped onto
-///     the same piece of its `from`; a span no record the caller may read
-///     covers whole refuses `StrayPlaceUnrecorded` with the entry, nothing
-///     committed — an ordinary window onto another document, which no
-///     record names, among them: it is refused, never silently kept.
-/// (a) THE CHECK: the V-span of the entry's width that opens at the place
-///     resolves, in the draft as the records staged so far left it
-///     (`stg.working()`), to exactly the pieces' `from` runs in sequence —
-///     M5's V→I resolution ([`M5State::resolve`]) answering their addresses
-///     in their order and nothing else over that span ([`arranged_at`]);
-///     for a draft-native entry that is the entry's own run, for a stray
-///     entry the records' draft words. The question is asked of the place
-///     alone, by MEMBERSHIP (the S-gate's ruling): a draft that arranges
-///     the identity twice is re-windowed at the named place and left
-///     standing at the other, the twin fence meeting the other at its own
-///     publication. The predicate implies the design's projection
+///     the same piece of its `from`. A span no record the caller may read
+///     covers whole — an ordinary window onto another document, which no
+///     record names, among them — is handed on with no pieces, and refused
+///     in its turn below, never silently kept.
+/// THE SUBSTITUTION, M5's ([`stage_substitute`]), over the entries in that
+///     order. It asks the draft's gate first — its registration, its owner,
+///     and the published-target refusal (a draft named outside the chain
+///     need not be private) — and then judges every entry: its place in
+///     the content subspace; its pieces found; and THE CHECK, that the
+///     positions its place opens at resolve, in the draft as the records
+///     staged so far left it (`stg.working()`), to exactly the pieces'
+///     `from` runs in sequence and nothing else. The question is asked of
+///     the place alone, by MEMBERSHIP: a draft that
+///     arranges the identity twice is re-windowed at the named place and
+///     left standing at the other, the twin fence meeting the other at its
+///     own publication. The predicate implies the design's projection
 ///     membership — `project(D, the run's I-span)` covering the span — and
 ///     refuses in addition a run whose addresses the draft arranges at the
-///     place in another order, a rearrangement within the span since the
-///     place was read, which the projection cannot see and the replacement
-///     would silently undo. Failing, `KeptPlaceMoved` with the entry: the
-///     draft moved the run, split it, deleted it or arranges it elsewhere
-///     since the place was read — or, for a stray entry, already arranges
-///     the published identity there — and nothing is committed, never a
-///     guess.
-/// (b) THE REPLACEMENT, piece by piece, each at its offset from the place
-///     (the widths before it, summed): the `to` piece placed by identity at
-///     the place plus the offset ([`stage_reinstate_at`], windowing the
-///     trunk of the document the piece's `to` lies under — the document
-///     whose shot minted it: this request's trunk for a draft-native piece
-///     and for a stray of its own identity, another document's for a
-///     record's `to` minted there — a published identity `reinstate`
-///     admits into a private draft as any; its precondition on the origin's
-///     readability holds, the record's `to` being a published member's
-///     identity, readable to every caller, and its registration check met
-///     by the same token), which moves the `from` piece right by
-///     the `to` piece's width; then that piece's position RE-DERIVED off
-///     the working world — the `to` piece's width past its place, where the
-///     placement left it, asked of the arrangement again and never carried
-///     over — and the piece removed there ([`stage_delete_at`]), so the
-///     draft reads the same bytes at every position and arranges the
-///     member's identity where it arranged its own. A piece placed by
-///     reference to an identity an earlier entry minted re-windows to the
-///     same piece of the first's fresh run; a stray piece to the record's
-///     published words, the member placing the entry by reference as any
-///     trunk run — no mint, no record, the draft's link run-list untouched
-///     (links move with identity, `reinstate`'s rule).
+///     place in another order, and a place that overlaps the place of an
+///     entry before it. The entry that answers is the EARLIEST that fails,
+///     in the lists' order and within a list in `runs`' order, whichever
+///     place the walk meets first. Where every entry holds, each place's
+///     draft words are replaced by its pieces' `to` runs, placed by
+///     identity — a published identity REINSTATE admits into a private
+///     draft as any; its precondition on the origin's readability holds,
+///     the record's `to` being a published member's identity, readable to
+///     every caller — so the draft reads the same bytes at every position
+///     and arranges the member's identity where it arranged its own: no
+///     mint, no link record, the draft's link run-list untouched (links
+///     move with identity, `reinstate`'s rule). A piece placed by reference
+///     to an identity an earlier entry minted re-windows to the same piece
+///     of the first's fresh run; a stray piece to the record's published
+///     words.
 ///
-/// Cost: per place, one resolution of the entry's span over the draft's
-/// run-list, its pieces found in the pairing by two binary searches
-/// (`plan::pieces_at`); per piece two records, each splicing the run-list —
-/// a walk and a copy of it, the longer by every run a piece before it cut —
-/// which [`price_publication_reads`] charges as its re-window term; per
-/// stray place one stab of the TO slot across every home beside it, each
-/// hit asked of `readable` once.
+/// Cost: per place its pieces found in the pairing, or one stab of the TO
+/// slot across every home for a stray, each hit asked of `readable` once;
+/// then ONE walk of the draft's run-list for every place together, and ONE
+/// record ([`M5Rec::ContentEdit`](skep_arrangement::M5Rec::ContentEdit)), a
+/// change a place and a run a piece, which the fold splices in one walk
+/// more and R takes a span a piece from — the draft's runs and the pieces
+/// placed, which [`price_publication_reads`] charges as its re-window term.
 ///
 /// # Errors
 ///
-/// `Reinstate(NotContentSubspace)` for a place outside the content subspace
-/// — the placement's own verdict for the position, asked ahead of the check,
-/// which the wire's codec refuses first; `StrayPlaceUnrecorded { index,
-/// draft }` where a stray entry's span is not covered whole by the records
-/// the caller may read; `KeptPlaceMoved { index, draft }` where the check
-/// fails, and where the re-derivation finds the piece elsewhere than the
-/// placement left it, which the check rules out — each naming `draft`, the
-/// one being re-windowed; `Reinstate` with the placement's own —
-/// `PublishedTarget` where the draft is a published document (a draft named
-/// outside the chain need not be private), `TooManyRuns` where the draft's
-/// run-list is at M5's budget; the rest made unreachable by the check and
-/// the admission — and `Delete` with the removal's, `PublishedTarget` alone
-/// reachable, the placement refusing it first.
-#[allow(clippy::too_many_arguments)]
+/// `Reinstate` carrying the gate's verdict — `PublishedTarget` where the
+/// draft is a published document, ahead of every entry; `DocNotRegistered`
+/// and `NotOwner`, which the shot's admission answers first; then the
+/// earliest failing entry's: `Reinstate(NotContentSubspace)` for a place
+/// outside the content subspace, which the wire's codec refuses first;
+/// `StrayPlaceUnrecorded { index, draft }` where a stray entry's span is not
+/// covered whole by the records the caller may read; `KeptPlaceMoved {
+/// index, draft }` where the check fails or the place overlaps an earlier
+/// entry's — each naming `draft`, the one being re-windowed; and
+/// `Reinstate` with a placed run's own (`BadRun`, `SourceNotRegistered`,
+/// `DanglingSource`), which the shot's staging and the records rule out.
 fn stage_rewindow<W>(
     stg: &mut Staging<W>,
     readable: &Visibility<'_, W>,
     caller: Caller,
-    draft: &Address,
-    trunk: &Address,
+    rewindow: &Rewindow<'_>,
     shot: &Shot,
-    places: &[Option<VPos>],
     pairing: &Pairing,
 ) -> Result<(), PublicationError>
 where
     W: PublishWorld + LinkWorld,
 {
-    for (index, (entry, place)) in shot.runs.iter().zip(places).enumerate() {
-        let Some(place) = place else { continue };
-        if !place.is_content() {
-            return Err(ReinstateError::NotContentSubspace.into());
-        }
-        // The pieces: the pairing's for a named draft's entry — whichever
-        // draft is being re-windowed at it — the records' for a stray entry,
-        // a run of published identity no pairing holds, of whichever
-        // document, read wherever homed at the caller's own visibility class.
-        let mut pieces: Vec<stray::Piece> = plan::pieces_at(pairing, index)
-            .iter()
-            .map(|piece| stray::Piece { from: piece.from.clone(), to: piece.to.clone() })
-            .collect();
-        if pieces.is_empty() {
-            pieces = stray::record_pieces(stg.working(), readable, &entry.run)
-                .ok_or_else(|| PublicationError::StrayPlaceUnrecorded { index, draft: draft.clone() })?;
-        }
-        // (a) The check, of the working world: the pieces' draft words, at
-        //     the place, in their order, and nothing else over the span.
-        if !arranged_at(stg.working().m5(), draft, place, pieces.iter().map(|piece| &piece.from)) {
-            return Err(PublicationError::KeptPlaceMoved { index, draft: draft.clone() });
-        }
-        // (b) The replacement, piece by piece at each piece's offset. The
-        //     two staged bodies take the UNCHECKED arm of the stale-edit
-        //     check (skep #442): the check by identity above is the
-        //     stricter one and this commit's own, and the positions handed
-        //     here are read off the working world the stagings before them
-        //     moved, which no typed state could name.
-        let mut offset = Nat::from(0u32);
-        for piece in &pieces {
-            let at = VPos::content(&place.ordinal + &offset);
-            // The fresh run windows the document whose shot minted the
-            // piece's `to`: this request's trunk for a draft-native piece
-            // and a stray of its own identity, another document's for a
-            // record's `to` minted there.
-            let origin = document_of(piece.to.i_start()).map_or_else(|| trunk.clone(), |d| trunk_of(&d));
-            let fresh = ShotRun { origin, run: piece.to.clone() };
-            stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh], AsOf::Unchecked)?;
-            // The draft-native piece, where the placement left it: the
-            // published piece's width past its place, read off the working
-            // world.
-            let moved = VPos::content(&at.ordinal + piece.to.width());
-            if !arranged_at(stg.working().m5(), draft, &moved, [&piece.from]) {
-                return Err(PublicationError::KeptPlaceMoved { index, draft: draft.clone() });
-            }
-            stage_delete_at(stg, caller, draft, moved, piece.from.width().clone(), AsOf::Unchecked)?;
-            offset = &offset + piece.from.width();
+    let (draft, lists) = rewindow;
+    // The pieces, of every placed entry: the pairing's for a named draft's
+    // entry — whichever draft is being re-windowed at it — the records' for
+    // a stray entry, a run of published identity no pairing holds, of
+    // whichever document, read wherever homed at the caller's own
+    // visibility class; none where no record covers it whole, and none read
+    // for a place the substitution refuses for its subspace.
+    let mut entries: Vec<Substitution> = Vec::new();
+    for list in lists {
+        for (index, place, entry) in placed_runs(shot, list) {
+            let own = plan::pieces_at(pairing, index);
+            let pieces: Option<Vec<Replacement>> = if !place.is_content() {
+                None
+            } else if own.is_empty() {
+                stray::record_pieces(stg.working(), readable, &entry.run)
+                    .map(|pieces| pieces.into_iter().map(|piece| Replacement { from: piece.from, to: piece.to }).collect())
+            } else {
+                Some(own.iter().map(|piece| Replacement { from: piece.from.clone(), to: piece.to.clone() }).collect())
+            };
+            entries.push(Substitution { index, at: place.clone(), pieces });
         }
     }
-    Ok(())
-}
-
-/// Returns whether `doc` arranges exactly `pieces`, in sequence, over the
-/// V-span of their summed width that opens at `at`.
-///
-/// It is the re-window's check by identity, asked of the arrangement `m5`
-/// holds: the span resolves (M5's V→I resolution, clipped to the arranged
-/// range) to runs that tile it, and their addresses are the pieces'
-/// addresses in the pieces' order and nothing else — walked position by
-/// position in chunks, a resolved run's addresses against the piece under
-/// the cursor, so a draft holding two I-adjacent pieces as one run and a
-/// run cut by an edit into two resolved runs answer alike. A span opening
-/// past the arranged end, or reaching past it, resolves short and answers
-/// `false`; so does one holding another address among the pieces', or the
-/// pieces' addresses in another order. One piece is the S2 check of one
-/// run; no piece is no arrangement.
-fn arranged_at<'r>(m5: &M5State, doc: &Address, at: &VPos, pieces: impl IntoIterator<Item = &'r Run>) -> bool {
-    let pieces: Vec<&Run> = pieces.into_iter().collect();
-    let width: Nat = pieces.iter().map(|piece| piece.width().clone()).sum();
-    let Some(span) = ordinal_vspan(at.clone(), width) else {
-        return false; // a piece's width is ≥ 1, so no span is no arrangement
-    };
-    let zero = Nat::from(0u32);
-    // The cursor into the pieces: which piece, and the offset into it.
-    let (mut k, mut offset) = (0usize, zero.clone());
-    for resolved in m5.iter_resolve(doc, &span) {
-        let mut cursor = resolved.i_start().tumbler().clone();
-        let mut left = resolved.width().clone();
-        while left > zero {
-            let Some(piece) = pieces.get(k) else { return false };
-            if shift(piece.i_start().tumbler(), &offset) != cursor {
-                return false;
-            }
-            let room = piece.width() - &offset;
-            let step = if left < room { left.clone() } else { room };
-            cursor = shift(&cursor, &step);
-            offset += &step;
-            left -= &step;
-            if offset == *piece.width() {
-                k += 1;
-                offset = zero.clone();
-            }
-        }
-    }
-    k == pieces.len()
+    // The substitution: the gate, every entry's check on one walk, one
+    // record. Its verdicts are spelled as the codes the re-window answers.
+    stage_substitute(stg, caller, draft, &entries, &mut |_| {}).map_err(|refused| match refused {
+        SubstituteError::Moved { index } => PublicationError::KeptPlaceMoved { index, draft: draft.clone() },
+        SubstituteError::Unrecorded { index } => PublicationError::StrayPlaceUnrecorded { index, draft: draft.clone() },
+        SubstituteError::DocNotRegistered => ReinstateError::DocNotRegistered.into(),
+        SubstituteError::NotOwner(doc) => ReinstateError::NotOwner(doc).into(),
+        SubstituteError::PublishedTarget => ReinstateError::PublishedTarget.into(),
+        SubstituteError::NotContentSubspace { .. } => ReinstateError::NotContentSubspace.into(),
+        SubstituteError::BadRun { .. } => ReinstateError::BadRun.into(),
+        SubstituteError::SourceNotRegistered { .. } => ReinstateError::SourceNotRegistered.into(),
+        SubstituteError::DanglingSource { .. } => ReinstateError::DanglingSource.into(),
+    })
 }
 
 /// Stages one correspondence record in `draft` — the named draft whose

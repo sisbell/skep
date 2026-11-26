@@ -60,7 +60,8 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
 /// W10 (a)); `links` the retracted-links read's (the design's lane 7);
 /// `line_numbers` the line read's (wire.md §Content & provenance reads);
 /// `image_page` an image's page past the run budget (wire.md §Link
-/// discovery reads).
+/// discovery reads); `publish_cost` the price of a publication (wire.md
+/// §Arrangement).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
@@ -90,6 +91,7 @@ pub const RESP_SHAPES: &[&str] = &[
     "doc_metadata",
     "edition_claims",
     "universal_grants",
+    "publish_cost",
     "rejected",
 ];
 

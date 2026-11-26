@@ -42,8 +42,12 @@
 //! an older board names none) and the race's key, the feed's newest row
 //! under THAT draft since the request's reads and its `key`, for the
 //! caller's re-read and re-statement; `stray_place_unrecorded`, naming the
-//! draft alike → this library's own bug; `publication_over_budget` → the price's verdict re-run: a race where
-//! this price admitted the request, the library's own bug where it did not;
+//! draft alike → this library's own bug; `publication_over_budget` → the
+//! request's price read again: the price is the board's own, asked at the
+//! build, so where it admitted the request the board has moved since — a
+//! race, the caller builds again — and where it did not, the request was
+//! sent past the board's own price, which is the caller's fault and never
+//! a race;
 //! `not_owner` naming the draft → the unowned draft, named; `not_owner` on
 //! `doc` or the account → named too; `claim_refused` → the edition named
 //! already holds a member, so the claim is a first version's no longer
@@ -267,7 +271,9 @@ pub enum OwnFault {
         /// The detail.
         detail: Option<String>,
     },
-    /// `publication_over_budget` where this price refused the request too.
+    /// `publication_over_budget` where the board's own price, asked at the
+    /// build, had refused the request too: it was sent past a price that
+    /// did not admit it.
     Budget {
         /// The daemon's detail.
         detail: Option<String>,
@@ -382,8 +388,10 @@ pub enum Refusal {
     /// The death signal: the session ended before or at the write. The
     /// caller opens a session and runs the landed test before any re-send.
     SessionEnded,
-    /// `publication_over_budget` where this price admitted the request: a
-    /// race with the board's state.
+    /// `publication_over_budget` where the request's price admitted it: the
+    /// board priced it inside its budgets at the build and past one at the
+    /// send, so its state moved between the two — or the request carries
+    /// no price of the board's at all, a default one admitting.
     BudgetRace {
         /// The daemon's detail.
         detail: Option<String>,

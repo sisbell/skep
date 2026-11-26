@@ -1006,3 +1006,77 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     assert!(rej.detail.is_none());
     assert_eq!(fx.febe.log_position(), before, "nothing committed");
 }
+
+/// THE PRICE READ through the front door. `Op::PublishCost` carries a
+/// publication's members and answers M7's price of them over the snapshot
+/// the read pins — the one function the daemon's refusal ahead of its lock
+/// calls — whole: the draft's one run and its one placed piece, the fence's
+/// stab, and, where the request names daughters, an entry and a staged
+/// claim for each. It is read at the head and moves no position. The drafts
+/// it names are consulted, and the home of each original by derivation: a
+/// caller that may not read one is answered `withheld` naming it. A frame
+/// naming no draft is answered for every caller, the guest — which holds no
+/// account — with no homes.
+#[test]
+fn the_price_read_answers_the_price_the_one_function_computes_and_writes_nothing() {
+    use skep_arrangement::Caller;
+    use skep_febe::{OpKind, Response};
+
+    let k = kernel();
+    let fx = fixture_on(surface_over(Arc::clone(&k)));
+    let edition = create_edition(&fx);
+    let draft = create_doc(&fx);
+    let (draft_start, _) = insert3(&fx, &draft);
+    let shot = Shot {
+        base: None,
+        draft: Some(draft.clone()),
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun { origin: draft.clone(), run: Run::new(draft_start, nat(3)).expect("a content run") }],
+    };
+    let target = PublishTarget::Document(edition.clone());
+    let places = vec![Some(vp(1, 1))];
+    let daughters = PublishDeposits { supersede: vec![under(&edition, &[1, 1]), under(&edition, &[1, 2])], ..PublishDeposits::default() };
+    let before = fx.febe.log_position();
+    let mut staged = Vec::new();
+    for deposits in [PublishDeposits::default(), daughters] {
+        let op = Op::PublishCost { target: target.clone(), shot: shot.clone(), places: places.clone(), also_places: vec![], deposits: deposits.clone() };
+        assert!(op.is_read() && op.kind() == OpKind::PublishCost);
+        let Response::PublishCost { price, as_of } = ex(&fx.febe, fx.user, op) else { panic!("no price answered") };
+        let snap = k.snapshot();
+        let direct = skep_links::price_publication_reads(snap.world(), Caller::Principal(USER), &target, &shot, &places, &[], &deposits);
+        assert_eq!(price, direct, "the read answers the one function's price, whole");
+        assert_eq!(as_of, before, "read at the head");
+        assert_eq!((price.rewindow, price.fence, price.entries), (1 + 1, 1, deposits.supersede.len()), "the draft's run and its piece; the fence's stab; an entry a daughter");
+        staged.push(price.staged_bytes);
+    }
+    assert_eq!(staged[1] - staged[0], 2 * skep_links::CLAIM_BYTES, "a claim staged a daughter");
+    assert_eq!(fx.febe.log_position(), before, "a read moves no position");
+
+    // The consult: the named drafts, then each original's home.
+    let (fx, unreadable) = setup_with_unreadable();
+    let edition = create_edition(&fx);
+    let (draft, also, notes) = (create_doc(&fx), create_doc(&fx), create_doc(&fx));
+    let naming = |draft: Option<&Address>, also: Vec<Address>, originals: Vec<skep_links::OriginalEntry>| Op::PublishCost {
+        target: PublishTarget::Document(edition.clone()),
+        shot: Shot { base: None, draft: draft.cloned(), also, keep_base: false, runs: vec![] },
+        places: vec![],
+        also_places: vec![],
+        deposits: PublishDeposits { originals, ..PublishDeposits::default() },
+    };
+    let original = skep_links::OriginalEntry { old: under(&notes, &[0, 2, 1]), rest: vec![] };
+    let stranger = fx.febe.open_session(OTHER);
+    for reader in [stranger, SessionId::GUEST] {
+        *unreadable.lock().expect("no poisoning") = vec![draft.clone()];
+        assert_withheld(ex(&fx.febe, reader, naming(Some(&draft), vec![also.clone()], vec![])), OpKind::PublishCost, &draft);
+        *unreadable.lock().expect("no poisoning") = vec![also.clone()];
+        assert_withheld(ex(&fx.febe, reader, naming(Some(&draft), vec![also.clone()], vec![])), OpKind::PublishCost, &also);
+        *unreadable.lock().expect("no poisoning") = vec![notes.clone()];
+        assert_withheld(ex(&fx.febe, reader, naming(Some(&draft), vec![also.clone()], vec![original.clone()])), OpKind::PublishCost, &notes);
+        // Nothing named that this caller may not read: answered.
+        let Response::PublishCost { price, .. } = ex(&fx.febe, reader, naming(Some(&draft), vec![also.clone()], vec![])) else { panic!("no price answered") };
+        assert_eq!((price.homes, price.entries), (0, 0), "no home of this caller's holds a link");
+    }
+    let Response::PublishCost { price, .. } = ex(&fx.febe, fx.user, naming(Some(&draft), vec![also], vec![original])) else { panic!("no price answered") };
+    assert_eq!(price.entries, 1, "the owner reads its own: the original an entry");
+}

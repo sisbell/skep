@@ -1467,6 +1467,7 @@ impl Commits {
             | Response::Claims { .. }
             | Response::DocMetadata { .. }
             | Response::EditionClaims { .. }
+            | Response::PublishCost { .. }
             | Response::UniversalGrants { .. }
             | Response::Rejected(_) => return None,
         };
@@ -2634,6 +2635,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::PublishCost { .. }
         | Op::UniversalGrants
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }

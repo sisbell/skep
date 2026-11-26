@@ -397,8 +397,8 @@ impl Daemon {
     /// lock-free snapshot of the head and the pre-lock resolution's
     /// principal: the caller's link-holding home count × (`links` +
     /// `originals` + `read_with` + `supersede` entries), plus, per draft the
-    /// commit re-windows, the pieces its lists place × the runs its run-list
-    /// holds while they are placed, plus the twin fence's stab per
+    /// commit re-windows, its content runs and the pieces its lists place,
+    /// plus the twin fence's stab per
     /// re-inserted run — the work of the reads the composite makes under the
     /// lock — against M7's `MAX_PUBLICATION_READS`; and, its fifth
     /// term, the bytes the commit would stage, priced from M7's worst-case

@@ -123,43 +123,56 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 ///
 /// It bounds the price `price_publication_reads` computes — the caller's
 /// link-holding home count × (`links` + `originals` + `read_with` +
-/// `supersede` entries); plus, per document the commit re-windows, the
-/// pieces its lists place × (its content runs + the runs those pieces can
-/// add); plus one per re-inserted run — which is the work the composite's
-/// in-lock reads and the re-window's splices do, counted in the two units
-/// they are paid in. The first product and the last term are index probes:
+/// `supersede` entries); plus, per document the commit re-windows, its
+/// content runs and the pieces its lists place; plus one per re-inserted
+/// run — which is the work the composite's in-lock reads and the re-window's
+/// one pass do, counted in the two units they are paid in. The first
+/// product and the last term are index probes:
 /// `stab_typed_in` of the supersession class per own home per `links`
 /// entry, twice — the claim's test and the successor's original's — and per
 /// `originals` entry, `read_with_in`'s probe per published own home per
 /// `read_with` entry, the claim read per own home per `supersede` entry, and
 /// the twin fence's one stab per re-inserted run. The re-window's term is
-/// run-list steps: each piece's check, placement and removal walk and copy
-/// the draft's run-list — about ten passes a piece, each a run walked or
-/// copied per step — and a piece that cuts a run lengthens the list for
-/// every piece after it. Like [`MAX_SLOT_RESOLVE_STEPS`] the charge is an
+/// run-list steps, and its unit is a run walked a constant few times: the
+/// check by identity walks the draft's run-list once for every kept place
+/// together, and the one record of those places is folded at its push and
+/// again at the seal, each fold a walk and a copy of the list; a piece is
+/// compared on the first walk and placed on the other two. A place that
+/// cuts a run adds nothing: it lengthens the list by at most two runs, on
+/// walks its pieces are charged a step each for already. Like
+/// [`MAX_SLOT_RESOLVE_STEPS`] the charge is an
 /// upper bound read before the work — every own home is charged whether or
-/// not it holds a claim, every piece at the pairing's bound, and every cut a
-/// place could make — so it is conservative in the one direction that is
-/// safe; a run no list places is charged nothing in the re-window's term,
-/// which passes it by. The daemon prices it on a snapshot taken before its
+/// not it holds a claim, and every piece at the pairing's bound — so it is
+/// conservative in the one direction that is
+/// safe; a run no list places adds no piece to the re-window's term. The
+/// daemon prices it on a snapshot taken before its
 /// lock, so the counts may have moved by the time the composite reads: a
 /// request refused here would have cost at least this much, and one admitted
 /// may cost a little more.
 ///
 /// `16 × MAX_SLOT_SPANS`, a quarter of the run-list steps one `Resolve`
-/// slot may command under the applier lock. The two units differ: a
-/// run-list step is a run walked or copied, order 50 ns a pass, while an
-/// index probe descends the home's spanfilade and tests its hits, order one
-/// to a few microseconds — so at this budget the re-window's term holds the
-/// lock for order 30 ms across its passes, and the probes for order a tenth
-/// of a second, inside the transport's 30 s deadlines by two orders and
-/// inside what a maximal shot's own staging already holds it for. What it
+/// slot may command under the applier lock: a number kept by choice, and
+/// derived from no measured hold. The two units differ: a run-list step is
+/// a run walked or copied — a copy pass over a list of 65,536 runs was
+/// measured at 115 to 169 ns a run, a placement at the low end and a
+/// removal at the high, and the re-window's one pass, its check and its
+/// record's two folds, has not been measured — while an index probe
+/// descends the home's spanfilade and tests its hits, order one
+/// to a few microseconds. What holds the lock longest is neither: the
+/// writes the commit stages — a correspondence record a minted piece, the
+/// re-insert's records, every record folded again at the seal — are priced
+/// by no read. This budget bounds the reads; the staged bytes, held to the
+/// transaction budget by the same price (`ReadPrice::BYTE_BUDGET`), bound
+/// the writes. What it
 /// admits: the wire's 4096 entries over 16 link-holding homes, 1024 over
-/// 64, 256 over 256; one typed word — one placed run, landing on run
-/// boundaries — in a draft of up to 65,000 runs; a first publication of a
-/// draft of 255 runs, placed run for run; 16 placed runs in a draft of
-/// 4,000; and the terms share the one budget, so a request near it on one
-/// has little room on the others. A refusal is permanent for the request as
-/// sent — the same board prices it the same — and the act that exists is a
-/// narrower one: fewer entries, or fewer places.
+/// 64, 256 over 256; one typed word — one placed run — in a draft of up to
+/// 65,534 runs; a change of 1,613 pieces into a draft of 4,167 runs, at
+/// 5,780 steps and its 1,613 fence stabs; a first publication placed run
+/// for run of a draft of up to 21,845 runs, three steps a run — the run
+/// walked, its piece, its fence stab — which is past what one request's
+/// `runs` list carries, so every such publication the wire admits is
+/// inside it; and the terms share the one budget, so a request near it on
+/// one has little room on the others. A refusal is permanent for the
+/// request as sent — the same board prices it the same — and the act that
+/// exists is a narrower one: fewer entries, or fewer places.
 pub const MAX_PUBLICATION_READS: usize = 16 * MAX_SLOT_SPANS;

@@ -1,54 +1,37 @@
 //! THE PRICE (the link-sets design §5.6; wire.md §The publish shot and
 //! head-float, the in-lock reads' budget): the request priced against every
-//! cap BEFORE the act, from the worst-case table the daemon prices by.
+//! cap BEFORE the act.
 //!
-//! The five terms the wire names, each a [`Term`] with how far it passes
-//! its cap: THE LISTS — `runs`, `places`, `links`, `retract`, `read_with`
-//! and the `originals` rider, each against the codec's wire-list cap,
-//! 4,096; THE BODY — the signed
+//! Five terms, each a [`Term`] with how far it passes its cap. Three are
+//! the request's own shape, judged here with no read: THE LISTS — `runs`,
+//! `places`, `links`, `retract`, `read_with` and the `originals` rider,
+//! each against the codec's wire-list cap, 4,096; THE BODY — the signed
 //! body against the frame routes' request-body cap, 8 MiB; THE VALUES — the
-//! distinct draft-native positions against the shot's re-insert budget; THE
-//! IN-LOCK READS — the person's link-holding home count × (`links` +
-//! `originals` + `read_with` entries), plus, per draft a list places (the
-//! rendering draft where `places` carries a place, each `also` draft where
-//! its `also_places` entry does; a draft no list places is not re-windowed
-//! and adds none), the pieces its list places × (its image's runs + the
-//! runs those pieces can cut, read off its image), plus one per
-//! draft-native run — the board's `price_publication_reads`, term for term
-//! — against `MAX_PUBLICATION_READS` = 65,536; THE STAGED BYTES — the
-//! bytes the one commit would stage, from the table, against the kernel's
-//! transaction budget, 64 MiB. The table's figures are MIRRORED from the
-//! daemon's `crates/skep-links/src/writes/publication/sizes.rs` and pinned
-//! equal to it by a cell (`tests`), as the shell pins its three budgets; a
-//! slot in the member-position form is priced at up to `MAX_SLOT_SPANS` =
-//! 4,096 stored spans (the owner: priced here until ruled lower). The
-//! verdict is DATA — which term, by how much — and the caller refuses the
-//! act on it with the caps' lines, which are the copy's; past a cap the act
-//! that exists is a narrower request.
+//! distinct draft-native positions against the shot's re-insert budget.
+//! Two are THE BOARD's, and the board is asked for them: THE IN-LOCK READS
+//! and THE STAGED BYTES are what the board prices the request at
+//! (`publish_cost`, wire.md §Arrangement — the function its own
+//! `publication_over_budget` refusal reads), answered with the two budgets
+//! it holds them to ([`PublishCost`]). This library sums neither and keeps
+//! no copy of either budget: a price costs one read of the board, and
+//! where the board cannot be asked there is no price.
 //!
-//! The price is an UPPER BOUND, as the daemon's is: the twin fence refuses
-//! before anything is staged, a skip stages less, a byte of prose costs a
-//! fraction of an atom. The same board prices the same request the same, so
-//! a refusal the daemon answers after this price admits is a race, and one
-//! it answers where this price refused is this library's own bug — the
-//! send's budget arm tells them apart.
+//! The verdict is DATA — which term, by how much — and the caller refuses
+//! the act on it with the caps' lines, which are the copy's; past a cap the
+//! act that exists is a narrower request. Where a list, the body or the
+//! values pass their cap the board is not asked — a frame past the list cap
+//! or the body cap does not parse — and the price carries no reads and no
+//! bytes beside the terms passed.
+//!
+//! The board's price is read off a state no lock holds, so the board may
+//! move between it and the send: a refusal the board answers after its own
+//! price admitted the request is a race, and the send's budget arm says so.
 
 use skep_address::Address;
 
 use super::enumerate::MAX_WIRE_LIST;
-use super::request::AlsoPlaces;
-use super::{ISpan, Run};
-use crate::board::answers::{IRun, LinkSpan};
-
-/// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
-pub const MAX_SLOT_SPANS: usize = 4096;
-
-/// The in-lock reads' budget: `MAX_PUBLICATION_READS` = 16 ×
-/// `MAX_SLOT_SPANS`.
-pub const MAX_PUBLICATION_READS: usize = 16 * MAX_SLOT_SPANS;
-
-/// The kernel's transaction budget, `MAX_TXN_BYTES`, 64 MiB.
-pub const MAX_TXN_BYTES: u64 = 64 * 1024 * 1024;
+use super::Run;
+use crate::board::PublishCost;
 
 /// The shot's re-insert budget: M5's `MAX_REINSERTED_VALUES`, the distinct
 /// draft-native positions.
@@ -57,36 +40,6 @@ pub const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 /// The frame routes' request-body cap, 8 MiB, the parity the daemon holds a
 /// signed body to.
 pub const REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
-
-/// The bytes one correspondence record stages (the daemon's
-/// `CORRESPONDENCE_RECORD_BYTES`).
-pub const CORRESPONDENCE_RECORD_BYTES: u64 = 1_057;
-/// The bytes one `links` entry's copy stages past its spans
-/// (`COPY_FIXED_BYTES`).
-pub const COPY_FIXED_BYTES: u64 = 561;
-/// The bytes one `links` entry's claim stages (`CLAIM_BYTES`).
-pub const CLAIM_BYTES: u64 = 857;
-/// The bytes one `retract` entry stages (`RETRACTION_BYTES`).
-pub const RETRACTION_BYTES: u64 = 845;
-/// The bytes one `read_with` entry stages (`READ_WITH_BYTES`).
-pub const READ_WITH_BYTES: u64 = 925;
-/// The bytes the re-window stages per piece at a kept place
-/// (`KEPT_PLACE_BYTES`).
-pub const KEPT_PLACE_BYTES: u64 = 364;
-/// The bytes one run of the member's placement adds (`PLACED_RUN_BYTES`).
-pub const PLACED_RUN_BYTES: u64 = 104;
-/// The bytes the re-insert stages per value at the worst case
-/// (`REINSERTED_VALUE_BYTES`).
-pub const REINSERTED_VALUE_BYTES: u64 = 287;
-/// The bytes the shot stages whatever it places (`SHOT_BYTES`), its
-/// rendering-draft slot empty; a shot naming a base stores the base's
-/// address in its terms beside them, and one naming its draft the draft's
-/// address in that slot, each `stored_tumbler_bytes` of it.
-pub const SHOT_BYTES: u64 = 272;
-/// The bytes the mint form adds (`EDITION_MINT_BYTES`).
-pub const EDITION_MINT_BYTES: u64 = 109;
-/// The bytes the edition claim stages (`EDITION_CLAIM_BYTES`).
-pub const EDITION_CLAIM_BYTES: u64 = 925;
 
 /// One term of the price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,112 +60,41 @@ pub enum Term {
     Body,
     /// The distinct draft-native positions against the re-insert budget.
     Values,
-    /// The in-lock reads against `MAX_PUBLICATION_READS`.
+    /// The in-lock reads against the board's reads budget.
     Reads,
-    /// The staged bytes against `MAX_TXN_BYTES`.
+    /// The staged bytes against the board's transaction budget.
     Bytes,
 }
 
-/// One end of a `links` entry, as priced: its spelling's shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EndShape {
-    /// The address form: each address, or a tag (`member`, `edition`).
-    Addrs(Vec<String>),
-    /// The I-span form.
-    Spans(Vec<ISpan>),
-    /// The member-position form: `(ordinal, width)` each.
-    Member(Vec<(u64, u64)>),
-}
-
-/// One `links` entry, as priced.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryShape {
-    /// The `from` end.
-    pub from: EndShape,
-    /// The `to` end.
-    pub to: EndShape,
-    /// The type slot.
-    pub ty: EndShape,
-    /// Whether the entry names an original — a claim staged beside the copy.
-    pub old: bool,
-}
-
-/// One entry of the `originals` rider, as priced: its rest and the stored
-/// type the fresh mark over the rest carries.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OriginalShape {
-    /// The rest's spans; empty where none stands, no fresh mark then.
-    pub rest: Vec<ISpan>,
-    /// The original's stored type slot.
-    pub ty: Vec<LinkSpan>,
-}
-
-/// The request's shape, as the price reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Shape<'a> {
-    /// The runs, in order.
-    pub runs: &'a [Run],
-    /// The named drafts — the rendering draft, then each draft `also` names
-    /// — whose runs the shot re-inserts, priced as values and records; empty
-    /// at a bare shot naming none.
-    pub drafts: &'a [Address],
-    /// The rendering draft whose base the shot moves, if it moves one.
-    ///
-    /// The placing record stores its address in its own slot, priced at
-    /// `stored_tumbler_bytes` of it; `None` at a shot naming none, and at one
-    /// keeping the draft's base (`keep_base`), whose record names none.
-    pub draft: Option<&'a Address>,
-    /// The base member the request names, if it names one.
-    ///
-    /// The placing record's terms store its address (skep #1111), priced at
-    /// `stored_tumbler_bytes` of it; `None` at the birth shape.
-    pub base: Option<&'a Address>,
-    /// The term the request's addresses are minted under — the trunk at the
-    /// document form, the account at the mint form.
-    pub term: &'a Address,
-    /// Whether the request is the mint form.
-    pub mint: bool,
-    /// Whether it carries the edition claim, at either form.
-    pub claim: bool,
-    /// The rendering draft's kept places, parallel to the runs.
-    pub places: &'a [Option<u64>],
-    /// Each `also` draft's own kept places, one entry per draft `also`
-    /// names in its order, each list parallel to the runs: a list carrying
-    /// a place re-windows its draft, priced as `places` is — its pieces over
-    /// the draft's runs into the reads, a kept place's bytes per piece it
-    /// places.
-    pub also_places: &'a [AlsoPlaces],
-    /// Each `also` draft's image, whole, in V-order, parallel to
-    /// `also_places`: its runs and their starts, read where that draft's list
-    /// carries a place.
-    pub also_images: &'a [&'a [IRun]],
-    /// Per run, the records covering it where it is a run re-composed by
-    /// reference with a place — a stray run of the document's own identity
-    /// the twin pre-check re-composed, or a counterpart's covered piece in
-    /// this document or another — priced at one piece each; zero where it
-    /// is none.
-    pub stray_records: &'a [usize],
-    /// The `links` entries.
-    pub entries: &'a [EntryShape],
-    /// The `retract` entries.
-    pub retract: usize,
-    /// The `originals` rider's entries.
-    pub originals: &'a [OriginalShape],
-    /// The `read_with` entries.
-    pub read_with: usize,
+/// The request's own shape, as the price judges it with no read.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Shape {
+    /// Each list's length: `runs`, `places`, `links`, `retract`,
+    /// `read_with`, `originals`.
+    pub lists: [usize; 6],
     /// The signed body's bytes.
-    pub body_bytes: usize,
-    /// The person's link-holding homes, as the client knows them — the homes
-    /// the enumeration saw and the person's published documents beside
-    /// them; the design names no read for the daemon's exact count, so this
-    /// is the caller's figure.
-    pub homes: usize,
-    /// The rendering draft's image, whole, in V-order: its runs and their
-    /// starts, read where `places` carries a place, as each `also` draft's
-    /// image is where its list does — the re-window's term is the SUM over
-    /// every draft a list places, nothing for a draft no list places (the
-    /// board's `price_publication_reads`).
-    pub draft_image: &'a [IRun],
+    pub body: usize,
+    /// The distinct draft-native positions.
+    pub values: u64,
+}
+
+impl Shape {
+    /// Returns every term of the shape past its cap, with how far past.
+    pub fn over(&self) -> Vec<(Term, u64)> {
+        let mut over = Vec::new();
+        for (term, n) in [Term::Runs, Term::Places, Term::Links, Term::Retract, Term::ReadWith, Term::Originals].into_iter().zip(self.lists) {
+            if n > MAX_WIRE_LIST {
+                over.push((term, (n - MAX_WIRE_LIST) as u64));
+            }
+        }
+        if self.body > REQUEST_BODY_BYTES {
+            over.push((Term::Body, (self.body - REQUEST_BODY_BYTES) as u64));
+        }
+        if self.values > MAX_REINSERTED_VALUES {
+            over.push((Term::Values, self.values - MAX_REINSERTED_VALUES));
+        }
+        over
+    }
 }
 
 /// The price.
@@ -225,9 +107,11 @@ pub struct Price {
     pub body: usize,
     /// The distinct draft-native positions.
     pub values: u64,
-    /// The in-lock reads.
+    /// The in-lock reads, as the board priced them; zero where the board
+    /// was not asked.
     pub reads: usize,
-    /// The staged bytes.
+    /// The staged bytes, as the board priced them; zero where the board was
+    /// not asked.
     pub bytes: u64,
     /// Every term past its cap, with how far past.
     pub over: Vec<(Term, u64)>,
@@ -238,87 +122,28 @@ impl Price {
     pub fn admits(&self) -> bool {
         self.over.is_empty()
     }
-}
 
-/// Returns the bytes one tumbler component stores: an 8-byte length before
-/// the magnitude's 32-bit digits, 4 bytes each, zero having none.
-fn nat_bytes(n: u64) -> u64 {
-    let bits = 64 - u64::from(n.leading_zeros());
-    8 + 4 * bits.div_ceil(32)
-}
-
-/// Returns the bytes a tumbler of `comps` stores as the kernel encodes it:
-/// an 8-byte length and, per component, its `nat_bytes` — the daemon's
-/// `stored_tumbler_bytes`.
-pub fn stored_tumbler_bytes(comps: &[u64]) -> u64 {
-    8 + comps.iter().map(|c| nat_bytes(*c)).sum::<u64>()
-}
-
-/// Returns the bytes a span stores: its start's and its width's tumblers
-/// (the daemon's `stored_span_bytes`).
-pub fn stored_span_bytes(start: &[u64], width: &[u64]) -> u64 {
-    stored_tumbler_bytes(start) + stored_tumbler_bytes(width)
-}
-
-/// Returns the components of a dotted spelling, a component past `u64` read
-/// as the top — a bound, never under.
-fn comps(text: &str) -> Vec<u64> {
-    text.split('.').map(|c| c.parse().unwrap_or(u64::MAX)).collect()
-}
-
-/// Returns the bytes of the unit span at `addr`: the address as the start,
-/// zeros then one as the width.
-fn unit_span_bytes(addr: &str) -> u64 {
-    let start = comps(addr);
-    let mut width = vec![0u64; start.len()];
-    if let Some(last) = width.last_mut() {
-        *last = 1;
+    /// Returns the price of a request of `shape` the board prices at `cost`.
+    ///
+    /// The shape's three terms are judged against this library's caps, and
+    /// the board's two against the budgets the board answered with them:
+    /// the reads ([`PublishCost::reads`]) against `read_budget`, the staged
+    /// bytes against `byte_budget`. `None` is a request the board was not
+    /// asked about, its shape already past a cap.
+    pub fn of(shape: &Shape, cost: Option<&PublishCost>) -> Price {
+        let mut over = shape.over();
+        let (mut reads, mut bytes) = (0u64, 0u64);
+        if let Some(cost) = cost {
+            (reads, bytes) = (cost.reads(), cost.staged_bytes);
+            if reads > cost.read_budget {
+                over.push((Term::Reads, reads - cost.read_budget));
+            }
+            if bytes > cost.byte_budget {
+                over.push((Term::Bytes, bytes - cost.byte_budget));
+            }
+        }
+        Price { lists: shape.lists, body: shape.body, values: shape.values, reads: usize::try_from(reads).unwrap_or(usize::MAX), bytes, over }
     }
-    stored_span_bytes(&start, &width)
-}
-
-/// Returns the bytes of a stored slot's span, as the board spells it: its
-/// start and its width, each a dotted tumbler.
-fn link_span_bytes(span: &LinkSpan) -> u64 {
-    stored_span_bytes(&comps(&span.start), &comps(&span.width))
-}
-
-/// Returns the bytes of an I-span: its start, and a width of zeros then the
-/// count.
-fn i_span_bytes(span: &ISpan) -> u64 {
-    let mut start = comps(&span.chain);
-    start.push(span.first);
-    let mut width = vec![0u64; start.len()];
-    if let Some(last) = width.last_mut() {
-        *last = span.width;
-    }
-    stored_span_bytes(&start, &width)
-}
-
-/// Returns the bytes of a content span of the edition's chain at the depth
-/// the member-position form resolves to — the daemon's `content_span_of`:
-/// the trunk then `0·1·k` at the document form, the account then
-/// `0·d·0·1·k` at the mint form.
-fn content_span_bytes(term: &Address, mint: bool) -> u64 {
-    let mut start = comps(&term.to_string());
-    start.extend(if mint { vec![0, 1, 0, 1, 1] } else { vec![0, 1, 1] });
-    let mut width = vec![0u64; start.len()];
-    if let Some(last) = width.last_mut() {
-        *last = 1;
-    }
-    stored_span_bytes(&start, &width)
-}
-
-/// Returns the bytes of a tag's unit span at the depth it resolves to — the
-/// member's address (the daemon's `tag_depth_of`).
-fn tag_span_bytes(term: &Address, mint: bool) -> u64 {
-    let mut start = comps(&term.to_string());
-    start.extend(if mint { vec![0, 1, 1] } else { vec![1] });
-    let mut width = vec![0u64; start.len()];
-    if let Some(last) = width.last_mut() {
-        *last = 1;
-    }
-    stored_span_bytes(&start, &width)
 }
 
 /// Returns the distinct positions the draft-native runs name — the store's
@@ -340,179 +165,4 @@ pub fn distinct_draft_positions(runs: &[Run], drafts: &[Address]) -> u64 {
         }
     }
     total
-}
-
-/// Returns the runs the pieces `list` places can add to its draft's
-/// run-list, read off the draft's `image` — the board's cuts: per run the
-/// list places, one where its place opens no run of the image, one where
-/// its reach neither opens one nor closes the image, and its `pieces` past
-/// the first.
-fn cuts(image: &[IRun], list: &[Option<u64>], runs: &[Run], pieces: &[u64]) -> usize {
-    let end = image.last().map_or(1, |last| last.ordinal.saturating_add(last.width));
-    let opens_a_run = |ordinal: u64| image.binary_search_by_key(&ordinal, |run| run.ordinal).is_ok();
-    let mut cuts = 0usize;
-    for (index, (place, run)) in list.iter().zip(runs).enumerate() {
-        let Some(place) = *place else { continue };
-        let reach = place.saturating_add(run.width);
-        let cut = usize::from(!opens_a_run(place)) + usize::from(reach < end && !opens_a_run(reach)) + usize::try_from(pieces[index].saturating_sub(1)).unwrap_or(usize::MAX);
-        cuts = cuts.saturating_add(cut);
-    }
-    cuts
-}
-
-/// Prices the request's shape against every cap.
-pub fn price(shape: &Shape<'_>) -> Price {
-    let drafts = shape.drafts;
-    let is_draft = |run: &Run| drafts.contains(&run.origin);
-    let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with, shape.originals.len()];
-    let values = distinct_draft_positions(shape.runs, drafts);
-    // The lists that place an entry: the rendering draft's and each `also`
-    // draft's — one re-window per list that carries a place at it, each
-    // priced a kept place's bytes per piece (the board's `placed_in`).
-    let placed_in = |index: usize| -> u64 {
-        let rendering = u64::from(shape.places.get(index).is_some_and(Option::is_some));
-        let also = shape.also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
-        rendering.saturating_add(also)
-    };
-    // THE PIECES, per run, the board's `run_pieces`: a draft-native run's
-    // bound by the endpoints of its own draft's runs, sorted, since a run is
-    // cut only where another run of the same chain begins or ends; a stray
-    // run a list places one piece per record covering it, at least one; any
-    // other run none.
-    let ends: Vec<(Address, Vec<u64>)> = drafts
-        .iter()
-        .map(|draft| {
-            let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
-            ends.sort_unstable();
-            (draft.clone(), ends)
-        })
-        .collect();
-    let pieces_bound = |run: &Run| -> u64 {
-        let ends = ends.iter().find(|(draft, _)| *draft == run.origin).map(|(_, ends)| ends.as_slice()).unwrap_or(&[]);
-        let first = ends.partition_point(|e| *e <= run.i_start);
-        let past = ends.partition_point(|e| *e < run.reach());
-        1 + past.saturating_sub(first) as u64
-    };
-    let pieces: Vec<u64> = shape
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(index, run)| match (is_draft(run), placed_in(index) > 0) {
-            (true, _) => pieces_bound(run),
-            (false, true) => (shape.stray_records.get(index).copied().unwrap_or(0) as u64).max(1),
-            (false, false) => 0,
-        })
-        .collect();
-
-    // THE IN-LOCK READS, the board's terms: the entries over the homes; per
-    // draft a list places the pieces it places × (its image's runs + the
-    // runs those pieces can cut), the cuts read only where the price stands
-    // inside the budget without them, as the board walks them; and the
-    // fence's stab per draft-native run.
-    let mut rewindows: Vec<(&[Option<u64>], &[IRun])> = Vec::new();
-    if shape.places.iter().any(Option::is_some) {
-        rewindows.push((shape.places, shape.draft_image));
-    }
-    for (entry, image) in shape.also_places.iter().zip(shape.also_images) {
-        if entry.carries_a_place() {
-            rewindows.push((&entry.places, image));
-        }
-    }
-    let placed_pieces = |list: &[Option<u64>]| -> usize {
-        let placed = list.iter().zip(&pieces).filter(|(place, _)| place.is_some());
-        placed.map(|(_, p)| usize::try_from(*p).unwrap_or(usize::MAX)).fold(0usize, usize::saturating_add)
-    };
-    // Each draft's term with the cuts counted or not: pieces × (runs + cuts).
-    let steps = |with_cuts: bool| -> usize {
-        rewindows
-            .iter()
-            .map(|(list, image)| {
-                let cut = if with_cuts { cuts(image, list, shape.runs, &pieces) } else { 0 };
-                placed_pieces(list).saturating_mul(image.len().saturating_add(cut))
-            })
-            .fold(0usize, usize::saturating_add)
-    };
-    let fence = shape.runs.iter().filter(|run| is_draft(run)).count();
-    let priced = |rewindow: usize| shape.homes.saturating_mul(shape.entries.len() + shape.originals.len() + shape.read_with).saturating_add(rewindow).saturating_add(fence);
-    let mut reads = priced(steps(false));
-    if reads <= MAX_PUBLICATION_READS {
-        reads = priced(steps(true));
-    }
-
-    // The staged bytes, the daemon's `price_staged_bytes` term by term.
-    let mut bytes = SHOT_BYTES;
-    if let Some(base) = shape.base {
-        bytes = bytes.saturating_add(stored_tumbler_bytes(&comps(&base.to_string())));
-    }
-    if let Some(draft) = shape.draft {
-        bytes = bytes.saturating_add(stored_tumbler_bytes(&comps(&draft.to_string())));
-    }
-    if shape.mint {
-        bytes += EDITION_MINT_BYTES;
-    }
-    if shape.claim {
-        bytes += EDITION_CLAIM_BYTES;
-    }
-    for (index, run) in shape.runs.iter().enumerate() {
-        let placed = placed_in(index);
-        if is_draft(run) {
-            bytes = bytes.saturating_add(pieces[index].saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
-            bytes = bytes.saturating_add(placed.saturating_mul(pieces[index].saturating_mul(KEPT_PLACE_BYTES)));
-        } else {
-            bytes = bytes.saturating_add(PLACED_RUN_BYTES);
-            bytes = bytes.saturating_add(placed.saturating_mul(pieces[index].saturating_mul(KEPT_PLACE_BYTES)));
-        }
-    }
-    bytes = bytes.saturating_add(values.saturating_mul(REINSERTED_VALUE_BYTES));
-    let content_span = content_span_bytes(shape.term, shape.mint);
-    let tag_span = tag_span_bytes(shape.term, shape.mint);
-    let runs = shape.runs.len() as u64;
-    let end_bytes = |end: &EndShape| -> u64 {
-        match end {
-            EndShape::Addrs(list) => list.iter().map(|a| if a == "member" || a == "edition" { tag_span } else { unit_span_bytes(a) }).fold(0u64, u64::saturating_add),
-            EndShape::Spans(list) => list.iter().map(i_span_bytes).fold(0u64, u64::saturating_add),
-            EndShape::Member(list) => list.iter().map(|(_, width)| width.min(&runs).min(&(MAX_SLOT_SPANS as u64)).saturating_mul(content_span)).fold(0u64, u64::saturating_add),
-        }
-    };
-    for entry in shape.entries {
-        bytes = bytes.saturating_add(COPY_FIXED_BYTES).saturating_add(end_bytes(&entry.from)).saturating_add(end_bytes(&entry.to)).saturating_add(end_bytes(&entry.ty));
-        if entry.old {
-            bytes = bytes.saturating_add(CLAIM_BYTES);
-        }
-    }
-    bytes = bytes.saturating_add((shape.retract as u64).saturating_mul(RETRACTION_BYTES));
-    bytes = bytes.saturating_add((shape.read_with as u64).saturating_mul(READ_WITH_BYTES));
-    // The rider, the daemon's term by term: a retraction per original and,
-    // over a rest, the fresh mark — a copy's fixed part, the rest's spans and
-    // the original's type as stored.
-    for original in shape.originals {
-        bytes = bytes.saturating_add(RETRACTION_BYTES);
-        if original.rest.is_empty() {
-            continue;
-        }
-        bytes = bytes
-            .saturating_add(COPY_FIXED_BYTES)
-            .saturating_add(original.rest.iter().map(i_span_bytes).fold(0u64, u64::saturating_add))
-            .saturating_add(original.ty.iter().map(link_span_bytes).fold(0u64, u64::saturating_add));
-    }
-
-    let mut over = Vec::new();
-    for (term, n) in [Term::Runs, Term::Places, Term::Links, Term::Retract, Term::ReadWith, Term::Originals].into_iter().zip(lists) {
-        if n > MAX_WIRE_LIST {
-            over.push((term, (n - MAX_WIRE_LIST) as u64));
-        }
-    }
-    if shape.body_bytes > REQUEST_BODY_BYTES {
-        over.push((Term::Body, (shape.body_bytes - REQUEST_BODY_BYTES) as u64));
-    }
-    if values > MAX_REINSERTED_VALUES {
-        over.push((Term::Values, values - MAX_REINSERTED_VALUES));
-    }
-    if reads > MAX_PUBLICATION_READS {
-        over.push((Term::Reads, (reads - MAX_PUBLICATION_READS) as u64));
-    }
-    if bytes > MAX_TXN_BYTES {
-        over.push((Term::Bytes, bytes - MAX_TXN_BYTES));
-    }
-    Price { lists, body: shape.body_bytes, values, reads, bytes, over }
 }

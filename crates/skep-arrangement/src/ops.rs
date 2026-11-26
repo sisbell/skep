@@ -32,7 +32,9 @@
 //! on that head ([`deposit_surface`](crate::deposit_surface)) rather than in
 //! the named address's arrangement, and a shot writes only the member it
 //! mints; both are members of the named document's chain, minted under it,
-//! so the owner the gate checked is theirs too.
+//! so the owner the gate checked is theirs too. The substitution's staging
+//! body ([`stage_substitute`]) opens with the same gate, on the draft it
+//! changes.
 //!
 //! **Publication** (PUB-kickoff D2b): the version-chain model's refusals,
 //! each stated with its op's check order, are evaluated inside that op's own
@@ -60,6 +62,9 @@
 //! and sees this file's private items and none of its siblings', the edit
 //! excepted: it asks a landing's three terms of `ops/set_arrangement.rs`,
 //! which holds their judgment and their record and no operation.
+//! `ops/substitute.rs` holds no operation either: it is one staging body,
+//! [`stage_substitute`], the identity-checked substitution a publication
+//! stages for each draft it re-windows at its kept places.
 //! `ops/publish.rs` holds as well the shot's admission, the checks
 //! `publish` opens with, offered as a pure query ([`shot_admission`]); and
 //! three of the modules hold their op's body as a function over a
@@ -81,8 +86,10 @@
 //! `ops/publish/tests.rs`, `ops/edit/tests.rs` and
 //! `ops/set_arrangement/tests.rs` hold the four ops' own claims — COPY's
 //! walk budget, REINSTATE's every-address probe, the edit's lock hold by a
-//! count and the refusal order of the landing's terms among them — which
-//! need a world no engine reaches.
+//! count and the refusal order of the landing's terms among them — and
+//! `ops/substitute/tests.rs` the substitution's — one pass against a
+//! replacement made one piece at a time, the entry that answers, its one
+//! walk by a count — which need a world no engine reaches.
 
 use std::fmt;
 use std::sync::Arc;
@@ -122,6 +129,10 @@ mod set_arrangement;
 // STAGE (B3-S10): the staging act — a private draft of a source, its base
 // recorded.
 mod stage;
+// SUBSTITUTE: the identity-checked substitution — the runs a draft arranges
+// at each place of a list replaced by the runs given for them, in one walk
+// and one record; a staging body, no operation.
+mod substitute;
 // CREATENEWVERSION (ASN-0123): the fork.
 mod version;
 
@@ -132,6 +143,7 @@ pub use publish::{
 };
 pub use reinstate::stage_reinstate_at;
 pub use set_arrangement::SetMerge;
+pub use substitute::{stage_substitute, Replacement, Substitution};
 
 /// The most runs one COPY, one REINSTATE, one EDIT or one publish shot may
 /// place.
@@ -187,7 +199,9 @@ pub use set_arrangement::SetMerge;
 /// prefix-sum walk of its source's run-list to reach the span,
 /// `Θ(#runs(source))` for a span near the end however narrow the answer.
 /// COPY's has a ceiling of its own, [`MAX_COPY_RESOLVE_STEPS`]; the shot's
-/// per-run work is stated on [`Vstream::publish`].
+/// per-run work is stated on [`Vstream::publish`]. Nor does it bind the
+/// runs a substitution puts in ([`stage_substitute`]): they are pieces its
+/// caller built before the call, so no accumulator here grows with them.
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// The most values one publish shot may re-insert.
@@ -317,13 +331,14 @@ pub enum AsOf {
     Typed(Seq),
     /// No state named: the edit is judged on its positions alone.
     ///
-    /// Three writers pass it, each with a reason the check could not improve
+    /// Two writers pass it, each with a reason the check could not improve
     /// on: the daemon's head writer and the rule engine's definer, in-process
-    /// writers under their own serial lock that nothing races; and the
-    /// publication's re-window of a draft at its kept places, staged inside
-    /// the shot's own commit behind a stricter check — by identity, refused
-    /// `KeptPlaceMoved` — which this check would only duplicate, and refuse
-    /// where the identity check does not.
+    /// writers under their own serial lock that nothing races. The
+    /// publication's re-window of a draft at its kept places takes no value
+    /// of this type at all: its body ([`stage_substitute`]), staged inside
+    /// the shot's own commit, checks by identity — refused `KeptPlaceMoved`
+    /// — which this check would only duplicate, and refuse where the
+    /// identity check does not.
     Unchecked,
 }
 
@@ -348,7 +363,8 @@ pub enum AsOf {
 /// the document's own while it has no member — and no position of any is
 /// removed, moved, or inserted before. Its gates: `insert`'s published-target
 /// refusal, cleared at that one position alone; the same refusal on `copy`,
-/// `reinstate`, `delete`, `rearrange` and `edit`; `publish` and `version` writing
+/// `reinstate`, `delete`, `rearrange` and `edit`, and on the substitution's
+/// staging body ([`stage_substitute`]); `publish` and `version` writing
 /// only the arrangement of the document or member they mint; and the
 /// `LinkSeat` fold touching the link run-list alone. An operation that writes
 /// a content arrangement joins this list or breaks the shot.

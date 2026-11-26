@@ -1,10 +1,13 @@
-//! THE TWO PUBLICATION READS AND THE PER-CLASS DUMP over the wire (PUB round
+//! THE PUBLICATION READS AND THE PER-CLASS DUMP over the wire (PUB round
 //! 2, lane 3.4): `doc_metadata` (PUB-8.12) and `edition_claims` (PUB-8.46)
 //! answered through the read predicate, the `/dump` filter at the presented
 //! token's class (§4), and the cache headers the four class-varying routes
 //! carry (§5). The engine's own suites hold the class the world answers and
 //! the filter's tree shape; this file holds the WIRE — the shapes, the
 //! consult, the home filter, the two-world `/dump?at`, and the headers.
+//! And the price read, `publish_cost`: its answer's members, the consult
+//! over the drafts it names and the originals' homes, the guest's answer,
+//! the claim a `supersede` entry is priced at, and that it writes nothing.
 
 use crate::common;
 
@@ -811,5 +814,179 @@ fn dump_at_filters_the_position_at_the_head_class() {
         String::from_utf8(get(port, "/dump").1).expect("utf-8"),
         "at=head equals plain /dump at one class"
     );
+    sd.shutdown();
+}
+
+// ── THE PRICE READ ───────────────────────────────────────────────────────
+
+/// A `publish_cost` of `draft`'s first `width` positions into `doc`, the
+/// run's place its first position, with `extra`'s members beside them.
+fn publish_cost(doc: &str, draft: &str, width: u64, extra: Value) -> String {
+    let mut frame = json!({
+        "op": "publish_cost",
+        "doc": doc,
+        "draft": draft,
+        "runs": [{"origin": draft, "i_start": format!("{draft}.0.1.1"), "width": width.to_string()}],
+        "places": [{"subspace": "1", "ordinal": "1"}],
+    });
+    for (k, v) in extra.as_object().expect("an object of members") {
+        frame[k] = v.clone();
+    }
+    frame.to_string()
+}
+
+/// The feed's entries past `since`, as `token`'s class.
+fn changes_since(port: u16, token: &str, since: u64) -> Vec<Value> {
+    let (st, body) = http(port, "GET", &format!("/changes?since={since}"), Some(token), b"");
+    assert_eq!(st, 200, "/changes: {}", String::from_utf8_lossy(&body));
+    json(&body)["changes"].as_array().expect("changes").clone()
+}
+
+/// THE PRICE READ's ANSWER. A publication of a draft's three bytes with
+/// their kept place answers `publish_cost`: eight members and the tag, each
+/// figure a JSON integer — the claimant's one link-holding home, its home
+/// page, where the claim ceremony left its credential links; no entry; the
+/// draft's one run and its one placed piece; one re-inserted run; the
+/// staged bytes from the table — beside the two budgets, read at the head.
+/// It moves no
+/// position and leaves no row in the feed. An `id` rides as on any frame;
+/// an `attest` is an unknown field; and a frame the codec refuses as a
+/// `publish` is refused the same.
+#[test]
+fn publish_cost_answers_the_five_figures_and_the_two_budgets_and_writes_nothing() {
+    use skep_links::{
+        stored_tumbler_bytes, ReadPrice, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = published_edition(port, &signed);
+    let d = private_draft(port, &bare, "abc");
+    let before = head(port);
+    let v = op(port, Some(&bare), &publish_cost(&e, &d, 3, json!({})));
+    let cost = expect_resp(&v, "publish_cost");
+    let keys: Vec<&str> = cost.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(keys, ["as_of", "byte_budget", "entries", "fence", "homes", "read_budget", "resp", "rewindow", "staged_bytes"], "{v}");
+    // The draft's address rides the placing record's slot and the
+    // re-window's one record; both drafts of the claimant lie at one depth.
+    let draft_addr = stored_tumbler_bytes(&skep_core::codec::wire_address(&d).expect("an address").tumbler().clone());
+    let staged = SHOT_BYTES + draft_addr + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 3 * REINSERTED_VALUE_BYTES + (REWINDOWED_DRAFT_BYTES + draft_addr) + KEPT_PLACE_BYTES;
+    assert_eq!(
+        *cost,
+        json!({
+            "resp": "publish_cost",
+            "homes": 1,
+            "entries": 0,
+            "rewindow": 1 + 1,
+            "fence": 1,
+            "staged_bytes": staged,
+            "read_budget": ReadPrice::BUDGET,
+            "byte_budget": ReadPrice::BYTE_BUDGET,
+            "as_of": before,
+        }),
+        "the home page; the draft's one run and its one piece; one fence stab; the table's bytes"
+    );
+    assert_eq!(head(port), before, "a read moves no position");
+    assert!(changes_since(port, &bare, before).is_empty(), "and leaves no row in the feed");
+    // An `id` rides as on any frame, and the answer is the same.
+    let keyed = op(port, Some(&bare), &publish_cost(&e, &d, 3, json!({"id": "price-1"})));
+    assert_eq!(expect_resp(&keyed, "publish_cost"), cost);
+    // No `attest`: the read is outside the checked set.
+    let (st, body) = http(port, "POST", "/op", Some(&bare), publish_cost(&e, &d, 3, json!({"attest": {"alg": "mldsa65-ed25519", "sig": "00"}})).as_bytes());
+    let refused = json(&body);
+    assert_eq!((st, refused["code"].as_str()), (200, Some("malformed")), "{refused}");
+    assert!(refused["detail"].as_str().is_some_and(|d| d.contains("unknown field 'attest'")), "{refused}");
+    // A frame the codec refuses as a `publish` is refused here the same: a
+    // place past the runs' length is no place.
+    let long = json(&http(port, "POST", "/op", Some(&bare), publish_cost(&e, &d, 3, json!({"places": [null, {"subspace": "1", "ordinal": "1"}]})).as_bytes()).1);
+    let as_publish = json(&http(port, "POST", "/op", Some(&bare), publish_cost(&e, &d, 3, json!({"places": [null, {"subspace": "1", "ordinal": "1"}]})).replace("publish_cost", "publish").as_bytes()).1);
+    assert_eq!((long["code"].as_str(), long["detail"].as_str()), (Some("malformed"), as_publish["detail"].as_str()), "{long} against {as_publish}");
+    assert_eq!(head(port), before);
+    sd.shutdown();
+}
+
+/// THE CONSULT, AND THE GUEST. The price states the run count of each draft
+/// a list re-windows, so a draft the caller may not read answers `withheld`
+/// naming it — the rendering draft, then an `also` draft — to a stranger
+/// and to the guest; and the home of an `originals` entry is consulted by
+/// derivation. A frame naming no draft is answered: the guest, holding no
+/// account, with no homes, and the owner with its own two — its home page
+/// and the notes document.
+#[test]
+fn publish_cost_withholds_a_draft_the_caller_may_not_read_and_prices_a_guest_with_no_homes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, other) = stranger(port, 9);
+    let e = published_edition(port, &signed);
+    let d = private_draft(port, &bare, "abc");
+    let d2 = private_draft(port, &bare, "xy");
+    // One link in a private notes document: a link-holding home of the
+    // claimant's, and an original a rider could name.
+    let notes = private_draft(port, &bare, "n");
+    let original = acked_addr(&op(
+        port,
+        Some(&bare),
+        &format!(r#"{{"op":"make_link","home":"{notes}","from":{{"addrs":["{d}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{notes}.0.3.6.1"]}}}}"#),
+    ));
+    for reader in [Some(other.as_str()), None] {
+        assert_withheld(&op(port, reader, &publish_cost(&e, &d, 3, json!({}))), &d);
+        assert_withheld(&op(port, reader, &publish_cost(&e, &d, 3, json!({"also": [d2]}))), &d);
+    }
+    // A draft the stranger reads, an `also` draft it does not.
+    let (st, body) = http(port, "POST", "/op", Some(&other), br#"{"op":"create_new_document","account":"1.0.2"}"#);
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let theirs = acked_addr(&json(&body));
+    let naming_also = json!({
+        "op": "publish_cost",
+        "doc": e,
+        "draft": theirs,
+        "also": [d2],
+        "runs": [],
+    });
+    assert_withheld(&op(port, Some(&other), &naming_also.to_string()), &d2);
+    // An original in a home the stranger may not read, by derivation.
+    let naming_original = json!({"op": "publish_cost", "doc": e, "runs": [], "originals": [{"old": original}], "retract": [original]});
+    assert_withheld(&op(port, Some(&other), &naming_original.to_string()), &notes);
+    // No draft named: an answer for every caller, the homes the caller's own.
+    let draftless = json!({"op": "publish_cost", "doc": e, "runs": []}).to_string();
+    let mine = op(port, Some(&bare), &draftless);
+    assert_eq!(expect_resp(&mine, "publish_cost")["homes"].as_u64(), Some(2), "the claimant's home page and its notes: {mine}");
+    for reader in [Some(other.as_str()), None] {
+        let v = op(port, reader, &draftless);
+        assert_eq!(expect_resp(&v, "publish_cost")["homes"].as_u64(), Some(0), "no home of this caller's holds a link: {v}");
+    }
+    sd.shutdown();
+}
+
+/// A `supersede` ENTRY IS PRICED: each daughter the request names is an
+/// entry read over the caller's homes and a claim the commit would stage,
+/// so the price read counts it in `entries` and its claim in the staged
+/// bytes — the figures a `publish` of the same members is refused on.
+#[test]
+fn publish_cost_counts_each_supersede_entry_and_the_claim_it_stages() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = published_edition(port, &signed);
+    let d = private_draft(port, &bare, "abc");
+    let priced = |extra: Value| -> Value { expect_resp(&op(port, Some(&bare), &publish_cost(&e, &d, 3, extra)), "publish_cost").clone() };
+    let plain = priced(json!({}));
+    let daughters = priced(json!({"supersede": [format!("{e}.1.1"), format!("{e}.1.2")]}));
+    assert_eq!((plain["entries"].as_u64(), daughters["entries"].as_u64()), (Some(0), Some(2)), "a daughter an entry: {daughters}");
+    assert_eq!(
+        daughters["staged_bytes"].as_u64().expect("bytes") - plain["staged_bytes"].as_u64().expect("bytes"),
+        2 * skep_links::CLAIM_BYTES,
+        "and a claim each: {daughters}"
+    );
+    for member in ["homes", "rewindow", "fence", "read_budget", "byte_budget"] {
+        assert_eq!(daughters[member], plain[member], "{member} stands");
+    }
     sd.shutdown();
 }

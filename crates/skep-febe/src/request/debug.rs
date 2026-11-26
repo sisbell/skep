@@ -236,6 +236,14 @@ impl fmt::Debug for Op {
                 f.debug_struct("EditionClaims").field("target", target).finish()
             }
             Op::UniversalGrants => f.write_str("UniversalGrants"),
+            Op::PublishCost { target, shot, places, also_places, deposits } => f
+                .debug_struct("PublishCost")
+                .field("target", target)
+                .field("shot", shot)
+                .field("places", places)
+                .field("also_places", also_places)
+                .field("deposits", deposits)
+                .finish(),
         }
     }
 }

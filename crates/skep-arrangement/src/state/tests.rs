@@ -1859,3 +1859,45 @@ fn the_edits_record_splices_its_changes_appends_what_it_places_and_always_moves_
         vec![run(&ca(1), 2), run(&vca(1), 1), run(&pca(1), 1)]
     );
 }
+
+/// THE SHAPE A RE-WINDOW STAGES, OUTSIDE ITS INPUT CLASS. A publication's
+/// kept places are one edit record: a change a place, as wide as the runs
+/// it puts in, a run a piece. Where such a record does not fit the list it
+/// is folded over, the fold answers without a panic and by the one-walk
+/// splice's clamps: a place past the end is made at the end; a place
+/// reaching past the end removes what is there; of two places that overlap,
+/// or stand out of order, the later is made where the walk stands; and a
+/// record replayed over a shorter draft, or an absent one, places every run
+/// it carries. Each fold appends a span for every run of the record and
+/// moves the arranged-at position.
+#[test]
+fn a_re_windows_record_that_does_not_fit_its_draft_is_folded_without_a_panic() {
+    let base = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 6)]);
+    let kept = |at: u32, to: u32, width: u32| Splice { at: n(at), width: n(width), runs: vec![run(&pca(to), width)] };
+    let folded = |over: &M5State, changes: Vec<Splice>| -> (Vec<Run>, usize) {
+        let s = over.apply_m5(Seq(7), &M5Rec::ContentEdit { doc: doc1(), changes });
+        assert_eq!(s.arranged_at(&doc1()), Some(Seq(7)));
+        (s.content_runs(&doc1()).cloned().collect(), s.recorded_span_count(&doc1()) - over.recorded_span_count(&doc1()))
+    };
+    // An ordinal past the end: made at the end, nothing there to remove.
+    assert_eq!(folded(&base, vec![kept(9, 1, 2)]), (vec![run(&ca(1), 6), run(&pca(1), 2)], 1));
+    // A place reaching past the end removes the one position there.
+    assert_eq!(folded(&base, vec![kept(6, 1, 3)]), (vec![run(&ca(1), 5), run(&pca(1), 3)], 1));
+    // Two places that overlap, positions 2–4 and 3–4: the second is made
+    // where the first's removal ends, and removes from there.
+    assert_eq!(folded(&base, vec![kept(2, 1, 3), kept(3, 5, 2)]), (vec![run(&ca(1), 1), run(&pca(1), 3), run(&pca(5), 2)], 2));
+    // Two places out of order: the second, behind the walk, is made where
+    // the walk stands.
+    assert_eq!(folded(&base, vec![kept(5, 1, 1), kept(2, 3, 1)]), (vec![run(&ca(1), 4), run(&pca(1), 1), run(&pca(3), 1)], 2));
+    // A record replayed over a draft it no longer fits: a shorter one, and
+    // an absent one.
+    let record = || vec![kept(2, 1, 2), kept(5, 3, 2)];
+    assert_eq!(folded(&base, record()), (vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(4), 1), run(&pca(3), 2)], 2), "the draft it was staged for");
+    let shorter = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+    assert_eq!(folded(&shorter, record()), (vec![run(&ca(1), 1), run(&pca(1), 4)], 2));
+    assert_eq!(folded(&M5State::genesis(), record()), (vec![run(&pca(1), 4)], 2));
+    // A piece's run stays a span of its own in R though the list holds two
+    // adjacent pieces as one run.
+    let pieces = Splice { at: n(2), width: n(2), runs: vec![run(&pca(1), 1), run(&pca(2), 1)] };
+    assert_eq!(folded(&base, vec![pieces]), (vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(4), 3)], 2));
+}

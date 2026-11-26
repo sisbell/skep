@@ -10,7 +10,7 @@ use skep_arrangement::{Marker, Run, ShotTerms};
 use skep_content::Val;
 use skep_discovery::{Cursor, GoOn, LinkRow, OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
-use skep_links::{Endset, Invalid, Link};
+use skep_links::{Endset, Invalid, Link, ReadPrice};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{CompareReport, Deletions, Delivery, LineNumbers};
 
@@ -502,6 +502,20 @@ pub enum Response {
     /// — the daemon applies the same live set itself at serve — so the answer
     /// changes what a client shows and never what it can read.
     UniversalGrants { rows: Vec<UniversalGrant>, as_of: Seq },
+    /// publish_cost: what a publication is priced at, before the act.
+    ///
+    /// `price` is M7's [`ReadPrice`] of the request as the caller, whole and
+    /// as the transport's refusal ahead of its lock computes it — the
+    /// caller's link-holding homes, the entries read per home, the
+    /// re-window's steps, the twin fence's stabs and the bytes the commit
+    /// would stage — inside the budgets or past them: an answer, where the
+    /// write past a budget is refused `publication_over_budget`. It is the
+    /// answer's whole content beside the position: the wire writes the
+    /// price's five figures and, off the same type, the two budgets they are
+    /// held to ([`ReadPrice::BUDGET`], [`ReadPrice::BYTE_BUDGET`]), so a
+    /// figure added to the price is added to the answer in the one place the
+    /// codec marshals it.
+    PublishCost { price: ReadPrice, as_of: Seq },
     /// The never-silent surface: every failure of a parsed `Op` (Invariants).
     Rejected(Rejection),
 }
@@ -595,7 +609,8 @@ impl Response {
             | Response::Claims { as_of, .. }
             | Response::DocMetadata { as_of, .. }
             | Response::EditionClaims { as_of, .. }
-            | Response::UniversalGrants { as_of, .. } => Some(*as_of),
+            | Response::UniversalGrants { as_of, .. }
+            | Response::PublishCost { as_of, .. } => Some(*as_of),
             Response::Ack { .. }
             | Response::AckAddr { .. }
             | Response::AckEdit { .. }
@@ -635,7 +650,8 @@ impl Response {
             | Response::Claims { as_of, .. }
             | Response::DocMetadata { as_of, .. }
             | Response::EditionClaims { as_of, .. }
-            | Response::UniversalGrants { as_of, .. } => Some(as_of),
+            | Response::UniversalGrants { as_of, .. }
+            | Response::PublishCost { as_of, .. } => Some(as_of),
             Response::Ack { .. }
             | Response::AckAddr { .. }
             | Response::AckEdit { .. }
@@ -715,6 +731,7 @@ impl Response {
             | Response::DocMetadata { .. }
             | Response::EditionClaims { .. }
             | Response::UniversalGrants { .. }
+            | Response::PublishCost { .. }
             | Response::Rejected(_) => None,
         }
     }

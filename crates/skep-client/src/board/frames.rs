@@ -919,6 +919,22 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     frame
 }
 
+/// Builds the request that asks the board what `publication` is priced at:
+/// `publish_cost` (wire.md §Arrangement).
+///
+/// `publication` is a `publish` request as [`publication`] builds one. The
+/// price read carries the same members under its own name, so the frame
+/// priced is the frame sent; its `id` and its `attest` are left out — a
+/// read is memoized under no key, and the board refuses a signature on one.
+pub fn publish_cost(mut publication: Value) -> Value {
+    if let Some(members) = publication.as_object_mut() {
+        members.insert("op".to_string(), Value::from("publish_cost"));
+        members.remove("id");
+        members.remove("attest");
+    }
+    publication
+}
+
 /// Builds one entry of a `publish` request's `originals` rider (wire.md
 /// §Arrangement, `publish`; the link-sets design §5.7 (vi′)): `old` the
 /// original's address and `rest` its spans in the I-span form, each as

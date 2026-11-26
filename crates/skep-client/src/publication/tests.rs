@@ -192,9 +192,20 @@ struct World {
     /// `/health` names a claimant and `H.1` answers its record.
     claim_at_publish: bool,
     key: Option<PublicKey>,
+    /// What `publish_cost` answers: the price's seven figures as the test
+    /// scripts them, or [`World::admitted`]'s where it scripts none.
+    cost: Option<Value>,
+    /// Every `publish_cost` answers `503 history_busy`, past every reissue:
+    /// a board that cannot be asked.
+    cost_unanswered: bool,
 }
 
 impl World {
+    /// A price inside both budgets, for the cells that script none.
+    fn admitted() -> Value {
+        json!({"homes": 3, "entries": 2, "rewindow": 40, "fence": 1, "staged_bytes": 9_000, "read_budget": 65_536, "byte_budget": 67_108_864})
+    }
+
     fn doc(&mut self, text: &str, published: bool, owner: &str, runs: Vec<Run>) {
         self.position += 1;
         self.docs.insert(text.to_string(), DocState { runs, published, owner: owner.to_string(), placed: None, base_extent: None, source: None, base: None, base_copied: None, at: self.position });
@@ -639,6 +650,18 @@ impl World {
                 Ok(reply(200, json!({"resp": "edition_claims", "as_of": position, "claims": rows})))
             }
             "publish" => self.publish(frame),
+            // The price read: the scripted figures under the tag, read at
+            // the head — nothing of the frame is priced here, the cells pin
+            // what the composition makes of the board's answer.
+            "publish_cost" => {
+                if self.cost_unanswered {
+                    return Ok(reply(503, json!({"error": "history_busy", "detail": "the scripted board answers no price"})));
+                }
+                let mut v = self.cost.clone().unwrap_or_else(World::admitted);
+                v["resp"] = json!("publish_cost");
+                v["as_of"] = json!(position);
+                Ok(reply(200, v))
+            }
             other => panic!("the composition sent an op the scripted board does not answer: {other}"),
         }
     }
@@ -2145,7 +2168,7 @@ fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
     assert!(borrowed[first_in_e + 1..].iter().all(|r| r.kind != DepositKind::EditionClaim), "one claim row");
     let mut plain = request.clone();
     plain.claim = false;
-    assert_eq!(request.priced(3, &[], &[]).bytes - plain.priced(3, &[], &[]).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
+    assert_eq!((request.price_frame()["claim"].as_bool(), plain.price_frame().get("claim")), (Some(true), None), "the claim rides the frame the board prices, at the document form");
     assert!(request.body().as_bytes().len() > plain.body().as_bytes().len(), "the row is in the signed body");
     // The board: `E` holds `E.1`, so the claim is refused naming `E`.
     dialer.clear();
@@ -2353,81 +2376,133 @@ fn each_supersede_refusal_is_typed_and_head_moved_carries_the_head() {
 
 // ── THE PRICE ────────────────────────────────────────────────────────────
 
-/// THE TABLE IS THE DAEMON's: every per-kind figure, the two budgets, the
-/// slot cap and the span arithmetic equal `skep-links`' own — a figure that
-/// moves there is a red cell here, not a drift.
+/// THE THREE CAPS THE SHAPE IS JUDGED BY ARE THE DAEMON's: the wire-list
+/// cap, the request-body cap and the re-insert budget equal `skep-links`'
+/// and `skep-arrangement`'s own — a figure that moves there is a red cell
+/// here, not a drift. The reads' and the bytes' budgets are no constant of
+/// this library: they are read off the board's answer.
 #[test]
-fn the_price_table_is_the_daemons() {
-    use skep_address::{Nat, Span, Tumbler};
-    assert_eq!(price::CORRESPONDENCE_RECORD_BYTES, skep_links::CORRESPONDENCE_RECORD_BYTES);
-    assert_eq!(price::COPY_FIXED_BYTES, skep_links::COPY_FIXED_BYTES);
-    assert_eq!(price::CLAIM_BYTES, skep_links::CLAIM_BYTES);
-    assert_eq!(price::RETRACTION_BYTES, skep_links::RETRACTION_BYTES);
-    assert_eq!(price::READ_WITH_BYTES, skep_links::READ_WITH_BYTES);
-    assert_eq!(price::KEPT_PLACE_BYTES, skep_links::KEPT_PLACE_BYTES);
-    assert_eq!(price::PLACED_RUN_BYTES, skep_links::PLACED_RUN_BYTES);
-    assert_eq!(price::REINSERTED_VALUE_BYTES, skep_links::REINSERTED_VALUE_BYTES);
-    assert_eq!(price::SHOT_BYTES, skep_links::SHOT_BYTES);
-    assert_eq!(price::EDITION_MINT_BYTES, skep_links::EDITION_MINT_BYTES);
-    assert_eq!(price::EDITION_CLAIM_BYTES, skep_links::EDITION_CLAIM_BYTES);
-    assert_eq!(price::REQUEST_BODY_BYTES as u64, skep_links::REQUEST_BODY_BYTES);
-    assert_eq!(price::MAX_SLOT_SPANS, skep_links::MAX_SLOT_SPANS);
-    assert_eq!(price::MAX_PUBLICATION_READS, skep_links::MAX_PUBLICATION_READS);
-    assert_eq!(price::MAX_TXN_BYTES, skep_links::ReadPrice::BYTE_BUDGET);
-    assert_eq!(price::MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
+fn the_shapes_three_caps_are_the_daemons() {
     assert_eq!(MAX_WIRE_LIST, skep_links::MAX_SLOT_SPANS, "the codec reuses the slot cap for its lists");
-    let t = |comps: &[u64]| Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
-    for (start, width) in [(vec![1, 0, 1, 0, 65, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 1, 0, 1, 0, 1, 0, 3, 23, 1], vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), (vec![1, 0, 1, 0, 65, 0, 1, 1], vec![0, 0, 0, 0, 0, 0, 0, 70_000]), (vec![1 << 40, 1 << 40], vec![0, 1])] {
-        let span = Span::new(t(&start), t(&width)).expect("a span");
-        assert_eq!(price::stored_span_bytes(&start, &width), skep_links::stored_span_bytes(&span), "{start:?}");
-    }
+    assert_eq!(price::REQUEST_BODY_BYTES as u64, skep_links::REQUEST_BODY_BYTES);
+    assert_eq!(price::MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
 }
 
-/// Each term over its cap is refused HERE, before any frame: a list past
-/// 4,096, the body past 8 MiB, the values past the re-insert budget, the
-/// reads past 65,536, the bytes past 64 MiB — the member-position slot
-/// priced at up to 4,096 spans — and a request within every cap admitted.
+/// THE PRICE IS THE BOARD's ANSWER, ASKED IN ONE FRAME. The build sends one
+/// `publish_cost` — the publication's own members under that name, no `id`
+/// and no `attest` — and the request's price is that answer: the reads the
+/// four terms the board counted, summed as the board sums them, the bytes
+/// its staged bytes, each held to the budget the board answered with it,
+/// whatever number that is. The request's own shape is beside them, judged
+/// here.
 #[test]
-fn each_term_past_its_cap_is_refused_before_any_frame() {
-    let draft = a(D);
-    let term = a(E);
-    let one = vec![run(D, 1, 1)];
-    // A shot off the memberless edition `E` as its base, whose address the
-    // placing record's terms store: the daemon's term, `stored_tumbler_bytes`
-    // of it (skep #1111).
-    // The rendering draft in two runs, the placed run its first: one piece
-    // × two runs, and the run's fence stab.
-    let two_runs = [image_run(D, 1, 1, 1), image_run(D, 5, 1, 2)];
-    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: Some(&term), term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_images: &[], stray_records: &[0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 100, homes: 3, draft_image: &two_runs };
-    let within = price::price(&shape);
-    assert!(within.admits(), "{within:?}");
-    assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0, 0], 1, 2 + 1));
-    let base_comps: Vec<u64> = E.split('.').map(|c| c.parse().expect("a component")).collect();
-    let based = price::stored_tumbler_bytes(&base_comps);
-    assert_eq!(within.bytes, price::SHOT_BYTES + based + price::PLACED_RUN_BYTES + price::CORRESPONDENCE_RECORD_BYTES + price::KEPT_PLACE_BYTES + price::REINSERTED_VALUE_BYTES);
-    assert_eq!(price::price(&price::Shape { base: None, ..shape.clone() }).bytes, within.bytes - based, "the birth shape names no base");
-    // Naming the rendering draft stores its address in the placing record's
-    // own slot: the daemon's term, `stored_tumbler_bytes` of it.
-    let named = price::price(&price::Shape { draft: Some(&draft), ..shape });
-    let comps: Vec<u64> = D.split('.').map(|c| c.parse().expect("a component")).collect();
-    assert_eq!(named.bytes, within.bytes + price::stored_tumbler_bytes(&comps), "{named:?}");
-    let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
-    let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 4097, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_image: &[] }), [price::Term::Body]);
-    let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: &[] });
-    assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 4096, body_bytes: 0, homes: 17, draft_image: &[] });
-    assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 + 1 - price::MAX_PUBLICATION_READS) as u64)], "17 homes × 4096 entries, and the one run's fence stab");
-    let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
-    let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
-    let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_image: &[] });
-    assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
-    let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, base: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_images: &[], stray_records: &[], entries: &entries, retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 1, draft_image: &[] }).admits(), "one such entry is inside both budgets");
+fn the_build_asks_the_board_its_price_once_and_takes_the_answers_figures() {
+    let (mut world, _) = World::base();
+    // Figures no sum of this library's could reach, and budgets that are
+    // no constant of it.
+    world.cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "read_budget": 2_000, "byte_budget": 5_000}));
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let asked = dialer.frames("publish_cost");
+    assert_eq!(asked.len(), 1, "one price read a build: {:?}", dialer.ops());
+    let mut sent = request.frame(None);
+    sent["op"] = json!("publish_cost");
+    sent.as_object_mut().unwrap().remove("id");
+    assert_eq!(asked[0], sent, "the publication's own members, under the read's name, with no id");
+    assert!(asked[0].get("attest").is_none() && asked[0].get("id").is_none());
+    assert_eq!((request.price.reads, request.price.bytes), (7 * 3 + 1_234 + 5, 4_242), "the board's figures, the reads summed as the board sums them");
+    assert!(request.price.admits(), "inside both budgets as answered: {:?}", request.price);
+    assert_eq!(request.price.lists[0], request.runs.len(), "the shape beside them");
+    assert!(request.price.body > 0 && request.price.values == 10, "{:?}", request.price);
+    // Past the budgets the board answers, by the answer's own numbers.
+    dialer.world().cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "read_budget": 1_000, "byte_budget": 4_000}));
+    let p = publisher(&board, &tok, &signer);
+    let over = price(&p, &request).unwrap();
+    assert_eq!(over.over, vec![(Term::Reads, 260), (Term::Bytes, 242)], "{over:?}");
+    assert_eq!(dialer.frames("publish_cost").len(), 2, "a price is one read");
+}
+
+/// A REQUEST WITH DAUGHTERS IS PRICED WITH THEM. The frame the board prices
+/// names every daughter the publication's own frame names, so the board
+/// counts each as an entry read over the homes and a claim staged; the
+/// request's price is the board's answer for that frame.
+#[test]
+fn a_request_naming_daughters_is_priced_by_the_board_with_its_supersede_list() {
+    let (mut world, _) = World::base();
+    let e11 = format!("{E}.1.1");
+    world.doc(&e11, true, ACCOUNT, vec![run(E, 1, 19)]);
+    world.cost = Some(json!({"homes": 4, "entries": 1, "rewindow": 0, "fence": 1, "staged_bytes": 3_000, "read_budget": 65_536, "byte_budget": 67_108_864}));
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let asked = Inputs { supersede: vec![a(&e11)], ..inputs() };
+    let e = enumerate(&p, &asked).unwrap();
+    let panel = panel(&p, &asked, &e).unwrap();
+    dialer.clear();
+    let Built::Request(request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert_eq!(request.supersede, vec![a(&e11)]);
+    let priced = dialer.frames("publish_cost");
+    assert_eq!(priced.len(), 1, "{:?}", dialer.ops());
+    assert_eq!(priced[0]["supersede"], json!([e11]), "the daughter rides the frame the board prices");
+    assert_eq!((request.price.reads, request.price.bytes), (4 + 1, 3_000), "and the price is the board's for that frame");
+}
+
+/// THE SHAPE PAST ITS OWN CAP IS REFUSED HERE, WITH NO FRAME: a list past
+/// 4,096, the body past 8 MiB, the values past the re-insert budget — the
+/// board is not asked, a frame past the list cap or the body cap parsing
+/// nowhere — and the price names those terms with no reads and no bytes
+/// beside them.
+#[test]
+fn a_shape_past_its_own_cap_is_refused_before_any_frame() {
+    let within = price::Shape { lists: [4_096, 4_096, 4_096, 4_096, 4_096, 4_096], body: price::REQUEST_BODY_BYTES, values: price::MAX_REINSERTED_VALUES };
+    assert!(within.over().is_empty(), "at every cap is inside it");
+    let lists = price::Shape { lists: [4_097, 0, 4_100, 0, 0, 4_098], ..within.clone() };
+    assert_eq!(lists.over(), vec![(Term::Runs, 1), (Term::Links, 4), (Term::Originals, 2)]);
+    let wide = price::Shape { body: price::REQUEST_BODY_BYTES + 7, values: price::MAX_REINSERTED_VALUES + 1, ..within.clone() };
+    assert_eq!(wide.over(), vec![(Term::Body, 7), (Term::Values, 1)]);
+    let unasked = Price::of(&wide, None);
+    assert_eq!((unasked.reads, unasked.bytes, unasked.over.clone()), (0, 0, wide.over()), "no figure of the board's beside the terms passed");
+    // Through the door: a request whose runs pass the list cap sends no
+    // price read.
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let mut many = request.clone();
+    many.runs = (0..4_097).map(|k| run(E, 1 + k, 1)).collect();
+    many.pieces = many.runs.iter().map(|_| Piece::Values(vec![vec![b'x']])).collect();
+    dialer.clear();
+    let p = publisher(&board, &tok, &signer);
+    let priced = price(&p, &many).unwrap();
+    assert!(priced.over.contains(&(Term::Runs, 1)) && !priced.admits(), "{priced:?}");
+    assert!(dialer.ops().is_empty(), "no frame: {:?}", dialer.ops());
+}
+
+/// NO PRICE WHERE THE BOARD CANNOT BE ASKED: the build fails with the
+/// read's fault and hands back no request, and a price asked of a built
+/// request fails the same — never a figure guessed in the answer's place.
+#[test]
+fn a_board_that_cannot_be_asked_leaves_no_price_and_no_request() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (e, panel, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    dialer.world().cost_unanswered = true;
+    let p = publisher(&board, &tok, &signer);
+    assert_eq!(build(&p, &inputs(), &e, &panel, &switched(None)).unwrap_err(), Fault::Busy, "the build halts at the price's read");
+    assert_eq!(price(&p, &request).unwrap_err(), Fault::Busy);
+    // An answer that is no price is faced, never read as one.
+    {
+        let mut w = dialer.world();
+        w.cost_unanswered = false;
+        w.cost = Some(json!({"homes": 1, "entries": 1}));
+    }
+    assert!(matches!(price(&p, &request), Err(Fault::Shape { ref op, .. }) if op == "publish_cost"), "an answer lacking a figure is no price");
+    // The request the panel holds to re-switch is built with no price asked.
+    dialer.clear();
+    let Built::Request(unpriced) = build_unpriced(&p, &inputs(), &e, &panel, &switched(None)).unwrap() else { panic!("inert") };
+    assert!(dialer.frames("publish_cost").is_empty() && unpriced.price == Price::default(), "{:?}", dialer.ops());
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────
@@ -2911,13 +2986,11 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
         assert_eq!(taken.places, vec![None, Some(20), Some(30), None], "{what}: the named part's place is D's own position of it; the window has none");
         assert_eq!(taken.stray_records, vec![0, 0, 1, 0], "{what}: the one record the commit reads for the part");
         assert!(matches!(taken.pieces[2], Piece::Values(_)) == !published_into_f, "{what}: E's own identity reads through the draft, F's is a window by address");
-        // The price charges the part's kept place per record it counts.
-        let mut unplaced = (*taken).clone();
-        (unplaced.places[2], unplaced.stray_records[2]) = (None, 0);
-        let mut twice = (*taken).clone();
-        twice.stray_records[2] = 2;
-        assert_eq!(taken.priced(0, &[], &[]).bytes, unplaced.priced(0, &[], &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the part, at its one record");
-        assert_eq!(twice.priced(0, &[], &[]).bytes, taken.priced(0, &[], &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
+        // The frame the board prices carries the part's kept place, as the
+        // publication's own frame does: the board counts its records.
+        let priced = taken.price_frame();
+        assert_eq!((priced["places"].clone(), priced["runs"].clone()), (taken.frame(None)["places"].clone(), taken.frame(None)["runs"].clone()), "{what}: the kept place beside the part rides the price's frame");
+        assert!(!priced["places"][2].is_null(), "{what}: {priced}");
         assert!(taken.price.admits(), "{what}: {:?}", taken.price);
         // Sent: the board finds the record in O by its `to`, checks D
         // arranges O's words at 30, and re-windows D there.
@@ -4173,10 +4246,10 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     assert_eq!(frame["also"], json!([A]), "the frame carries `also`");
     assert_eq!(frame["also_places"], json!([{"draft": A, "places": [null, null, {"subspace": "1", "ordinal": "1"}, null]}]), "and A's entry, in also's order");
     assert_eq!(request.price.values, 15, "both drafts' distinct positions");
-    let mut unplaced = (*request).clone();
-    unplaced.also_places[0].places = vec![None; 4];
     assert_eq!(e.also[0].image, vec![image_run(A, 1, 5, 1)], "the premise: A's five words, its image's one run");
-    assert_eq!(request.priced(0, &e.image, &e.also).reads, unplaced.priced(0, &e.image, &e.also).reads + 1, "A's one placed run enters the re-window's term as one piece over A's one run, where its list places it");
+    let priced = dialer.frames("publish_cost");
+    assert_eq!(priced.len(), 1, "the build asks the board its price once: {:?}", dialer.ops());
+    assert_eq!((priced[0]["also"].clone(), priced[0]["also_places"].clone()), (frame["also"].clone(), frame["also_places"].clone()), "A and its own places ride the frame the board prices, so A's re-window is in the board's term");
     dialer.clear();
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
     assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer));
@@ -4388,95 +4461,6 @@ fn an_also_drafts_published_words_shown_as_its_own_again_offer_nothing_their_pub
     let sent = send(&p, &again, &mut request).unwrap();
     assert!(matches!(&sent, Sent::Acknowledged(ack) if ack.member.to_string() == format!("{E}.3")), "{sent:?}");
     assert_eq!(dialer.world().docs[D].runs, vec![run(E, 1, 34), run(O, 1, 5)], "D re-windowed onto E's words");
-}
-
-/// THE RE-WINDOW's TERM IS THE BOARD's (`price_publication_reads`): per
-/// draft a list places — the rendering draft where `places` carries a
-/// place, each `also` draft where its `also_places` entry does — the pieces
-/// it places × (its image's runs + the runs they cut), and NONE for a draft
-/// no list places; beside it the fence's stab per draft-native run. A
-/// family request placing the rendering draft's two runs on its run
-/// boundaries and `A`'s one prices `2 × 4 + 1 × 1`, the unplaced `B` adding
-/// nothing; one placing no draft has no re-window term; one placing `A`
-/// alone reads `A` alone; `A`'s run placed where its reach cuts a run of
-/// `A`'s image counts the run it adds. `also_places` is no sixth list —
-/// bounded by `runs`, it needs no cap of its own — and the staged bytes
-/// count a kept place per LIST that places a run (the board's `placed_in`).
-#[test]
-fn the_re_window_term_sums_every_draft_a_list_places_as_the_boards_does() {
-    const B: &str = "1.0.1.0.73";
-    let (d, a_draft, b, term) = (a(D), a(A), a(B), a(E));
-    let drafts = vec![d.clone(), a_draft.clone(), b.clone()];
-    let runs = vec![run(D, 1, 10), run(A, 1, 5), run(B, 1, 7)];
-    let also = |a_places: Vec<Option<u64>>, b_places: Vec<Option<u64>>| vec![AlsoPlaces { draft: a_draft.clone(), places: a_places }, AlsoPlaces { draft: b.clone(), places: b_places }];
-    let none: [Option<u64>; 3] = [None; 3];
-    let no_also = also(vec![None; 3], vec![None; 3]);
-    // D's image in four runs — E's words, D's run at 20, A's at 30, E's
-    // again at 35 — A's in one, B's in nine, B's run at 4.
-    let d_image = [image_run(E, 1, 19, 1), image_run(D, 1, 10, 20), image_run(A, 1, 5, 30), image_run(E, 20, 5, 35)];
-    let a_image = [image_run(A, 1, 5, 1)];
-    let mut b_image = vec![image_run(B, 8, 3, 1), image_run(B, 1, 7, 4)];
-    b_image.extend((0..7u64).map(|k| image_run(B, 20 + 2 * k, 1, 11 + k)));
-    let images: [&[IRun]; 2] = [&a_image, &b_image];
-    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), base: None, term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_images: &images, stray_records: &[0, 0, 0], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 3, draft_image: &d_image };
-    assert_eq!(price::price(&base).reads, 3, "no list places a draft: nothing re-windowed, the three runs' fence stabs alone");
-    let placed = [Some(20), Some(30), None];
-    let family = also(vec![None, Some(1), None], vec![None; 3]);
-    let priced = price::price(&price::Shape { places: &placed, also_places: &family, ..base.clone() });
-    assert_eq!(priced.reads, 2 * 4 + 1 + 3, "D's two placed pieces × its four runs and A's one × its one; B, unplaced, adds none");
-    assert_eq!(priced.lists, [3, 2, 0, 0, 0, 0], "places counts its two entries; also_places is no list of the price, the rider its sixth");
-    let also_alone = price::price(&price::Shape { also_places: &family, ..base.clone() });
-    assert_eq!(also_alone.reads, 1 + 3, "an also draft's re-window alone reads that draft");
-    let b_too = also(vec![None, Some(1), None], vec![None, None, Some(4)]);
-    assert_eq!(price::price(&price::Shape { places: &placed, also_places: &b_too, ..base.clone() }).reads, 2 * 4 + 1 + 9 + 3, "every draft a list places, each its own term");
-    let a_longer = [image_run(A, 1, 9, 1)];
-    let cut: [&[IRun]; 2] = [&a_longer, &b_image];
-    assert_eq!(price::price(&price::Shape { also_places: &family, also_images: &cut, ..base.clone() }).reads, (1 + 1) + 3, "A's run ends inside A's one run: the run its reach cuts off");
-    let in_places_alone = price::price(&price::Shape { places: &placed, ..base.clone() });
-    assert_eq!(priced.bytes, in_places_alone.bytes + price::KEPT_PLACE_BYTES, "A's run placed by two lists stages a kept place per list, one piece each");
-}
-
-/// THE RE-WINDOW's TERM, SHAPE FOR SHAPE WITH THE BOARD's CELLS (skep-links'
-/// `the_re_window_is_priced_on_the_pieces_its_lists_place` and
-/// `the_re_window_is_priced_per_piece_and_per_cut`): a draft of 300 runs
-/// re-supplied whole with ONE place prices one piece × 300 runs and 300
-/// fence stabs, admitted, where the request's runs × the draft's would be
-/// 300 × 300; a draft of 200 runs placed run for run prices 200 × 200 + 200,
-/// admitted; a draft of one run of eight positions re-supplied as eight
-/// one-position runs, every other one placed, prices 4 × (1 + 7) + 8; of 512
-/// positions, 256 × (1 + 511) + 512, past the budget.
-#[test]
-fn the_re_window_term_prices_the_boards_shapes_as_the_board_does() {
-    let (draft, term) = (a(D), a(E));
-    let reads = |runs: &[Run], places: &[Option<u64>], image: &[IRun]| -> price::Price {
-        price::price(&price::Shape { runs, drafts: std::slice::from_ref(&draft), draft: Some(&draft), base: None, term: &term, mint: false, claim: false, places, also_places: &[], also_images: &[], stray_records: &[], entries: &[], retract: 0, originals: &[], read_with: 0, body_bytes: 0, homes: 0, draft_image: image })
-    };
-    // A draft of `n` one-position runs, each inserted at its front: the k-th
-    // run of its image holds the (n + 1 − k)-th word.
-    let fragmented = |n: u64| -> (Vec<Run>, Vec<IRun>) {
-        let image: Vec<IRun> = (1..=n).map(|k| image_run(D, n + 1 - k, 1, k)).collect();
-        (image.iter().map(|r| run(D, r.first, 1)).collect(), image)
-    };
-    let (runs, image) = fragmented(300);
-    let mut one = vec![None; 300];
-    one[0] = Some(1);
-    let word = reads(&runs, &one, &image);
-    assert_eq!(word.reads, 300 + 300, "one piece × 300 runs, 300 fence stabs");
-    assert!(word.admits() && 300 * 300 > price::MAX_PUBLICATION_READS, "{word:?}");
-    let (runs, image) = fragmented(200);
-    let every: Vec<Option<u64>> = (1..=200).map(Some).collect();
-    let first = reads(&runs, &every, &image);
-    assert_eq!(first.reads, 200 * 200 + 200, "200 pieces × 200 runs, none cut");
-    assert!(first.admits(), "{first:?}");
-    let alternating = |n: u64| {
-        let runs: Vec<Run> = (1..=n).map(|k| run(D, k, 1)).collect();
-        let places: Vec<Option<u64>> = (1..=n).map(|k| (k % 2 == 1).then_some(k)).collect();
-        reads(&runs, &places, &[image_run(D, 1, n, 1)])
-    };
-    assert_eq!(alternating(8).reads, 4 * (1 + 7) + 8);
-    let wide = alternating(512);
-    assert_eq!(wide.reads, 256 * (1 + 511) + 512);
-    assert!(wide.over.iter().any(|(t, _)| *t == price::Term::Reads), "past the budget: {wide:?}");
 }
 
 /// `kept_place_moved` NAMING AN `also` DRAFT: `site.addr` is the draft that
@@ -5528,7 +5512,6 @@ fn a_held_removals_original_rides_the_rider_and_ends_with_its_copy() {
     assert_eq!(request.retract.len(), 3, "mpub, cpub and mpub3: {:?}", request.retract);
     assert_eq!(request.originals.len(), 1);
     assert_eq!((request.originals[0].old.to_string(), request.originals[0].rest.clone(), request.originals[0].marks.clone()), (orig.clone(), vec![], vec![a(&named.mpub)]));
-    assert_eq!(request.originals[0].ty, vec![LinkSpan { start: T_STRONG.to_string(), width: "0.0.0.0.0.0.0.0.0.1".to_string() }], "the original's stored type, for the price");
     let frame = request.frame(None);
     assert_eq!(frame["originals"], json!([{"old": orig}]), "the rider, no rest spelled");
     assert_eq!(request.price.lists[5], 1, "the rider's list counted");
@@ -5589,8 +5572,7 @@ fn a_cut_copys_rest_is_composed_by_identity_through_the_records_and_kept_by_a_fr
     let spelled = |old: &str| originals.iter().find(|o| o["old"] == old).unwrap()["rest"].clone();
     assert_eq!(spelled(&heading), json!([{"start": format!("{E}.0.1.15"), "width": "1"}]));
     assert_eq!(spelled(&emph), json!([{"start": format!("{D}.0.1.22"), "width": "2"}]));
-    let without = Request { originals: Vec::new(), ..(*request).clone() }.priced(0, &[], &[]);
-    assert!(request.priced(0, &[], &[]).bytes > without.bytes + 2 * price::RETRACTION_BYTES, "the fresh marks priced beside the retractions");
+    assert_eq!(request.price_frame()["originals"], frame["originals"], "the rider rides the frame the board prices, its rests spelled: the board reads each original's stored type for the fresh mark");
     let sent = send(&p, &inputs, &mut request).unwrap();
     assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
     let w = dialer.world();
@@ -5634,7 +5616,7 @@ fn a_skipped_copys_original_is_dropped_with_it_at_the_one_re_sign() {
     assert!(frames[1].get("originals").is_none(), "the second carries neither the entry nor the original: {}", frames[1]);
     assert!(!dialer.world().links.iter().find(|l| l.addr == orig3).unwrap().retracted, "the original stands: the other device's take-off is where it ends");
     // Paired with two marks: dropped only with the last.
-    let mut two = Request { originals: vec![OriginalEntry { old: a(&orig3), rest: vec![], ty: vec![], marks: vec![a(&named.mpub), a(&named.mpub3)] }], ..request.clone() };
+    let mut two = Request { originals: vec![OriginalEntry { old: a(&orig3), rest: vec![], marks: vec![a(&named.mpub), a(&named.mpub3)] }], ..request.clone() };
     two.retract = vec![a(&named.mpub), a(&named.mpub3)];
     two.without(&[1], &[], &[]);
     assert_eq!(two.originals.len(), 1, "one mark still rides");

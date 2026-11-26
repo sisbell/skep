@@ -12,7 +12,7 @@
 // `m3()`/`m5()`/`links()`/`content()` methods the read arms call, so no
 // accessor trait is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
-use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, Edited, M5Rec};
+use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, Caller, Edited, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
@@ -21,7 +21,7 @@ use skep_discovery::{
     HomeCounts, ImagePage, LinkRows,
 };
 use skep_kernel::{Attestation, Seq};
-use skep_links::{Deposited, Invalid, LinkRec};
+use skep_links::{price_publication_reads, Deposited, Invalid, LinkRec};
 use skep_namespace::{M3Rec, PrincipalId, WellKnown};
 use skep_retrieval::{Query, MAX_DELIVERY_ITEMS};
 
@@ -432,6 +432,7 @@ where
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
@@ -886,6 +887,20 @@ where
                     Some(_) => covered_universal_grants(world.m3(), world.universal_grant_index()),
                 };
                 Ok(Response::UniversalGrants { rows, as_of })
+            }
+            // ── the publication's price (→ M7) ──
+            // The price of a publication: M7's own price over this snapshot
+            // as the caller — the one function the transport's refusal ahead
+            // of its lock calls — handed back whole, past a budget or inside
+            // both. The named drafts and each original's home passed the
+            // consult above, so no figure describes a document this caller
+            // may not read. A guest holds no account: it is priced as the
+            // caller with no homes, an answer and never a refusal, as the
+            // any-principal read answers it no rows.
+            Op::PublishCost { target, shot, places, also_places, deposits } => {
+                let caller = principal.map_or(Caller::System, Caller::Principal);
+                let price = price_publication_reads(world, caller, &target, &shot, &places, &also_places, &deposits);
+                Ok(Response::PublishCost { price, as_of })
             }
             // Complementary half — see dispatch_write's twin arm (§1).
             Op::CreateNewDocument { .. }

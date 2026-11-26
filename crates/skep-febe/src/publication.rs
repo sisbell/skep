@@ -24,6 +24,10 @@
 //! * [`Op::UniversalGrants`] takes the grant fold's live universal index and
 //!   narrows it by M3's ω — [`covered_universal_grants`] is the narrowing.
 //!
+//! The price read (`Op::PublishCost`) is none of them: M7 computes its whole
+//! answer (`skep_links::price_publication_reads`), so its arm forwards the
+//! request's members and nothing of it sits here.
+//!
 //! The dispatch arms stay in `dispatch_read`, beside the one snapshot and the
 //! one read predicate every read answers from, and each says there what it
 //! assembles. What sits here are pure functions of M3's and M5's state and of

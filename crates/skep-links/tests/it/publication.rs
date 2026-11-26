@@ -22,7 +22,11 @@
 //! in turn so positions stay true, a piece of a run by the same piece of the
 //! fresh run at its offset" — refusing the whole publication, with the
 //! entry, where it does not: "`D` moved the run, split it, deleted it or
-//! arranged it elsewhere since P4 … never a guess". The check is by
+//! arranged it elsewhere since P4 … never a guess". The commit stages that
+//! pair as ONE record a re-windowed draft, every kept place of the draft
+//! checked on one walk of its run-list (M5's `stage_substitute`), and the
+//! price counts it as a sum: the draft's runs and the pieces placed. The
+//! check is by
 //! MEMBERSHIP (the S-gate's ruling): the named place alone, a draft
 //! arranging the identity twice re-windowed at the named place and left
 //! standing at the other. A request with no place is today's shot: the S1
@@ -645,13 +649,16 @@ fn a_run_named_twice_with_a_place_on_each_re_windows_the_second_to_the_firsts_fr
 
 /// A draft the re-window cannot edit: a PUBLISHED document named as the
 /// draft (the shot admits any registered document of the caller's outside
-/// the chain) takes the shot and its record, and then the placement refuses
-/// `published_target` — `reinstate`'s own verdict, lowered as `Reinstate` —
-/// and the whole publication falls with it: no member, no record. With no
-/// place the same shot lands, the published draft's words re-inserted and
-/// the draft left as it stands.
+/// the chain) takes the shot and its record, and then the re-window's gate
+/// refuses `published_target` — the verdict `reinstate` answers a published
+/// destination, lowered as `Reinstate` — and the whole publication falls
+/// with it: no member, no record. The gate answers ahead of every entry's
+/// check, so a place the draft does not hold the run at is refused
+/// `published_target` too, never `kept_place_moved`. With no place the same
+/// shot lands, the published draft's words re-inserted and the draft left
+/// as it stands.
 #[test]
-fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands_with_no_place() {
+fn a_published_document_named_as_the_draft_is_refused_at_its_gate_and_lands_with_no_place() {
     let published_draft = doc(4);
     let world = edition_world();
     let k = kernel_over(World { m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(published_draft.clone(), true)), ..world });
@@ -664,6 +671,11 @@ fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands
     assert_eq!(
         refused(writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 1)]), &[], &PublishDeposits::default())),
         PublicationError::Reinstate(ReinstateError::PublishedTarget)
+    );
+    assert_eq!(
+        refused(writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 5)]), &[], &PublishDeposits::default())),
+        PublicationError::Reinstate(ReinstateError::PublishedTarget),
+        "a place the draft does not hold the run at: the gate answers before the entry is checked"
     );
     assert_eq!(k.current_seq(), before, "nothing committed");
     assert!(!k.snapshot().world().m3().is_registered_document(&pmember(1)), "no member");
@@ -1016,12 +1028,15 @@ fn two_editions_world() -> World {
 /// identity with its place is refused `StrayPlaceUnrecorded`, nothing
 /// committed. At the caller's own class the price counts the two records
 /// the stab finds, and the commit re-windows doc1 onto F's identity
-/// through them, piece by piece — the fresh run windowing F, the document
-/// whose shot minted it — the member holding F's words by reference, no
+/// through them, a run a piece — each windowing F, the document whose shot
+/// minted it — the member holding F's words by reference, no
 /// record written, nothing minted in F.
 #[test]
 fn a_window_onto_words_published_into_another_document_is_re_windowed_through_that_drafts_record() {
-    use skep_links::{price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, SHOT_BYTES};
+    use skep_links::{
+        price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES,
+        SHOT_BYTES,
+    };
     let k = kernel_over(two_editions_world());
     draft_holding(&k, "ab");
     other_draft_holding(&k, "xy");
@@ -1061,8 +1076,12 @@ fn a_window_onto_words_published_into_another_document_is_re_windowed_through_th
     let drafted = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler());
     assert_eq!(
         price_staged_bytes(before.world(), &into_e, &the_shot, &the_places, &[], &none),
-        drafted + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES) + (PLACED_RUN_BYTES + 2 * KEPT_PLACE_BYTES) + 2 * REINSERTED_VALUE_BYTES,
-        "the draft-native run as one piece; the placed run of F's words at its two records"
+        drafted
+            + (REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler()))
+            + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES)
+            + (PLACED_RUN_BYTES + 2 * KEPT_PLACE_BYTES)
+            + 2 * REINSERTED_VALUE_BYTES,
+        "doc1's one record of its kept places; the draft-native run as one piece; the placed run of F's words at its two records"
     );
     let (m1, _) = w.publication(P1, &into_e, &the_shot, &the_places, &[], &none).expect("re-windowed onto F's identity through doc2's records");
     assert_eq!(m1, pmember(1));
@@ -1754,8 +1773,8 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 /// `homes_under` of the account (doc1 holding the record of `E.1`'s shot,
 /// `N` holding `L`, `E.1` holding `M`: three, whatever the caller may read of
 /// them), the `links` and `read_with` entries summed, the re-window's steps
-/// where a place is carried — the one piece placed × doc1's one run; none
-/// where no place is — and the twin fence's stab per re-inserted run,
+/// where a place is carried — doc1's one run and the one piece placed in
+/// it; none where no place is — and the twin fence's stab per re-inserted run,
 /// placed or not — and the one comparison against `MAX_PUBLICATION_READS`:
 /// a request at the budget is inside it, one past it is over, the system
 /// caller prices no homes, and a shot naming no draft re-windows nothing and
@@ -1767,14 +1786,17 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 /// placement, a draft-native run's placement and record, its values, the
 /// copy at its own slots' spans (a member-position span at the fewer of its
 /// width and the runs, an address as its unit span) with its claim, the
-/// retraction and the two read-withs — against `MAX_TXN_BYTES`, the same
+/// retraction and the two read-withs, and where a place is carried the
+/// re-windowed draft's one record and the place's change in it — against
+/// `MAX_TXN_BYTES`, the same
 /// `over_budget`; one past the transaction budget is over with the reads
 /// inside theirs.
 #[test]
 fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() {
     use skep_links::{
         price_publication_reads, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
-        KEPT_PLACE_BYTES, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, SHOT_BYTES,
+        KEPT_PLACE_BYTES, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES,
+        SHOT_BYTES,
     };
 
     let k = kernel_over(deposits_world());
@@ -1796,7 +1818,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
     let unplaced = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &deposits);
     assert_eq!(unplaced.rewindow, 0, "no place carried: the re-window places no piece");
     assert_eq!(unplaced.fence, 1, "the draft-native run's fence stab, placed or not");
-    // A place beside the draft-native run: one piece over the draft's one run.
+    // A place beside the draft-native run: the draft's one run, and one piece.
     let price = price_publication_reads(world, P1, &target, &the_shot, &places(2, &[(1, 1)]), &[], &deposits);
     // The fifth term, from the table: the member-position `from` of width 3
     // over a shot of two runs is at most two content spans of the edition's
@@ -1822,14 +1844,17 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         + CLAIM_BYTES
         + RETRACTION_BYTES
         + 2 * READ_WITH_BYTES;
+    // The re-windowed draft's one record, its address in it, and the one
+    // place's change.
+    let rewindowed = REWINDOWED_DRAFT_BYTES + rendering_draft + KEPT_PLACE_BYTES;
     assert_eq!(
         price,
-        ReadPrice { homes: 3, entries: 3, rewindow: 1, fence: 1, staged_bytes: staged + KEPT_PLACE_BYTES },
-        "three link-holding homes under the account; one links entry and two read-withs; one piece placed over doc1's one run, its place and its reach on doc1's run boundaries; one re-inserted run; the staged bytes from the table with the one kept place"
+        ReadPrice { homes: 3, entries: 3, rewindow: 1 + 1, fence: 1, staged_bytes: staged + rewindowed },
+        "three link-holding homes under the account; one links entry and two read-withs; doc1's one run and the one piece placed in it; one re-inserted run; the staged bytes from the table with the draft's one record and its one kept place"
     );
-    assert_eq!(unplaced, ReadPrice { rewindow: 0, staged_bytes: staged, ..price }, "unplaced: no re-window term, no kept place staged");
-    assert_eq!(staged, 7_279, "the figure, at the shallow depth");
-    assert_eq!(price.total(), 3 * 3 + 1 + 1, "homes × entries + the re-window's steps + the fence's stabs");
+    assert_eq!(unplaced, ReadPrice { rewindow: 0, staged_bytes: staged, ..price }, "unplaced: no re-window term, no record of kept places staged");
+    assert_eq!((staged, rewindowed), (7_279, 252), "the figures, at the shallow depth");
+    assert_eq!(price.total(), 3 * 3 + 2 + 1, "homes × entries + the re-window's steps + the fence's stabs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
     assert_eq!(ReadPrice::BYTE_BUDGET, skep_kernel::MAX_TXN_BYTES);
@@ -1861,7 +1886,8 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
 /// THE STAGED BYTES' SHAPES (lane F4): what the fifth term prices off the
 /// request alone, each against the formula — a kept place on a
 /// draft-native run (`KEPT_PLACE_BYTES` per piece, a run cut by another
-/// run's endpoints inside it priced per piece); a kept place on a stray
+/// run's endpoints inside it priced per piece, and the re-windowed draft's
+/// one record once, its address beside it); a kept place on a stray
 /// run (per record of the draft overlapping it, one here; one where none
 /// does, the arm refusing it); the mint form's two; a copy's `spans` form at
 /// its own spans; and the member-position form's amplification, which the
@@ -1873,7 +1899,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
 fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spells() {
     use skep_links::{
         price_staged_bytes, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
-        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, SHOT_BYTES,
+        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
 
     let k = kernel_over(deposits_world());
@@ -1886,6 +1912,9 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     // Every shot here names doc1 as its rendering draft, whose address the
     // placing record carries in its own slot.
     let drafted = SHOT_BYTES + skep_links::stored_tumbler_bytes(doc1().tumbler());
+    // Where a list carries a place doc1 is re-windowed: its one record, the
+    // draft's address in it, whatever the places number.
+    let rewindowed = REWINDOWED_DRAFT_BYTES + skep_links::stored_tumbler_bytes(doc1().tumbler());
     // Draft-native: `a b c` whole and `b` inside it — the first cut at `b`'s
     // two endpoints into three pieces, the second one piece; both placed.
     let nested = birth(vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
@@ -1897,16 +1926,16 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     );
     assert_eq!(
         price_staged_bytes(world, &target, &nested, &places(2, &[(0, 1), (1, 2)]), &[], &none),
-        drafted + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
-        "a kept place per piece"
+        drafted + rewindowed + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
+        "a kept place per piece, and the draft's one record once"
     );
     // Stray: the head's identity, which the board's one record names, with
     // a place — one record; identity no record names — priced as one piece,
     // the arm refusing it.
     let stray = birth(vec![shot_run(&pdoc(), &pca(1), 3)]);
-    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &[], &none), drafted + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     let unrecorded = birth(vec![shot_run(&pdoc(), &pca(9), 1)]);
-    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &[], &none), drafted + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     // The mint form's two, and a copy in the I-span form at its own spans.
     let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
     let spans = EndArg::Spans(vec![run(&pca(1), 2).iextent(), run(&pca(5), 1).iextent()]);
@@ -1960,7 +1989,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     use skep_links::{
         stored_span_bytes, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
         EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
-        RETRACTION_BYTES, SHOT_BYTES,
+        RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
 
     // The marker and the record, off a kernel of their own: one record,
@@ -2066,8 +2095,25 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
     let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
     let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - drafted - placed_run - record;
-    let kept_place = byte_placed - byte;
     assert_eq!(bytes_of(&k, &doc1()), "abcxyde", "doc1 reads as it did, its last byte re-windowed");
+    // The re-window's one record, told apart into its two figures: what one
+    // place costs is what a second place adds — two shots of one shape, two
+    // bytes apart in the draft, the first with no place and the second with
+    // both placed — and what the record costs past its places is the one
+    // placed byte's cost less that place and the draft's own address.
+    for (at, byte) in (7u32..).zip(*b"fghijkl") {
+        vs.insert(P1, &doc1(), vp(1, at), vec![Val::new([byte])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("a byte more");
+    }
+    let apart = |first: u32, placed: bool| {
+        let fresh = vec![shot_run(&doc1(), &ca(first), 1), shot_run(&doc1(), &ca(first + 2), 1)];
+        let kept = if placed { places(2, &[(0, first), (1, first + 2)]) } else { vec![] };
+        measure(&|| commit(&into_e, &base_shot(fresh.clone()), &kept, &none))
+    };
+    let (two_runs, two_placed) = (apart(7, false), apart(11, true));
+    let rewindowed_once = byte_placed - byte;
+    let kept_place = (two_placed - two_runs) - rewindowed_once;
+    let rewindowed_draft = rewindowed_once - kept_place - drafted;
+    assert_eq!(bytes_of(&k, &doc1()), "abcxydefghijkl", "doc1 reads as it did through both re-windows");
     // The mint form: the edition's mint over a birth shot into `S`, the
     // claim over the mint form without one.
     let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
@@ -2106,6 +2152,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ("RETRACTION_BYTES", retraction, RETRACTION_BYTES),
         ("READ_WITH_BYTES", read_with, READ_WITH_BYTES),
         ("KEPT_PLACE_BYTES", kept_place, KEPT_PLACE_BYTES),
+        ("REWINDOWED_DRAFT_BYTES", rewindowed_draft, REWINDOWED_DRAFT_BYTES),
         ("PLACED_RUN_BYTES", placed_run, PLACED_RUN_BYTES),
         ("REINSERTED_VALUE_BYTES", atom, REINSERTED_VALUE_BYTES),
         ("SHOT_BYTES", shot_bytes - based, SHOT_BYTES),
@@ -2133,6 +2180,9 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         (109, 260, 301, 1_029),
         "the quoted figures"
     );
+    // A kept place's change is its ordinal, its width and its run count
+    // around the one run it places, which is the placement's own figure.
+    assert_eq!(KEPT_PLACE_BYTES - PLACED_RUN_BYTES, 32, "a change past its run");
     assert_eq!(
         one_span_copy,
         COPY_FIXED_BYTES + stored_span_bytes(&run(&pca(1), 3).iextent()) + stored_span_bytes(&subtree_of(doc2().tumbler())) + stored_span_bytes(&subtree_of(citation().tumbler())),
@@ -2608,16 +2658,20 @@ fn a_family_shot_re_windows_every_named_draft_at_its_own_places_in_one_commit_an
 
 /// THE PRICE of a family publication: the re-window's term is the SUM over
 /// every document a list places, each its own term — the rendering draft's
-/// one placed piece × its run count where `places` carries a place, each
+/// run count and its one placed piece where `places` carries a place, each
 /// `also` draft's where its `also_places` entry does, none where no list
 /// places anything — and the fence's one stab per re-inserted run counts
 /// the runs of every named draft's identity. THE STAGED BYTES
 /// price an `also` draft's run as any draft-native run's, its record beside
-/// it (the gap the survey found closed), and a kept place PER LIST that
-/// places a run — the rendering draft's `places` and each `also` entry.
+/// it (the gap the survey found closed), a kept place PER LIST that
+/// places a run — the rendering draft's `places` and each `also` entry —
+/// and one record a draft a list re-windows.
 #[test]
 fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list_places() {
-    use skep_links::{price_publication_reads, price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, SHOT_BYTES};
+    use skep_links::{
+        price_publication_reads, price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES,
+        REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
+    };
     let k = kernel_over(edition_world());
     draft_holding(&k, "abc");
     other_draft_holding(&k, "xy");
@@ -2635,9 +2689,9 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     let unplaced = price(&[], &[]);
     assert_eq!(unplaced.rewindow, 0, "no list places anything: nothing is re-windowed, no re-window term");
     assert_eq!(unplaced.fence, 2, "one stab per re-inserted run, of whichever named draft");
-    assert_eq!(price(&places(2, &[(0, 1)]), &[]).rewindow, d1, "the rendering draft's one placed piece × its run count where `places` carries a place");
-    assert_eq!(price(&[], &doc2_places).rewindow, d2, "the `also` draft's one placed piece × its run count where its entry carries a place");
-    assert_eq!(price(&places(2, &[(0, 1)]), &doc2_places).rewindow, d1 + d2, "each draft its own term, summed");
+    assert_eq!(price(&places(2, &[(0, 1)]), &[]).rewindow, d1 + 1, "the rendering draft's run count and its one placed piece where `places` carries a place");
+    assert_eq!(price(&[], &doc2_places).rewindow, d2 + 1, "the `also` draft's run count and its one placed piece where its entry carries a place");
+    assert_eq!(price(&places(2, &[(0, 1)]), &doc2_places).rewindow, (d1 + 1) + (d2 + 1), "each draft its own term, summed");
     assert_eq!(price(&[], &[AlsoPlaces { draft: doc2(), places: vec![None, None] }]).rewindow, 0, "an entry with no place places nothing");
     let (homes, entries) = (unplaced.homes, unplaced.entries);
     assert_eq!((price(&places(2, &[(0, 1)]), &doc2_places).homes, price(&places(2, &[(0, 1)]), &doc2_places).entries), (homes, entries), "the other terms stand");
@@ -2648,7 +2702,13 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     let drafted = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler());
     let runs_and_records = 2 * (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 5 * REINSERTED_VALUE_BYTES;
     assert_eq!(price_staged_bytes(world, &into, &with, &[], &[], &none), drafted + runs_and_records, "the `also` draft's run priced as any draft-native run's, its record beside it");
-    assert_eq!(price_staged_bytes(world, &into, &with, &places(2, &[(0, 1), (1, 4)]), &doc2_places, &none), drafted + runs_and_records + 3 * KEPT_PLACE_BYTES, "a kept place per list that places a run");
+    let a_draft = REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler());
+    assert_eq!(stored_tumbler_bytes(doc2().tumbler()), stored_tumbler_bytes(doc1().tumbler()), "the two drafts lie at one depth");
+    assert_eq!(
+        price_staged_bytes(world, &into, &with, &places(2, &[(0, 1), (1, 4)]), &doc2_places, &none),
+        drafted + runs_and_records + 3 * KEPT_PLACE_BYTES + 2 * a_draft,
+        "a kept place per list that places a run, and one record a draft re-windowed"
+    );
     assert_eq!(unplaced.staged_bytes, drafted + runs_and_records, "the price carries the same figure");
 }
 
@@ -2678,19 +2738,17 @@ fn whole_image(k: &Kernel<World>) -> (Shot, Vec<Option<VPos>>) {
     (shot(None, runs), places)
 }
 
-/// THE RE-WINDOW's TERM IS ITS PLACED PIECES': per document the commit
-/// re-windows, the pieces its lists place × the runs its run-list holds
-/// while they are placed, never the request's every run. doc1 in 200 runs,
-/// published whole with every run placed at its own place — a first
-/// publication — prices 200 pieces × 200 runs, no run cut, beside 200 fence
-/// stabs: inside the budget. At 300 runs, the whole image with ONE place —
-/// a typed word — prices one piece × 300 runs and admits, where every run
-/// of the request multiplied by the draft's would be 300 × 300, past the
-/// budget; every run placed is past it, its lower bound answered with no
-/// run walked; and no place at all prices nothing for the re-window, the
-/// fence's stab per run standing either way.
+/// THE RE-WINDOW's TERM IS A SUM: per document the commit re-windows, its
+/// content runs and the pieces its lists place, never their product and
+/// never the request's every run. doc1 in 200 runs, published whole with
+/// every run placed at its own place — a first publication — prices 200
+/// runs + 200 pieces beside 200 fence stabs. At 300 runs, the whole image
+/// with ONE place — a typed word — prices 300 runs + one piece; every run
+/// placed prices 300 + 300 and is admitted, where the pieces × the runs
+/// would be 90,000, past the budget; and no place at all prices nothing
+/// for the re-window, the fence's stab per run standing either way.
 #[test]
-fn the_re_window_is_priced_on_the_pieces_its_lists_place() {
+fn the_re_window_is_priced_at_its_drafts_runs_and_the_pieces_its_lists_place() {
     use skep_links::{price_publication_reads, MAX_PUBLICATION_READS};
 
     let k = kernel_over(edition_world());
@@ -2701,7 +2759,7 @@ fn the_re_window_is_priced_on_the_pieces_its_lists_place() {
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&doc1()), 200, "the premise: two hundred runs");
     let published = price_publication_reads(s.world(), P1, &into, &first, &every, &[], &none);
-    assert_eq!((published.rewindow, published.fence), (200 * 200, 200), "200 pieces × 200 runs, each place and reach on a run boundary; one stab per run");
+    assert_eq!((published.rewindow, published.fence), (200 + 200, 200), "200 runs and 200 pieces; one stab per run");
     assert!(!published.reads_over_budget(), "a first publication of 200 runs, placed run for run, is inside the budget");
     fragment(&k, 100);
     let (whole, every) = whole_image(&k);
@@ -2709,28 +2767,25 @@ fn the_re_window_is_priced_on_the_pieces_its_lists_place() {
     assert_eq!(s.world().m5().content_run_count(&doc1()), 300, "the premise: three hundred runs");
     let price = |places: &[Option<VPos>]| price_publication_reads(s.world(), P1, &into, &whole, places, &[], &none);
     let word = price(&places(300, &[(0, 1)]));
-    assert_eq!((word.rewindow, word.fence), (300, 300), "one piece × 300 runs; 300 fence stabs");
-    assert!(!word.reads_over_budget() && 300 * 300 > MAX_PUBLICATION_READS, "admitted, where the request's runs × the draft's would be past the budget");
+    assert_eq!((word.rewindow, word.fence), (300 + 1, 300), "300 runs and one piece; 300 fence stabs");
     let all = price(&every);
-    assert_eq!(all.rewindow, 300 * 300, "every run placed: the lower bound, no run cut counted");
-    assert!(all.reads_over_budget());
+    assert_eq!(all.rewindow, 300 + 300, "every run placed: the runs once, and a piece a run");
+    assert!(!all.reads_over_budget() && 300 * 300 > MAX_PUBLICATION_READS, "admitted, where its pieces × its runs would be past the budget");
     let unplaced = price(&[]);
     assert_eq!((unplaced.rewindow, unplaced.fence), (0, 300), "no place: an unplaced run adds nothing to the re-window's term");
 }
 
-/// THE PIECES AND THE CUTS: a run the pairing cuts into three pieces is
-/// priced per piece, and each piece past the first a run more — over doc1's
-/// one run `a b c`, the run re-supplied after `b` alone, so `b`'s endpoints
-/// cut it, prices three pieces × (one run + two); a run placed strictly
-/// inside a run of the draft cuts it at both ends — one piece × (one run +
-/// two). THE ALTERNATING SHAPE: doc1's one run of 512 positions re-supplied
-/// as 512 one-position runs, every other one placed, prices 256 pieces ×
-/// (one run + the 511 its places cut), past the budget though its pieces ×
-/// its runs alone would be 256 — each piece splitting what is left of the
-/// run, so the run-list grows to 512 as they are placed; the same shape over
-/// eight positions prices 4 × (1 + 7), its arithmetic in small.
+/// THE PIECES ARE COUNTED, THE CUTS ARE NOT: a run the pairing cuts into
+/// three pieces is priced a step a piece — over doc1's one run `a b c`, the
+/// run re-supplied after `b` alone, so `b`'s endpoints cut it, prices one
+/// run + three pieces; a run placed strictly inside a run of the draft
+/// prices one run + one piece, the two runs its ends cut adding nothing.
+/// THE ALTERNATING SHAPE: doc1's one run of 512 positions re-supplied as
+/// 512 one-position runs, every other one placed — each place splitting
+/// what is left of the run, 511 cuts in all — prices one run + 256 pieces,
+/// and lands.
 #[test]
-fn the_re_window_is_priced_per_piece_and_per_cut() {
+fn the_re_window_is_priced_per_piece_and_nothing_for_the_runs_its_places_cut() {
     use skep_links::price_publication_reads;
 
     let into = PublishTarget::Document(pdoc());
@@ -2740,23 +2795,21 @@ fn the_re_window_is_priced_per_piece_and_per_cut() {
     let s = k.snapshot();
     let after_b = shot(None, vec![shot_run(&doc1(), &ca(2), 1), shot_run(&doc1(), &ca(1), 3)]);
     let cut = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(1, 1)]), &[], &none);
-    assert_eq!((cut.rewindow, cut.fence), (3 * (1 + 2), 2), "three pieces, two runs between them");
+    assert_eq!((cut.rewindow, cut.fence), (1 + 3, 2), "one run, three pieces");
     let inside = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(0, 2)]), &[], &none);
-    assert_eq!(inside.rewindow, 1 + 2, "`b` placed inside `a b c`: a cut at each end");
-    let alternating = |positions: u32| {
-        let k = kernel_over(edition_world());
-        draft_holding(&k, &"x".repeat(positions as usize));
-        assert_eq!(runs_of(&k, &doc1()).len(), 1, "the premise: one run");
-        let runs: Vec<ShotRun> = (1..=positions).map(|j| shot_run(&doc1(), &ca(j), 1)).collect();
-        let placed: Vec<(usize, u32)> = (0..positions as usize).step_by(2).map(|index| (index, index as u32 + 1)).collect();
-        let s = k.snapshot();
-        price_publication_reads(s.world(), P1, &into, &shot(None, runs), &places(positions as usize, &placed), &[], &none)
-    };
-    let small = alternating(8);
-    assert_eq!((small.rewindow, small.fence), (4 * (1 + 7), 8), "the first place opens the run, every reach cuts it, every later place cuts it again");
-    let wide = alternating(512);
-    assert_eq!((wide.rewindow, wide.fence), (256 * (1 + 511), 512));
-    assert!(wide.reads_over_budget(), "past the budget: {wide:?}");
+    assert_eq!(inside.rewindow, 1 + 1, "`b` placed inside `a b c`: one run, one piece, its two cuts uncounted");
+    let k = kernel_over(edition_world());
+    draft_holding(&k, &"x".repeat(512));
+    assert_eq!(runs_of(&k, &doc1()).len(), 1, "the premise: one run");
+    let runs: Vec<ShotRun> = (1..=512).map(|j| shot_run(&doc1(), &ca(j), 1)).collect();
+    let placed: Vec<(usize, u32)> = (0..512).step_by(2).map(|index| (index, index as u32 + 1)).collect();
+    let (alternating, kept) = (shot(None, runs), places(512, &placed));
+    let wide = price_publication_reads(k.snapshot().world(), P1, &into, &alternating, &kept, &[], &none);
+    assert_eq!((wide.rewindow, wide.fence), (1 + 256, 512), "one run and 256 pieces, whatever they cut");
+    assert!(!wide.reads_over_budget(), "inside the budget: {wide:?}");
+    writer(&k).publication(P1, &into, &alternating, &kept, &[], &none).expect("the alternating shape lands");
+    assert_eq!(bytes_of(&k, &doc1()), "x".repeat(512), "the draft reads as it did");
+    assert_eq!(runs_of(&k, &doc1()).len(), 512, "every other position the edition's, each its own run of the draft");
 }
 
 /// THE FENCE AND THE LOCK SET, ONE PASS EACH: a family shot naming 64 owned
@@ -2801,4 +2854,284 @@ fn a_family_of_sixty_four_drafts_and_4096_runs_is_fenced_in_one_pass() {
     assert_eq!(refusal, PublicationError::AlreadyPublished { site: e1 }, "the fence met the published word at the last run");
     assert_eq!(k.current_seq(), before, "nothing committed");
     assert!(elapsed < std::time::Duration::from_secs(2), "the lock set and the fence over 64 drafts and 4,096 runs: {elapsed:?}");
+}
+
+// ───────────────────────── the re-window in one pass ─────────────────────────
+
+/// THE EARLIEST ENTRY ANSWERS. A first entry whose place the draft does not
+/// hold its run at answers `kept_place_moved` naming it, whatever stands
+/// after it and wherever: a stray no record names, at a lower place; an
+/// entry whose place overlaps its own; and a second moved entry at a lower
+/// place, which a walk of the draft meets first. An entry that holds leaves
+/// the later one to answer. Each refusal commits nothing.
+#[test]
+fn a_moved_first_entry_answers_ahead_of_whatever_stands_after_it() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abcdef");
+    other_draft_holding(&k, "xy");
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let before = k.current_seq();
+    let own = |start: u32| shot_run(&doc1(), &ca(start), 2);
+    // doc1 holds `a b` at 1, `c d` at 3, `e f` at 5.
+    let cells: [(&str, ShotRun, u32, ShotRun, u32, usize); 4] = [
+        ("a stray no record names, at a lower place", own(1), 3, shot_run(&doc2(), &ca2(1), 2), 1, 0),
+        ("an entry overlapping the first's place", own(1), 3, own(5), 4, 0),
+        ("a second moved entry at a lower place", own(1), 5, own(5), 1, 0),
+        ("a first entry that holds", own(1), 1, own(5), 3, 1),
+    ];
+    for (what, first, first_at, second, second_at, index) in cells {
+        let the_shot = shot(None, vec![first, second]);
+        assert_eq!(
+            refused(writer(&k).publication(P1, &into, &the_shot, &places(2, &[(0, first_at), (1, second_at)]), &[], &none)),
+            PublicationError::KeptPlaceMoved { index, draft: doc1() },
+            "{what}"
+        );
+        assert_eq!(k.current_seq(), before, "{what}: nothing committed");
+        assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 6)], "{what}: the draft unchanged");
+    }
+}
+
+/// The suite's world, its fold noting each content-arrangement record it is
+/// handed — a placement, a removal, an edit — with the document it names,
+/// so a test reads what a commit asked of a draft's run-list: a record
+/// folded at its push and again at the seal is noted twice.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Counted(World);
+
+thread_local! {
+    static FOLDED: std::cell::RefCell<Vec<(&'static str, Address)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Returns the records this thread's counted worlds have folded since the
+/// last call, and starts again from none.
+fn folded() -> Vec<(&'static str, Address)> {
+    FOLDED.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
+
+impl skep_kernel::WorldState for Counted {
+    type Record = Record;
+    fn apply(&self, at: Seq, r: &Record) -> Counted {
+        use skep_arrangement::M5Rec;
+        let noted = match r {
+            Record::M5(M5Rec::ContentPlace { doc, .. }) => Some(("place", doc)),
+            Record::M5(M5Rec::ContentRemove { doc, .. }) => Some(("remove", doc)),
+            Record::M5(M5Rec::ContentEdit { doc, .. }) => Some(("edit", doc)),
+            _ => None,
+        };
+        if let Some((kind, doc)) = noted {
+            FOLDED.with(|log| log.borrow_mut().push((kind, doc.clone())));
+        }
+        Counted(self.0.apply(at, r))
+    }
+}
+impl HasM3 for Counted {
+    fn m3(&self) -> &M3State {
+        &self.0.m3
+    }
+}
+impl HasContent for Counted {
+    fn content(&self) -> &skep_content::ContentStore {
+        &self.0.content
+    }
+}
+impl HasM5 for Counted {
+    fn m5(&self) -> &skep_arrangement::M5State {
+        &self.0.m5
+    }
+}
+impl HasLinks for Counted {
+    fn links(&self) -> &skep_links::LinkState {
+        &self.0.links
+    }
+}
+
+fn counted_kernel(world: World) -> Kernel<Counted> {
+    let cfg = skep_kernel::KernelConfig {
+        durability: skep_kernel::Durability::InMemory,
+        checkpoint: skep_kernel::CheckpointPolicy::Manual,
+        salt: skep_kernel::SaltSource::Seeded(0),
+    };
+    Kernel::open(cfg, Counted(world)).expect("in-memory open cannot fail")
+}
+
+static EVERY_DOCUMENT: fn(&Counted, &Address) -> bool = |_, _| true;
+
+/// A world whose doc2 holds `4 × runs` one-byte values as one run, and whose
+/// doc1 holds the first three of every four of them by identity: `runs`
+/// runs of doc2's words, three wide, no two I-adjacent.
+fn fragmented_family(runs: u32) -> World {
+    let k = kernel_over(edition_world());
+    let vals: Vec<Val> = (0..4 * runs).map(|_| Val::new(*b"w")).collect();
+    Vstream::new(&k).insert(P1, &doc2(), vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("doc2's words");
+    let held: Vec<ShotRun> = (0..runs).map(|j| shot_run(&doc2(), &ca2(1 + 4 * j), 3)).collect();
+    Vstream::new(&k).reinstate(P1, &doc1(), vp(1, 1), &held, AsOf::Typed(k.current_seq())).expect("doc1 holding doc2's words by identity");
+    let world = k.snapshot().world().clone();
+    assert_eq!((world.m5.content_run_count(&doc1()), world.m5.content_run_count(&doc2())), (runs as usize, 1));
+    world
+}
+
+/// A family shot of `pieces` runs of doc2's words over [`fragmented_family`]
+/// — run `j` a part of doc1's run `j`: the whole of it, its middle position,
+/// which cuts the run at both ends, or its first position, which cuts it at
+/// one, in turn — beside each run's place in doc1 and its place in doc2.
+fn parts_of_the_family(pieces: u32) -> (Shot, Vec<Option<VPos>>, Vec<AlsoPlaces>) {
+    let part = |j: u32| match j % 3 {
+        0 => (0, 3),
+        1 => (1, 1),
+        _ => (0, 1),
+    };
+    let runs: Vec<ShotRun> = (0..pieces).map(|j| shot_run(&doc2(), &ca2(1 + 4 * j + part(j).0), part(j).1)).collect();
+    let in_doc1: Vec<Option<VPos>> = (0..pieces).map(|j| Some(vp(1, 3 * j + 1 + part(j).0))).collect();
+    let in_doc2: Vec<Option<VPos>> = (0..pieces).map(|j| Some(vp(1, 4 * j + 1 + part(j).0))).collect();
+    (family(None, runs), in_doc1, vec![AlsoPlaces { draft: doc2(), places: in_doc2 }])
+}
+
+/// THE TERM IS A SUM. A draft of 4,167 runs re-windowed at 1,613 places, a
+/// piece each, places that cut a run at one end and at both among them, is
+/// priced at exactly its runs and its pieces — 5,780 steps, where the
+/// pieces × the runs are past the budget a hundred times over — and a
+/// second draft re-windowed beside it adds its own runs and pieces. The
+/// publication is inside both budgets, and lands.
+#[test]
+fn the_re_windows_term_is_exactly_the_drafts_runs_and_the_pieces_placed() {
+    use skep_links::{price_publication_reads, MAX_PUBLICATION_READS};
+    const RUNS: u32 = 4_167;
+    const PIECES: u32 = 1_613;
+    let k = kernel_over(fragmented_family(RUNS));
+    let (the_shot, in_doc1, in_doc2) = parts_of_the_family(PIECES);
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let s = k.snapshot();
+    let price = price_publication_reads(s.world(), P1, &into, &the_shot, &in_doc1, &[], &none);
+    assert_eq!(price.rewindow, (RUNS + PIECES) as usize, "the draft's runs and the pieces placed, summed");
+    assert_eq!(price.fence, PIECES as usize);
+    assert!(!price.over_budget() && (RUNS * PIECES) as usize > 100 * MAX_PUBLICATION_READS, "{price:?}");
+    let both = price_publication_reads(s.world(), P1, &into, &the_shot, &in_doc1, &in_doc2, &none);
+    assert_eq!(both.rewindow, (RUNS + PIECES) as usize + (1 + PIECES) as usize, "doc2's one run and its pieces beside doc1's");
+    let counts = |k: &Kernel<World>| (k.snapshot().world().m5().content_count(&doc1()), k.snapshot().world().m5().content_count(&doc2()));
+    let counts_before = counts(&k);
+    writer(&k).publication(P1, &into, &the_shot, &in_doc1, &in_doc2, &none).expect("the publication lands");
+    assert_eq!(counts(&k), counts_before, "both drafts hold as many positions as they did");
+    let fresh = |r: &Run| skep_address::document_of(r.i_start()).is_some_and(|d| d == pdoc());
+    let placed: u32 = runs_of(&k, &doc1()).iter().filter(|r| fresh(r)).map(width_of).sum();
+    assert_eq!(placed, runs_of(&k, &doc2()).iter().filter(|r| fresh(r)).map(width_of).sum::<u32>(), "the same positions re-windowed in each draft");
+    assert_eq!(placed, (0..PIECES).map(|j| if j % 3 == 0 { 3 } else { 1 }).sum::<u32>());
+}
+
+/// ONE RECORD A DRAFT. A publication re-windowing a draft of 4,167 runs at
+/// 1, 16 and 1,613 pieces stages its kept places as one edit record of the
+/// draft — folded at its push and at the seal, so the draft's run-list is
+/// rebuilt twice whatever the pieces number — and no placement and no
+/// removal: one record more than the same shot stages with no place. A
+/// second draft re-windowed beside it takes a record of its own, and two
+/// lists naming one document are one record of it.
+#[test]
+fn a_publications_kept_places_are_one_record_a_draft_whatever_the_pieces() {
+    const RUNS: u32 = 4_167;
+    let world = fragmented_family(RUNS);
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let publish = |the_shot: &Shot, in_doc1: &[Option<VPos>], also: &[AlsoPlaces]| -> (u64, Vec<(&'static str, Address)>) {
+        let k = counted_kernel(world.clone());
+        let (before, _) = (k.current_seq(), folded());
+        LinkWriter::new(&k, &EVERY_DOCUMENT).publication(P1, &into, the_shot, in_doc1, also, &none).expect("the publication lands");
+        (k.current_seq().0 - before.0, folded())
+    };
+    let of = |log: &[(&'static str, Address)], kind: &str, doc: &Address| log.iter().filter(|(k, d)| *k == kind && d == doc).count();
+    for pieces in [1u32, 16, 1_613] {
+        let (the_shot, in_doc1, in_doc2) = parts_of_the_family(pieces);
+        let (unplaced, log) = publish(&the_shot, &[], &[]);
+        assert!(log.is_empty(), "{pieces} pieces, no place: no draft's arrangement is written");
+        let (records, log) = publish(&the_shot, &in_doc1, &[]);
+        assert_eq!(records - unplaced, 1, "{pieces} pieces: the kept places are one record");
+        assert_eq!((of(&log, "edit", &doc1()), log.len()), (2, 2), "{pieces} pieces: one edit record of doc1, folded at its push and at the seal, and nothing else of any draft");
+        let (records, log) = publish(&the_shot, &in_doc1, &in_doc2);
+        assert_eq!(records - unplaced, 2, "{pieces} pieces: a record a draft");
+        assert_eq!((of(&log, "edit", &doc1()), of(&log, "edit", &doc2()), log.len()), (2, 2, 4), "{pieces} pieces: each draft's list rebuilt twice");
+    }
+    // Two lists naming one document — doc1 as the rendering draft and among
+    // `also`, its first list placing the even runs and its second the odd —
+    // re-window it once, by one record.
+    let (the_shot, in_doc1, _) = parts_of_the_family(16);
+    let named_twice = Shot { also: vec![doc2(), doc1()], ..the_shot.clone() };
+    let split = |keep: u32| -> Vec<Option<VPos>> { in_doc1.iter().enumerate().map(|(j, place)| place.clone().filter(|_| j as u32 % 2 == keep)).collect() };
+    let second_list = vec![AlsoPlaces { draft: doc1(), places: split(1) }];
+    let (unplaced, _) = publish(&named_twice, &[], &[]);
+    let (records, log) = publish(&named_twice, &split(0), &second_list);
+    assert_eq!(records - unplaced, 1, "two lists, one document: one record");
+    assert_eq!((of(&log, "edit", &doc1()), log.len()), (2, 2));
+    let k = kernel_over(world.clone());
+    let price = skep_links::price_publication_reads(k.snapshot().world(), P1, &into, &named_twice, &split(0), &second_list, &none);
+    assert_eq!(price.rewindow, (RUNS + 16) as usize, "and priced once: its runs, and the pieces of both lists");
+}
+
+/// THE RE-WINDOW's SHARE OF THE PRICE IS AT OR ABOVE WHAT IT STAGES. On a
+/// journaled kernel, a publication with its kept places against the same
+/// publication with none, over one world: the bytes the places add to the
+/// journal are the bytes they add to the price where every place is one
+/// piece — one place, a stray through its record, sixteen places, two
+/// drafts each at its own list — and fewer where a place holds several
+/// pieces, each piece past the first staging a run and priced a whole
+/// change.
+#[test]
+fn the_re_windows_share_of_the_price_is_at_or_above_what_it_stages() {
+    use skep_links::{price_staged_bytes, stored_tumbler_bytes, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REWINDOWED_DRAFT_BYTES};
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    // What `kept` and `also` add to the price and to the journal of the
+    // one commit, over `world`.
+    let share = |world: &World, the_shot: &Shot, kept: &[Option<VPos>], also: &[AlsoPlaces]| -> (u64, u64) {
+        let staged = |kept: &[Option<VPos>], also: &[AlsoPlaces]| {
+            let k = journaled_over(world.clone());
+            let before = k.journal_bytes();
+            writer(&k).publication(P1, &into, the_shot, kept, also, &none).expect("the publication lands");
+            k.journal_bytes() - before
+        };
+        let priced = |kept: &[Option<VPos>], also: &[AlsoPlaces]| price_staged_bytes(world, &into, the_shot, kept, also, &none);
+        (priced(kept, also) - priced(&[], &[]), staged(kept, also) - staged(&[], &[]))
+    };
+    let after = |build: &dyn Fn(&Kernel<World>)| -> World {
+        let k = kernel_over(edition_world());
+        build(&k);
+        let world = k.snapshot().world().clone();
+        world
+    };
+    let a_draft = REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler());
+
+    // One place, one piece.
+    let abc = after(&|k| draft_holding(k, "abc"));
+    assert_eq!(share(&abc, &shot(None, vec![shot_run(&doc1(), &ca(2), 1)]), &places(1, &[(0, 2)]), &[]), (a_draft + KEPT_PLACE_BYTES, a_draft + KEPT_PLACE_BYTES));
+
+    // Sixteen places, a piece each.
+    let wide = after(&|k| draft_holding(k, &"x".repeat(32)));
+    let every_other: Vec<ShotRun> = (1..=32).map(|j| shot_run(&doc1(), &ca(j), 1)).collect();
+    let kept: Vec<(usize, u32)> = (0..32).step_by(2).map(|index| (index, index as u32 + 1)).collect();
+    assert_eq!(share(&wide, &shot(None, every_other), &places(32, &kept), &[]), (a_draft + 16 * KEPT_PLACE_BYTES, a_draft + 16 * KEPT_PLACE_BYTES));
+
+    // Two drafts, each at its own list.
+    let two = after(&|k| {
+        draft_holding(k, "abc");
+        other_draft_holding(k, "xy");
+    });
+    let both = family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)]);
+    let in_doc2 = vec![AlsoPlaces { draft: doc2(), places: vec![None, Some(vp(1, 1))] }];
+    assert_eq!(share(&two, &both, &places(2, &[(0, 1)]), &in_doc2), (2 * (a_draft + KEPT_PLACE_BYTES), 2 * (a_draft + KEPT_PLACE_BYTES)));
+
+    // A stray, through its one record.
+    let strayed = after(&|k| {
+        stray_board(k);
+    });
+    let k = kernel_over(strayed.clone());
+    let mut heal = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(1), 2)]);
+    heal.draft = Some(doc1());
+    assert_eq!(share(&strayed, &heal, &places(2, &[(1, 4)]), &[]), (a_draft + KEPT_PLACE_BYTES, a_draft + KEPT_PLACE_BYTES));
+
+    // One place of three pieces: `a b c` whole, cut at `b`'s two ends by the
+    // run that names `b` first. The record holds one change of three runs.
+    let cut = shot(None, vec![shot_run(&doc1(), &ca(2), 1), shot_run(&doc1(), &ca(1), 3)]);
+    let (priced, staged) = share(&abc, &cut, &places(2, &[(1, 1)]), &[]);
+    assert_eq!(priced, a_draft + 3 * KEPT_PLACE_BYTES);
+    assert_eq!(staged, a_draft + KEPT_PLACE_BYTES + 2 * PLACED_RUN_BYTES, "the place's one change, a run a piece");
+    assert!(priced >= staged);
 }

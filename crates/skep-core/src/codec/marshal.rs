@@ -18,7 +18,9 @@ use skep_febe::{
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
-use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, OriginalEntry, PublishTarget, View};
+use skep_links::{
+    EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, OriginalEntry, PublishTarget, ReadPrice, View,
+};
 use skep_retrieval::{
     CompareRegion, CorrPair, Deletions, DeliveryItem, Flagged, Operand, RegionSpec, SpanFault, Spec,
 };
@@ -342,8 +344,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // (`doc`, or `account` with `mint: true`), `claim: true` where the
         // deposits claim, at either form (an unset flag is no field), and
         // each of `links`, `retract`, `originals`, `read_with` and
-        // `supersede` only where it holds an entry.
-        Op::Publish { target, shot, places, also_places, deposits } => {
+        // `supersede` only where it holds an entry. The price read carries
+        // the same members under its own name, so one arm writes both.
+        Op::Publish { target, shot, places, also_places, deposits }
+        | Op::PublishCost { target, shot, places, also_places, deposits } => {
             let mut pairs = match target {
                 PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
                 PublishTarget::Mint { account } => vec![("account", j_addr(account)), ("mint", Value::Bool(true))],
@@ -403,7 +407,7 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if !deposits.supersede.is_empty() {
                 pairs.push(("supersede", j_addrs(&deposits.supersede)));
             }
-            (op_name(OpKind::Publish), pairs)
+            (op_name(op.kind()), pairs)
         }
         Op::MakeLink { home, from, to, ty, replaces } => {
             let mut pairs = vec![
@@ -847,6 +851,27 @@ pub(super) fn j_response(r: &Response) -> Value {
         // `rows` is always present and empty for the guest — an answer.
         Response::UniversalGrants { rows, as_of } => {
             ("universal_grants", vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))])
+        }
+        // The price of a publication (wire.md §The response envelope,
+        // `publish_cost`): the price's five figures, a member each, then
+        // the two budgets they are held to and the position read. This is
+        // the one place the answer is built, off `ReadPrice` alone: a
+        // figure the price gains is a member added here.
+        Response::PublishCost { price, as_of } => {
+            let ReadPrice { homes, entries, rewindow, fence, staged_bytes } = *price;
+            (
+                "publish_cost",
+                vec![
+                    ("homes", j_usize(homes)),
+                    ("entries", j_usize(entries)),
+                    ("rewindow", j_usize(rewindow)),
+                    ("fence", j_usize(fence)),
+                    ("staged_bytes", j_u64(staged_bytes)),
+                    ("read_budget", j_usize(ReadPrice::BUDGET)),
+                    ("byte_budget", j_u64(ReadPrice::BYTE_BUDGET)),
+                    ("as_of", j_seq(*as_of)),
+                ],
+            )
         }
         Response::Rejected(rej) => return j_rejection(rej),
     };
@@ -1640,6 +1665,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::OutClaims => "out_claims",
         OpKind::EditionClaims => "edition_claims",
         OpKind::UniversalGrants => "universal_grants",
+        OpKind::PublishCost => "publish_cost",
         OpKind::Unparseable => "unparseable",
     }
 }

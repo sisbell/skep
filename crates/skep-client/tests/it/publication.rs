@@ -453,6 +453,13 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     assert_eq!(rr.restatement, None);
     let Built::Request(mut request) = build(&p, &inputs, &rr.enumeration, &rr.panel, &confirmed(&seeded)).expect("built") else { panic!("inert") };
     assert!(request.price.admits(), "{:?}", request.price);
+    // The price is the board's own for the request's members: a daughter
+    // named beside them is an entry more over the person's link-holding
+    // homes and a claim more staged, by the board's count.
+    let with_daughter = publication::Request { supersede: vec![addr(&format!("{e}.1.1"))], ..(*request).clone() };
+    let priced = publication::price(&p, &with_daughter).expect("the board prices the frame");
+    assert_eq!(priced.bytes, request.price.bytes + skep_links::CLAIM_BYTES, "a claim staged a daughter");
+    assert!(priced.reads > request.price.reads, "an entry over the homes a daughter: {priced:?} against {:?}", request.price);
     assert_eq!(request.runs, vec![run(e, 1, 19), run(d, 1, 10), run(o, 1, 5)]);
     assert_eq!(request.places, vec![None, Some(20), None]);
     assert_eq!(request.retract, vec![addr(&seeded.mpub)]);

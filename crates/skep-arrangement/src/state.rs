@@ -205,8 +205,9 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   iextents it splices in, [`ShotPlace`](M5Rec::ShotPlace) exactly the
 ///   iextents of the runs it splices at ordinal 1 (none when it places none),
 ///   [`ContentEdit`](M5Rec::ContentEdit) exactly the iextents of the runs
-///   its changes place — the values a text edit minted and the runs a
-///   landing placed by identity alike, none where its changes only remove —
+///   its changes place — the values a text edit minted, the runs a landing
+///   placed by identity and the published runs a re-window put at a draft's
+///   kept places alike, none where its changes only remove —
 ///   while what its changes remove only contracts the image, and
 ///   [`VersionSnapshot`](M5Rec::VersionSnapshot) exactly the iextents of
 ///   the run-list it installs. Preserved by the other three:
@@ -836,8 +837,10 @@ pub enum M5Rec {
     /// `changes` are in the coordinates of `doc`'s arrangement as it stood
     /// before the record — each a [`Splice`]: positions removed at an
     /// ordinal, runs placed where they stood — ascending and apart, as the
-    /// op that stages it judged them
-    /// ([`Vstream::edit`](crate::Vstream::edit)). The fold splices every one
+    /// body that stages it judged them
+    /// ([`Vstream::edit`](crate::Vstream::edit), or
+    /// [`stage_substitute`](crate::stage_substitute) for a publication's
+    /// kept places). The fold splices every one
     /// in one walk of the list, R-appends each placed run's iextent (J1★;
     /// P4★), and moves `doc`'s arranged-at entry to its commit whatever the
     /// list holds, an EMPTY list included (MOVED★): the record of a landing
@@ -845,7 +848,8 @@ pub enum M5Rec {
     /// pushed beside it — still refuses a frame typed before it.
     ///
     /// **What it appends to R, by surface.** One record serves two wire
-    /// frames, and R gains the same thing under both — a span for each run
+    /// frames and the publication's re-window, and R gains the same thing
+    /// under all three — a span for each run
     /// a change places, and nothing for what a change removes (P2: the
     /// removed addresses keep the pairs that placed them). For a text edit
     /// (`edit`) the placed runs are the values the call minted, one run a
@@ -856,7 +860,12 @@ pub enum M5Rec {
     /// `reinstate`'s are: a run put back gains a second span, and a frame
     /// that names only the stretch it changes appends only that stretch's
     /// runs, where one replacing the whole arrangement appends every run it
-    /// re-places.
+    /// re-places. For a publication's re-window of a draft at its kept
+    /// places ([`stage_substitute`](crate::stage_substitute)) they are the
+    /// published runs put where the draft's own words stood: a change a
+    /// place and a run a piece, never coalesced in the record, so R↾doc
+    /// gains a span a piece — in the record's order, by place — where the
+    /// run-list holds two I-adjacent pieces as one run.
     ///
     /// It mints nothing and notes no birth extent, as a
     /// [`ContentPlace`](M5Rec::ContentPlace) notes none (BIRTH★), and it
@@ -1389,8 +1398,9 @@ impl M5State {
             // The edit's fold: every change spliced in ONE walk of the list
             // (`RunList::spliced`), and each placed run's iextent appended
             // to R in the same fold, as the placement's arm appends them
-            // (J1★ ⇒ P4★) — the values a text edit minted and the runs a
-            // landing placed by identity alike; what a change removes
+            // (J1★ ⇒ P4★) — the values a text edit minted, the runs a
+            // landing placed by identity and the published runs a
+            // re-window put at its kept places alike; what a change removes
             // leaves R as it stands (P2). A record of no change leaves the
             // arrangement map as it stands, an absent document absent, and
             // one that places no run appends no entry to R.

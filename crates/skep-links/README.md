@@ -31,6 +31,20 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   query could meet before any link is touched, so a reader stabs the
   homes it may read and pays nothing for the links of the rest.
 
+- **The publication and its price** — `LinkWriter::publication` stages
+  the publish shot with its correspondence records, its deposits and each
+  named draft's re-window at its kept places in one transaction, the
+  re-window one identity-checked substitution a draft
+  ([skep-arrangement](../skep-arrangement)'s `stage_substitute`). The
+  commit is priced before any lock is taken (`price_publication_reads`,
+  `ReadPrice`): its in-lock reads — the caller's link-holding homes × the
+  entries read over them, per re-windowed draft its content runs and the
+  pieces placed, a fence stab a re-inserted run — against
+  `MAX_PUBLICATION_READS`, and the bytes it would stage, from a
+  worst-case table held equal to the kernel's own accounting, against
+  the transaction budget. One function prices the daemon's refusal and
+  the price a client asks for before it sends.
+
 State rides the kernel; span algebra comes from
 [skep-address](../skep-address).
 

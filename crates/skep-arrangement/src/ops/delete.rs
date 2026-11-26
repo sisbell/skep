@@ -79,14 +79,16 @@ where
 /// [`M5Rec::ContentRemove`] it pushes, `delete`'s own. Offered so a caller
 /// can compose the removal with other stagings under ONE transaction, which
 /// the public ops cannot, each opening a transaction of its own and the
-/// kernel refusing a nested one: the last step of the link-sets design's one
-/// commit, after the shot ([`stage_publish`](crate::stage_publish)) and the
-/// fresh run's placement ([`stage_reinstate_at`](crate::stage_reinstate_at))
-/// — "a `reinstate` of the fresh I-run at the run's place and a `delete` of
-/// the draft-native run, staged in the same commit and applied in turn so
-/// positions stay true" (the link-sets design, §5.7): the position it is
-/// given is the draft-native run's AFTER the placement, which the caller
-/// reads off `stg.working()` once the placement is staged.
+/// kernel refusing a nested one. Behind a placement
+/// ([`stage_reinstate_at`](crate::stage_reinstate_at)) it is the second of
+/// the pair the link-sets design re-windows a draft at a kept place by — "a
+/// `reinstate` of the fresh I-run at the run's place and a `delete` of the
+/// draft-native run, staged in the same commit and applied in turn so
+/// positions stay true" (§5.7): the position it is given is then the
+/// draft-native run's AFTER the placement, which the caller reads off
+/// `stg.working()` once the placement is staged. The publication stages
+/// that pair for every kept place of a draft as one record
+/// ([`stage_substitute`](crate::stage_substitute)).
 ///
 /// It reads the transaction's working world, `stg.working()`: the registry
 /// for the gate and the publication bit, and the arrangement as the records
@@ -97,9 +99,9 @@ where
 /// one transaction supplies the union of their keys.
 ///
 /// `as_of` is the state the removal was typed against, checked as `delete`
-/// checks it: the publication's re-window passes [`AsOf::Unchecked`], its
-/// removal staged behind the shot's own check by identity and never refused
-/// for a position the stagings before it moved.
+/// checks it. A caller staging the removal behind a check of its own passes
+/// [`AsOf::Unchecked`], and is never refused for a position the stagings
+/// before it moved.
 ///
 /// # Errors
 ///

@@ -133,13 +133,14 @@ where
 /// and the one [`M5Rec::ContentPlace`] it pushes, `reinstate`'s own. Offered
 /// so a caller can compose the placement with other stagings under ONE
 /// transaction, which the public ops cannot, each opening a transaction of
-/// its own and the kernel refusing a nested one: the step the link-sets
-/// design's one commit takes after the shot
-/// ([`stage_publish`](crate::stage_publish)) to re-window the draft at a kept
-/// place — "a `reinstate` of the fresh I-run at the run's place and a
-/// `delete` of the draft-native run, staged in the same commit and applied in
-/// turn so positions stay true" (the link-sets design, §5.7;
-/// [`stage_delete_at`](crate::stage_delete_at) the delete).
+/// its own and the kernel refusing a nested one. With
+/// [`stage_delete_at`](crate::stage_delete_at) it is the pair the link-sets
+/// design re-windows a draft at a kept place by — "a `reinstate` of the
+/// fresh I-run at the run's place and a `delete` of the draft-native run,
+/// staged in the same commit and applied in turn so positions stay true"
+/// (§5.7) — which the publication stages for every kept place of a draft as
+/// one record ([`stage_substitute`](crate::stage_substitute)), leaving the
+/// draft as the pair leaves it.
 ///
 /// It reads the transaction's working world, `stg.working()`: the registry
 /// for the gate, the publication bit and each origin's registration; the
@@ -153,9 +154,9 @@ where
 /// precondition on the origins' readability is the caller's here as there.
 ///
 /// `as_of` is the state the placement was typed against, checked as
-/// `reinstate` checks it: the publication's re-window passes
-/// [`AsOf::Unchecked`], its placement staged behind the shot's own check by
-/// identity and never refused for a position the stagings before it moved.
+/// `reinstate` checks it. A caller staging the placement behind a check of
+/// its own passes [`AsOf::Unchecked`], and is never refused for a position
+/// the stagings before it moved.
 ///
 /// # Errors
 ///

@@ -27,12 +27,10 @@ fn wrappers_recurse() {
     ))
     .lower();
     assert_eq!(code, RejectCode::Content);
-    // The publication's re-window: its placement and its removal recurse
-    // into M5's own tables, so a published draft reads as `reinstate`'s and
-    // `delete`'s `published_target`.
+    // The publication's re-window: its gate's verdict recurses into M5's
+    // own table, so a published draft reads as `reinstate`'s
+    // `published_target`.
     let (code, site) = PublicationError::Reinstate(ReinstateError::PublishedTarget).lower();
-    assert_eq!((code, site), (RejectCode::PublishedTarget, None));
-    let (code, site) = PublicationError::Delete(DeleteError::PublishedTarget).lower();
     assert_eq!((code, site), (RejectCode::PublishedTarget, None));
     let (code, _) = PublicationError::Reinstate(ReinstateError::TooManyRuns).lower();
     assert_eq!(code, RejectCode::TooManyRuns);

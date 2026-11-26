@@ -339,9 +339,8 @@ pub struct PublicationReadRefusal {
     pub entries: usize,
     /// The re-window's steps: per document the commit re-windows — the
     /// rendering draft where `places` carries a place, each `also` draft
-    /// where its `also_places` entry does — the pieces its lists place ×
-    /// (its content runs + the runs those pieces can add), summed; `0` for a
-    /// shot re-windowing none.
+    /// where its `also_places` entry does — its content runs and the pieces
+    /// its lists place, summed; `0` for a shot re-windowing none.
     pub rewindow: usize,
     /// The twin fence's stabs: one per re-inserted run.
     pub fence: usize,
@@ -374,8 +373,8 @@ impl PublicationReadRefusal {
 /// It is M7's [`price_publication_reads`] over `world` as the caller — the
 /// caller's link-holding homes × (`links` + `originals` + `read_with` +
 /// `supersede` entries), plus the re-window's steps per document it
-/// re-windows (the pieces its lists place × the runs its run-list holds
-/// while they are placed) and the twin fence's stab per re-inserted run,
+/// re-windows (its content runs and the pieces its lists place) and the
+/// twin fence's stab per re-inserted run,
 /// the work of the composite's in-lock reads counted before any is made,
 /// against M7's one reads budget; and the bytes the commit would stage,
 /// priced from M7's worst-case table off the request, against the kernel's
@@ -395,9 +394,10 @@ impl PublicationReadRefusal {
 /// plan's reads and the kept-place checks stay where the composite makes
 /// them; this bounds them and reads nothing of theirs but one stab, per
 /// stray place in either list, of the correspondence records across every
-/// home — the records the caller may read, wherever homed, are among them —
-/// and, where the price stands inside the budget without them, one walk of
-/// each re-windowed draft's run-list for the cuts its places make.
+/// home — the records the caller may read, wherever homed, are among them.
+/// The read door answers the same price whole, inside the budgets or past
+/// them, to a client that asks before it sends (`publish_cost`; M10's
+/// `Op::PublishCost`): one function prices both.
 pub fn publication_read_refusal(
     world: &World,
     op: &Op,

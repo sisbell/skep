@@ -747,25 +747,20 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         // private, so the flag on this op is an unknown field `finish`
         // refuses, as `attest` is: a stage is outside the checked set.
         "stage" => Op::Stage { from: fields.addr("from")? },
-        // The target, the claim's flag, the shot, then its kept places — the
-        // rendering draft's, and each `also` draft's own — and its deposits
-        // beside it (the link-sets design §5.7): the places parallel to the
-        // runs the shot just took, so they are read against them, and each
-        // `also_places` entry's draft against the `also` list the shot took;
-        // the deposits' member positions read against the same runs. The
-        // claim rides either form (skep #692) and names the rendering draft,
-        // so `draft` is required beside it at both.
+        // The target, the claim's flag, the shot, then its kept places and
+        // its deposits beside it ([`Fields::publication`]).
         "publish" => {
-            let target = fields.publish_target()?;
-            let claim = fields.flag("claim")?;
-            let shot = fields.shot()?;
-            if claim && shot.draft.is_none() {
-                return Err(PErr("field 'claim': the edition claim names the rendering draft, so 'draft' is required beside it".into()).into());
-            }
-            let places = fields.places(&shot)?;
-            let also_places = fields.also_places(&shot)?;
-            let deposits = fields.deposits(&shot, &target, claim)?;
+            let (target, shot, places, also_places, deposits) = fields.publication()?;
             Op::Publish { target, shot, places, also_places, deposits }
+        }
+        // The price read (wire.md §Arrangement, `publish_cost`): a
+        // `publish`'s members under another name, parsed by the one parser,
+        // so a frame is priced exactly where it would be admitted — and no
+        // `attest`: the read is outside the checked set, so `finish` refuses
+        // the member as it refuses any unknown field.
+        "publish_cost" => {
+            let (target, shot, places, also_places, deposits) = fields.publication()?;
+            Op::PublishCost { target, shot, places, also_places, deposits }
         }
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
@@ -1698,6 +1693,39 @@ impl Fields {
 
     fn successor(&mut self, k: &'static str) -> PResult<SuccessorSpec> {
         self.field(k, p_successor)
+    }
+
+    /// Takes a publication's members: the target, the shot, its kept places
+    /// — the rendering draft's, and each `also` draft's own — and its
+    /// deposits (the link-sets design §5.7).
+    ///
+    /// They are what a `publish` carries and what a `publish_cost` prices,
+    /// read by this one parser in one order: the places parallel to the
+    /// runs the shot just took, so they are read against them, and each
+    /// `also_places` entry's draft against the `also` list the shot took;
+    /// the deposits' member positions read against the same runs. The claim
+    /// rides either form (skep #692) and names the rendering draft, so
+    /// `draft` is required beside it at both.
+    ///
+    /// # Errors
+    ///
+    /// A [`Refusal`] where a member is refused — the entry named where it is
+    /// a place's or a deposit's — or where `claim` is set and no `draft` is
+    /// named.
+    #[allow(clippy::type_complexity)]
+    fn publication(
+        &mut self,
+    ) -> Result<(PublishTarget, Shot, Vec<Option<VPos>>, Vec<AlsoPlaces>, PublishDeposits), Refusal> {
+        let target = self.publish_target()?;
+        let claim = self.flag("claim")?;
+        let shot = self.shot()?;
+        if claim && shot.draft.is_none() {
+            return Err(PErr("field 'claim': the edition claim names the rendering draft, so 'draft' is required beside it".into()).into());
+        }
+        let places = self.places(&shot)?;
+        let also_places = self.also_places(&shot)?;
+        let deposits = self.deposits(&shot, &target, claim)?;
+        Ok((target, shot, places, also_places, deposits))
     }
 
     /// Takes a `publish`'s target (the link-sets design §5.7, THE REQUEST):

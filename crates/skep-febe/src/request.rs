@@ -823,6 +823,45 @@ pub enum Op {
     /// list, not PUB-8.43's bound). Total, like every read that neither names
     /// nor derives a document.
     UniversalGrants,
+    // ── the publication's price (→ M7): a read that carries a write's
+    //    members and forwards them to the one function that prices them ──
+    /// The price of a publication, asked before the act (the link-sets
+    /// design §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE
+    /// LOCK).
+    ///
+    /// It carries a [`Op::Publish`]'s five members, as the codec parses
+    /// them for that write, and writes nothing. It answers what the
+    /// publication is priced at over the snapshot the read pins: M7's
+    /// `price_publication_reads`, the one function the transport's refusal
+    /// ahead of its lock calls, so the figures are the ones
+    /// `publication_over_budget` would name — answered whether or not
+    /// either budget is passed, with both budgets beside them
+    /// ([`Response::PublishCost`]). The price is read off a snapshot no
+    /// write lock covers, as the refusal's is: the board may move before a
+    /// `publish` of the same members is priced again.
+    ///
+    /// The caller's link-holding homes are the session's principal's; a
+    /// guest holds no account and is priced with none.
+    ///
+    /// **The documents consulted.** The named drafts — the rendering
+    /// `draft`, then each `also` draft, in the request's order — are
+    /// doc-arguments ([`Op::doc_arguments`]): the price states the run
+    /// count of each one a list re-windows, so an unreadable one answers
+    /// `withheld`. The home of each `originals` entry is a derived one
+    /// ([`Op::derived_doc_arguments`]): the price reads that original's
+    /// stored type. Every other member is priced by request arithmetic,
+    /// the caller's own home count and one stab of the correspondence
+    /// records, wherever homed, per stray place — a count the refusal's
+    /// detail states of the same request.
+    ///
+    /// [`Response::PublishCost`]: crate::Response::PublishCost
+    PublishCost {
+        target: PublishTarget,
+        shot: Shot,
+        places: Vec<Option<VPos>>,
+        also_places: Vec<AlsoPlaces>,
+        deposits: PublishDeposits,
+    },
 }
 
 /// EditLink's successor, assembled by M10 from content V-specs or I-spans
@@ -1057,6 +1096,8 @@ pub enum OpKind {
     EditionClaims,
     /// The kind of [`Op::UniversalGrants`].
     UniversalGrants,
+    /// The kind of [`Op::PublishCost`].
+    PublishCost,
     /// A frame that never parsed into an `Op`.
     ///
     /// [`Rejection::unparseable`] stamps it, on the transport's parse
@@ -1121,6 +1162,7 @@ impl Op {
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => true,
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
@@ -1209,6 +1251,7 @@ impl Op {
             Op::OutClaims { .. } => OpKind::OutClaims,
             Op::EditionClaims { .. } => OpKind::EditionClaims,
             Op::UniversalGrants => OpKind::UniversalGrants,
+            Op::PublishCost { .. } => OpKind::PublishCost,
         }
     }
 
@@ -1274,6 +1317,11 @@ impl Op {
             // draft's mint count plus one, so it takes PUB-6.1's row by
             // PUB-6.12's rule.
             Op::ContentFrontier { doc } => vec![doc],
+            // The price read names its drafts — the rendering draft, then
+            // each `also` draft, in the request's order — and its answer
+            // states the run count of each one a list re-windows, so each
+            // is consulted by the same rule.
+            Op::PublishCost { shot, .. } => shot.draft.iter().chain(&shot.also).collect(),
             // No named document to withhold (see above); written out rather
             // than wildcarded so a new read variant is classified here on
             // purpose, never defaulted to "consults nothing". The read by
@@ -1321,7 +1369,8 @@ impl Op {
     /// does not name but derives by address arithmetic on its own fields (the
     /// media record's "each I-span confined to one derived document";
     /// PATTERNS P29) — [`Op::RetrieveI`]'s, `document_of` of each span's
-    /// start, in span order — which [`consult_read`] walks *after*
+    /// start, in span order, and [`Op::PublishCost`]'s, the home of each
+    /// `originals` entry, in the list's order — which [`consult_read`] walks *after*
     /// [`Op::doc_arguments`]'s named ones, so the first unreadable derived
     /// document answers `Withheld` naming it before dispatch, and the
     /// historical door walks it the same way (PUB-6.49). Owned, where the
@@ -1363,6 +1412,13 @@ impl Op {
                     document_of(&span.start).ok_or((index, ISpanFault::NoElementPosition))
                 })
                 .collect(),
+            // The price reads each original's stored type where its entry
+            // names a rest, so the original's home is consulted: the
+            // document of the link's address, an address that is no
+            // element's deriving none — the write's plan refuses that entry.
+            Op::PublishCost { deposits, .. } => {
+                Ok(deposits.originals.iter().filter_map(|entry| document_of(&entry.old)).collect())
+            }
             Op::ContentFrontier { .. }
             | Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
@@ -1560,6 +1616,7 @@ impl Op {
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
             | Op::EditionClaims { .. }
+            | Op::PublishCost { .. }
             | Op::UniversalGrants => Vec::new(),
         }
     }

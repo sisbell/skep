@@ -90,6 +90,23 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   document with no recorded base gains none; a FORK whose source is not
   the request's head is refused by name (`fork_base_moved`), its
   recorded source never made false.
+- **The substitution** — `stage_substitute` (`ops/substitute.rs`) is the
+  identity-checked substitution, a staging body with no operation of its
+  own: for each place of a list, the runs a draft must arrange there and
+  the runs that take their place. The draft's gate answers first — its
+  registration, its owner, `PublishedTarget`. Every place is then checked
+  by identity on ONE walk of the draft's run-list
+  (`RunList::arranges_each`: the positions hold exactly those runs'
+  addresses, in order, whatever the run boundaries on either side), and a
+  refusal is the earliest entry's in the order given: a place the draft
+  does not hold its runs at, a place overlapping an earlier entry's, an
+  entry that came with no pieces (`SubstituteError`). Where every entry
+  holds, the places are staged as ONE `M5Rec::ContentEdit` — a change a
+  place and a run a piece, never coalesced in the record, so the
+  provenance relation gains a span a piece while the run-list holds
+  adjacent pieces as one run. A publication stages it once for each draft
+  it re-windows at its kept places, so a re-window costs the draft's runs
+  and the pieces placed, and one record, however many places it has.
 - **The publish shot** — `publish` appends the next member of a
   published document's version chain, born published, in ONE commit,
   from CLIENT-SUPPLIED I-address runs and never from any draft's
@@ -143,8 +160,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The stale-edit refusal** — each of the five in-place edits, and the
   edit, names the
   document state it was typed against (`AsOf::Typed`, the position of the
-  read its positions came from; `AsOf::Unchecked` for the three in-process
-  writers nothing races). The slice keeps, per document, the position its
+  read its positions came from; `AsOf::Unchecked` for the two in-process
+  writers nothing races — the substitution takes no typed state, its check
+  by identity being the stricter one). The slice keeps, per document, the position its
   content arrangement last changed at (`M5State::arranged_at`, set by
   every placing, removing, reordering or minting record and never by a
   link seat), and an edit typed below it is refused `ArrangementMoved`

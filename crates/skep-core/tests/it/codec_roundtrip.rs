@@ -21,7 +21,7 @@ use skep_febe::{
 use skep_kernel::Seq;
 use skep_links::{
     EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress, PublishDeposits,
-    PublishTarget, View, MAX_SLOT_SPANS,
+    PublishTarget, ReadPrice, View, MAX_SLOT_SPANS,
 };
 use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{
@@ -123,7 +123,7 @@ fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
 /// three slot-constraint forms, and all four value write forms (per-byte
 /// runs, a UTF-8 atom, a non-UTF-8 run, a non-UTF-8 atom).
 fn all_requests() -> Vec<Request> {
-    vec![
+    let mut all = vec![
         rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]), published: None }),
         // The three-valued flag on the minting ops (PUB-8.16): absent, and
         // both explicit values, so parse ∘ marshal covers every arm.
@@ -713,7 +713,28 @@ fn all_requests() -> Vec<Request> {
         // without the idempotency id.
         rq(None, Op::UniversalGrants),
         rq(Some("poll-1"), Op::UniversalGrants),
-    ]
+    ];
+    // The price read carries a publication's members under its own name:
+    // every `publish` above, as the `publish_cost` that prices it.
+    let priced: Vec<Request> = all
+        .iter()
+        .filter_map(|req| match &req.op {
+            Op::Publish { target, shot, places, also_places, deposits } => Some(Request {
+                op: Op::PublishCost {
+                    target: target.clone(),
+                    shot: shot.clone(),
+                    places: places.clone(),
+                    also_places: also_places.clone(),
+                    deposits: deposits.clone(),
+                },
+                ..req.clone()
+            }),
+            _ => None,
+        })
+        .collect();
+    assert!(priced.len() >= 8, "every shape of publication is priced");
+    all.extend(priced);
+    all
 }
 
 /// Every op name the wire publishes, one per `Op` variant, in the order
@@ -777,6 +798,7 @@ const OP_NAMES: &[&str] = &[
     "doc_metadata",
     "edition_claims",
     "universal_grants",
+    "publish_cost",
 ];
 
 /// Each `OpKind`'s place in [`OP_NAMES`] — an exhaustive match, so a new
@@ -839,6 +861,7 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::DocMetadata => 50,
         OpKind::EditionClaims => 51,
         OpKind::UniversalGrants => 52,
+        OpKind::PublishCost => 53,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -2176,6 +2199,14 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 detail: None,
                 io_kind: None,
             }),
+        ),
+        // The price of a publication: the five figures, whole.
+        (
+            "publish_cost",
+            Response::PublishCost {
+                price: ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033 },
+                as_of: Seq(9),
+            },
         ),
         (
             "rejected_site",

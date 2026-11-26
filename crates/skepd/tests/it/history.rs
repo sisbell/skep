@@ -402,12 +402,13 @@ fn historical_reads_answer_every_earlier_state() {
 }
 
 /// The read shapes the history route stamps: every one M10's
-/// `Response::as_of_mut` classifies as carrying an `as_of`. Nineteen: the
+/// `Response::as_of_mut` classifies as carrying an `as_of`. Twenty: the
 /// seventeen of lane 3.4, the owner-of-address read's `effective_owner`
-/// (AUTH-6.37) and the any-principal discovery read's `universal_grants`
-/// (PUB-8.47). The test below counts the shapes its rows visit against this,
-/// so its rows are known to reach every one.
-const STAMPED_SHAPES: usize = 19;
+/// (AUTH-6.37), the any-principal discovery read's `universal_grants`
+/// (PUB-8.47) and the price read's `publish_cost`. The test below counts
+/// the shapes its rows visit against this, so its rows are known to reach
+/// every one.
+const STAMPED_SHAPES: usize = 20;
 
 /// wire.md §The response envelope: `as_of` reports the position the answer
 /// is OF. On the history surface `stamp_as_of` is what makes that true —
@@ -478,6 +479,14 @@ fn every_read_shape_stamps_the_position_it_is_of() {
         // owner is bound, so the SHAPE answers — its rows empty on this
         // board, and `as_of` still the position asked.
         ("universal_grants", r#"{"op":"universal_grants"}"#.to_string()),
+        // The price read: a publication of `d1`'s first position into
+        // `d2`, priced over the world as it stood at the position asked.
+        (
+            "publish_cost",
+            format!(
+                r#"{{"op":"publish_cost","doc":"{d2}","draft":"{d1}","runs":[{{"origin":"{d1}","i_start":"{d1}.0.1.1","width":"1"}}],"places":[{{"subspace":"1","ordinal":"1"}}]}}"#
+            ),
+        ),
     ];
 
     let mut seen: BTreeSet<&str> = BTreeSet::new();

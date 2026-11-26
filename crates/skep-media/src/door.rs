@@ -328,6 +328,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::PublishCost { .. }
         | Op::UniversalGrants
         | Op::Delete { .. }
         | Op::Copy { .. }

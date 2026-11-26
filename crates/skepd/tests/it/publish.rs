@@ -2233,20 +2233,23 @@ fn pending_then_re_ask(sd: &skepd::Skepd, b: &DepositBoard, frame: &str) -> Valu
 }
 
 /// THE PRICE AHEAD OF THE LOCK over the wire (the link-sets design §5.7, W8
-/// (1)): the draft fragmented into eighteen content runs by seventeen inserts
-/// at its first position, and a shot of 4096 runs over it each carrying a
-/// kept place — each run one piece the re-window places over the draft's 18
-/// runs — priced at 4096 × 18 re-window steps and 4096 fence stabs — past
-/// `MAX_PUBLICATION_READS` — is refused `publication_over_budget`,
-/// permanent, no `site`, its `detail` the four terms, the total and the
-/// budget, WITH EVERY WRITE PERMIT HELD: the refusal stands ahead of the
-/// pool, so ahead of both locks and of the admission (the frame is sent
-/// unsigned, and the price answers before the signature is asked for);
-/// nothing committed. The same 4096 runs with ONE place — a typed word —
-/// price one piece × 18 runs and pass the price, and with NO place pass it
-/// too; 3449 runs each placed price 3449 × 18 + 3449, inside the budget, and
-/// pass the step, the admission then answering for the unsigned frame; and
-/// an ordinary one-run shot off the fragmented draft lands.
+/// (1)): the claimant holding sixteen link-holding homes and more, the draft
+/// fragmented into eighteen content runs by seventeen inserts at its first
+/// position, and a shot of 4096 runs over it beside a `read_with` list that
+/// brings the price to its edge. The re-window's term is a sum — the draft's
+/// 18 runs and a step a placed run — so with the placed runs that reach the
+/// budget exactly the price admits, and with ONE more it is one step past
+/// `MAX_PUBLICATION_READS`: refused `publication_over_budget`, permanent, no
+/// `site`, its `detail` the four terms, the total and the budget, WITH EVERY
+/// WRITE PERMIT HELD: the refusal stands ahead of the pool, so ahead of both
+/// locks and of the admission (the frame is sent unsigned, and the price
+/// answers before the signature is asked for); nothing committed. THE PRICE
+/// READ answers the same frame's figures under its own name, the refusal's
+/// own and with the permits still held, writing nothing. Every one of the
+/// 4096 runs placed, with no `read_with` beside it, prices 18 + 4096 steps
+/// and passes — where 4096 × 18 was past the budget — the admission then
+/// answering for the unsigned frame; and an ordinary one-run shot off the
+/// fragmented draft lands.
 #[test]
 fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool_and_commits_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2256,15 +2259,38 @@ fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool
     for _ in 0..17 {
         expect_resp(&op(port, Some(&b.bare), &insert(&b.d, 1, "x", false)), "ack_addr");
     }
+    // Sixteen more homes of the claimant's, a link in each.
+    for _ in 0..16 {
+        let home = draft(port, &b.bare);
+        expect_resp(&op(port, Some(&b.bare), &link_frame(&home, &addrs_slot(&[&b.d_text]), &addrs_slot(&[]), &ghost_ty(&home, 1))), "ack_addr");
+    }
     let runs: Vec<String> = (0..4096).map(|_| run(&b.d, &b.d_text, 1)).collect();
     // A kept place beside the first `count` runs, each at the draft's first
-    // position: one piece apiece, placed over the draft's runs.
+    // position: one piece apiece.
     let placed = |frame: &str, count: usize| -> String {
         let mut v: Value = serde_json::from_str(frame).expect("a frame");
         v["places"] = Value::Array(vec![serde_json::json!({"subspace": "1", "ordinal": "1"}); count]);
         v.to_string()
     };
-    let over = placed(&publish(&b.e, None, Some(&b.d), &runs), runs.len());
+    let priced = |frame: &str| -> Value {
+        let mut v: Value = serde_json::from_str(frame).expect("a frame");
+        v["op"] = Value::from("publish_cost");
+        op(port, Some(&b.signed), &v.to_string())
+    };
+    let whole = publish(&b.e, None, Some(&b.d), &runs);
+    // The claimant's link-holding homes, as the board counts them, and the
+    // `read_with` list that leaves the price a few steps short of its
+    // budget with one run placed.
+    let budget = skep_links::MAX_PUBLICATION_READS as u64;
+    let homes = expect_resp(&priced(&whole), "publish_cost")["homes"].as_u64().expect("homes");
+    assert!((16..=4096).contains(&homes), "the homes the cell stands on: {homes}");
+    let entries = (budget - 18 - 4096 - 1) / homes;
+    assert!(entries <= 4096, "a list the wire carries: {entries}");
+    let beside = |frame: &str| with_members(frame, serde_json::json!({"read_with": vec![b.set.clone(); entries as usize]}));
+    // How many placed runs bring the total to the budget exactly.
+    let at_budget = (budget - homes * entries - 18 - 4096) as usize;
+    assert!(at_budget >= 1);
+    let over = beside(&placed(&whole, at_budget + 1));
     let before = head(port);
     let mut held = Vec::new();
     while let Some(permit) = sd.daemon().try_hold_write_permit() {
@@ -2276,31 +2302,50 @@ fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool
     assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
     assert!(rej.get("site").is_none(), "no site: {v}");
-    let detail = rej["detail"].as_str().expect("the price's detail");
-    assert!(detail.starts_with(&format!("{} in-lock reads priced over the budget of {}: ", 4096 * 18 + 4096, skep_links::MAX_PUBLICATION_READS)), "{detail}");
-    assert!(
-        detail.ends_with("link-holding homes × 0 links, originals, read-with and supersede entries + 73728 re-window steps + 4096 re-inserted runs; narrow the request"),
-        "{detail}"
+    let steps = 18 + at_budget as u64 + 1;
+    assert_eq!(
+        rej["detail"].as_str(),
+        Some(
+            format!(
+                "{} in-lock reads priced over the budget of {budget}: {homes} link-holding homes × {entries} links, originals, read-with and supersede entries + {steps} re-window steps + 4096 re-inserted runs; narrow the request",
+                budget + 1
+            )
+            .as_str()
+        ),
+        "{v}"
     );
+    // The price read: the refusal's own figures for the same members, with
+    // every permit still held — it takes none — and nothing written.
+    let cost = priced(&over);
+    let cost = expect_resp(&cost, "publish_cost");
+    assert_eq!(
+        (cost["homes"].as_u64(), cost["entries"].as_u64(), cost["rewindow"].as_u64(), cost["fence"].as_u64(), cost["read_budget"].as_u64()),
+        (Some(homes), Some(entries), Some(steps), Some(4096), Some(budget)),
+        "{cost}"
+    );
+    assert_eq!(cost["as_of"].as_u64(), Some(before), "read at the head: {cost}");
     drop(held);
     assert_eq!(head(port), before, "nothing committed");
-    // One place — a typed word — over the same 4096 runs: one piece × 18
-    // runs and 4096 fence stabs, and the price admits; the unsigned frame
-    // then meets the admission, never the price.
-    let v = op_as_written(port, Some(&b.signed), &placed(&publish(&b.e, None, Some(&b.d), &runs), 1));
-    let rej = expect_resp(&v, "rejected");
-    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "one place carried: one piece over the draft's runs, and the price admits: {v}");
-    assert_eq!(head(port), before);
-    // No place: nothing re-windowed, and the price admits the same 4096 runs.
-    let v = op_as_written(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &runs));
-    let rej = expect_resp(&v, "rejected");
-    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "no place carried: nothing is re-windowed, and the price admits: {v}");
-    assert_eq!(head(port), before);
-    // Inside the budget: 3449 × 18 + 3449 = 65531 passes the price; the
-    // unsigned frame then meets the admission, never the price.
-    let v = op_as_written(port, Some(&b.signed), &placed(&publish(&b.e, None, Some(&b.d), &runs[..3449]), 3449));
+    // At the budget the price admits; the unsigned frame then meets the
+    // admission, never the price.
+    let v = op_as_written(port, Some(&b.signed), &beside(&placed(&whole, at_budget)));
     let rej = expect_resp(&v, "rejected");
     assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "at the budget the price admits: {v}");
+    assert_eq!(head(port), before);
+    // Every run placed, no list beside it: the draft's 18 runs and 4096
+    // pieces, and 4096 fence stabs — 8,210 steps, where the pieces × the
+    // runs were 73,728.
+    let all = placed(&whole, runs.len());
+    assert_eq!(expect_resp(&priced(&all), "publish_cost")["rewindow"].as_u64(), Some(18 + 4096));
+    let v = op_as_written(port, Some(&b.signed), &all);
+    let rej = expect_resp(&v, "rejected");
+    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "every run placed: a sum, and the price admits: {v}");
+    assert_eq!(head(port), before);
+    // No place: nothing re-windowed, and the price admits the same 4096 runs.
+    assert_eq!(expect_resp(&priced(&whole), "publish_cost")["rewindow"].as_u64(), Some(0));
+    let v = op_as_written(port, Some(&b.signed), &whole);
+    let rej = expect_resp(&v, "rejected");
+    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "no place carried: nothing is re-windowed, and the price admits: {v}");
     assert_eq!(head(port), before);
     // An ordinary shot off the fragmented draft, no place carried, lands.
     let member = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &[run(&b.d, &b.d_text, 1)])));

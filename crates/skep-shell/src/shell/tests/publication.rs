@@ -435,6 +435,14 @@ fn but_health(shell: &Shell) -> Vec<Value> {
     shell.log().entries().into_iter().filter(|e| e["path"] != "/health").collect()
 }
 
+/// Returns the method, the route and the status of the last dial `shell`
+/// made beside the feed thread's `/health` reads.
+fn last_dial(shell: &Shell) -> (String, String, Option<u64>) {
+    let log = but_health(shell);
+    let dial = log.iter().rev().find(|e| e["kind"] == "dial").unwrap_or_else(|| panic!("a dial in the log"));
+    (dial["method"].as_str().unwrap_or_default().to_string(), dial["path"].as_str().unwrap_or_default().to_string(), dial["status"].as_u64())
+}
+
 /// Returns how many board ops `shell` has dialed, at `/op` and `/op-at`.
 ///
 /// The feed thread's own reads, `/health` and `/changes`, are no op, so a
@@ -595,7 +603,8 @@ pub(super) fn other_account(g: &Ground) -> Other {
 /// notes row OFF with its one link, the counts at the default, `windows`
 /// empty, `read_with` naming the set, the price under its caps, every
 /// member declared; `publication.count` with the row ON
-/// counts ⟨l⟩ one up, pure local; `publication.confirm` is acknowledged —
+/// counts ⟨l⟩ one up, its one dial the board asked its price;
+/// `publication.confirm` is acknowledged —
 /// the member `E.1`, `via: answer`, `claim: false` — with the event's `sent`
 /// then `acknowledged`, the panel gone, and the feed's publish row naming
 /// the member, the draft and the notes, its drafts copy and its `changes`
@@ -644,14 +653,16 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!(panel["read_with"], json!({set.clone(): true}), "the set the edition is read with");
     assert_eq!(panel["price"]["over"], json!([]), "under every cap: {}", panel["price"]);
     assert!(panel["price"]["bytes"].as_u64().unwrap() > 0 && panel.get("hold").is_none(), "{panel}");
-    // The count with the notes ON: ⟨l⟩ up by one, nothing dialed.
-    let entries = but_health(&g.shell).len();
+    // The count with the notes ON: ⟨l⟩ up by one, and one op dialed — the
+    // board asked what it prices the request at.
+    let (entries, ops) = (but_health(&g.shell).len(), op_dials(&g.shell));
     let counted = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap();
     assert_eq!(counted["count"], json!({"l": 1, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{counted}");
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 0, "changed": 1}), json!(true)), "the fold and P3's standing re-keyed by the count: {counted}");
     crate::shapes::assert_declared("Price", &counted["price"]);
     assert!(counted["price"]["bytes"].as_u64().unwrap() > panel["price"]["bytes"].as_u64().unwrap(), "the price moves with the switches: {counted}");
-    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local: its own call logged and no dial");
+    assert_eq!((but_health(&g.shell).len(), op_dials(&g.shell)), (entries + 2, ops + 1), "the count dials once, for the board's price: its own call logged beside the one read");
+    assert_eq!(last_dial(&g.shell), ("POST".to_string(), "/op".to_string(), Some(200)), "the one dial a read the board answered");
     let bad_home = g.call("publication.count", json!({"session": g.session, "switches": {"on": [edition]}})).unwrap_err();
     assert_eq!((bad_home.name(), bad_home.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a home no private row holds");
     let bad_answer = g.call("publication.count", json!({"session": g.session, "answers": {"0": "drop"}})).unwrap_err();
@@ -743,7 +754,8 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
 /// at the next open its row's one link is unchanged since the base — read
 /// through the draft's record onto the words version 1 arranges — so
 /// `unchanged` names it, `fold` counts one and none, and with nothing else
-/// to decide P3 does not stand; the count answers the same, nothing dialed.
+/// to decide P3 does not stand; the count answers the same, nothing dialed
+/// — the panel holds no request to price, the draft unchanged.
 /// A note made since joins the row changed, of a type of its own, and P3
 /// stands: the row's two folds by type (E4 1.3) answer each side alone, at
 /// the open and at the count.
@@ -776,7 +788,7 @@ fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 1, "changed": 0}), json!(false)), "{counted}");
     assert_eq!((counted["rows"][0]["changed_types"].clone(), counted["rows"][0]["unchanged_types"].clone()), (json!([]), citations.clone()), "{counted}");
-    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local");
+    assert_eq!(but_health(&g.shell).len(), entries + 1, "a panel with no request to price dials nothing: its own call logged alone");
     g.call("publication.cancel", json!({"session": g.session})).unwrap();
     // A note made since version 1, on the words it holds, of its own type.
     let mark = "1.1.0.1.0.1.0.3.23.4";
@@ -801,7 +813,9 @@ fn the_open_and_the_count_answer_the_fold_and_whether_p3_stands() {
 /// The link-sets design §5.2; E4 1.4. Version 1 published, a word typed in
 /// the draft and a link on it homed in that member: the link is no row's, so
 /// the open answers no row, one in `edition_links` and P3 standing on it
-/// alone, and the count answers the same, nothing dialed.
+/// alone, and the count answers the same, its one dial the board asked its
+/// price. With the board gone the count answers the read's own refusal,
+/// `unreachable`, and no price in its place.
 #[test]
 fn the_open_and_the_count_answer_the_documents_own_links() {
     let dir = TempDir::new().unwrap();
@@ -820,12 +834,17 @@ fn the_open_and_the_count_answer_the_documents_own_links() {
     let panel = g.call("publication.open", inputs).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("PublicationPanel", &panel);
     assert_eq!((panel["rows"].clone(), panel["edition_links"].clone(), panel["p3_stands"].clone()), (json!([]), json!(1), json!(true)), "its own line alone: {panel}");
-    let entries = but_health(&g.shell).len();
+    let (entries, ops) = (but_health(&g.shell).len(), op_dials(&g.shell));
     let counted = g.call("publication.count", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((counted["edition_links"].clone(), counted["p3_stands"].clone()), (json!(1), json!(true)), "{counted}");
-    assert_eq!(but_health(&g.shell).len(), entries + 1, "the count is pure local");
-    g.shell.shutdown();
+    assert_eq!((but_health(&g.shell).len(), op_dials(&g.shell)), (entries + 2, ops + 1), "the count reads the board once, for its price, and nothing else");
+    // The board gone: the count cannot ask its price and answers the read's
+    // own refusal, no price guessed in its place.
     sd.shutdown();
+    let unasked = g.call("publication.count", json!({"session": g.session})).unwrap_err();
+    assert_eq!(unasked.name(), "unreachable", "{unasked}");
+    assert!(unasked.to_value().get("price").is_none(), "no price beside the refusal: {unasked}");
+    g.shell.shutdown();
 }
 
 /// Checks that a claimed draft's next version counts no own link.
@@ -1066,9 +1085,10 @@ fn a_family_confirm_over_an_also_draft_moved_since_the_panel_sends_no_place_for_
 /// admitting the counterpart and `drop`, the note counting toward nothing
 /// while the part awaits its answer; `keep_private` there is refused
 /// `malformed_args` naming `answers`; `count`, the call per answer, re-keys
-/// the panel with no dial — the counterpart puts the note in the notes' row
-/// and counts it, leaving the words out takes it back; and the confirm with
-/// the counterpart is acknowledged, the note's entry on the edition's words.
+/// the panel with one dial, its price read — the counterpart puts the note
+/// in the notes' row and counts it, leaving the words out takes it back;
+/// and the confirm with the counterpart is acknowledged, the note's entry
+/// on the edition's words.
 #[test]
 fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
     let dir = TempDir::new().unwrap();
@@ -1110,7 +1130,7 @@ fn a_windows_parts_take_their_own_answers_and_each_answer_re_keys_the_panel() {
     assert!(left["rows"].as_array().unwrap().iter().all(|row| row["home"] != notes) && left["count"]["l"] == 0, "the words left out take the note's row with them: {left}");
     let stale = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "drop"}})).unwrap_err();
     assert_eq!((stale.name(), stale.to_value()["what"].as_str()), ("malformed_args", Some("switches.on")), "a switch names a row the panel holds as answered");
-    assert_eq!(but_health(&g.shell).iter().filter(|e| e["kind"] == "dial").count(), dials, "each answer re-keys with no dial");
+    assert_eq!(but_health(&g.shell).iter().filter(|e| e["kind"] == "dial").count(), dials + 2, "each answer re-keys with one dial, the board asked its price; a count refused for its arguments dials nothing");
     let acked = g.call("publication.confirm", json!({"session": g.session, "switches": {"on": [notes]}, "answers": {"1.0": "counterpart"}})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Acknowledged", &acked);
     assert_eq!(acked["member"], format!("{edition}.1"), "{acked}");

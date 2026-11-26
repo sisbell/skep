@@ -117,17 +117,17 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, EntryBody, MemberPositions, PublishBody, ShotBase, SlotElement};
 
 use crate::address::parse_address;
-use crate::board::answers::{self, IRun, LinkSpan, MergeMarker};
+use crate::board::answers::{self, LinkSpan, MergeMarker};
 use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
-use crate::board::{T_RETRACTION, T_SUPERSEDES};
+use crate::board::{Rejection, T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{disjoint_places, enumerate_with, is_formatting, place_selection, AlsoImage, Enumeration, Placement, Record, RecordWalk, Via};
+use super::enumerate::{disjoint_places, enumerate_with, is_formatting, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
 use super::parts::{compose_part, Answer, OwedAnswer, PartComposition, PartKey};
 use super::landed::twin_precheck_with;
-use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind};
-use super::price::{self, EndShape, EntryShape, OriginalShape, Price, Shape};
-use super::{canonical_member_spans, fresh_id, own_claim_names, Door, Fault, ISpan, Inputs, Publisher, Run};
+use super::panel::{count, panel_with, Count, Destination, Panel, Removal, RowKind, Switches};
+use super::price::{self, Price, Shape};
+use super::{canonical_member_spans, fresh_id, own_claim_names, shape, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// What the caller confirmed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -332,14 +332,6 @@ impl End {
             End::Member(spans) => frames::member_end(spans),
         }
     }
-
-    fn shape(&self) -> EndShape {
-        match self {
-            End::Addrs(list) => EndShape::Addrs(list.clone()),
-            End::Spans(list) => EndShape::Spans(list.clone()),
-            End::Member(spans) => EndShape::Member(spans.clone()),
-        }
-    }
 }
 
 /// One `links` entry.
@@ -418,9 +410,6 @@ pub struct OriginalEntry {
     /// ever covered, which the commit keeps formatted by a fresh mark;
     /// empty where none stands.
     pub rest: Vec<ISpan>,
-    /// The original's stored type slot, which the fresh mark over the rest
-    /// carries: the price reads it, the frame does not.
-    pub ty: Vec<LinkSpan>,
     /// The marks of `retract` the original is paired with — the job list's
     /// marks whose accept claim names it. The board admits the entry while
     /// one of them rides, so the one re-sign drops it with the last.
@@ -431,8 +420,9 @@ pub struct OriginalEntry {
 /// the listed removals' originals, in the job list's order, the marks of
 /// one original grouped under it (the link-sets design §5.7 (vi′)).
 ///
-/// The one composition of the member, the shell's local price and the
-/// request's build both reading it, so the two agree.
+/// The one composition of the member, taken wherever a request's lists
+/// are — at the build, and where they are switched again
+/// ([`Request::switched`]) — so the two agree.
 pub fn originals_of(job_list: &[&Removal]) -> Vec<OriginalEntry> {
     let mut out: Vec<OriginalEntry> = Vec::new();
     for removal in job_list {
@@ -442,7 +432,6 @@ pub fn originals_of(job_list: &[&Removal]) -> Vec<OriginalEntry> {
             None => out.push(OriginalEntry {
                 old: original.link.clone(),
                 rest: original.rest.clone(),
-                ty: original.value.ty.clone(),
                 marks: vec![removal.mark.clone()],
             }),
         }
@@ -669,54 +658,41 @@ impl Request {
         homes.into_values().flatten().collect()
     }
 
-    /// Returns the `links` entries' shapes for the price.
-    fn entry_shapes(&self) -> Vec<EntryShape> {
-        self.entries.iter().map(|e| EntryShape { from: e.from.shape(), to: e.to.shape(), ty: e.ty.shape(), old: e.old.is_some() }).collect()
-    }
-
-    /// Returns the rider's shapes for the price: each original's rest and
-    /// stored type.
-    fn original_shapes(&self) -> Vec<OriginalShape> {
-        self.originals.iter().map(|o| OriginalShape { rest: o.rest.clone(), ty: o.ty.clone() }).collect()
-    }
-
-    /// Prices the request as it stands, with the caller's home count, the
-    /// rendering draft's image and each `also` draft's (the enumeration's
-    /// `image` and `also`): the price reads a draft's runs only where its
-    /// list places it, each `also_places` entry beside the image of the draft
-    /// it names — none where the enumeration imaged no such draft.
-    pub fn priced(&self, homes: usize, image: &[IRun], also: &[AlsoImage]) -> Price {
-        let entries = self.entry_shapes();
-        let originals = self.original_shapes();
-        let term = self.term().clone();
-        let images: BTreeMap<&Address, &[IRun]> = also.iter().map(|a| (&a.draft, a.image.as_slice())).collect();
-        let also_images: Vec<&[IRun]> = self.also_places.iter().map(|entry| images.get(&entry.draft).copied().unwrap_or(&[])).collect();
-        // The named drafts — the rendering draft, then each of `also` — whose
-        // runs are re-inserted and priced as values; none at a bare shot.
+    /// Returns the request's own shape, as the price judges it with no
+    /// read: each list's length — the places counted where a place is
+    /// carried — the signed body's bytes, and the distinct positions of the
+    /// named drafts its runs re-insert.
+    pub fn shape(&self) -> Shape {
         let drafts: Vec<Address> = self.draft.iter().chain(&self.also).cloned().collect();
-        price::price(&Shape {
-            runs: &self.runs,
-            drafts: &drafts,
-            // The draft the placing record names: the rendering draft, where
-            // the shot moves its base (the board's `Shot::moves_base_of`).
-            draft: self.draft.as_ref().filter(|_| !self.keep_base),
-            // The base the placing record's terms name: the request's own.
-            base: self.base.as_ref().map(|(member, _)| member),
-            term: &term,
-            mint: self.mint.is_some(),
-            claim: self.claim,
-            places: &self.places,
-            also_places: &self.also_places,
-            also_images: &also_images,
-            stray_records: &self.stray_records,
-            entries: &entries,
-            retract: self.retract.len(),
-            originals: &originals,
-            read_with: self.read_with.len(),
-            body_bytes: self.body().as_bytes().len(),
-            homes,
-            draft_image: image,
-        })
+        Shape {
+            lists: [self.runs.len(), self.places.iter().filter(|p| p.is_some()).count(), self.entries.len(), self.retract.len(), self.read_with.len(), self.originals.len()],
+            body: self.body().as_bytes().len(),
+            values: price::distinct_draft_positions(&self.runs, &drafts),
+        }
+    }
+
+    /// Returns the frame that asks the board this request's price: its
+    /// members as the publication's own frame spells them, under
+    /// `publish_cost`, with no `id` and no `attest`.
+    pub fn price_frame(&self) -> Value {
+        frames::publish_cost(self.frame(None))
+    }
+
+    /// Returns the request with the lists its switches decide taken again
+    /// over `e` and `panel` as they are composed now: the formatting line's
+    /// marks and each switched-on row's links as entries, each spelled over
+    /// this request's runs as the build spells it, the job list's
+    /// retractions with the originals they end, the count and its
+    /// read-withs. The runs, their places, the body's pieces and the
+    /// daughters stand as built. Reads nothing: the records walked are the
+    /// enumeration's, so an end on words only a record the build's twin
+    /// pre-check read names is spelled as the enumeration alone reads it.
+    ///
+    /// The price it carries is the request's as built: it is priced again
+    /// by [`price()`].
+    pub fn switched(&self, inputs: &Inputs, e: &Enumeration, panel: &Panel, switches: &Switches) -> Request {
+        let lists = Lists::of(inputs, e, panel, switches, &e.records, &self.runs);
+        Request { entries: lists.entries, unspellable: lists.unspellable, retract: lists.retract, originals: lists.originals, read_with: lists.read_with, count: lists.count, ..self.clone() }
     }
 
     /// Re-composes the request without the entries at `retract_skipped`,
@@ -916,8 +892,66 @@ pub fn build(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel,
     build_with(&door, p, inputs, e, panel, confirmed)
 }
 
-/// Builds the request through `door`.
+/// Builds the request as [`build`] builds it, and asks no price: the
+/// request's [`Request::price`] is the default, which admits and says
+/// nothing of the board. For a caller that holds the request to take its
+/// switched lists again and price what it then is ([`Request::switched`],
+/// [`price()`]) — the panel's count — and never sends it as built.
+///
+/// # Errors
+///
+/// [`build`]'s, the price's aside.
+pub fn build_unpriced(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
+    let door = Door::new(p.board, p.token);
+    compose_with(&door, p, inputs, e, panel, confirmed)
+}
+
+/// Prices `request`: its own shape judged here, and the board asked what it
+/// prices the request at — ONE read, `publish_cost`, of the request's own
+/// members ([`Request::price_frame`]).
+///
+/// Where the shape is past a cap of its own — a list, the body, the values
+/// — the board is not asked, and the price names those terms alone.
+///
+/// # Errors
+///
+/// The read's faults — the board unreachable or busy, the session ended —
+/// and the board's refusal of the frame, [`Fault::Halt`]; an answer that is
+/// no `publish_cost`, [`Fault::Shape`]. No price is guessed in their place.
+pub fn price(p: &Publisher<'_>, request: &Request) -> Result<Price, Fault> {
+    price_with(&Door::new(p.board, p.token), request)
+}
+
+/// Prices `request` through `door` ([`price()`]).
+pub(crate) fn price_with(door: &Door<'_>, request: &Request) -> Result<Price, Fault> {
+    let shape_of = request.shape();
+    if !shape_of.over().is_empty() {
+        return Ok(Price::of(&shape_of, None));
+    }
+    door.step("price");
+    let frame = request.price_frame();
+    let v = door.read(&frame)?;
+    if let Some(refused) = Rejection::of(&v) {
+        return Err(Fault::Halt(refused.refused(&v)));
+    }
+    let cost = answers::publish_cost(&v).ok_or_else(|| shape(&frame, &v))?;
+    Ok(Price::of(&shape_of, Some(&cost)))
+}
+
+/// Builds the request through `door`, and prices it.
 pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
+    Ok(match compose_with(door, p, inputs, e, panel, confirmed)? {
+        Built::Request(mut request) => {
+            request.price = price_with(door, &request)?;
+            request.as_of = request.as_of.max(door.as_of());
+            Built::Request(request)
+        }
+        inert => inert,
+    })
+}
+
+/// Builds the request through `door`, every member but its price.
+fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
     // The one composition the request is taken from: the answers decide
     // the selection, every offer and the formatting line before any member
     // is composed (B3-S11 P2 (i)).
@@ -1019,40 +1053,9 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         }
     }
 
-    // The entries.
+    // The entries, and the lists beside them.
     door.step("entries");
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut unspellable: Vec<(Address, Unspellable)> = Vec::new();
-    let ctx = SpellContext { walk: RecordWalk::composed(inputs, &records, e), runs: &runs, held_back: e.held_back_words(), placeholders: e.placeholder_words() };
-    let mut add = |candidate: usize, home: EntryHome| {
-        let c = &e.candidates[candidate];
-        let formatting = is_formatting(&c.value);
-        let ends = (spell_end(&c.value.from, &c.via, &ctx, formatting), spell_end(&c.value.to, &c.via, &ctx, formatting), spell_type(&c.value.ty));
-        match ends {
-            (Ok(from), Ok(to), Ok(ty)) => entries.push(Entry { home, from, to, ty, old: Some(c.link.clone()), candidate }),
-            (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => unspellable.push((c.link.clone(), why)),
-        }
-    };
-    for &mark in &panel.formatting.marks {
-        add(mark, EntryHome::Member);
-    }
-    for row in &panel.rows {
-        if matches!(row.kind, RowKind::Public { .. }) || !confirmed.switches.on.contains(&row.home) {
-            continue;
-        }
-        let home = match confirmed.switches.destination(&row.home) {
-            Destination::Member => EntryHome::Member,
-            Destination::Set(s) => EntryHome::Set(s),
-        };
-        for &i in &row.links {
-            add(i, home.clone());
-        }
-    }
-    let job_list = panel.formatting.job_list();
-    let retract: Vec<Address> = job_list.iter().map(|r| r.mark.clone()).collect();
-    let originals = originals_of(&job_list);
-    let count = count(panel, &confirmed.switches, inputs);
-    let read_with = count.read_with.clone();
+    let Lists { entries, unspellable, retract, originals, read_with, count } = Lists::of(inputs, e, panel, &confirmed.switches, &records, &runs);
 
     // The daughters, the skip read first: one an active claim of the
     // person's own already names is dropped, as the board's plan drops it.
@@ -1094,7 +1097,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         }
     }
 
-    let mut request = Request {
+    let request = Request {
         doc: inputs.doc.clone(),
         mint: inputs.mint.clone(),
         claim: inputs.claim,
@@ -1116,12 +1119,71 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         unspellable,
         id: fresh_id(),
         count,
-        price: Price { lists: [0; 6], body: 0, values: 0, reads: 0, bytes: 0, over: Vec::new() },
+        price: Price::default(),
         as_of: door.as_of().max(e.as_of),
     };
-    let homes = e.homes.len() + inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.price = request.priced(homes, &e.image, &e.also);
     Ok(Built::Request(Box::new(request)))
+}
+
+/// The lists a request carries beside its runs, as the switches decide
+/// them over one composition.
+struct Lists {
+    /// The `links` entries.
+    entries: Vec<Entry>,
+    /// The switched-on links left out for want of one form, with why.
+    unspellable: Vec<(Address, Unspellable)>,
+    /// The `retract` entries: the job list's marks.
+    retract: Vec<Address>,
+    /// The `originals` rider the marks end.
+    originals: Vec<OriginalEntry>,
+    /// The `read_with` entries, the count's.
+    read_with: Vec<Address>,
+    /// The count the rows as switched give.
+    count: Count,
+}
+
+impl Lists {
+    /// Returns the lists of a request whose runs are `runs`: the formatting
+    /// line's marks into the member and each switched-on private row's
+    /// links into its destination, each end spelled through the walk of
+    /// `records` over `runs`, a link no one form spells left out with why;
+    /// the job list's retractions and the originals they end; and the
+    /// count, whose read-withs the request carries. Reads nothing.
+    fn of(inputs: &Inputs, e: &Enumeration, panel: &Panel, switches: &Switches, records: &[Record], runs: &[Run]) -> Lists {
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut unspellable: Vec<(Address, Unspellable)> = Vec::new();
+        let ctx = SpellContext { walk: RecordWalk::composed(inputs, records, e), runs, held_back: e.held_back_words(), placeholders: e.placeholder_words() };
+        let mut add = |candidate: usize, home: EntryHome| {
+            let c = &e.candidates[candidate];
+            let formatting = is_formatting(&c.value);
+            let ends = (spell_end(&c.value.from, &c.via, &ctx, formatting), spell_end(&c.value.to, &c.via, &ctx, formatting), spell_type(&c.value.ty));
+            match ends {
+                (Ok(from), Ok(to), Ok(ty)) => entries.push(Entry { home, from, to, ty, old: Some(c.link.clone()), candidate }),
+                (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => unspellable.push((c.link.clone(), why)),
+            }
+        };
+        for &mark in &panel.formatting.marks {
+            add(mark, EntryHome::Member);
+        }
+        for row in &panel.rows {
+            if matches!(row.kind, RowKind::Public { .. }) || !switches.on.contains(&row.home) {
+                continue;
+            }
+            let home = match switches.destination(&row.home) {
+                Destination::Member => EntryHome::Member,
+                Destination::Set(s) => EntryHome::Set(s),
+            };
+            for &i in &row.links {
+                add(i, home.clone());
+            }
+        }
+        let job_list = panel.formatting.job_list();
+        let retract: Vec<Address> = job_list.iter().map(|r| r.mark.clone()).collect();
+        let originals = originals_of(&job_list);
+        let count = count(panel, switches, inputs);
+        let read_with = count.read_with.clone();
+        Lists { entries, unspellable, retract, originals, read_with, count }
+    }
 }
 
 /// Composes each `also` draft's own kept places over `runs`, off its image

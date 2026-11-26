@@ -18,7 +18,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   position of the commit that minted it off the name space's position
   map, and a slot for the transport's testimony of when it committed
   (`MintTime`, `TimeSource`), filled through `Response::mint_mut` by the
-  daemon that holds the change feed — never by this crate.
+  daemon that holds the change feed — never by this crate. One read
+  carries a write's members: `Op::PublishCost` holds a `publish`'s five
+  and answers what the board prices that publication at
+  (`Response::PublishCost`, the link store's `ReadPrice` whole) — the
+  function the daemon's `publication_over_budget` refusal reads, inside
+  the budgets or past them — consulting the drafts it names and the home
+  of each original before it answers.
 - **`OperationSurface::execute`** — total by contract: every input yields a
   `Response`, never a panic; failures are typed rejections with
   fault-site localization.

@@ -111,8 +111,8 @@
 //! a published document, `no_such_document`, `unreadable`, `over_cap` where
 //! the mapped state is in more runs than one write may name, `merge_refused`
 //! with `not_past` where `at` is at or past the draft's position, or with
-//! `history_reclaimed`, `not_a_position`, `history_busy` or
-//! `too_fragmented`; at the restore's write, `not_owner` for another
+//! `history_reclaimed`, `not_a_position` or `history_busy`; at the
+//! restore's write, `not_owner` for another
 //! account's draft, `no_such_document`, `merge_refused` with
 //! `window_withheld` or `needs_signed_session`, and the board's verdicts
 //! verbatim, `arrangement_moved` among them; `session_died` where a read or
@@ -197,10 +197,9 @@ impl Shell {
     ///    `no_such_document` at the draft's read, then `not_owner` with
     ///    `published` for a published document; `merge_refused` with
     ///    `not_past`, before any read at a position; at the state's reads,
-    ///    `merge_refused` with `history_reclaimed`, `not_a_position`,
-    ///    `history_busy` or `too_fragmented`, and `no_such_document` for a
-    ///    draft that did not exist then; the records' reads' refusals; then
-    ///    `over_cap`;
+    ///    `merge_refused` with `history_reclaimed`, `not_a_position` or
+    ///    `history_busy`, and `no_such_document` for a draft that did not
+    ///    exist then; the records' reads' refusals; then `over_cap`;
     /// 5. the write's (`skep_client::history::restore`): the board's
     ///    `arrangement_moved` verbatim where the draft's arrangement changed
     ///    past `as_of`, nothing changed; `not_owner`; `no_such_document`;

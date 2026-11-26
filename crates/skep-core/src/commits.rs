@@ -1457,6 +1457,7 @@ impl Commits {
             | Response::Links { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
+            | Response::ImagePage { .. }
             | Response::Bool { .. }
             | Response::LinkValue { .. }
             | Response::Follow { .. }

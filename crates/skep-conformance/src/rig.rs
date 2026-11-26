@@ -413,7 +413,12 @@ impl Rig {
             return None;
         }
         let span = VPoint::content(ord).region(1).span()?;
-        match self.exec(Op::Image { d: self.types_doc.clone(), region: vec![span], own: false }) {
+        match self.exec(Op::Image {
+            d: self.types_doc.clone(),
+            region: vec![span],
+            own: false,
+            cur: None,
+        }) {
             Response::Runs { runs, .. } if !runs.is_empty() => {
                 Some(Endset::from_spans(runs.iter().map(skep_arrangement::Run::iextent)))
             }

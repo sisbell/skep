@@ -266,6 +266,7 @@ fn every_refusal_is_matchable_without_a_catch_all() {
             QueryError::DocNotRegistered => "doc",
             QueryError::NotALink => "link",
             QueryError::BadRegion => "region",
+            QueryError::PageMoved => "moved",
             QueryError::ImageTooLarge => "runs",
             QueryError::EndsetsTooLarge => "spans",
         }
@@ -290,6 +291,7 @@ fn every_refusal_is_matchable_without_a_catch_all() {
         QueryError::DocNotRegistered,
         QueryError::NotALink,
         QueryError::BadRegion,
+        QueryError::PageMoved,
         QueryError::ImageTooLarge,
         QueryError::EndsetsTooLarge,
     ] {

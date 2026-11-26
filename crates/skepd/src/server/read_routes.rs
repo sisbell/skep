@@ -55,6 +55,15 @@ impl Daemon {
     /// its declaration order (PUB-6.4) and the verdict (PUB-8.4, PUB-8.5:
     /// `withheld`, `reorder`, `site.addr` the document, no detail) — asked
     /// here over the head's predicate rather than restated.
+    ///
+    /// **A paged read is one reconstruction.** Every read frame goes to
+    /// `History::read_at` with the position and the reader, which is all a
+    /// page needs to join its read: an `image` answered a short page keeps
+    /// its world and its permit there, and the continuation that sends the
+    /// page's go-on back is answered from them, rebuilding nothing and never
+    /// refused `history_busy`. The consult above runs for every page, over
+    /// the head as it then stands, so a page of a document its reader may no
+    /// longer read is `withheld` and touches no kept read.
     pub(super) fn post_op_at(&self, resolved: &Resolved, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,

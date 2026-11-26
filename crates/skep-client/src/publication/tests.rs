@@ -179,7 +179,8 @@ struct World {
     history_busy: usize,
     /// `doc_metadata` answers every trunk member of `E`, registered or not.
     endless_trunk: bool,
-    /// `image` refuses `image_too_large` past this many runs.
+    /// The most runs one `image` answer carries: a region of more answers a
+    /// page of this many under `image_page`, and where the rest begins.
     image_cap: usize,
     /// `/health` names a claimant.
     claimed: bool,
@@ -526,11 +527,16 @@ impl World {
                 let (from, width) = span_of(&frame["region"][0]);
                 let positions = Self::expand(&runs);
                 let clipped = Self::coalesce(positions.into_iter().skip(from as usize - 1).take(width as usize).collect());
+                let served = |runs: &[Run]| -> Vec<Value> { runs.iter().map(|r| json!({"i_start": r.i_start_text(), "width": r.width.to_string()})).collect() };
+                // Past the budget: the runs that fit, each whole, and the
+                // go-on at the reach of the last.
                 if clipped.len() > self.image_cap {
-                    return Ok(rejected("image_too_large", json!({})));
+                    let page = &clipped[..self.image_cap];
+                    let reach = from + page.iter().map(|r| r.width).sum::<u64>();
+                    let next = json!({"at": reach.to_string(), "surface": doc, "arranged_at": null});
+                    return Ok(reply(200, json!({"resp": "image_page", "as_of": position, "ispans": served(page), "next": next})));
                 }
-                let runs: Vec<Value> = clipped.iter().map(|r| json!({"i_start": r.i_start_text(), "width": r.width.to_string()})).collect();
-                Ok(reply(200, json!({"resp": "runs", "as_of": position, "runs": runs})))
+                Ok(reply(200, json!({"resp": "runs", "as_of": position, "runs": served(&clipped)})))
             }
             "retrieve_v" => {
                 let spec = &frame["specs"][0];
@@ -6170,6 +6176,41 @@ fn a_region_past_the_wire_list_cap_is_read_in_chunks_of_it() {
     assert_eq!(widths((0..cap).map(|k| (1 + 2 * k, 1)).collect()), [MAX_WIRE_LIST], "at the cap, one");
     assert_eq!(widths((0..=cap).map(|k| (1 + k, 1)).collect()), [1], "adjacent spans are one");
     assert!(widths(Vec::new()).is_empty(), "no span, no read");
+}
+
+/// The door images a long document whole, a page a frame and no frame
+/// more: a draft of 5,000 runs is two `image` frames and one of 12,289
+/// four, each the rest of the span from the reach of the page before it,
+/// the go-on sent back whole, none of a halved width, each counted under
+/// its step; the runs are the board's as it served them, each at its own
+/// ordinal, none joined to its neighbour (the mutant that takes the first
+/// page for the image answers 4,096 runs).
+#[test]
+fn the_door_images_a_long_document_whole_a_page_a_frame() {
+    /// A draft of the publisher's own, holding the long arrangement.
+    const LONG: &str = "1.0.1.0.99";
+    for (count, pages) in [(5_000u64, 2u64), (12_289, 4)] {
+        let (mut world, _) = World::base();
+        let long: Vec<Run> = (1..=count).map(|k| run(E, 2 * k, 1)).collect();
+        world.doc(LONG, false, ACCOUNT, long);
+        let (dialer, board, _) = open(world);
+        let token = token();
+        let door = Door::new(&board, &token);
+        door.step("image");
+        let runs = door.image(LONG, 1, count).expect("the image, whole");
+        assert_eq!(runs.len() as u64, count);
+        assert!(runs.iter().enumerate().all(|(k, r)| (r.ordinal, r.first, r.width) == (k as u64 + 1, 2 * (k as u64 + 1), 1)), "every run at its own ordinal");
+        let frames = dialer.frames("image");
+        let spans: Vec<(u64, u64)> = frames.iter().map(|f| span_of(&f["region"][0])).collect();
+        assert_eq!(spans, (0..pages).map(|page| (1 + page * 4_096, count - page * 4_096)).collect::<Vec<_>>(), "{count} runs: ⌈R ÷ 4,096⌉ frames");
+        assert!(frames[0].get("cur").is_none() && frames[1..].iter().all(|f| f["cur"]["surface"] == LONG), "the go-on sent back on every continuation");
+        assert_eq!(door.counts(), [("image", pages as usize)], "each page a frame of the step");
+        // A window inside the document, past the budget too.
+        dialer.clear();
+        let inner = door.image(LONG, 11, 4_500).expect("a window of it");
+        assert_eq!((inner.len(), inner[0].ordinal, inner[4_499].ordinal), (4_500, 11, 4_510));
+        assert_eq!(dialer.frames("image").iter().map(|f| span_of(&f["region"][0])).collect::<Vec<_>>(), [(11, 4_500), (4_107, 404)]);
+    }
 }
 
 mod walks;

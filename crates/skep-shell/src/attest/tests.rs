@@ -148,6 +148,11 @@ struct Fake {
     origins: HashMap<&'static str, Stored>,
     extents: HashMap<&'static str, u64>,
     images: HashMap<&'static str, Value>,
+    /// Documents of this many one-position runs — position `k` at
+    /// `<doc>.0.1.<2k>`, none I-adjacent to the next — whose `image` the
+    /// fake answers as the board pages one: the runs that fit under
+    /// `image_page` with the go-on, and the rest to its continuation.
+    paged: HashMap<&'static str, u64>,
     /// The links a retraction tuple stands for: `find_links_ftt` over the
     /// retraction class and one of these as `to` answers one hit.
     retracted: Vec<&'static str>,
@@ -205,6 +210,17 @@ impl Dialer for Fake {
             "image" => {
                 let doc = frame["d"].as_str().unwrap_or("");
                 let (from, width) = (last_component(frame["region"][0]["start"].as_str().unwrap_or("")), last_component(frame["region"][0]["width"].as_str().unwrap_or("")));
+                if let Some((doc, count)) = self.paged.get_key_value(doc) {
+                    let (from, until) = (from as u64, (from as u64 + width as u64).min(count + 1));
+                    assert!(frame["cur"].is_null() || frame["cur"]["at"] == from.to_string(), "a continuation begins where its go-on says: {frame}");
+                    let page = (until - from).min(MAX_SLOT_SPANS as u64);
+                    let runs: Vec<Value> = (from..from + page).map(|k| json!({"i_start": format!("{doc}.0.1.{}", 2 * k), "width": "1"})).collect();
+                    return Ok(if from + page < until {
+                        ok(json!({"resp": "image_page", "as_of": 1, "ispans": runs, "next": {"at": (from + page).to_string(), "surface": doc, "arranged_at": null}}))
+                    } else {
+                        ok(json!({"resp": "runs", "as_of": 1, "runs": runs}))
+                    });
+                }
                 match (self.images.get(doc), self.origins.get(doc)) {
                     (Some(runs), _) => ok(json!({"resp": "image", "runs": runs})),
                     (None, Some(stored)) => ok(json!({"resp": "image", "runs": [{"i_start": format!("{}.{}", stored.prefix, stored.first + from as u64 - 1), "width": width.to_string()}]})),
@@ -416,6 +432,37 @@ fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
     let mut spent = 0;
     let read_back = read("1.0.1.0.64", &mut spent).unwrap();
     assert_eq!((read_back.value("1.0.1.0.64.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
+}
+
+/// **The composer reads a long image whole**, both of its reads. An origin of
+/// 5,000 runs is read back through its whole map, two `image` frames, and
+/// the value at a position on the second page is the one kept (the mutant
+/// that takes the first page for the image maps fewer positions than the
+/// extent and composes no body). A V-spec slot over the same 5,000 runs is
+/// resolved whole, two frames, and refused at the slot's span budget on the
+/// run past it — its own cap, counted over every run, never `image`
+/// answering none.
+#[test]
+fn the_composer_reads_an_image_past_one_page_whole() {
+    let long = "1.0.1.0.64";
+    let mut fake = Fake::default().text(long, "1.0.1.0.64.0.1", 1, &"q".repeat(4_499));
+    fake.origins.get_mut(long).expect("the origin").items.extend([json!({"content": "Z"}), json!({"content": "q"})].into_iter().cycle().take(501));
+    fake.paged.insert(long, 5_000);
+    let g = Ground::over(fake);
+    let c = g.composer();
+    let mut wanted = Wanted::new(long);
+    wanted.want(IRange::new("1.0.1.0.64.0.1", 9_000, 1).expect("a spellable range"));
+    let mut spent = 0;
+    let read_back = c.read_back(wanted, &mut spent).expect("read back through the whole map");
+    assert_eq!(read_back.value("1.0.1.0.64.0.1", 9_000), Some(&b"Z"[..]), "the 4,500th position's value, on the second page");
+    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set", "image", "image", "retrieve_v"], "the map in two frames");
+    g.fake.dialed.lock().unwrap().clear();
+    let whole = json!([{"source": long, "span": {"start": "1.1", "width": "0.5000"}}]);
+    let refused = c.slot(&whole, "from").unwrap_err();
+    assert!(refused.to_string().contains("slot resolves to more than 4096 spans"), "the slot's own budget, over every run: {refused}");
+    assert_eq!(g.fake.dialed(), ["image", "image"], "the source's image whole, two frames");
+    let within = json!([{"source": long, "span": {"start": "1.4090", "width": "0.20"}}]);
+    assert_eq!(c.slot(&within, "from").expect("a region across the page's edge").len(), 20);
 }
 
 /// THE SHOT's BODY, the positive control: runs copied in from the staging

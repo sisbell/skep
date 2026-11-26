@@ -7,7 +7,7 @@
 use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
 use skep_arrangement::{trunk_of, Deposit, Edit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
-use skep_discovery::{Cursor, FourSet};
+use skep_discovery::{Cursor, FourSet, GoOn};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{AlsoPlaces, Endset, PublishDeposits, PublishTarget, SlotArg, View};
 use skep_namespace::{PrincipalId, WellKnownSlot};
@@ -635,7 +635,20 @@ pub enum Op {
     /// member, the arrangement it held before its first version (PUB-2.66),
     /// and everywhere else the same answer the unset flag gives. `d` is the
     /// doc-argument either way, so whoever may read `d` reads both.
-    Image { d: Address, region: Vec<Span>, own: bool },
+    ///
+    /// **In pages.** A region resolving more runs than M8's run budget is
+    /// answered the runs that fit and where the rest begins
+    /// ([`Response::ImagePage`](crate::Response::ImagePage)), never refused
+    /// for them. `cur` is the continuation: the go-on of the page before,
+    /// whole, with `region` the rest of the region from where it names. The
+    /// page is then read from the arrangement the go-on names — `d`'s own,
+    /// or the member a bare published `d` floated to at the first page —
+    /// and refused `PageMoved` where that arrangement takes in-place edits
+    /// and has changed since, so a page set is one state's (M8's
+    /// `image_page_on`). `d` is the one doc-argument still: a member reads
+    /// as its document does (PUB-2.15), and no other arrangement is one a
+    /// continuation of `d` may name.
+    Image { d: Address, region: Vec<Span>, own: bool, cur: Option<GoOn> },
     /// Content-region link discovery (foundation ∩ active).
     FindLinksV { d: Address, region: Vec<Span> },
     /// Four-set descriptor query (ASN-0121).

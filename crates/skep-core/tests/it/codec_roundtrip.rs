@@ -12,7 +12,7 @@ use skep_arrangement::{
     Base, Change, Edit, Marker, Placed, Run, RunError, SetMerge, Shot, ShotRun, VPos, VSpec,
 };
 use skep_content::Val;
-use skep_discovery::{FourSet, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
+use skep_discovery::{FourSet, GoOn, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
     AlsoPlaces, BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, ISpan,
     MintTime, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request, Response, ShotTerms,
@@ -256,7 +256,8 @@ fn all_requests() -> Vec<Request> {
         ),
         // The edit under its own name: changes that mint — a placement, a
         // replacement by text and an atom, a removal alone, touching the
-        // one before it — with no optional member, and with all three.
+        // one before it — with no optional member, and with the head pair,
+        // the one an `edit` frame carries.
         rq(
             Some("edit-1"),
             Op::Edit {
@@ -281,8 +282,8 @@ fn all_requests() -> Vec<Request> {
                 edit: Edit {
                     changes: vec![minting(2, 1, vec![Val::new(vec![0xff])])],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
-                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
-                    merge: Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: None }),
+                    base: None,
+                    merge: None,
                 },
                 as_of: Seq(9),
             },
@@ -638,8 +639,28 @@ fn all_requests() -> Vec<Request> {
                 regions: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }],
             },
         ),
-        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: false }),
-        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: true }),
+        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: false, cur: None }),
+        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)], own: true, cur: None }),
+        // A continuation: the go-on of the page before, of a draft with a
+        // position and of a member the board keeps none for.
+        rq(
+            None,
+            Op::Image {
+                d: d1(),
+                region: vec![cspan(4097, 904)],
+                own: false,
+                cur: Some(GoOn { at: n(4097), surface: d1(), arranged_at: Some(Seq(7)) }),
+            },
+        ),
+        rq(
+            None,
+            Op::Image {
+                d: d1(),
+                region: vec![cspan(4097, 904)],
+                own: true,
+                cur: Some(GoOn { at: n(4097), surface: a(&[1, 0, 1, 0, 1, 2]), arranged_at: None }),
+            },
+        ),
         rq(None, Op::FindLinksV { d: d1(), region: vec![cspan(1, 5)] }),
         rq(
             None,
@@ -1941,6 +1962,15 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 as_of: Seq(9),
             },
         ),
+        (
+            "image_page",
+            Response::ImagePage {
+                runs: vec![Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 1]), n(5))
+                    .expect("element-level run fixture")],
+                next: GoOn { at: n(6), surface: a(&[1, 0, 1, 0, 1]), arranged_at: Some(Seq(7)) },
+                as_of: Seq(9),
+            },
+        ),
         ("bool", Response::Bool { val: true, as_of: Seq(9) }),
         (
             "link_value",
@@ -2460,9 +2490,121 @@ fn an_edits_changes_are_capped_ordered_and_of_their_frames_one_form() {
     assert!(detail.contains("missing field 'changes'"), "{detail}");
     let (detail, _) = refused(r#"{"op":"edit","doc":"1.0.1.0.65","changes":[]}"#);
     assert!(detail.contains("missing field 'as_of'"), "{detail}");
-    // An empty list parses under both names: whether it stands beside a
-    // base or a merge is the store's to say.
+    // An empty list parses under both names: whether a frame of no change
+    // stands is the store's to say.
     assert!(codec.parse(br#"{"op":"edit","doc":"1.0.1.0.65","changes":[],"as_of":7}"#).is_ok());
+}
+
+/// An `edit` frame carries no landing (wire.md §Arrangement, `edit`): the
+/// base pair and the merge's sides are `set_arrangement`'s alone, and an
+/// `edit` carrying either is refused as an unknown field, `null` and all,
+/// whatever stands beside it; the head pair it keeps, read as the landing's
+/// is. The same members under `set_arrangement` parse.
+#[test]
+fn an_edit_frame_refuses_a_landings_base_and_merge() {
+    let codec = JsonCodec;
+    let frame = |op: &str, member: &str, fields: &str| {
+        format!(
+            r#"{{"op":"{op}","doc":"1.0.1.0.65","changes":[{{"at":{{"subspace":"1","ordinal":"1"}},"width":"0",{member}}}],"as_of":7{fields}}}"#
+        )
+    };
+    let edit = |fields: &str| frame("edit", r#""values":["hi"]"#, fields);
+    let set = |fields: &str| {
+        frame("set_arrangement", r#""runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]"#, fields)
+    };
+    let head = r#","head":{"at":"1.0.1.0.1.2","extent":"4"}"#;
+    let base = r#","base":{"at":"1.0.1.0.1.2","extent":"4"}"#;
+    let merge = r#","merge":{"sides":["1.0.1.0.1.1.1"]}"#;
+    for (fields, named) in [
+        (base.to_string(), "unknown field 'base'"),
+        (format!("{head}{merge}"), "unknown field 'merge'"),
+        (format!("{head}{base}{merge}"), "unknown field 'base'"),
+        (r#","base":null"#.to_string(), "unknown field 'base'"),
+        (format!(r#"{head},"merge":null"#), "unknown field 'merge'"),
+    ] {
+        let refused = codec.parse(edit(&fields).as_bytes()).expect_err("an edit carries no landing");
+        let detail = refused.detail.expect("a parse failure names what failed");
+        assert!(detail.contains(named), "{fields}: {detail}");
+        assert!(codec.parse(set(&fields).as_bytes()).is_ok(), "a landing is set_arrangement's: {fields}");
+    }
+    // The head pair stays the edit's own.
+    let headed = parse_ok(&codec, edit(head).as_bytes());
+    let Op::Edit { edit: parsed, .. } = &headed.op else { panic!("{headed:?}") };
+    assert_eq!(parsed.head, Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }));
+    assert!(parsed.base.is_none() && parsed.merge.is_none());
+    assert_eq!(parse_ok(&codec, &codec.marshal_request(&headed)), headed, "parse ∘ marshal is a fixpoint");
+}
+
+/// A paged image's continuation and its page (wire.md §Link discovery
+/// reads, `image`; §The response envelope, `image_page`): `cur` reads
+/// absent and `null` alike as a first page and an object of `at`, `surface`
+/// and `arranged_at` as the go-on, its position `null` or absent where the
+/// board keeps none; the canonical frame carries `cur` only where set, all
+/// three members in it; and the page marshals under a `resp` of its own,
+/// its runs under `ispans`, with the go-on beside them in the form a
+/// continuation sends back.
+#[test]
+fn an_images_continuation_and_its_page_carry_the_go_on_whole() {
+    let codec = JsonCodec;
+    let image = |cur: &str| {
+        format!(r#"{{"d":"1.0.1.0.1","op":"image","region":[{{"start":"1.4097","width":"0.904"}}]{cur}}}"#)
+    };
+    let cur_of = |frame: &str| match parse_ok(&codec, frame.as_bytes()).op {
+        Op::Image { cur, .. } => cur,
+        other => panic!("expected an image, got {other:?}"),
+    };
+    assert_eq!(cur_of(&image("")), None);
+    assert_eq!(cur_of(&image(r#","cur":null"#)), None);
+    let draft = GoOn { at: n(4097), surface: d1(), arranged_at: Some(Seq(7)) };
+    let whole = r#","cur":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1"}"#;
+    assert_eq!(cur_of(&image(whole)), Some(draft.clone()));
+    let unplaced = GoOn { arranged_at: None, ..draft.clone() };
+    for cur in [
+        r#","cur":{"arranged_at":null,"at":"4097","surface":"1.0.1.0.1"}"#,
+        r#","cur":{"at":"4097","surface":"1.0.1.0.1"}"#,
+    ] {
+        assert_eq!(cur_of(&image(cur)), Some(unplaced.clone()), "{cur}");
+    }
+    // Canonical: `cur` where set, whole, and the frame a fixpoint.
+    let canonical = |frame: &str| {
+        String::from_utf8(codec.marshal_request(&parse_ok(&codec, frame.as_bytes()))).expect("utf-8")
+    };
+    assert_eq!(
+        canonical(&image(whole)),
+        r#"{"cur":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1"},"d":"1.0.1.0.1","op":"image","region":[{"start":"1.4097","width":"0.904"}]}"#
+    );
+    assert_eq!(canonical(&image(r#","cur":{"at":4097,"surface":"1.0.1.0.1"}"#)), canonical(&image(r#","cur":{"arranged_at":null,"at":"4097","surface":"1.0.1.0.1"}"#)));
+    assert_eq!(canonical(&image(r#","cur":null"#)), canonical(&image("")), "written only where set");
+    for (bad, named) in [
+        (r#","cur":"1.0.1.0.1""#, "field 'cur': expected a JSON object"),
+        (r#","cur":{"arranged_at":7,"surface":"1.0.1.0.1"}"#, "missing field 'at'"),
+        (r#","cur":{"arranged_at":7,"at":"4097"}"#, "missing field 'surface'"),
+        (r#","cur":{"arranged_at":"7","at":"4097","surface":"1.0.1.0.1"}"#, "arranged_at: expected a non-negative JSON integer"),
+        (r#","cur":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1","own":true}"#, "unknown field 'own'"),
+        (r#","cur":{"arranged_at":7,"at":"x","surface":"1.0.1.0.1"}"#, "at:"),
+    ] {
+        let refused = codec.parse(image(bad).as_bytes()).err().unwrap_or_else(|| panic!("{bad} must not parse"));
+        let detail = refused.detail.expect("a parse failure names what failed");
+        assert!(detail.contains(named), "{bad}: {detail}");
+    }
+    // The page: its own `resp`, its runs under `ispans`, never `runs`.
+    let page = Response::ImagePage {
+        runs: vec![Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 1]), n(5)).expect("a run")],
+        next: draft,
+        as_of: Seq(9),
+    };
+    assert_eq!(
+        String::from_utf8(codec.marshal(&page)).expect("utf-8"),
+        r#"{"as_of":9,"ispans":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}],"next":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1"},"resp":"image_page"}"#
+    );
+    let v: Value = serde_json::from_slice(&codec.marshal(&page)).expect("json");
+    assert!(v.get("runs").is_none(), "a reader of `runs` meets none: {v}");
+    let fits = Response::Runs { runs: vec![Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 1]), n(5)).expect("a run")], as_of: Seq(9) };
+    assert_eq!(
+        String::from_utf8(codec.marshal(&fits)).expect("utf-8"),
+        r#"{"as_of":9,"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}]}"#,
+        "an image that fits answers as it did, no go-on beside it"
+    );
 }
 
 /// Returns the line read's answer to wire.md's own example request.
@@ -2607,14 +2749,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 97 codes, pinned.
+/// The full `RejectCode` wire-name table — all 98 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 97] = [
+    let table: [(RejectCode, &str); 98] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -2710,6 +2852,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::TooManyItems, "too_many_items"),
         (RejectCode::NotALink, "not_a_link"),
         (RejectCode::BadRegion, "bad_region"),
+        (RejectCode::PageMoved, "page_moved"),
         (RejectCode::ImageTooLarge, "image_too_large"),
         (RejectCode::EndsetsTooLarge, "endsets_too_large"),
     ];

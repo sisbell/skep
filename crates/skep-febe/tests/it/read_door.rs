@@ -26,9 +26,9 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    consult_read, enc, validate, Address, CompareRegion, DeliveryItem, Deposit, EditionClaim,
-    Flagged, FourSet, LineNumbers, Op, OpKind, RegionSpec, RejectCode, Response, SlotArg, SlotSpec,
-    Span, SpanSet, Spec, Tumbler, Val, View, FROM, TO,
+    consult_read, enc, validate, Address, CompareRegion, DeliveryItem, Deposit, Disposition,
+    EditionClaim, Flagged, FourSet, GoOn, LineNumbers, Op, OpKind, RegionSpec, RejectCode,
+    Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, Val, View, FROM, TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -152,8 +152,8 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
             &d2,
         ),
         // The region family's `d`.
-        (Op::Image { d: d1.clone(), region: vec![first_span()], own: false }, &d1),
-        (Op::Image { d: d1.clone(), region: vec![first_span()], own: true }, &d1),
+        (Op::Image { d: d1.clone(), region: vec![first_span()], own: false, cur: None }, &d1),
+        (Op::Image { d: d1.clone(), region: vec![first_span()], own: true, cur: None }, &d1),
         (Op::FindLinksV { d: d1.clone(), region: vec![first_span()] }, &d1),
         (Op::CountV { d: d1.clone(), region: vec![first_span()] }, &d1),
         (Op::WindowV { d: d1.clone(), region: vec![first_span()], cur: None, n: 1 }, &d1),
@@ -1010,4 +1010,65 @@ fn a_supplied_predicate_overrides_the_world_rather_than_narrowing_it() {
 
     let (set, _) = spanset(ex(&fx.febe, other, Op::RetrieveDocVSpan { doc: d }));
     assert_ne!(set, SpanSet::empty(), "the supplied predicate is the whole answer");
+}
+
+/// An `image` past M8's run budget is answered in pages through the door,
+/// never refused: the page under its own shape, the go-on naming the draft
+/// and the position `doc_metadata` serves as its `arranged_at`; the
+/// continuation under `Runs`; and an image that fits under `Runs` alone. A
+/// continuation of a draft written since is refused `PageMoved`, permanent,
+/// naming the document, and one naming another arrangement `BadRegion`. The
+/// doc-argument consult stands ahead of both: a continuation of a document
+/// the caller may not read is withheld, whatever its go-on names.
+#[test]
+fn an_image_past_the_run_budget_is_answered_in_pages_through_the_door() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let other = fx.febe.open_session(skep_febe::PrincipalId(USER.0 + 1));
+    let at_budget: u32 = 1 << 12;
+    let d = fragmented_doc(&fx, at_budget);
+    let image = |region: Span, cur: Option<GoOn>| {
+        ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![region], own: false, cur })
+    };
+    assert_eq!(runs(image(vspan(1, 1, at_budget), None)).len(), at_budget as usize);
+
+    // The draft doubled: twice the budget, every position its own run.
+    let doubled = Op::Copy {
+        doc: d.clone(),
+        at: vp(1, at_budget + 1),
+        specs: vec![vspec(&d, 1, at_budget)],
+        as_of: head(&fx),
+    };
+    let copied_at = ack(ex(&fx.febe, fx.user, doubled));
+    let whole = vspan(1, 1, 2 * at_budget);
+    let Response::ImagePage { runs: first, next, as_of } = image(whole, None) else {
+        panic!("a region past the run budget answers a page");
+    };
+    assert_eq!(first.len(), at_budget as usize);
+    assert_eq!(as_of, head(&fx));
+    assert_eq!(
+        next,
+        GoOn { at: nat(at_budget + 1), surface: d.clone(), arranged_at: Some(copied_at) },
+        "the next ordinal, the draft, and the position it last changed at"
+    );
+    let rest = vspan(1, at_budget + 1, at_budget);
+    let second = runs(image(rest.clone(), Some(next.clone())));
+    assert_eq!(second.len(), at_budget as usize, "the rest, and no go-on");
+
+    // Another arrangement than the draft's own is no continuation of it.
+    let elsewhere = GoOn { surface: fx.account.clone(), ..next.clone() };
+    let refused = rejected(image(rest.clone(), Some(elsewhere)));
+    assert_eq!((refused.op, refused.code), (OpKind::Image, RejectCode::BadRegion));
+
+    // Unreadable to another principal: withheld ahead of the continuation.
+    unreadable.lock().expect("no poisoning").push(d.clone());
+    let continued = Op::Image { d: d.clone(), region: vec![rest.clone()], own: false, cur: Some(next.clone()) };
+    assert_withheld(ex(&fx.febe, other, continued), OpKind::Image, &d);
+
+    // The draft written: the continuation names a state it has left.
+    insert3(&fx, &d);
+    let moved = rejected(image(rest, Some(next)));
+    assert_eq!((moved.op, moved.code), (OpKind::Image, RejectCode::PageMoved));
+    assert_eq!(moved.disposition, Disposition::Permanent);
+    assert_eq!(moved.site.expect("the document rides the site").addr, Some(d));
+    assert!(moved.detail.is_none());
 }

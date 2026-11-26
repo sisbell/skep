@@ -210,16 +210,6 @@ pub enum Refusal {
     /// none this client parses is [`Refusal::Halt`], the board's refusal
     /// verbatim (SP-18).
     NoSuchDocument(Address),
-    /// `image_too_large` down to a region of one position.
-    ///
-    /// The document's runs cannot be imaged, `runs_seen` of them counted
-    /// before the floor (§8's measurement, reported).
-    TooFragmented {
-        /// The document imaged.
-        doc: Address,
-        /// The runs the parts that answered carried.
-        runs_seen: usize,
-    },
     /// `history_busy` on a read at a position, past the bounded retries.
     ///
     /// A read at a position is a verification's, a take-back's, a
@@ -707,7 +697,6 @@ impl fmt::Display for Refusal {
                 write!(f, ": the merge composes once {doc} is shared with this reader or its words are published")
             }
             Refusal::NoSuchDocument(doc) => write!(f, "{doc} is not registered at this board"),
-            Refusal::TooFragmented { doc, runs_seen } => write!(f, "{doc} is in more pieces than `image` can answer, even one position at a time ({runs_seen} runs seen)"),
             Refusal::HistoryBusy => f.write_str("the board was busy reading history (history_busy) past the bounded retries"),
             Refusal::HistoryReclaimed { at, floor } => {
                 write!(f, "the board no longer answers position {at} (history_reclaimed")?;

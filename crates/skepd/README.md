@@ -20,7 +20,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the parse, and the default one above that, so a daemon whose every
   pool is saturated still answers.
 - **The wire** — `/op` (execute), `/op-at` (historical reads over
-  reconstructed worlds), `/chain` (the commit chain's value at a
+  reconstructed worlds, an image read in pages rebuilt once and kept,
+  with its permit, from its first page to its last, and let go where
+  no page is asked of it for ten seconds), `/chain` (the commit chain's
+  value at a
   position), `/changes`, `/dump`, `/events` (commit stream),
   `/health`, the session routes `/challenge`, `/session`,
   `/session/close`, the blob upload's family `/blob/upload` — the

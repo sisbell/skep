@@ -762,8 +762,8 @@ fn an_undo_after_a_put_back_is_typed_at_the_landing_where_a_members_word_became_
 /// The draft holds the trunk's words and a member's by turns at adjoining
 /// ordinals, 4,097 runs as the board serves and takes them and one run of
 /// `D` as the core joins them. (a) The withdrawal lands: it names no
-/// change, so no run of the draft is sent or counted, the image still read
-/// in halves past the board's run budget, the marker cleared and every word
+/// change, so no run of the draft is sent or counted, the image still read,
+/// in two pages past the board's run budget, the marker cleared and every word
 /// standing (the mutant that sends the image back whole answers `OverCap`).
 /// (b) Its undo lands the same way, no record moving a word: the marker
 /// back, no run named. (c) A draft whose first and last words are `S`'s
@@ -786,7 +786,7 @@ fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("(a): withdrawn");
     let names = dialer.names();
     let write = names.iter().position(|n| n == "set_arrangement").expect("(a): the write");
-    assert_eq!(names[..write].iter().filter(|n| *n == "image").count(), 3, "(a): the premise: the image read in halves past the board's run budget: {names:?}");
+    assert_eq!(names[..write].iter().filter(|n| *n == "image").count(), 2, "(a): the premise: the image read in two pages past the board's run budget: {names:?}");
     let sent = dialer.frames("set_arrangement");
     assert_eq!((sent.len(), &sent[0]["changes"]), (1, &json!([])), "(a): one write, naming no change");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, alternating(), "(a): every word stands");

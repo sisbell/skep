@@ -409,6 +409,86 @@ impl Board {
         floor_past(at, self.post_json("/op-at", &body, op))
     }
 
+    /// Reads the image of the `width` V-ordinals of `doc` from `from`, whole.
+    ///
+    /// The read is made at the head, or as of `at`. An image within the
+    /// board's run budget is one frame and its answer. One past it is a page
+    /// a frame, each answered ([`Board::image_pass`]), and the pages are
+    /// one state's: a continuation the board refuses `page_moved` — the
+    /// document changed between two pages — begins the read again from its
+    /// first page, at most [`PAGE_RESTARTS`] times, and past them every
+    /// page is read as of the last first page's position, where a state
+    /// does not move. A read already at a position meets no such refusal,
+    /// and its pages are one reconstruction at the board, kept for the
+    /// read.
+    ///
+    /// The answer is the read's one document: a `runs` answer holding every
+    /// run, in V-order, its `as_of` the first page's ([`runs_of`]); or, where
+    /// a frame answered neither a page nor an image, that frame's answer as
+    /// served — a rejection, a shape this build does not read — which no
+    /// reader takes for an image.
+    ///
+    /// # Errors
+    ///
+    /// [`Board::op`]'s, and at a position [`Board::op_at`]'s.
+    pub(crate) fn image(&self, doc: &Address, from: u64, width: u64, at: Option<u64>) -> Result<Value, BoardError> {
+        let (mut read_at, mut restarts, mut moved) = (at, 0, false);
+        loop {
+            match self.image_pass(doc, from, width, read_at)? {
+                ImagePass::Answered(answer) => return Ok(answer),
+                ImagePass::Moved { .. } if !moved && restarts < PAGE_RESTARTS => restarts += 1,
+                ImagePass::Moved { as_of: Some(position), .. } if !moved => {
+                    (read_at, moved) = (Some(position), true);
+                }
+                ImagePass::Moved { refusal, .. } => return Ok(refusal),
+            }
+        }
+    }
+
+    /// Reads one pass over the pages of an image, at the head or as of `at`.
+    ///
+    /// A short page — `image_page`, at most the run budget of runs under
+    /// `ispans`, and `next` naming an ordinal inside the span past where
+    /// the page began — is followed: the rest of the span from that
+    /// ordinal, `next` sent back whole as `cur`. A page that is not the
+    /// wire's ends the pass with that page for its answer, never read as an
+    /// image.
+    fn image_pass(&self, doc: &Address, from: u64, width: u64, at: Option<u64>) -> Result<ImagePass, BoardError> {
+        let send = |frame: &Value| match at {
+            None => self.op(frame),
+            Some(at) => self.op_at(at, frame),
+        };
+        let mut answer = send(&image_frame(doc, from, width))?;
+        if answer["resp"].as_str() != Some("image_page") {
+            return Ok(ImagePass::Answered(answer));
+        }
+        let as_of = answer["as_of"].as_u64();
+        let (mut begun, mut left, mut runs) = (from, width, Vec::new());
+        loop {
+            let page = answer["ispans"].as_array().filter(|page| (1..=MAX_IMAGE_RUNS).contains(&page.len()));
+            let next = answer["next"]["at"].as_str().and_then(|at| at.parse::<u64>().ok());
+            let read = next.and_then(|at| at.checked_sub(begun)).filter(|read| (1..left).contains(read));
+            let (Some(page), Some(read)) = (page, read) else { return Ok(ImagePass::Answered(answer)) };
+            runs.extend(page.iter().cloned());
+            (begun, left) = (begun + read, left - read);
+            let mut frame = image_frame(doc, begun, left);
+            frame["cur"] = answer["next"].clone();
+            answer = send(&frame)?;
+            match answer["resp"].as_str() {
+                Some("image_page") => {}
+                Some("runs") => {
+                    let Some(last) = answer["runs"].as_array() else { return Ok(ImagePass::Answered(answer)) };
+                    runs.extend(last.iter().cloned());
+                    return Ok(ImagePass::Answered(json!({ "resp": "runs", "runs": runs, "as_of": as_of })));
+                }
+                Some("rejected") if answer["code"].as_str() == Some("page_moved") => {
+                    return Ok(ImagePass::Moved { refusal: answer, as_of });
+                }
+                _ => return Ok(ImagePass::Answered(answer)),
+            }
+        }
+    }
+
     fn not_rejected(v: Value) -> Result<Value, BoardError> {
         if v["resp"].as_str() == Some("rejected") {
             return Err(BoardError::Rejected {
@@ -645,9 +725,56 @@ pub(crate) fn span_set_frame(doc: &Address) -> Value {
 }
 
 /// The `image` frame: the runs `doc` arranges at the `width` V-ordinals from
-/// `from` ([`runs_of`]).
-pub(crate) fn image_frame(doc: &Address, from: u64, width: u64) -> Value {
+/// `from` ([`runs_of`]) — the first page's, which [`Board::image`] follows
+/// to the last.
+fn image_frame(doc: &Address, from: u64, width: u64) -> Value {
     json!({ "op": "image", "d": doc.to_string(), "region": [{ "start": format!("1.{from}"), "width": format!("0.{width}") }] })
+}
+
+/// The most runs one `image` answer carries, the board's run budget
+/// (wire.md §The response envelope, `image_page`): a short page holds this
+/// many, and a whole image, read in pages, as many as its document
+/// arranges.
+const MAX_IMAGE_RUNS: usize = 1 << 12;
+
+/// How many times a paged read begins again at the head before it reads at
+/// one position ([`Board::image`]): `skep-client`'s `PAGE_RESTARTS`, whose
+/// card argues the number — a restart re-reads the live image, tens of
+/// milliseconds, where the read at a position is one reconstruction, up to
+/// seconds and one of the board's two permits. Restated, this crate taking
+/// no `skep-client`.
+const PAGE_RESTARTS: u32 = 3;
+
+/// A board's answer to an `image` frame over a document of `count`
+/// one-position runs, as the wire pages it: position `k` at `<d>.0.1.<2k>`,
+/// none I-adjacent to the next, the runs that fit under `image_page` with
+/// the go-on, and a `runs` answer where the region ends in them. For this
+/// crate's unit tests, whose boards answer by hand.
+#[cfg(test)]
+pub(crate) fn paged_image_of(frame: &Value, count: u64, as_of: u64) -> Value {
+    let part = |member: &str, prefix: &str| -> u64 {
+        frame["region"][0][member].as_str().and_then(|s| s.strip_prefix(prefix)).and_then(|n| n.parse().ok()).expect("a content span")
+    };
+    let (doc, from) = (frame["d"].as_str().expect("a document"), part("start", "1."));
+    assert!(frame["cur"].is_null() || frame["cur"]["at"] == from.to_string(), "a continuation begins where its go-on says: {frame}");
+    let until = from.saturating_add(part("width", "0.")).min(count + 1);
+    let page = until.saturating_sub(from).min(MAX_IMAGE_RUNS as u64);
+    let runs: Vec<Value> = (from..from + page).map(|k| json!({ "i_start": format!("{doc}.0.1.{}", 2 * k), "width": "1" })).collect();
+    if from + page < until {
+        let next = json!({ "at": (from + page).to_string(), "surface": doc, "arranged_at": 7 });
+        return json!({ "resp": "image_page", "as_of": as_of, "ispans": runs, "next": next });
+    }
+    json!({ "resp": "runs", "as_of": as_of, "runs": runs })
+}
+
+/// One pass over an image's pages ([`Board::image_pass`]).
+enum ImagePass {
+    /// The read's answer: the image whole, or the board's answer where it
+    /// gave no image.
+    Answered(Value),
+    /// A continuation was refused `page_moved`: the rejection, and the
+    /// first page's `as_of` where it carried one.
+    Moved { refusal: Value, as_of: Option<u64> },
 }
 
 fn key_set_frame(account: &Address) -> Value {

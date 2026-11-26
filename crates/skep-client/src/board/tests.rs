@@ -323,10 +323,13 @@ fn a_read_by_identity_decodes_one_value_a_position_and_keeps_null_in_its_place()
 /// The wire's own `runs` example is one run of five positions; runs come in
 /// V order with the ordinal each begins at, a run placed twice standing
 /// twice and a run of no address dropped; an empty document's image is the
-/// empty one; and an answer that is no image, a run that does not parse,
-/// runs past the board's budget and positions that reach the range's end
-/// are no image at all, never a part of one (the mutant that reads what it
-/// can of a broken answer shifts every position past the break).
+/// empty one; an image of more runs than one answer carries, as its pages
+/// answered it, is decoded whole; and an answer that is no image, a short
+/// page among them, a run that does not parse and positions that reach the
+/// range's end are no image at all, never a part of one (the mutant that
+/// reads what it can of a broken answer shifts every position past the
+/// break; the one that reads a short page's runs takes a first page for
+/// the document).
 #[test]
 fn a_whole_image_is_decoded_whole_or_not_at_all() {
     // `<!-- wire: response runs -->`.
@@ -346,7 +349,13 @@ fn a_whole_image_is_decoded_whole_or_not_at_all() {
     assert_eq!(whole_image(&json!({"code":"image_too_large","op":"image","resp":"rejected"})), None, "a rejection is no image");
     assert_eq!(whole_image(&json!({"as_of":9,"resp":"span_set","set":[]})), None);
     let many: Vec<Value> = (1..=(1u64 << 12) + 1).map(|k| json!({"i_start": format!("1.0.1.0.1.0.1.{}", 2 * k), "width": "1"})).collect();
-    assert_eq!(whole_image(&json!({"resp":"runs","runs":many})), None, "past the run budget");
+    assert_eq!(whole_image(&json!({"resp":"runs","runs":many.clone()})).map(|image| image.extent()), Some((1 << 12) + 1), "past one answer's runs, whole");
+    // `<!-- wire: response image_page -->`, and a page of the budget's runs.
+    let example = json!({"as_of":9,"ispans":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}],"next":{"arranged_at":7,"at":"6","surface":"1.0.1.0.1"},"resp":"image_page"});
+    assert_eq!(whole_image(&example), None, "a short page is no image");
+    assert!(example["runs"].is_null(), "and holds no `runs` for a reader of one to take");
+    let page = json!({"resp":"image_page","as_of":9,"ispans":many[..1 << 12],"next":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1"}});
+    assert_eq!(whole_image(&page), None, "never its first page as the whole");
     let run = |width: u64| json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":width.to_string()}]});
     assert_eq!(whole_image(&run(u64::MAX)), None, "positions that leave no position past the last");
     assert_eq!(whole_image(&run(u64::MAX - 1)).map(|image| image.extent()), Some(u64::MAX - 1), "the widest image: one past its last position is a position still");
@@ -732,4 +741,167 @@ fn a_published_slots_creation_frame_carries_its_slot_and_an_attest_over_the_slot
     }
     assert!(well_known_frame(term, "1.x", "1.0.1", POLICY_SLOT, &key, None).is_err(), "an account that is no address");
     assert!(key.signed.lock().unwrap().is_empty(), "a frame not composed signs nothing");
+}
+
+/// The pages a paged read sends, as [`answers::paging::Paged`] logs them.
+fn pages(board: &answers::paging::Paged) -> Vec<answers::paging::Served> {
+    board.served()
+}
+
+/// A long image is read whole, a page a frame and no frame more: a
+/// document of R runs is ⌈R ÷ 4,096⌉ frames, each beginning where the page
+/// before it ended and asking the rest of the span, none of a halved width;
+/// the pages' runs stand in order in one `runs` answer, whose `as_of` is
+/// the first page's; and an image within one answer is one frame, its
+/// answer the board's own.
+#[test]
+fn a_paged_image_is_one_frame_a_page_and_answers_every_run() {
+    for (runs, frames) in [(5_000u64, 2usize), (12_289, 4), (4_096, 1), (3, 1)] {
+        let board = answers::paging::Paged::of("1.0.1.0.64", runs);
+        let first = frames::image(&board.doc, 1, runs);
+        let answer = paged_image(&first, |frame, at| Ok::<_, ()>(board.answer(frame, at))).expect("answered");
+        assert_eq!((answer["resp"].as_str(), answer["as_of"].as_u64()), (Some("runs"), Some(100)), "{runs} runs: the first page's position");
+        assert_eq!(answer["runs"].as_array().expect("runs"), &board.wire_runs(), "{runs} runs, every one");
+        let image = whole_image(&answer).expect("a whole image");
+        assert_eq!((image.runs().len() as u64, image.extent()), (runs, runs));
+        let expected: Vec<answers::paging::Served> = (0..frames as u64).map(|page| (None, 1 + page * 4_096, runs - page * 4_096, page > 0)).collect();
+        assert_eq!(pages(&board), expected, "{runs} runs: ⌈R ÷ 4,096⌉ frames, each the rest of the span");
+    }
+    // Under `own`, and from inside the document: the frame's other members
+    // ride every page.
+    let board = answers::paging::Paged::of("1.0.1.0.64", 9_000);
+    let first = frames::image_own(&board.doc, 501, 8_500);
+    let mut sent = Vec::new();
+    let answer = paged_image(&first, |frame, at| {
+        sent.push(frame.clone());
+        Ok::<_, ()>(board.answer(frame, at))
+    })
+    .expect("answered");
+    assert_eq!(answer["runs"].as_array().map(Vec::len), Some(8_500));
+    assert!(sent.len() == 3 && sent.iter().all(|frame| frame["own"] == true && frame["d"] == "1.0.1.0.64"), "{sent:?}");
+    assert_eq!(pages(&board), [(None, 501, 8_500, false), (None, 4_597, 4_404, true), (None, 8_693, 308, true)]);
+}
+
+/// A reader refused `page_moved` begins again from its first page and
+/// answers the new state whole; past [`PAGE_RESTARTS`] restarts it reads
+/// every page as of its last first page's position, and answers that state
+/// whole — the restarts counted, and the frames sent at a position.
+#[test]
+fn a_moved_page_begins_the_read_again_and_past_the_bound_reads_at_one_position() {
+    let read = |board: &answers::paging::Paged| {
+        let first = frames::image(&board.doc, 1, 5_000);
+        paged_image(&first, |frame, at| Ok::<_, ()>(board.answer(frame, at))).expect("answered")
+    };
+    let (page, rest) = ((None, 1, 5_000, false), (None, 4_097, 904, true));
+    // Moved once: one restart, the second reading answered at the head.
+    let once = answers::paging::Paged::of("1.0.1.0.64", 5_000).moving(1);
+    let answer = read(&once);
+    assert_eq!(pages(&once), [page, rest, page, rest], "begun again from its first page");
+    assert_eq!(answer["runs"].as_array().map(Vec::len), Some(5_000), "the new state, whole");
+    assert_eq!(answer["as_of"].as_u64(), Some(102), "its own first page's position");
+    // Moved at every reading the bound allows: still read at the head.
+    let bound = answers::paging::Paged::of("1.0.1.0.64", 5_000).moving(PAGE_RESTARTS);
+    let answer = read(&bound);
+    let restarts = pages(&bound).iter().filter(|served| !served.3).count() as u32 - 1;
+    assert_eq!(restarts, PAGE_RESTARTS, "as many restarts as the bound, none at a position");
+    assert!(pages(&bound).iter().all(|served| served.0.is_none()) && answer["runs"].as_array().map(Vec::len) == Some(5_000));
+    // Moved once more: no further restart; every page at the position the
+    // last first page stood at.
+    let past = answers::paging::Paged::of("1.0.1.0.64", 5_000).moving(PAGE_RESTARTS + 1);
+    let answer = read(&past);
+    let served = pages(&past);
+    let at_head = served.iter().filter(|served| served.0.is_none()).count() as u32;
+    assert_eq!(at_head, 2 * (PAGE_RESTARTS + 1), "the first reading and the bound's restarts, each refused at its second page");
+    let stood = 100 + u64::from(2 * PAGE_RESTARTS);
+    assert_eq!(served[at_head as usize..], [(Some(stood), 1, 5_000, false), (Some(stood), 4_097, 904, true)], "then every page at the last first page's position");
+    assert_eq!((answer["runs"].as_array().map(Vec::len), answer["as_of"].as_u64()), (Some(5_000), Some(stood)), "that state, whole");
+}
+
+/// A page that is not the wire's ends the read with no image: one of no
+/// run, one past the budget, a go-on that does not advance, and a
+/// continuation answered another shape are each the document a reader
+/// decodes as no image, and a refusal other than `page_moved` is the
+/// board's as it answered. A `page_moved` no restart cures, and one met at
+/// a position, is that refusal.
+#[test]
+fn a_page_that_is_not_the_wires_is_no_image() {
+    let run = |k: u64| json!({"i_start": format!("1.0.1.0.64.0.1.{}", 2 * k), "width": "1"});
+    let page = |runs: u64, at: &str| json!({"resp": "image_page", "as_of": 9, "ispans": (1..=runs).map(run).collect::<Vec<_>>(), "next": {"arranged_at": 7, "at": at, "surface": "1.0.1.0.64"}});
+    let first = frames::image("1.0.1.0.64", 1, 9_000);
+    let unread = |answers: Vec<Value>| {
+        let mut answers = answers.into_iter();
+        let answer = paged_image(&first, |_, _| Ok::<_, ()>(answers.next().expect("a frame no answer was scripted for"))).expect("answered");
+        assert_eq!(whole_image(&answer), None, "no image: {}", &answer.to_string()[..answer.to_string().len().min(120)]);
+        answer
+    };
+    unread(vec![page(0, "1")]);
+    unread(vec![page(4_097, "4098")]);
+    unread(vec![page(4_096, "1")]);
+    unread(vec![page(4_096, "9001")]);
+    unread(vec![page(4_096, "4097"), json!({"resp": "span_set", "as_of": 9, "set": []})]);
+    let withheld = json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": "image", "site": {"addr": "1.0.1.0.64"}});
+    assert_eq!(unread(vec![page(4_096, "4097"), withheld.clone()]), withheld, "the board's refusal, as it answered");
+    assert_eq!(unread(vec![withheld.clone()]), withheld);
+    // A frame of two spans is no page this reader continues.
+    let two = json!({"op": "image", "d": "1.0.1.0.64", "region": [{"start": "1.1", "width": "0.5"}, {"start": "1.9", "width": "0.5"}]});
+    assert_eq!(frames::image_continued(&two, &page(4_096, "3")["next"]), None);
+    // `page_moved` where the first page named no position: no position to
+    // read at, so the refusal stands; and at the position, the same.
+    let moved = json!({"resp": "rejected", "code": "page_moved", "disposition": "permanent", "op": "image", "site": {"addr": "1.0.1.0.64"}});
+    let mut unplaced = page(4_096, "4097");
+    unplaced.as_object_mut().expect("a page").remove("as_of");
+    let mut sent = 0;
+    let answer = paged_image(&first, |frame, at| {
+        sent += 1;
+        assert_eq!(at, None, "no position to read at");
+        Ok::<_, ()>(if frame["cur"].is_null() { unplaced.clone() } else { moved.clone() })
+    })
+    .expect("answered");
+    assert_eq!((answer, sent), (moved.clone(), 2 * (PAGE_RESTARTS + 1)));
+    let answer = paged_image(&first, |frame, _| Ok::<_, ()>(if frame["cur"].is_null() { page(4_096, "4097") } else { moved.clone() })).expect("answered");
+    assert_eq!(answer, moved, "refused at the position too: the board's refusal");
+}
+
+/// The continuation frame is the page's own with its span cut to the rest
+/// and the go-on beside it, whole.
+#[test]
+fn a_continuation_is_the_rest_of_the_span_and_the_go_on_whole() {
+    let next = json!({"arranged_at": 7, "at": "4097", "surface": "1.0.1.0.1.3"});
+    assert_eq!(
+        frames::image_continued(&frames::image("1.0.1.0.1", 1, 5_000), &next).expect("a continuation").to_string(),
+        r#"{"cur":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1.3"},"d":"1.0.1.0.1","op":"image","region":[{"start":"1.4097","width":"0.904"}]}"#
+    );
+    let whole = frames::image_own("1.0.1.0.1", 1, u64::MAX);
+    let continued = frames::image_continued(&whole, &next).expect("a continuation");
+    assert_eq!((continued["own"].as_bool(), continued["region"][0]["width"].as_str()), (Some(true), Some(format!("0.{}", u64::MAX - 4_096).as_str())));
+    for at in ["1", "0", "5001", "6000", "x", "04097"] {
+        let next = json!({"arranged_at": 7, "at": at, "surface": "1.0.1.0.1"});
+        assert_eq!(frames::image_continued(&frames::image("1.0.1.0.1", 1, 5_000), &next), None, "{at}: no ordinal inside the span past its start");
+    }
+}
+
+/// The read over a board's own dials answers as `op` does: the whole image,
+/// the death signal at whichever page it rode, and at a position the
+/// board's refusal of it under its own name.
+#[test]
+fn the_whole_image_read_answers_as_op_does_and_names_a_positions_refusal() {
+    let paged = Arc::new(answers::paging::Paged::of("1.0.1.0.64", 5_000));
+    let at_of = |req: &crate::dial::Request| (req.path == "/op-at").then(|| serde_json::from_slice::<Value>(&req.body).expect("json")["at"].as_u64().expect("at"));
+    let serving = paged.clone();
+    let fake = fake::Fake::new(move |req| fake::json(200, serving.answer(&fake::frame(req), at_of(req))));
+    let token = Token::parse(&"ab".repeat(16)).expect("a token");
+    let first = frames::image("1.0.1.0.64", 1, 5_000);
+    let Answer::Document(v) = whole_image_read(&fake::board(&fake), Some(&token), &first).expect("answered") else { panic!("a document") };
+    assert_eq!(whole_image(&v).map(|image| image.extent()), Some(5_000));
+    assert_eq!(fake.log(), ["POST /op image", "POST /op image"]);
+    // The death signal on the second page.
+    let serving = paged.clone();
+    let dying = fake::Fake::new(move |req| if fake::frame(req)["cur"].is_null() { fake::json(200, serving.answer(&fake::frame(req), None)) } else { fake::closed() });
+    assert_eq!(whole_image_read(&fake::board(&dying), Some(&token), &first).expect("answered"), Answer::Closed);
+    // Moved past the bound, and the position busy: the board's own name.
+    let moving = Arc::new(answers::paging::Paged::of("1.0.1.0.64", 5_000).moving(u32::MAX));
+    let busy = fake::Fake::new(move |req| if req.path == "/op-at" { fake::json(503, json!({"error": "history_busy"})) } else { fake::json(200, moving.answer(&fake::frame(req), None)) });
+    let Err(Halt::Refused(refused)) = whole_image_read(&fake::board(&busy), Some(&token), &first) else { panic!("the position's refusal") };
+    assert_eq!((refused.status, refused.code.as_str(), &refused.body), (503, "history_busy", &json!({"error": "history_busy"})));
+    assert_eq!(busy.log().iter().filter(|line| line.starts_with("POST /op-at")).count(), 1, "one frame at the position, refused");
 }

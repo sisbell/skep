@@ -334,7 +334,7 @@ fn a_published_documents_arrangement_from_before_version_1_is_read_where_a_reque
             other => panic!("doc_metadata answers: {other:?}"),
         };
     let image = |d: &Address, own: bool| {
-        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own }))
+        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own, cur: None }))
     };
     let edition = create_edition(&fx);
     let (start, _) = deposit3(&fx, &edition);
@@ -865,7 +865,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
         runs(ex(
             &fx.febe,
             fx.user,
-            Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own: false },
+            Op::Image { d: d.clone(), region: vec![vspan(1, 1, 3)], own: false, cur: None },
         ))
     };
     let text = |d: &skep_address::Address| -> Vec<u8> {
@@ -952,7 +952,7 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
         runs(ex(
             &fx.febe,
             fx.user,
-            Op::Image { d: d.clone(), region: vec![vspan(1, from, width)], own: false },
+            Op::Image { d: d.clone(), region: vec![vspan(1, from, width)], own: false, cur: None },
         ))
     };
     let image = |d: &skep_address::Address, width: u32| image_at(d, 1, width);

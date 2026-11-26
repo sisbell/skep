@@ -715,6 +715,47 @@ fn every_topic_the_catalog_names_is_a_help_topic() {
     assert!(headings > 0 && calls > 0, "premise: the catalog names a topic both ways");
 }
 
+/// The catalog spells an edit with no landing and an image with its page.
+///
+/// The `edit` tool names `doc`, `changes`, `as_of` and `head` and nothing
+/// else, its schema closed: a landing's `base` and `merge` are no member of
+/// it, so the adapter's door refuses one before the board does, and its
+/// card and reference say a landing is `set_arrangement`'s. The `image`
+/// tool takes the continuation, `cur`, an object of the go-on's three
+/// members, and its card names the page, the go-on and the refusal of a
+/// moved draft's. No text of the catalog names `too_fragmented`, and none
+/// says a document in more runs than an image answers is refused.
+#[test]
+fn the_catalog_spells_an_edit_with_no_landing_and_an_image_with_its_page() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
+    let members = |schema: &Value| -> BTreeSet<String> { schema["properties"].as_object().expect("a schema's properties").keys().cloned().collect() };
+    let edit = &entry("edit")["inputSchema"];
+    assert_eq!(members(edit), BTreeSet::from(["doc", "changes", "as_of", "head"].map(String::from)), "no `base`, no `merge`");
+    assert_eq!(edit["additionalProperties"], false, "closed: a landing's member is refused at the adapter's door");
+    for said in [card(&catalog, "edit"), reference(&catalog, "edit")] {
+        assert!(said.contains("set_arrangement") && said.contains("base or merge") && said.contains("refused malformed"), "a landing is set_arrangement's: {said}");
+        assert!(!said.contains("beside base or merge"), "an edit is never empty beside a landing's terms: {said}");
+    }
+    let changes = edit["properties"]["changes"]["description"].as_str().expect("the changes' description");
+    assert!(changes.contains("empty_result") && !changes.contains("base"), "{changes}");
+    let head = edit["properties"]["head"]["description"].as_str().expect("the head's description");
+    assert!(head.contains("head_moved") && head.contains("records nothing"), "{head}");
+    let image = &entry("image")["inputSchema"];
+    assert_eq!(members(image), BTreeSet::from(["d", "region", "own", "cur"].map(String::from)));
+    assert_eq!(members(&image["properties"]["cur"]), BTreeSet::from(["at", "surface", "arranged_at"].map(String::from)), "the go-on, whole");
+    assert_eq!((&image["properties"]["cur"]["required"], &image["properties"]["cur"]["additionalProperties"]), (&json!(["at", "surface"]), &json!(false)));
+    let said = card(&catalog, "image");
+    for token in ["image_page", "ispans", "next: {at, surface, arranged_at}", "cur: next", "page_moved", "bad_region", "4096 runs"] {
+        assert!(said.contains(token), "image's card says `{token}`: {said}");
+    }
+    let texts = catalog.tools.iter().filter_map(|t| t["description"].as_str()).chain(catalog.help.iter().map(|(_, text)| text.as_str()));
+    for text in texts {
+        assert!(!text.contains("too_fragmented"), "no refusal of that name is answered: {text}");
+        assert!(!text.contains("more runs than the board images"), "a long document's image is read in pages: {text}");
+    }
+}
+
 /// Every card and the instructions are short.
 ///
 /// A client cuts a tool's description, and the server instructions, past a

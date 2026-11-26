@@ -20,6 +20,7 @@
 //! (or target link) into `FaultSite::addr` — the same address-localization
 //! shape M6's `DocNotRegistered(Address)` takes.
 
+use skep_address::Address;
 use skep_arrangement::{
     CopyError, DeleteError, EditError, InsertError, PublishError, RearrangeError, ReinstateError,
     SeatError, StageError, VersionError,
@@ -83,6 +84,24 @@ fn not_owner(a: skep_address::Address) -> (RejectCode, Option<FaultSite>) {
 /// Lowers a read error into a classified [`Rejection`] (§5).
 pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
     let (code, site) = e.lower();
+    Rejection::classified(kind, code, site)
+}
+
+/// Lowers a paged read's error, a moved continuation naming its document.
+///
+/// It is [`lower_read`], save that `PageMoved` carries `site.addr`, the
+/// document `doc` the read named: M8's refusals are fieldless, and the
+/// document is the dispatch arm's to hand in. The one lowering for every
+/// read that answers in pages, so a moved continuation is told to its
+/// reader one way whichever read it continues.
+pub(crate) fn lower_paged_read(kind: OpKind, e: QueryError, doc: &Address) -> Rejection {
+    let (code, site) = e.lower();
+    let site = match code {
+        RejectCode::PageMoved => {
+            Some(FaultSite { addr: Some(doc.clone()), ..FaultSite::default() })
+        }
+        _ => site,
+    };
     Rejection::classified(kind, code, site)
 }
 
@@ -921,6 +940,10 @@ impl Lower for QueryError {
             QueryError::DocNotRegistered => RejectCode::DocNotRegistered,
             QueryError::NotALink => RejectCode::NotALink,
             QueryError::BadRegion => RejectCode::BadRegion,
+            // The moved continuation's site is the document read, which the
+            // dispatch arm holds and this table does not: `lower_paged_read`
+            // adds it.
+            QueryError::PageMoved => RejectCode::PageMoved,
             // M8's two budget refusals name the request's whole shape and no
             // position in it, so they carry no site — M6's `TooManyPairs`
             // and `TooMuchCoverage` exactly.

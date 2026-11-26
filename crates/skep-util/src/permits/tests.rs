@@ -30,6 +30,31 @@ fn a_pool_hands_out_exactly_its_count_and_a_drop_returns_one_slot() {
     drop((second, third));
 }
 
+/// The owned permit spends the pool's one count: a slot an owned permit
+/// holds is refused to a borrowed one and the reverse, each form's drop
+/// returns exactly one slot, and an owned permit outlives the handle it was
+/// taken through.
+#[test]
+fn an_owned_permit_holds_a_slot_of_the_pool_it_was_taken_from() {
+    let pool = Arc::new(Permits::new(2));
+    let owned = pool.try_acquire_owned().expect("permit 1 of 2");
+    let borrowed = pool.try_acquire().expect("permit 2 of 2");
+    assert!(pool.try_acquire_owned().is_none(), "the pool is exactly two, whichever form asks");
+    assert!(pool.try_acquire().is_none());
+    drop(borrowed);
+    let second = pool.try_acquire_owned().expect("a dropped permit reopens its slot");
+    assert!(pool.try_acquire().is_none(), "exactly one slot came back");
+    // Held past the handle that took it, and still a slot of that pool.
+    let handle = Arc::clone(&pool);
+    drop(pool);
+    assert!(handle.try_acquire().is_none(), "both slots held by owned permits");
+    drop(owned);
+    let third = handle.try_acquire().expect("an owned permit's drop returns its slot");
+    assert!(handle.try_acquire().is_none(), "and exactly one");
+    drop((second, third));
+    assert!(handle.try_acquire().is_some(), "every slot returns");
+}
+
 /// m12 — THE FIRST EDGE, ONCE: the first refusal opens an episode and is
 /// the failure edge; every later refusal inside it is no edge, however many.
 #[test]

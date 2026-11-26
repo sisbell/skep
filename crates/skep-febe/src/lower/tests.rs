@@ -693,6 +693,7 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(QueryError::DocNotRegistered);
     same_name(QueryError::NotALink);
     same_name(QueryError::BadRegion);
+    same_name(QueryError::PageMoved);
     same_name(QueryError::ImageTooLarge);
     same_name(QueryError::EndsetsTooLarge);
     same_name(OrphanError::DocNotRegistered);

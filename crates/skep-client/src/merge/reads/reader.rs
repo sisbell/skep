@@ -288,9 +288,10 @@ impl<'a> Reader<'a> {
 
     /// Images content ordinals `from ..` of `doc`, `width` of them.
     ///
-    /// The image is whole where its runs are at or under the run budget,
-    /// else in parts, halving until each part answers (§8) — the runs in V
-    /// order with each run's `ordinal` the document's own.
+    /// The image is whole, whatever its runs: one frame where they are at or
+    /// under the board's run budget, else a page a frame, each answered
+    /// ([`Reader::image_read`]) — the runs in V order with each run's
+    /// `ordinal` the document's own.
     ///
     /// # Errors
     ///
@@ -306,15 +307,30 @@ impl<'a> Reader<'a> {
     }
 
     /// Images as [`Reader::image`] does — `doc`'s own arrangement where
-    /// `own`, sent with `own` (PUB-2.66) — with the highest `as_of` the
-    /// parts answered: `None` where no part was read, or none carried one.
+    /// `own`, sent with `own` (PUB-2.66) — with the `as_of` the image
+    /// answers: its one answer's, or its first page's, the position the
+    /// read began at; `None` where nothing was read, or it carried none.
+    ///
+    /// A document in R runs is ⌈R ÷ 4,096⌉ frames, each answered: a short
+    /// page is followed from its go-on, and the pages are one state's
+    /// ([`paged_image`](answers::paged_image)). At the head, a continuation
+    /// the board refuses because the draft changed begins the read again,
+    /// and past the restart bound the pages are read as of the last first
+    /// page's position, through `/op-at`. As of `at`, every page is read
+    /// through `/op-at` there, where a state does not move: the board
+    /// rebuilds the position once and keeps it for the read, one
+    /// reconstruction and one of its two permits whatever the pages — 8 to
+    /// 11 s for 16 pages a checkpoint cadence above a base, measured over a
+    /// world of three documents; a board's base is larger — and a page that
+    /// finds its read let go asks a reconstruction of its own, retried
+    /// where the board is busy as any read at a position is.
     ///
     /// # Errors
     ///
-    /// [`Refusal::TooFragmented`] where a part of one position is still
-    /// refused `image_too_large`; another refusal, mapped by
-    /// [`Reader::refuse`]; an answer that is no image, faced;
-    /// [`Reader::read`]'s errors.
+    /// A refusal, mapped by [`Reader::refuse`] — `page_moved` among them,
+    /// the board's own, where the pages could not be read as one state even
+    /// at a position; an answer that is no image, faced; [`Reader::read`]'s
+    /// errors.
     pub(super) fn image_read(
         &self,
         doc: &Address,
@@ -323,24 +339,8 @@ impl<'a> Reader<'a> {
         width: u64,
         own: bool,
     ) -> Result<(Vec<IRun>, Option<u64>), Refusal> {
-        let mut out = Vec::new();
-        let as_of = self.image_into(doc, at, from, width, own, &mut out)?;
-        Ok((out, as_of))
-    }
-
-    /// Images one part of [`Reader::image_read`] into `out`, halving it on
-    /// `image_too_large`; the runs `out` holds are the runs seen so far.
-    fn image_into(
-        &self,
-        doc: &Address,
-        at: Option<u64>,
-        from: u64,
-        width: u64,
-        own: bool,
-        out: &mut Vec<IRun>,
-    ) -> Result<Option<u64>, Refusal> {
         if width == 0 {
-            return Ok(None);
+            return Ok((Vec::new(), None));
         }
         let text = doc.to_string();
         let frame = if own {
@@ -348,25 +348,15 @@ impl<'a> Reader<'a> {
         } else {
             frames::image(&text, from, width)
         };
-        let v = self.read(&frame, at)?;
+        let v = answers::paged_image(&frame, |frame, moved_to| self.read(frame, moved_to.or(at)))?;
         if let Some(r) = Rejection::of(&v) {
-            if r.key() != "image_too_large" {
-                return Err(self.refuse(Some(doc), &r, &v));
-            }
-            if width == 1 {
-                return Err(Refusal::TooFragmented { doc: doc.clone(), runs_seen: out.len() });
-            }
-            let left = width / 2;
-            let first = self.image_into(doc, at, from, left, own, out)?;
-            let rest = self.image_into(doc, at, from + left, width - left, own, out)?;
-            return Ok(first.max(rest));
+            return Err(self.refuse(Some(doc), &r, &v));
         }
-        let runs = answers::i_runs(&v, width).ok_or_else(|| shape("image", &v))?;
-        out.extend(runs.into_iter().map(|mut r| {
-            r.ordinal += from - 1;
-            r
-        }));
-        Ok(answers::as_of(&v))
+        let mut runs = answers::i_runs(&v, width).ok_or_else(|| shape("image", &v))?;
+        for run in &mut runs {
+            run.ordinal += from - 1;
+        }
+        Ok((runs, answers::as_of(&v)))
     }
 
     /// Reads the extent and the whole image of `doc`.
@@ -396,12 +386,13 @@ impl<'a> Reader<'a> {
     /// version, which `image` with `own` answers (PUB-2.66), its `count`
     /// positions. `count` is the `own_count` the trunk's `doc_metadata` served where
     /// this read is made; at 0 nothing is read and the image is empty. The
-    /// image is whole or in parts as [`Reader::image`] reads one.
+    /// image is whole, in pages past the run budget, as [`Reader::image`]
+    /// reads one.
     ///
     /// # Errors
     ///
     /// [`Reader::image_read`]'s errors.
-    pub(super) fn imaged_own(&self, doc: &Address, at: Option<u64>, count: u64) -> Result<Imaged, Refusal> {
+    pub(in crate::merge) fn imaged_own(&self, doc: &Address, at: Option<u64>, count: u64) -> Result<Imaged, Refusal> {
         let (runs, as_of) = self.image_read(doc, at, 1, count, true)?;
         Ok(Imaged { doc: doc.clone(), own: true, at, extent: count, runs, as_of })
     }

@@ -248,7 +248,7 @@ fn a_reinstate_is_withheld_naming_its_first_unreadable_origin_and_admits_a_reada
             let r = runs(ex(
                 &fx.febe,
                 other,
-                Op::Image { d: their_draft.clone(), region: vec![vspan(1, o, 1)], own: false },
+                Op::Image { d: their_draft.clone(), region: vec![vspan(1, o, 1)], own: false, cur: None },
             ));
             assert_eq!(r.len(), 1, "one position, one run");
             r[0].i_start().clone()
@@ -394,7 +394,7 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
         runs(ex(
             &fx.febe,
             fx.user,
-            Op::Image { d: d.clone(), region: vec![vspan(1, 1, 2)], own: false },
+            Op::Image { d: d.clone(), region: vec![vspan(1, 1, 2)], own: false, cur: None },
         ))
         .len()
     };

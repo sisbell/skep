@@ -15,7 +15,7 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Run, VPos};
 use skep_content::Val;
-use skep_discovery::{LinkRow, OrphanReport, SupClaim, Window};
+use skep_discovery::{GoOn, LinkRow, OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, Marker, MintTime, OpKind,
     ParseError, RejectCode, Rejection, Response, ShotTerms, TimeSource, UniversalGrant,
@@ -311,6 +311,16 @@ fn fixture(name: &str) -> Response {
             ],
             as_of: Seq(9),
         },
+        // An image cut short at the run budget: the page's runs under
+        // `ispans` and the go-on beside them — the next ordinal, the
+        // arrangement read and its position.
+        "image_page" => Response::ImagePage {
+            runs: vec![
+                Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 1]), n(5)).expect("element-level run fixture")
+            ],
+            next: GoOn { at: n(6), surface: a(&[1, 0, 1, 0, 1]), arranged_at: Some(Seq(7)) },
+            as_of: Seq(9),
+        },
         "bool" => Response::Bool { val: true, as_of: Seq(9) },
         "link_value" => Response::LinkValue {
             link: Some(
@@ -504,6 +514,16 @@ fn fixture(name: &str) -> Response {
             detail: None,
             io_kind: None,
         }),
+        // A paged image's continuation of a draft written since its page
+        // was read: the code, permanent, the document under the site.
+        "rejected_page_moved" => Response::Rejected(Rejection {
+            op: OpKind::Image,
+            code: RejectCode::PageMoved,
+            disposition: Disposition::Permanent,
+            site: Some(FaultSite { addr: Some(a(&[1, 0, 1, 0, 64])), ..FaultSite::default() }),
+            detail: None,
+            io_kind: None,
+        }),
         "rejected_unparseable" => {
             JsonCodec.unparseable(ParseError {
                 detail: Some("unknown op 'frobnicate'".into()),
@@ -514,9 +534,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 28 response shapes every client must decode; each must appear as a
+/// The 29 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 28] = [
+const REQUIRED_SHAPES: [&str; 29] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -534,6 +554,7 @@ const REQUIRED_SHAPES: [&str; 28] = [
     "links",
     "endsets",
     "runs",
+    "image_page",
     "bool",
     "link_value",
     "follow",
@@ -2259,6 +2280,176 @@ fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
     ] {
         assert!(transport.contains(&fact), "§Transport says {fact:?}");
     }
+}
+
+/// **The image in pages, as the document states it.** §Link discovery reads'
+/// `image` row says a region past the run budget is never refused for its
+/// runs and answers `image_page`, names the continuation — the rest of the
+/// region and the page's `next` sent back whole as `cur` — and the one
+/// state a page set is of: read from `cur.surface`, a draft's refused
+/// `page_moved` once written, a published document's answered from the
+/// version its first page read, another arrangement or another place
+/// `bad_region`; §Value encodings states the go-on's three members;
+/// §The response envelope states the page's shape and why it is no `runs`;
+/// and §Rejection codes lists `page_moved` and says the image read is not
+/// refused for the runs its region resolves. The examples are held to the
+/// codec by the marker tests; the continuation's parses to the go-on it
+/// spells.
+#[test]
+fn doc_states_the_image_in_pages_its_continuation_and_the_one_state_of_a_page_set() {
+    let row = op_row("image");
+    for fact in [
+        "→ `runs`; or, where the region resolves more than `MAX_IMAGE_RUNS` = 4096 runs, `image_page`",
+        "NEVER REFUSED FOR THE RUNS IT RESOLVES",
+        "a document in R runs is read whole in ⌈R ÷ 4096⌉ frames, each answered",
+        "THE CONTINUATION is the same frame with the rest of the region and the page's `next` sent back whole as `cur`",
+        "`region`'s first span begins at `cur.at`",
+        "A PAGE SET IS ONE STATE, whoever reads it",
+        "The continuation is read from `cur.surface`, not from wherever `d`'s readers float by then",
+        "it is answered only while that document's `arranged_at` is still `cur.arranged_at`",
+        "the continuation is refused `page_moved` — `site.addr` the document, `permanent`",
+        "any other, and a `region` that does not begin at `cur.at`, is `bad_region`",
+        "A region of several spans is paged in region order",
+    ] {
+        assert!(row.contains(fact), "the image row says {fact:?}: {row}");
+    }
+    let encodings = prose("\n## Value encodings", &["\n## The request envelope"]);
+    for fact in [
+        "**Go-ons** (a paged read) are `{\"at\": <nat>, \"surface\": <address>, \"arranged_at\": <position or null>}`",
+        "the continuation sends it back WHOLE under `cur`",
+        "The board holds no iterator here either",
+    ] {
+        assert!(encodings.contains(fact), "§Value encodings says {fact:?}");
+    }
+    let envelope = prose("\n## The response envelope", &["\n## Rejections"]);
+    for fact in [
+        "`ispans` is its first 4096 runs",
+        "EVERY ONE WHOLE — a page ends at a run's reach, never inside one",
+        "A `resp` of its own and a member of its own, never `runs` with a member beside it",
+    ] {
+        assert!(envelope.contains(fact), "§The response envelope says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### ", "\n## "]);
+    for fact in [
+        "`page_moved` (the image read's continuation of a draft or a private document written since its page was read",
+        "where the image read, never refused for those runs, ends its page and names where the rest begins",
+    ] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+    // The continuation's example carries the go-on the page's example hands
+    // back, in the one form.
+    let codec = JsonCodec;
+    let continued = blocks().into_iter().find(|(kind, name, body)| kind == "request" && name == "image" && body.contains("\"cur\"")).expect("the continuation's example").2;
+    let frame = codec.parse(continued.as_bytes()).unwrap_or_else(|e| panic!("the continuation parses: {e}"));
+    let skep_febe::Op::Image { cur, region, .. } = frame.op else { panic!("an image") };
+    let cur = cur.expect("the go-on");
+    assert_eq!((cur.at.clone(), cur.arranged_at), (n(4097), Some(Seq(7))));
+    assert_eq!(region[0].start().iter().nth(1), Some(&cur.at), "the region begins where the go-on says");
+}
+
+/// **An edit carries no landing, as the document states it.** §Arrangement's
+/// `edit` row says `base` and `merge` are a landing's terms and
+/// `set_arrangement`'s alone, an `edit` carrying either refused at the
+/// parse with nothing written and no row, `head` the one of the three it
+/// keeps; and the codec holds the document to it — its own `edit` example
+/// parses, and with a `base` or a `merge` beside it is refused as an
+/// unknown field, where the same members under `set_arrangement` parse.
+#[test]
+fn doc_states_an_edit_carries_no_landing_and_the_codec_refuses_one() {
+    let row = op_row("edit");
+    for fact in [
+        "Of `set_arrangement`'s three optional members, below, it carries ONE: `head`",
+        "`base` and `merge` are a LANDING's terms, and a landing is `set_arrangement`'s alone",
+        "an `edit` frame carrying either is refused at the parse",
+        "with nothing written and no row",
+        "An EMPTY `changes` changes nothing and is refused `empty_result`",
+        "the two terms `base` and `merge`, both `null`",
+    ] {
+        assert!(row.contains(fact), "the edit row says {fact:?}: {row}");
+    }
+    let landing = op_row("set_arrangement");
+    assert!(landing.contains("a landing's terms, `base` and `merge` below, which no other frame carries"), "{landing}");
+    let codec = JsonCodec;
+    let example = blocks().into_iter().find(|(kind, name, _)| kind == "request" && name == "edit").expect("the edit's example").2;
+    let with = |name: &str, members: &str| {
+        let mut frame: Value = serde_json::from_str(&example).expect("the example is JSON");
+        frame["op"] = Value::from(name);
+        for (member, value) in serde_json::from_str::<Value>(members).expect("members").as_object().expect("an object") {
+            frame[member] = value.clone();
+        }
+        if name == "set_arrangement" {
+            frame["changes"] = Value::Array(Vec::new());
+        }
+        codec.parse(frame.to_string().as_bytes())
+    };
+    assert!(with("edit", "{}").is_ok(), "the document's own example parses");
+    let head = r#""head":{"at":"1.0.1.0.1.2","extent":"4"}"#;
+    assert!(with("edit", &format!("{{{head}}}")).is_ok(), "the head pair rides an edit");
+    for (members, named) in [
+        (r#"{"base":{"at":"1.0.1.0.1.2","extent":"4"}}"#.to_string(), "unknown field 'base'"),
+        (format!(r#"{{{head},"merge":{{"sides":[]}}}}"#), "unknown field 'merge'"),
+    ] {
+        let refused = with("edit", &members).expect_err("an edit carries no landing");
+        assert!(refused.detail.as_deref().is_some_and(|detail| detail.contains(named)), "{members}: {refused}");
+        assert!(with("set_arrangement", &members).is_ok(), "a landing is set_arrangement's: {members}");
+    }
+}
+
+/// **A paged past read is one reconstruction, and when it is let go.** §Reading
+/// history says an `image` at a position that answers a page keeps the
+/// state and its slot for the continuation, which rebuilds nothing and is
+/// never refused `history_busy`; that the kept state is let go at the
+/// read's end, when its reader begins that read again, and after
+/// **`KEPT_READ_IDLE` = 10 s** with no page asked — at the next historical
+/// request, before it asks for a slot. The figure is `history.rs`'s
+/// crate-private constant, held by the daemon's own behaviour: a read left
+/// after its first page keeps its slot half-way to the document's figure
+/// and has lost it at the figure, the edge clock driven through its seam;
+/// the bound to the millisecond is `history.rs`'s own unit test's.
+#[test]
+fn doc_states_a_paged_past_read_is_one_reconstruction_and_when_it_is_let_go() {
+    use crate::common::{acked_at, draft_with, edit_frame, expect_resp, image_frame, insert_text, op, op_at_ok, open_session, spanset_frame, spawn, CLAIMANT_PRINCIPAL};
+
+    let history = prose("\n## Reading history", &["\n## The commit stream"]);
+    for fact in [
+        "**A paged read is one reconstruction.**",
+        "is answered from the kept state, and so on to the last page",
+        "It rebuilds nothing and asks no slot, so it is never refused `history_busy`",
+        "ONE reconstruction and ⌈R ÷ 4096⌉ frames",
+        "holds one of the pool's slots from its first page to its last",
+        "is rebuilt as every other historical read is, and answered the same page",
+        "when the read ends — a page under `runs`, or a rejection the read itself answers",
+        "`withheld`, decided ahead of the read (§The read predicate), reaches no kept state — when its reader sends that read's first page again",
+        "**`KEPT_READ_IDLE` = 10 s**",
+        "the next historical request lets an idle read go before it asks for a slot",
+        "A past state does not move, so a read at a position meets no `page_moved`",
+        "per request, with no answer kept, a paged `image`'s reconstruction aside (above)",
+    ] {
+        assert!(history.contains(fact), "§Reading history says {fact:?}");
+    }
+    let idle_ms = figure_after(&history, "**`KEPT_READ_IDLE` = ") as u64 * 1_000;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let draft = draft_with(port, &owner, &"a".repeat(2_501));
+    let cuts: Vec<(u64, u64, &str)> = (2..=2_501).map(|at| (at, 0, "b")).collect();
+    let at = acked_at(expect_resp(&op(port, Some(&owner), &edit_frame(&draft, &cuts, None)), "ack_addr"));
+    expect_resp(&insert_text(port, &owner, &draft, 1, "since"), "ack_addr");
+    // Held together, then counted: a permit dropped as it is taken returns
+    // its slot to the pool.
+    let free = || std::iter::from_fn(|| sd.daemon().try_hold_reconstruction_permit()).collect::<Vec<_>>().len();
+    expect_resp(&op_at_ok(port, Some(&owner), at, &image_frame(&draft, 1, 5_001)), "image_page");
+    assert_eq!(free(), 1, "the page's state is kept, its slot held");
+    // Half-way to the figure: the time the requests themselves take, which
+    // the seam's clock counts too, is far under the other half.
+    sd.daemon().advance_edge_clock_ms(idle_ms / 2);
+    expect_resp(&op_at_ok(port, Some(&owner), at, &spanset_frame(&draft)), "span_set");
+    assert_eq!(free(), 1, "half-way to the document's figure it is kept still");
+    sd.daemon().advance_edge_clock_ms(idle_ms - idle_ms / 2);
+    expect_resp(&op_at_ok(port, Some(&owner), at, &spanset_frame(&draft)), "span_set");
+    assert_eq!(free(), 2, "at the figure the next historical request lets it go");
+    sd.shutdown();
 }
 
 /// THE RECONSTRUCTION POOL's WIDTH BESIDE THE CLASS-SCAN POOL's, AND THE

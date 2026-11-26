@@ -31,14 +31,14 @@ use super::{handshake, Session, Site};
 use crate::address::parse_address;
 use crate::board::{
     acked_addr, acked_at, frames, guest_closed, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1,
-    T_SUPERSEDES,
+    PAGE_RESTARTS, T_SUPERSEDES,
 };
 use crate::dial::{
     DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse,
 };
 use crate::halt::Halt;
 use crate::merge::land::Stem;
-use crate::merge::reads::{session_ended, LostTakeBack, OnEnd, MAX_SIDES};
+use crate::merge::reads::{session_ended, LostTakeBack, OnEnd, Reader, MAX_SIDES};
 use crate::merge::*;
 use crate::origin::Origin;
 use crate::publication::OriginAnswer;
@@ -286,8 +286,12 @@ struct World {
     trunk_head: BTreeMap<String, String>,
     /// The per-session idempotency memo: an id's acknowledgment.
     memo: BTreeMap<String, Value>,
-    /// `image` refuses `image_too_large` past this many runs.
+    /// The most runs one `image` answer carries: a region of more answers a
+    /// page of this many under `image_page`, and where the rest begins.
     image_cap: usize,
+    /// How many continuations at the head are yet to be refused
+    /// `page_moved`, as a draft written between two pages refuses one.
+    page_moved: u32,
     /// `retrieve_v` and `retrieve_i` refuse `too_many_items` past this many
     /// positions, every spec's counted.
     delivery_cap: u64,
@@ -902,14 +906,28 @@ impl World {
                     return Ok(masked(doc));
                 }
                 let (from, width) = span(&frame["region"][0]);
+                // A continuation at the head, of a draft a cell has
+                // written since: refused, nothing answered (wire.md §Link
+                // discovery reads, `image`).
+                if !frame["cur"].is_null() && at.is_none() && self.page_moved > 0 {
+                    self.page_moved -= 1;
+                    return Ok(reply(200, json!({"resp": "rejected", "code": "page_moved", "disposition": "permanent", "op": op, "site": {"addr": doc}})));
+                }
                 let runs = if frame["own"] == true { self.own_arrangement(doc, at) } else { self.arrangement(doc, at) };
                 let Some(runs) = runs else { return Ok(rejected("doc_not_registered")) };
                 let clipped = clip(&runs, from, width);
+                let served = |runs: &[(u64, Run)]| -> Vec<Value> { runs.iter().map(|(_, r)| json!({"i_start": i_addr(&r.origin, r.i_start), "width": r.width.to_string()})).collect() };
+                // Past the budget: the runs that fit, each whole, and the
+                // go-on — the reach of the last, the document, and the
+                // position its arrangement last changed at.
                 if clipped.len() > self.image_cap {
-                    return Ok(rejected("image_too_large"));
+                    let page = &clipped[..self.image_cap];
+                    let reach = page.last().map_or(from, |(v, r)| v + r.width);
+                    let arranged_at = self.docs.get(doc).and_then(|d| d.history.range(..=position).next_back().map(|(at, _)| *at)).filter(|at| *at > 0);
+                    let next = json!({"at": reach.to_string(), "surface": doc, "arranged_at": arranged_at});
+                    return Ok(reply(200, json!({"resp": "image_page", "as_of": position, "ispans": served(page), "next": next})));
                 }
-                let runs: Vec<Value> = clipped.iter().map(|(_, r)| json!({"i_start": i_addr(&r.origin, r.i_start), "width": r.width.to_string()})).collect();
-                Ok(reply(200, json!({"resp": "runs", "as_of": position, "runs": runs})))
+                Ok(reply(200, json!({"resp": "runs", "as_of": position, "runs": served(&clipped)})))
             }
             "retrieve_v" => {
                 let specs = frame["specs"].as_array().expect("`specs`, a list");

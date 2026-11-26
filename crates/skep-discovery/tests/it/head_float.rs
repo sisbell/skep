@@ -5,26 +5,42 @@
 //! is decided of the reading surface — asked of the region family and the
 //! pointwise pair alike, and of both subspaces discoverability reads. What a
 //! budget counts on a head is stated in `region` and in `pointwise`, and the
-//! preview, which does not float, in `survival`. The named image, which does
-//! not float either, is asked here beside `image_on`.
+//! preview, which does not float, in `survival`. The image of a document's
+//! own arrangement, which does not float either, is asked here beside
+//! `image_on`; what it answers past the run budget is `page`'s.
 
 use crate::common;
 
 use common::*;
-use skep_arrangement::{HasM5, Shot, ShotRun, Vstream};
-use skep_discovery::{image_named_on, image_on, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE};
+use skep_address::{Address, Span};
+use skep_arrangement::{HasM5, Run, Shot, ShotRun, Vstream};
+use skep_discovery::{image_on, image_page_on, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE};
+use skep_kernel::Snapshot;
 use skep_links::{enc, LinkWriter};
 use skep_namespace::PrincipalId;
+
+/// The image of `d`'s own arrangement over `region`: a first page read with
+/// `own`, and the runs it answers where it is the whole image.
+fn own_image(
+    snap: &Snapshot<World>,
+    d: &Address,
+    region: &[Span],
+) -> Result<Vec<Run>, QueryError> {
+    let page = image_page_on(snap, d, region, true, None)?;
+    assert_eq!(page.next, None, "the region resolves within one page");
+    Ok(page.runs)
+}
 
 /// §1 — the one image that does not float. A published document takes
 /// `a b c` while memberless, and its birth shot mints version 1 holding
 /// `a b` alone, by reference to the document's own I-space. Named the bare
-/// address, `image_on` answers the head's two; `image_named_on` answers the
-/// three the document's own arrangement keeps, frozen since the shot. Where
+/// address, `image_on` answers the head's two; the image read with `own`
+/// answers the three the document's own arrangement keeps, frozen since the
+/// shot. Where
 /// the address named is its own reading surface — the head, a private
 /// document, a memberless published document — the two answer alike.
 #[test]
-fn the_named_image_reads_what_a_published_document_held_before_version_1() {
+fn the_own_image_reads_what_a_published_document_held_before_version_1() {
     let k = kernel();
     seed_published_content(&k, &pdoc(), 3); // memberless: pdoc's own pca(1..=3)
     seed_content(&k, &doc1(), 2);
@@ -50,13 +66,13 @@ fn the_named_image_reads_what_a_published_document_held_before_version_1() {
         "the head's `a b`"
     );
     assert_eq!(
-        image_named_on(&snap, &pdoc(), &region),
+        own_image(&snap, &pdoc(), &region),
         Ok(vec![run(&pca(1), 3)]),
         "pdoc's own `a b c`"
     );
     for d in [phead(), doc1()] {
         assert_eq!(
-            image_named_on(&snap, &d, &region),
+            own_image(&snap, &d, &region),
             image_on(&snap, &d, &region),
             "{d:?}"
         );
@@ -65,19 +81,20 @@ fn the_named_image_reads_what_a_published_document_held_before_version_1() {
     seed_published_content(&memberless, &pdoc(), 3);
     let snap = memberless.snapshot();
     assert_eq!(
-        image_named_on(&snap, &pdoc(), &region),
+        own_image(&snap, &pdoc(), &region),
         image_on(&snap, &pdoc(), &region),
         "a memberless published document is its own reading surface"
     );
 }
 
-/// §1 — the named image refuses as `image_on` does, in its order, each
-/// budget priced over the arrangement it reads: a head fragmented past the
-/// run budget refuses `image_on` and not `image_named_on`, whose one run of
-/// the document's own is all it walks; a private document fragmented past
-/// it refuses both.
+/// §1 — the own image keeps `image_on`'s gates, in its order, and counts
+/// its runs over the arrangement it reads: a head fragmented past the run
+/// budget refuses `image_on`, while the image read with `own` walks the one
+/// run of the document's own and answers it whole; a private document
+/// fragmented past the budget refuses `image_on` and is answered a page
+/// with its go-on.
 #[test]
-fn the_named_image_keeps_the_gates_and_budgets_over_its_own_arrangement() {
+fn the_own_image_keeps_the_gates_and_counts_its_own_arrangement() {
     // pdoc's own arrangement: one run of two; its head: MAX + 1 runs.
     let k = fragmented_head_world(MAX_IMAGE_RUNS + 1);
     let snap = k.snapshot();
@@ -86,11 +103,8 @@ fn the_named_image_keeps_the_gates_and_budgets_over_its_own_arrangement() {
         image_on(&snap, &pdoc(), &whole),
         Err(QueryError::ImageTooLarge)
     );
-    assert_eq!(
-        image_named_on(&snap, &pdoc(), &whole),
-        Ok(vec![run(&pca(1), 2)])
-    );
-    for named in [image_on::<World>, image_named_on::<World>] {
+    assert_eq!(own_image(&snap, &pdoc(), &whole), Ok(vec![run(&pca(1), 2)]));
+    for named in [image_on::<World>, own_image] {
         assert_eq!(
             named(&snap, &unregistered_doc(), &whole),
             Err(QueryError::DocNotRegistered)
@@ -108,10 +122,9 @@ fn the_named_image_keeps_the_gates_and_budgets_over_its_own_arrangement() {
         image_on(&past, &doc2(), &region),
         Err(QueryError::ImageTooLarge)
     );
-    assert_eq!(
-        image_named_on(&past, &doc2(), &region),
-        Err(QueryError::ImageTooLarge)
-    );
+    let page = image_page_on(&past, &doc2(), &region, true, None).expect("a page");
+    assert_eq!(page.runs.len(), MAX_IMAGE_RUNS, "the runs that fit");
+    assert!(page.next.is_some(), "and where the rest begins");
 }
 
 /// §1 — HEAD-FLOAT on every region read, not only the two the pointwise

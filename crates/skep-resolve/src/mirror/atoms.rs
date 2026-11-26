@@ -26,7 +26,7 @@ use skep_address::{document_of, Address, Nat, Tumbler};
 
 use super::{Mirror, MirrorError};
 use crate::board::{
-    atom_of, content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame,
+    atom_of, content_extent, content_ordinal_in, retrieve_frame, runs_of, span_set_frame,
     v_ordinal_in,
 };
 use crate::parse_address;
@@ -238,10 +238,12 @@ impl Mirror {
         Ok(Some(content_extent(&v).unwrap_or(0)))
     }
 
-    /// `image`: the runs at V-ordinals `from ..` of `doc`, `None` where
-    /// refused or where a run does not read.
+    /// `image`: the runs at V-ordinals `from ..` of `doc`, whole — read in
+    /// pages where `doc` holds more than one answer carries
+    /// (`Board::image`) — and `None` where refused or where a run does
+    /// not read.
     fn image(&self, doc: &Address, from: u64, width: u64) -> Result<Option<Vec<(Address, u64)>>, MirrorError> {
-        let v = self.board_ref()?.op(&image_frame(doc, from, width))?;
+        let v = self.board_ref()?.image(doc, from, width, None)?;
         if v["resp"].as_str() != Some("runs") {
             return Ok(None);
         }
@@ -256,12 +258,15 @@ impl Mirror {
     }
 
     /// THE POSITION READ (REG-3.26): the home as of the link's position,
-    /// through `/op-at` — the extent, the image, the value.
+    /// through `/op-at` — the extent, the image, the value. The image is
+    /// read whole, every page as of the position: one reconstruction at the
+    /// board whatever the pages, kept for the read, where the extent and
+    /// the value are one each.
     fn position_read(&self, at: u64, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
         let board = self.board_ref()?;
         let v = board.op_at(at, &span_set_frame(home))?;
         let Some(extent) = content_extent(&v) else { return Ok(None) };
-        let v = board.op_at(at, &image_frame(home, 1, extent))?;
+        let v = board.image(home, 1, extent, Some(at))?;
         let Some(runs) = runs_of(&v) else { return Ok(None) };
         let Some(ordinal) = v_ordinal_in(&runs, addr) else { return Ok(None) };
         let v = board.op_at(at, &retrieve_frame(home, ordinal))?;
@@ -380,6 +385,64 @@ mod tests {
         let mut mirror = over(Unarranged { places: false }, dir.path());
         assert_eq!(mirror.fetch_atom(7, &home, &atom, MAX_REGISTRY_RECORD_BYTES), Ok(None), "the home as of 7 arranges nothing");
         assert_eq!(mirror.stats.chain_walk.position_reads, 0);
+    }
+
+    /// **A board whose home `1.0.2.0.1` arranges 5,000 atoms in as many runs**,
+    /// the atom at V-ordinal 4,500 the one asked for — at its head where
+    /// `at_head`, and otherwise as of position 7 alone, the head arranging one
+    /// other atom and the chain no member. The image is answered as the wire
+    /// pages it, and every `image` frame is kept: the position it was read
+    /// at and its first ordinal.
+    struct Long {
+        at_head: bool,
+        images: std::rc::Rc<std::cell::RefCell<Vec<(Option<u64>, u64)>>>,
+    }
+
+    impl Transport for Long {
+        fn exchange(&self, _: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let request: Value = serde_json::from_slice(body).expect("a JSON body");
+            let (frame, at) = if path == "/op-at" { (&request["frame"], request["at"].as_u64()) } else { (&request, None) };
+            let doc = frame["doc"].as_str().or(frame["d"].as_str()).or(frame["specs"][0]["doc"].as_str());
+            let set = |width: &str| json!({ "resp": "span_set", "set": [{ "start": "1.1", "width": width }] });
+            let long = self.at_head == at.is_none();
+            match (frame["op"].as_str(), doc) {
+                (Some("retrieve_doc_v_span_set"), Some("1.0.2.0.1")) if long => answer(set("0.5000")),
+                (Some("retrieve_doc_v_span_set"), Some("1.0.2.0.1")) if at.is_none() => answer(set("0.1")),
+                (Some("retrieve_doc_v_span_set"), Some(_)) if at.is_none() => answer(json!({ "resp": "rejected", "op": frame["op"], "code": "doc_not_registered" })),
+                (Some("image"), Some("1.0.2.0.1")) if long => {
+                    let start = frame["region"][0]["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|n| n.parse().ok()).expect("a start");
+                    self.images.borrow_mut().push((at, start));
+                    answer(crate::board::paged_image_of(frame, 5_000, at.unwrap_or(9)))
+                }
+                (Some("image"), Some("1.0.2.0.1")) if at.is_none() => answer(json!({ "resp": "runs", "runs": [{ "i_start": "1.0.2.0.1.0.1.1", "width": "1" }] })),
+                (Some("retrieve_v"), Some("1.0.2.0.1")) if long && frame["specs"][0]["span"]["start"] == "1.4500" => {
+                    answer(json!({ "resp": "delivery", "items": [{ "atom": "the record" }] }))
+                }
+                _ => panic!("a read this board does not answer: {path} {request}"),
+            }
+        }
+    }
+
+    /// **A home in more runs than one answer carries is imaged whole**, at the
+    /// head and as of a position: the atom at V-ordinal 4,500, on the image's
+    /// second page, is found and read — at the head by two `image` frames over
+    /// `/op`, and where the head no longer arranges it, as of its link's
+    /// position by two over `/op-at` there (the mutant that takes the first
+    /// page for the image finds no atom at either). The frames at the head
+    /// follow the guess at the atom's own ordinal, which misses.
+    #[test]
+    fn an_atom_on_the_second_page_of_its_homes_image_is_read_at_the_head_and_at_a_position() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.9000"));
+        // At the head the append-only guess at the atom's own ordinal comes
+        // first, and misses.
+        for (at_head, frames) in [(true, vec![(None, 9_000), (None, 1), (None, 4_097)]), (false, vec![(Some(7), 1), (Some(7), 4_097)])] {
+            let images = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut mirror = over(Long { at_head, images: images.clone() }, dir.path());
+            assert_eq!(mirror.fetch_atom_off_board(7, &home, &atom, MAX_REGISTRY_RECORD_BYTES), Ok(Some("the record".to_string())), "at the head: {at_head}");
+            assert_eq!(*images.borrow(), frames, "the image whole, a page a frame");
+            assert_eq!(mirror.stats.chain_walk.position_reads, u64::from(!at_head));
+        }
     }
 
     /// A BOARD WHOSE HOME `1.0.2.0.1` ARRANGES ITS ATOM `…0.1.1` AT THE HEAD,

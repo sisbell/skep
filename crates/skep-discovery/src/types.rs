@@ -1,5 +1,6 @@
 //! §Public interface — the plain values the reads take and return: the
-//! windowing pair ([`Cursor`]/[`Window`]), the count by home
+//! windowing pair ([`Cursor`]/[`Window`]), the paged image's pair
+//! ([`GoOn`]/[`ImagePage`]), the count by home
 //! ([`HomeCounts`]), the retracted-links read's rows ([`LinkRow`]/
 //! [`LinkRows`]), the lineage and survival reports
 //! ([`SupClaim`]/[`OrphanReport`]), and the two typed rejections
@@ -11,7 +12,8 @@
 use std::error::Error;
 use std::fmt;
 
-use skep_address::Address;
+use skep_address::{Address, Nat};
+use skep_arrangement::Run;
 use skep_kernel::Seq;
 
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
@@ -55,6 +57,57 @@ pub struct Window {
     pub batch: Vec<Address>,
     pub next: Cursor,
     pub exhausted: bool,
+}
+
+/// Where a paged read goes on, and the one state its pages are of.
+///
+/// A read that answers what fits hands this back beside its page, and the
+/// continuation hands it in whole. It names the arrangement the page was
+/// answered from and that arrangement's position, so a page set never holds
+/// two states: a continuation is answered from `surface`, wherever the
+/// document's readers float by then, and where that arrangement can change
+/// in place — a draft's, a private document's — only while its
+/// `arranged_at` is still the one named, [`QueryError::PageMoved`]
+/// otherwise. A published document's arrangement and a member's take no
+/// in-place edit, only a deposit past their end, so the prefix a page read
+/// never moves (PUB-2.43) and their continuation is answered whatever has
+/// landed since.
+///
+/// One value for every paged read: [`crate::image_page_on`] states the rule
+/// a continuation is held to. A plain record, its fields public and
+/// independent as [`Window`]'s are.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GoOn {
+    /// The next page's first content ordinal.
+    ///
+    /// It is the V-ordinal the first run not answered sits at. A page ends
+    /// at a run's reach, never inside one, so within one span it is the
+    /// reach of the last run answered.
+    pub at: Nat,
+    /// The arrangement the page was answered from.
+    ///
+    /// It is the address the read named, or the trunk head a bare published
+    /// document's readers floated to when the first page was read
+    /// (PUB-2.53).
+    pub surface: Address,
+    /// M5's `arranged_at` of `surface` as the page read it.
+    ///
+    /// `None` where the board keeps none for it.
+    pub arranged_at: Option<Seq>,
+}
+
+/// One page of an image ([`crate::image_page_on`]): a plain record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImagePage {
+    /// The page's runs, in the order the image answers them.
+    ///
+    /// Every one is whole, and there are at most [`crate::MAX_IMAGE_RUNS`].
+    pub runs: Vec<Run>,
+    /// Where the rest begins, or `None` where the page ends the image.
+    ///
+    /// It is the one way a caller tells a short page from the whole: `Some`
+    /// exactly where the region resolves a run past the page's last.
+    pub next: Option<GoOn>,
 }
 
 /// One count by home (the link-sets design §7, W10 (a)): the answer of
@@ -182,11 +235,11 @@ pub struct OrphanReport {
 }
 
 /// The typed rejection of the QUERY surface — the region resolver
-/// [`crate::image_on`], the region family that reads through it, and the
-/// pointwise pair. Exactly these five arise on the surface as a whole, so a
-/// caller matching the whole surface — as M10's lowering does — writes no
-/// unreachable arm. Each read states which of them it raises, and a match
-/// over one read's result carries the rest as unreachable arms. The
+/// [`crate::image_on`], the region family that reads through it, the paged
+/// image and the pointwise pair. Exactly these six arise on the surface as a
+/// whole, so a caller matching the whole surface — as M10's lowering does —
+/// writes no unreachable arm. Each read states which of them it raises, and a
+/// match over one read's result carries the rest as unreachable arms. The
 /// delete-orphan preview refuses on its own preconditions and carries its
 /// own [`OrphanError`].
 ///
@@ -202,7 +255,9 @@ pub struct OrphanReport {
 ///   in parts, down to single positions, and the parts recomposed by UNION —
 ///   a count by counting the union, never by adding counts. A single
 ///   position is refused only over a reading surface of more than
-///   `MAX_IMAGE_RUNS²` content runs;
+///   `MAX_IMAGE_RUNS²` content runs. The paged image
+///   ([`crate::image_page_on`]) raises it for the walk's square alone: the
+///   runs its region resolves past the budget it answers in pages;
 /// * a pointwise `ImageTooLarge` — a fact about `d`'s runs and `a`'s
 ///   coverage — and an `EndsetsTooLarge` over one position do not: those
 ///   questions cannot be answered through this surface at this state.
@@ -232,7 +287,22 @@ pub enum QueryError {
     /// builds — rejected up front so M5's silent clipping never turns the
     /// request into a different query. A caller that builds its region
     /// through that constructor cannot provoke this.
+    ///
+    /// Also a continuation the paged image cannot be continued by
+    /// ([`crate::image_page_on`]): one naming an arrangement that is not the
+    /// document's own nor a member its readers floated to, or one whose
+    /// region does not begin where its go-on says the rest does.
     BadRegion,
+    /// A continuation names a state its arrangement has left.
+    ///
+    /// The paged image's alone ([`crate::image_page_on`]): the go-on's
+    /// arrangement can change in place — a draft's, a private document's —
+    /// and its `arranged_at` is no longer the one the go-on names, so the
+    /// pages read so far and the page asked for would be of two states.
+    /// Nothing is answered. No narrower request passes and the same one never
+    /// will, a position only rising: the read that is answered is begun again
+    /// from its first page.
+    PageMoved,
     /// The read would materialize or join more arrangement I-runs than
     /// [`crate::MAX_IMAGE_RUNS`] admits, or exceed the product its own join is
     /// held to: the square for the run-list walk behind the region family and
@@ -258,6 +328,9 @@ impl fmt::Display for QueryError {
             QueryError::NotALink => "query: the address is not a resident link (or the slot is out of range)",
             QueryError::BadRegion => {
                 "query: the region is not content-subspace ordinal-level depth-2 V-spans"
+            }
+            QueryError::PageMoved => {
+                "query: the arrangement a continuation names has changed since its page was read"
             }
             QueryError::ImageTooLarge => {
                 "query: the arrangement runs the request would materialize or walk, or the product of the join against them, are past this read's budget"

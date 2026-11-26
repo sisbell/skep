@@ -221,7 +221,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use skep_client::board::{acked_at, frames, Answer, AtAnswer, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::board::{acked_at, frames, whole_image_read, Answer, AtAnswer, ChangesAnswer, ChangesQuery, Rejection};
 use skep_client::halt::Halt;
 
 use super::{
@@ -241,8 +241,9 @@ use crate::wire::{delivered_values, natural, values_of};
 /// this window answers the document's whole content image — its runs in
 /// V-order, a run the document places twice answered at each place
 /// ([`Image`]) — whatever its extent, and the anchors are found wherever
-/// they now stand; a document past the board's run budget answers
-/// `image_too_large`, and the shift is not made.
+/// they now stand; a document past the board's run budget is answered a
+/// page at a time, and the read follows the pages to the last
+/// ([`read_image`]).
 const IMAGE_WINDOW: u64 = u64::MAX;
 
 /// Why a line was not shifted ([`Holds::shift_and_send`]).
@@ -663,7 +664,13 @@ fn named_span<'a>(frame: &Value, anchors: &'a Anchors) -> Result<(EditedSpan, Ru
 /// Reads the document's content image: the shift's one live read.
 ///
 /// It is the read over the whole content window ([`IMAGE_WINDOW`]) under the
-/// session, made outside every lock as every dial is.
+/// session, made outside every lock as every dial is: one frame where the
+/// document's runs are within the board's run budget, else a page a frame,
+/// the pages one state's (`whole_image_read`) — a document written between
+/// two pages is read again from its first, and past the restart bound as of
+/// the last first page's position. The image answered is whole, its
+/// `as_of` the position the read began at, so an anchor is found wherever
+/// in the document it stands.
 ///
 /// # Errors
 ///
@@ -672,7 +679,7 @@ fn named_span<'a>(frame: &Value, anchors: &'a Anchors) -> Result<(EditedSpan, Ru
 /// death signal on the session's token and [`ShiftStop::Unanswered`] where
 /// the board gave the read no answer.
 fn read_image(session: &SessionEntry, doc: &str) -> Result<Value, ShiftStop> {
-    match session.board.op(Some(&session.token), &frames::image(doc, 1, IMAGE_WINDOW)) {
+    match whole_image_read(&session.board, Some(&session.token), &frames::image(doc, 1, IMAGE_WINDOW)) {
         Ok(Answer::Document(v)) => match Rejection::of(&v) {
             None => Ok(v),
             Some(r) => Err(ShiftStop::Refused(Unshiftable::Unread(format!("the image read was refused {}", r.token())))),

@@ -290,7 +290,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Map, Value};
 use skep_address::Address;
 use skep_client::address::{account_of, is_address_text};
-use skep_client::board::{frames, merge_marker, Answer, LinkSpan, LinkValue, MergeMarker, Rejection};
+use skep_client::board::{frames, merge_marker, whole_image_read, Answer, LinkSpan, LinkValue, MergeMarker, Rejection};
 use skep_client::halt::Halt;
 use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, LineageCause, Missing, OriginAnswer, OwedAnswer, OwnFault, PartKey, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, SupersedeCause, Switches, Term, Unrecorded, Verdict};
 use skep_client::sheet::render_inert;
@@ -823,6 +823,10 @@ impl Shell {
     /// Returns the draft's whole arrangement as I-runs: the selection where
     /// the page passes none (P1's select-all).
     ///
+    /// The image is read whole, in pages where the draft holds more runs
+    /// than one answer carries, as one state (`whole_image_read`): the runs
+    /// are the board's, no page having cut one, and none is joined here.
+    ///
     /// # Errors
     ///
     /// Returns `unreadable`, `no_such_document`, the board's refusals,
@@ -843,34 +847,24 @@ impl Shell {
         }
         let extent = extent_of(&set).ok_or_else(|| Refusal::shell(Name::SHAPE, json!({"op": "retrieve_doc_v_span_set", "body": clipped(&set.to_string(), 200)})))?;
         let mut runs: Vec<lib::Run> = Vec::new();
-        // Read in parts past the run budget, halving on `image_too_large`.
-        let mut pending = vec![(1u64, extent)];
-        while let Some((from, width)) = pending.pop() {
-            if width == 0 {
-                continue;
-            }
-            let v = self.family_read(session, &frames::image(&text, from, width))?;
-            if let Some(r) = Rejection::of(&v) {
-                if r.key() == "image_too_large" && width > 1 {
-                    let left = width / 2;
-                    pending.push((from + left, width - left));
-                    pending.push((from, left));
-                    continue;
-                }
-                return Err(refused(&r, &v));
-            }
-            let shape = || Refusal::shell(Name::SHAPE, json!({"op": "image", "body": clipped(&v.to_string(), 200)}));
-            for run in v["runs"].as_array().ok_or_else(shape)? {
-                let i_start = run["i_start"].as_str().ok_or_else(shape)?;
-                let w: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(shape)?;
-                let (prefix, first) = i_start.rsplit_once('.').ok_or_else(shape)?;
-                let first: u64 = first.parse().map_err(|_| shape())?;
-                let origin = skep_client::address::document_of(i_start).and_then(|d| bounded_address(&d)).ok_or_else(shape)?;
-                match runs.last_mut() {
-                    Some(last) if last.chain() == prefix && last.reach() == first => last.width += w,
-                    _ => runs.push(lib::Run::new(origin, first, w)),
-                }
-            }
+        if extent == 0 {
+            return Ok(runs);
+        }
+        let v = match whole_image_read(&session.board, Some(&session.token), &frames::image(&text, 1, extent))? {
+            Answer::Closed => return Err(self.died(session)),
+            Answer::Document(v) => v,
+        };
+        if let Some(r) = Rejection::of(&v) {
+            return Err(refused(&r, &v));
+        }
+        let shape = || Refusal::shell(Name::SHAPE, json!({"op": "image", "body": clipped(&v.to_string(), 200)}));
+        for run in v["runs"].as_array().ok_or_else(shape)? {
+            let i_start = run["i_start"].as_str().ok_or_else(shape)?;
+            let w: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(shape)?;
+            let (_, first) = i_start.rsplit_once('.').ok_or_else(shape)?;
+            let first: u64 = first.parse().map_err(|_| shape())?;
+            let origin = skep_client::address::document_of(i_start).and_then(|d| bounded_address(&d)).ok_or_else(shape)?;
+            runs.push(lib::Run::new(origin, first, w));
         }
         Ok(runs)
     }

@@ -11,7 +11,7 @@ use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Base, Change, Marker, Placed, Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
-use skep_discovery::{FourSet, LinkRow, SlotSpec, SupClaim, Window};
+use skep_discovery::{FourSet, GoOn, LinkRow, SlotSpec, SupClaim, Window};
 use skep_febe::{
     Deposit, Disposition, EditionClaim, FaultSite, IItem, ISpan, MintTime, Op, OpKind, RejectCode,
     Rejection, Response, SlotArg, SuccessorSpec, TimeSource, UniversalGrant,
@@ -485,11 +485,15 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             (op_name(OpKind::FindDocsContaining), vec![("regions", j_regions(regions))])
         }
         // `own` is written only where set, so a frame that asks nothing of
-        // it keeps the canonical form it had without the member.
-        Op::Image { d, region, own } => {
+        // it keeps the canonical form it had without the member; `cur`
+        // likewise, a first page carrying none.
+        Op::Image { d, region, own, cur } => {
             let mut pairs = vec![("d", j_addr(d)), ("region", j_spans(region))];
             if *own {
                 pairs.push(("own", Value::Bool(true)));
+            }
+            if let Some(cur) = cur {
+                pairs.push(("cur", j_go_on(cur)));
             }
             (op_name(OpKind::Image), pairs)
         }
@@ -697,6 +701,15 @@ pub(super) fn j_response(r: &Response) -> Value {
         Response::Runs { runs, as_of } => {
             ("runs", vec![("runs", j_runs(runs)), ("as_of", j_seq(*as_of))])
         }
+        // An image cut short at the run budget (wire.md §The response
+        // envelope, `image_page`): a `resp` of its own and the runs under a
+        // member of their own, `ispans`, so a reader of `runs` meets no
+        // image at all and never a first page as the whole; `next` beside
+        // them, the go-on a continuation sends back whole.
+        Response::ImagePage { runs, next, as_of } => (
+            "image_page",
+            vec![("ispans", j_runs(runs)), ("next", j_go_on(next)), ("as_of", j_seq(*as_of))],
+        ),
         Response::Bool { val, as_of } => {
             ("bool", vec![("val", Value::Bool(*val)), ("as_of", j_seq(*as_of))])
         }
@@ -1300,6 +1313,21 @@ fn j_fourset(q: &FourSet) -> Value {
     ])
 }
 
+/// Renders a go-on: where a paged read goes on, and the state it is of.
+///
+/// The object is `{at, surface, arranged_at}` (wire.md §Value encodings,
+/// **Go-ons**): `at` a natural, as every ordinal rides; `surface` an
+/// address; `arranged_at` a position, `null` where the board keeps none.
+/// One rendering for the page's `next` and the continuation's `cur`, which
+/// is what lets a reader send back what it was handed.
+fn j_go_on(g: &GoOn) -> Value {
+    obj(vec![
+        ("at", j_nat(&g.at)),
+        ("surface", j_addr(&g.surface)),
+        ("arranged_at", g.arranged_at.map(j_seq).unwrap_or(Value::Null)),
+    ])
+}
+
 fn j_cursor(c: &Option<Address>) -> Value {
     c.as_ref().map(j_addr).unwrap_or(Value::Null)
 }
@@ -1774,6 +1802,7 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::TooManyItems => "too_many_items",
         RejectCode::NotALink => "not_a_link",
         RejectCode::BadRegion => "bad_region",
+        RejectCode::PageMoved => "page_moved",
         RejectCode::ImageTooLarge => "image_too_large",
         RejectCode::EndsetsTooLarge => "endsets_too_large",
     }

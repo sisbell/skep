@@ -39,7 +39,7 @@ use skep_identity::{parse_record_value, signer_of, BoardTerm, CredentialRecord, 
 
 use crate::address::{document_of, parent_account, parse_address, within_principal_depth};
 use crate::board::answers::IRun;
-use crate::board::{answers, frames, guest_closed, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
+use crate::board::{answers, frames, guest_closed, Answer, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
 
 #[cfg(test)]
@@ -490,20 +490,23 @@ fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet
 /// Returns a home's I→V inversion (AUTH-2.114).
 ///
 /// It is the runs its content I-addresses are arranged in, off
-/// `retrieve_doc_v_span_set` and `image` — at most the run budget's,
-/// whatever widths the board names — and none where the I-map does not read
-/// whole, so the home's records read as unreadable and never as another
-/// position's bytes.
+/// `retrieve_doc_v_span_set` and `image` — every run the home arranges, the
+/// image read in pages where it holds more than one answer carries — and
+/// none where the I-map does not read whole, so the home's records read as
+/// unreadable and never as another position's bytes.
 ///
 /// # Errors
 ///
-/// [`Board::guest`]'s errors.
+/// [`Board::guest`]'s errors, and [`answers::whole_image_read`]'s.
 fn inversion(board: &Board, home: &str) -> Result<Vec<IRun>, Halt> {
     let extent = answers::content_extent(&board.guest(&frames::span_set(home))?);
     if extent == 0 {
         return Ok(Vec::new());
     }
-    let image = board.guest(&frames::image(home, 1, extent))?;
+    let image = match answers::whole_image_read(board, None, &frames::image(home, 1, extent))? {
+        Answer::Document(image) => image,
+        Answer::Closed => return Err(guest_closed()),
+    };
     Ok(answers::i_runs(&image, extent).unwrap_or_default())
 }
 

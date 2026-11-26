@@ -808,7 +808,7 @@ impl Cx<'_> {
         if region.is_empty() {
             return (Endset::from_spans(std::iter::empty()), notes, clamped);
         }
-        match self.rig.exec(Op::Image { d, region, own: false }) {
+        match self.rig.exec(Op::Image { d, region, own: false, cur: None }) {
             Response::Runs { runs, .. } => {
                 (Endset::from_spans(runs.iter().map(Run::iextent)), notes, clamped)
             }
@@ -827,11 +827,9 @@ impl Cx<'_> {
         let (Some(d), Some(span)) = (self.alpha.peek_exact(docid), whole.span()) else {
             return Vec::new();
         };
-        let Response::Runs { runs, .. } = self.rig.exec(Op::Image {
-            d,
-            region: vec![span],
-            own: false,
-        }) else {
+        let Response::Runs { runs, .. } =
+            self.rig.exec(Op::Image { d, region: vec![span], own: false, cur: None })
+        else {
             return Vec::new();
         };
         let mut rows = Vec::new();
@@ -1099,7 +1097,7 @@ impl Cx<'_> {
         let imaged = VRegion { width: removed.len() as u64, ..region };
         if let Some(span) = imaged.span() {
             if let Response::Runs { runs, .. } =
-                self.rig.exec(Op::Image { d: d.clone(), region: vec![span], own: false })
+                self.rig.exec(Op::Image { d: d.clone(), region: vec![span], own: false, cur: None })
             {
                 self.deletions.record(doc, removed, runs.iter().map(Run::iextent).collect());
             }

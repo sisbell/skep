@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use skep_address::{Address, Nat, SpanSet};
 use skep_arrangement::{Marker, Run, ShotTerms};
 use skep_content::Val;
-use skep_discovery::{Cursor, LinkRow, OrphanReport, SupClaim, Window};
+use skep_discovery::{Cursor, GoOn, LinkRow, OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
 use skep_namespace::PrincipalId;
@@ -316,6 +316,17 @@ pub enum Response {
     Endsets { pairs: Vec<(usize, Endset)>, as_of: Seq },
     /// V→I image.
     Runs { runs: Vec<Run>, as_of: Seq },
+    /// One page of a V→I image, and where the rest begins.
+    ///
+    /// It is the answer of an `image` whose region resolves more runs than
+    /// M8's run budget: `runs` the page's, every one whole, and `next` M8's
+    /// [`GoOn`] — the next page's first content ordinal, the arrangement the
+    /// page was read from and that arrangement's `arranged_at` — which the
+    /// continuation hands back whole. A shape of its own, never
+    /// [`Response::Runs`] with a member beside it: a reader that takes
+    /// `Runs` for the whole image cannot take a page for one. An image that
+    /// fits, and a paged image's last page, answer `Runs`.
+    ImagePage { runs: Vec<Run>, next: GoOn, as_of: Seq },
     /// discoverable_from.
     Bool { val: bool, as_of: Seq },
     /// readlink (`None` = ⊥), with the link's age.
@@ -555,10 +566,10 @@ impl Response {
     pub fn as_of(&self) -> Option<Seq> {
         // One catalogue, written here and in `as_of_mut`: the coordinate law
         // (`every_read_reports_the_committed_head_as_its_as_of`) asks both of
-        // twenty-two of the twenty-four read shapes — every one but the
-        // read by identity's and the content frontier's — and counts the
-        // shapes it visits, so the two cannot come to classify one of those
-        // twenty-two differently.
+        // twenty-two of the twenty-five read shapes — every one but the
+        // read by identity's, the content frontier's and the image's page —
+        // and counts the shapes it visits, so the two cannot come to
+        // classify one of those twenty-two differently.
         match self {
             Response::Delivery { as_of, .. }
             | Response::IDelivery { as_of, .. }
@@ -574,6 +585,7 @@ impl Response {
             | Response::Links { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
+            | Response::ImagePage { as_of, .. }
             | Response::Bool { as_of, .. }
             | Response::LinkValue { as_of, .. }
             | Response::Follow { as_of, .. }
@@ -613,6 +625,7 @@ impl Response {
             | Response::Links { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
+            | Response::ImagePage { as_of, .. }
             | Response::Bool { as_of, .. }
             | Response::LinkValue { as_of, .. }
             | Response::Follow { as_of, .. }
@@ -691,6 +704,7 @@ impl Response {
             | Response::Links { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
+            | Response::ImagePage { .. }
             | Response::Bool { .. }
             | Response::LinkValue { .. }
             | Response::Follow { .. }

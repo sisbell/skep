@@ -664,3 +664,85 @@ fn the_two_images_are_mapped_once_after_the_drafts_last_image_and_planned_as_map
     let refused = Asked::read(&json!({"doc": DOC, "since": SINCE})).and_then(|asked| diff(&board, &asked, &refusing)).unwrap_err();
     assert_eq!((refused.name(), board.ops().len()), ("unreadable", 5), "nothing read by identity");
 }
+
+/// A document of `runs` one-position runs, none I-adjacent to the next,
+/// read through the `op` row as the board pages it: the page that fits and
+/// the go-on, a continuation from the go-on's place, the next `moved`
+/// continuations at the head refused `page_moved` as the row answers a
+/// rejection, and a frame in the row's `/op-at` form answered at its
+/// position. Every frame is kept.
+struct Long {
+    runs: u64,
+    moved: Cell<u32>,
+    sent: RefCell<Vec<Value>>,
+}
+
+impl Calls for Long {
+    fn op(&self, sent: Value) -> Result<Value, Refusal> {
+        self.sent.borrow_mut().push(sent.clone());
+        let (frame, at) = match sent["at"].as_u64() {
+            Some(at) => (sent["frame"].clone(), Some(at)),
+            None => (sent, None),
+        };
+        assert_eq!(frame["op"], "image", "the read sends an `image` alone: {frame}");
+        if !frame["cur"].is_null() && at.is_none() && self.moved.get() > 0 {
+            self.moved.set(self.moved.get() - 1);
+            let body = json!({"resp": "rejected", "op": "image", "code": "page_moved", "disposition": "permanent", "site": {"addr": DOC}});
+            return Err(Refusal::Board(Refused { status: 200, code: "page_moved".into(), detail: None, op: Some("image".into()), body }));
+        }
+        let from = last(&frame["region"][0]["start"]);
+        let until = from.saturating_add(last(&frame["region"][0]["width"])).min(self.runs + 1);
+        let page = (until - from).min(4_096);
+        let runs: Vec<Value> = (from..from + page).map(|k| json!({"i_start": format!("{DOC}.0.1.{}", 2 * k), "width": "1"})).collect();
+        let as_of = at.unwrap_or(AT + self.sent.borrow().len() as u64);
+        Ok(if from + page < until {
+            json!({"resp": "image_page", "as_of": as_of, "ispans": runs, "next": {"at": (from + page).to_string(), "surface": DOC, "arranged_at": 7}})
+        } else {
+            json!({"resp": "runs", "as_of": as_of, "runs": runs})
+        })
+    }
+    fn held(&self) -> Result<Value, Refusal> {
+        panic!("no line")
+    }
+    fn drop_held(&self, _: u64) -> Result<Value, Refusal> {
+        panic!("no line")
+    }
+    fn changes(&self, _: &str, _: u64) -> Result<Value, Refusal> {
+        panic!("no feed read")
+    }
+    fn key(&self) -> Option<String> {
+        panic!("no key asked")
+    }
+}
+
+/// The diff's image of a document in more runs than one answer carries is
+/// read whole, a page a call of the row: 5,000 runs in two frames, every
+/// run at its own position, the position answered the first page's (the
+/// mutant that takes the first page for the image answers `unread`). A
+/// draft written between two pages is read again from its first; one that
+/// moves at every reading the bound allows is read once more in the row's
+/// `/op-at` form, every page as of the last first page's position.
+#[test]
+fn a_long_documents_image_is_read_whole_in_pages_and_again_where_it_moved() {
+    let read = |moved: u32| {
+        let board = Long { runs: 5_000, moved: Cell::new(moved), sent: RefCell::new(Vec::new()) };
+        let (image, as_of) = image(&board, DOC, DOC).expect("the row answered").unwrap_or_else(|answer| panic!("an image: {}", answer.value));
+        assert_eq!((image.runs().len(), image.extent()), (5_000, 5_000));
+        assert!(image.runs().iter().enumerate().all(|(k, run)| (run.ordinal, run.first) == (k as u64 + 1, 2 * (k as u64 + 1))), "every run at its own position");
+        (board.sent.into_inner(), as_of)
+    };
+    let (sent, as_of) = read(0);
+    assert_eq!(sent.len(), 2, "⌈5,000 ÷ 4,096⌉ calls of the row");
+    assert_eq!(sent[0], frames::image(DOC, 1, u64::MAX), "the whole content");
+    assert_eq!((sent[1]["region"][0]["start"].as_str(), &sent[1]["cur"]["surface"]), (Some("1.4097"), &json!(DOC)), "the rest, the go-on sent back");
+    assert_eq!(as_of, AT + 1, "the first page's position");
+    let (sent, _) = read(1);
+    assert_eq!(sent.len(), 4, "begun again from its first page: {sent:?}");
+    assert!(sent.iter().all(|frame| frame["at"].is_null()), "at the head");
+    let bound = skep_client::board::PAGE_RESTARTS;
+    let (sent, as_of) = read(bound + 1);
+    let at_position: Vec<&Value> = sent.iter().filter(|frame| !frame["at"].is_null()).collect();
+    assert_eq!(sent.len() as u32 - 2, 2 * (bound + 1), "the first reading and the bound's restarts at the head");
+    assert_eq!(at_position.len(), 2, "then every page in the `/op-at` form");
+    assert!(at_position.iter().all(|frame| frame["at"].as_u64() == Some(as_of)) && sent[sent.len() - 2..].iter().all(|frame| !frame["at"].is_null()), "as of the last first page's position: {as_of}");
+}

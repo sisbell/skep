@@ -21,6 +21,16 @@
 //! full copy of its memory, so the budget bounds live reconstructions rather
 //! than concurrent replays.
 //!
+//! One answer is longer than one call: an image read in pages. Each page is
+//! a request of its own, and a page of one past state rebuilt per request
+//! would rebuild that state once a page. So a paged read's world is kept
+//! between its pages (`KeptRead`), with the permit that licenses it: the
+//! read is one reconstruction and holds one permit from its first page to
+//! its last, and the pool still bounds the reconstructed worlds resident —
+//! a kept world is a permit held. A read nobody continues is let go
+//! ([`KEPT_READ_IDLE`]; [`History::read_at`] states both ways), so a permit
+//! is never held by one.
+//!
 //! [`Unavailable`] says why an answer cannot be given without knowing what
 //! an HTTP status is; `server/reply.rs`'s `refuse_unavailable` is the one
 //! mapping onto the wire's transport errors.
@@ -34,16 +44,20 @@
 //! for the daemon's classed door, this module holding none
 //! (`skep_core::limits::EDGE_HOLD_DOWN`'s card).
 
-use std::sync::Arc;
+use std::fmt;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "observe")]
 use skep_engine::dump::WorldDump;
 use skep_address::Address;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
-use skep_febe::{OperationSurface, Request, Response, SessionId};
+use skep_febe::{GoOn, Op, OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot};
 use skep_namespace::PrincipalId;
-use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
+#[cfg(any(test, feature = "test-hooks"))]
+use skep_util::permits::Permit;
+use skep_util::permits::{edge_clock_now, EdgeTracker, OwnedPermit, Permits};
 
 use skep_core::limits::EDGE_HOLD_DOWN;
 
@@ -70,7 +84,31 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 /// of the scan and the fold. Two keeps history panes serviceable without
 /// letting core-bound replay occupy the worker pool or letting reconstructed
 /// worlds accumulate one per worker.
+///
+/// A paged read's kept world is one of the two for as long as it is kept:
+/// the permit is held with it, so the peak stands as stated and at most two
+/// readers hold a kept world each.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
+
+/// How long a kept read may stand with no page asked of it.
+///
+/// A paged read's reconstruction is kept between its pages, with its permit
+/// ([`History::read_at`]). A reader between two pages is one round trip
+/// away: a page is at most 4,096 runs, about 200 KB of JSON. Ten seconds is
+/// far past any such round trip, and no longer than the whole read it
+/// reclaims a permit from can itself take — one reconstruction of a
+/// position a checkpoint cadence above its base ran 11 s on a small world.
+/// Past it the read is taken for abandoned: the next historical question
+/// lets its world and its permit go before it asks the pool, so a reader
+/// that stopped — a client gone, an early stop — refuses no one for longer.
+/// A reader slower than this loses nothing but the reconstruction: its
+/// continuation is answered from a fresh one, the same page.
+///
+/// Judged on the edge clock (`skep_util::permits::edge_clock_now`), the
+/// daemon's one seam for a duration, and only when a historical question
+/// arrives: this module runs no thread, so on a board no one asks history
+/// of, an abandoned read's world stays resident, within the pool's bound.
+pub(crate) const KEPT_READ_IDLE: Duration = Duration::from_secs(10);
 
 /// Why a historical answer is unavailable.
 ///
@@ -125,6 +163,64 @@ impl Unavailable {
     }
 }
 
+/// Which paged read a page belongs to.
+///
+/// It is the position read, the reader, the document named and whether its
+/// own arrangement was asked: a page of another position, another reader or
+/// another document is another read, and never answered from this one's
+/// world.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PagedRead {
+    /// The position the read is as of.
+    at: Seq,
+    /// The reader: the presented session's principal, `None` the guest.
+    principal: Option<PrincipalId>,
+    /// The document the frame names.
+    doc: Address,
+    /// Whether the frame asks the document's own arrangement.
+    own: bool,
+}
+
+impl PagedRead {
+    /// Returns the paged read `op` is a page of at `at`, and its go-on.
+    ///
+    /// `Some` for the one read that answers in pages, `image`: the read, and
+    /// the continuation the frame carries — `None` on a first page. `None`
+    /// for every other op, which is one answer and one reconstruction.
+    fn of(at: Seq, principal: Option<PrincipalId>, op: &Op) -> Option<(PagedRead, Option<&GoOn>)> {
+        let Op::Image { d, own, cur, .. } = op else { return None };
+        Some((PagedRead { at, principal, doc: d.clone(), own: *own }, cur.as_ref()))
+    }
+}
+
+/// One paged read's reconstruction, kept between its pages.
+struct KeptRead {
+    /// The read it is kept for.
+    read: PagedRead,
+    /// The go-on its last page handed back: the `cur` its next page sends.
+    next: GoOn,
+    /// The world as of the read's position.
+    world: World,
+    /// The permit that licenses the world, held for as long as it is kept.
+    ///
+    /// Declared after the world, so a drop lets the world go first and the
+    /// slot second: the pool never counts free a slot whose world stands.
+    permit: OwnedPermit,
+    /// The edge clock's reading when its last page was answered.
+    last_page: Instant,
+}
+
+/// Renders the read and its go-on, never the world.
+impl fmt::Debug for KeptRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeptRead")
+            .field("read", &self.read)
+            .field("next", &self.next)
+            .field("last_page", &self.last_page)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The history surface: the budget, and the three questions asked of it.
 ///
 /// They are a read as of a position ([`History::read_at`]), the world's dump
@@ -132,20 +228,29 @@ impl Unavailable {
 /// ([`History::chain_at`]).
 #[derive(Debug)]
 pub(crate) struct History {
-    permits: Permits,
+    /// The reconstruction budget, shared with the permits kept reads hold.
+    permits: Arc<Permits>,
     /// The pool's edge pair (m12).
     ///
     /// It is the memory of the episode that stands, if one does, and the
     /// edges the one door crossed and has not yet handed the daemon
     /// ([`History::edge`]).
     edge: EdgeTracker,
+    /// The paged reads kept between their pages, each holding one permit.
+    ///
+    /// At most [`MAX_CONCURRENT_RECONSTRUCTIONS`], a kept read being a
+    /// permit held. Locked for a lookup, a removal or a push alone: never
+    /// across a reconstruction or a read, and never while a world is
+    /// dropped.
+    kept: Mutex<Vec<KeptRead>>,
 }
 
 impl History {
     pub fn new() -> History {
         History {
-            permits: Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS),
+            permits: Arc::new(Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS)),
             edge: EdgeTracker::new(EDGE_HOLD_DOWN),
+            kept: Mutex::new(Vec::new()),
         }
     }
 
@@ -168,12 +273,22 @@ impl History {
     /// this door and crosses no edge: what a suite holds is the pool, not a
     /// request.
     ///
+    /// **Abandoned reads first.** A kept read idle for [`KEPT_READ_IDLE`]
+    /// is let go here, ahead of the pool, so the question at the door is
+    /// never refused for a permit a read nobody continues still held. A
+    /// page that joins its kept read asks no permit and does not come this
+    /// way.
+    ///
+    /// The permit owns its hold on the pool, so a paged read can keep it
+    /// with its world past this call.
+    ///
     /// # Errors
     ///
     /// [`Unavailable::Busy`] when every permit is in use.
-    fn admit(&self) -> Result<Permit<'_>, Unavailable> {
-        let permit = self.permits.try_acquire();
+    fn admit(&self) -> Result<OwnedPermit, Unavailable> {
         let now = edge_clock_now();
+        self.let_go_of_idle_reads(now);
+        let permit = self.permits.try_acquire_owned();
         self.edge.queue(match &permit {
             Some(_) => self.edge.admitted(now),
             None => self.edge.refused(now),
@@ -223,10 +338,61 @@ impl History {
         &self,
         engine: &Engine,
         at: Seq,
-    ) -> Result<(Permit<'_>, World), Unavailable> {
+    ) -> Result<(OwnedPermit, World), Unavailable> {
         let permit = self.admit()?;
         let world = engine.world_at(at).map_err(Unavailable::Journal)?;
         Ok((permit, world))
+    }
+
+    /// Takes the kept read `read`'s page `cur` continues, out of the list.
+    ///
+    /// A continuation joins the kept read of its own read whose last page
+    /// handed back the go-on it carries, whole: the position, the reader,
+    /// the document, the arrangement asked and the go-on all agree, or
+    /// nothing is taken. A first page — no `cur` — joins none, and lets go
+    /// of every kept read of the same read: its reader has begun that read
+    /// again, so the one it left is nobody's.
+    fn take_kept(&self, read: &PagedRead, cur: Option<&GoOn>) -> Option<KeptRead> {
+        let mut kept = self.kept();
+        let Some(cur) = cur else {
+            let left: Vec<KeptRead> = kept.extract_if(.., |k| k.read == *read).collect();
+            // The worlds are dropped with the lock released.
+            drop(kept);
+            drop(left);
+            return None;
+        };
+        let place = kept.iter().position(|k| k.read == *read && k.next == *cur)?;
+        Some(kept.swap_remove(place))
+    }
+
+    /// Keeps `read` for its next page, unless one is kept at the same page.
+    ///
+    /// Two requests that sent one continuation — a reader's repeat while
+    /// the first was in flight — each rebuilt the position; one world is
+    /// kept and the other let go with its permit.
+    fn keep(&self, read: KeptRead) {
+        let mut kept = self.kept();
+        if kept.iter().any(|k| k.read == read.read && k.next == read.next) {
+            drop(kept);
+            return;
+        }
+        kept.push(read);
+    }
+
+    /// Lets go of every kept read idle for [`KEPT_READ_IDLE`] at `now`.
+    fn let_go_of_idle_reads(&self, now: Instant) {
+        let idle: Vec<KeptRead> = self
+            .kept()
+            .extract_if(.., |k| now.saturating_duration_since(k.last_page) >= KEPT_READ_IDLE)
+            .collect();
+        drop(idle);
+    }
+
+    /// The kept reads, poisoned or not: nothing under the lock is left
+    /// half-done by an unwind — a removal, a push — and a read kept or let
+    /// go fails no answer.
+    fn kept(&self) -> MutexGuard<'_, Vec<KeptRead>> {
+        self.kept.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Returns the `WorldDump` of the world as of `at`, at the reader's class.
@@ -284,10 +450,28 @@ impl History {
     /// (PUB-6.49); what runs here is the rest of the read surface — the
     /// per-run masks and the result-set filter — through the same predicate.
     ///
+    /// **A paged read is one reconstruction.** An `image` answered a short
+    /// page keeps the world it was answered from, and the permit, for the
+    /// continuation: the page that sends that page's go-on back, of the
+    /// same document at the same position by the same reader, is answered
+    /// from the kept world and asks the pool nothing, so it is never
+    /// refused `Busy`. Each page is stamped the position asked, and is the
+    /// page a fresh reconstruction answers, the world being that position's
+    /// either way; the predicate is each request's own, the head's as it
+    /// then stands. The world and the permit are let go when the read ends
+    /// — a page that names no rest, or a refusal — and when it is
+    /// abandoned: the same reader beginning that read again from its first
+    /// page, or no page asked of it for [`KEPT_READ_IDLE`]
+    /// ([`History::admit`]). A continuation that joins no kept read — of
+    /// another position, another document, another reader, a go-on no kept
+    /// read handed back, or one let go — is a first reconstruction of its
+    /// own, as every other answer is.
+    ///
     /// # Errors
     ///
-    /// [`History::reconstruct`]'s: [`Unavailable::Busy`] ahead of every
-    /// journal verdict about `at`, then the replay's [`Unavailable::Journal`].
+    /// [`History::reconstruct`]'s, for every read but a page that joins its
+    /// kept read: [`Unavailable::Busy`] ahead of every journal verdict about
+    /// `at`, then the replay's [`Unavailable::Journal`].
     pub fn read_at(
         &self,
         engine: &Engine,
@@ -296,9 +480,23 @@ impl History {
         principal: Option<PrincipalId>,
         head: &Snapshot<World>,
     ) -> Result<Response, Unavailable> {
-        let (_permit, world) = self.reconstruct(engine, at)?;
-        let mut resp = execute_read_on(world, frame, principal, head.world());
+        let Some((read, cur)) = PagedRead::of(at, principal, &frame.op) else {
+            let (_permit, world) = self.reconstruct(engine, at)?;
+            let mut resp = execute_read_on(world, frame, principal, head.world());
+            stamp_as_of(&mut resp, at);
+            return Ok(resp);
+        };
+        let (permit, world) = match self.take_kept(&read, cur) {
+            Some(kept) => (kept.permit, kept.world),
+            None => self.reconstruct(engine, at)?,
+        };
+        // One root clone: the world may be kept for the page after this one.
+        let mut resp = execute_read_on(world.clone(), frame, principal, head.world());
         stamp_as_of(&mut resp, at);
+        if let Response::ImagePage { next, .. } = &resp {
+            let last_page = edge_clock_now();
+            self.keep(KeptRead { read, next: next.clone(), world, permit, last_page });
+        }
         Ok(resp)
     }
 
@@ -603,6 +801,50 @@ mod tests {
             ),
             "admitted, the chain read meets the journal's own verdict"
         );
+    }
+
+    /// Checks which page joins a kept read, and what lets one go.
+    ///
+    /// A continuation joins the read kept for its own position, reader,
+    /// document, arrangement and go-on, and no other; a first page joins
+    /// none and lets go of its own read's; and a read idle for
+    /// [`KEPT_READ_IDLE`] is let go, its permit with it.
+    #[test]
+    fn a_page_joins_its_own_kept_read_and_an_idle_one_is_let_go() {
+        let history = History::new();
+        let d = |n: u32| {
+            let tumbler = skep_address::Tumbler::new([1, 0, 1, 0, n].map(Into::into));
+            skep_address::validate(tumbler.expect("nonempty")).expect("a document address")
+        };
+        let read = PagedRead { at: Seq(7), principal: Some(PrincipalId(1)), doc: d(1), own: false };
+        let next = GoOn { at: 4097u32.into(), surface: d(1), arranged_at: Some(Seq(5)) };
+        let now = Instant::now();
+        let keep = || {
+            let permit = history.permits.try_acquire_owned().expect("a permit");
+            let (read, next, world) = (read.clone(), next.clone(), World::genesis());
+            history.keep(KeptRead { read, next, world, permit, last_page: now });
+        };
+        keep();
+        for other in [
+            PagedRead { at: Seq(8), ..read.clone() },
+            PagedRead { principal: None, ..read.clone() },
+            PagedRead { doc: d(2), ..read.clone() },
+            PagedRead { own: true, ..read.clone() },
+        ] {
+            assert!(history.take_kept(&other, Some(&next)).is_none(), "{other:?}: another read");
+        }
+        let later = GoOn { at: 8193u32.into(), ..next.clone() };
+        assert!(history.take_kept(&read, Some(&later)).is_none(), "a go-on no page handed back");
+        assert_eq!(history.kept().len(), 1, "kept through them all");
+        assert!(history.take_kept(&read, Some(&next)).is_some(), "its own continuation");
+        keep();
+        assert!(history.take_kept(&read, None).is_none() && history.kept().is_empty(), "let go");
+        keep();
+        history.let_go_of_idle_reads(now + KEPT_READ_IDLE - Duration::from_millis(1));
+        assert_eq!(history.kept().len(), 1, "short of the bound it stands, a permit held");
+        history.let_go_of_idle_reads(now + KEPT_READ_IDLE);
+        let free: Vec<_> = std::iter::from_fn(|| history.try_hold_permit()).collect();
+        assert_eq!((history.kept().len(), free.len()), (0, MAX_CONCURRENT_RECONSTRUCTIONS));
     }
 
     /// Checks which refusals are the journal's damage (RUNBOOK §2).

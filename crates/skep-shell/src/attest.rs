@@ -62,7 +62,7 @@ use std::ops::Range;
 use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::{document_of, well_known_of, WELL_KNOWN_SLOTS};
-use skep_client::board::{frames, Answer, Board, Rejection, Token, T_SUPERSEDES};
+use skep_client::board::{frames, whole_image_read, Answer, Board, Rejection, Token, T_SUPERSEDES};
 use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::halt::Halt;
 use skep_client::sign::{sig_hex, Signer};
@@ -724,7 +724,31 @@ impl Composer<'_> {
     /// unanswered `unreachable`, the library's own halt
     /// `attest_not_composed`.
     fn read(&self, frame: &Value) -> Result<Value, Unattested> {
-        match self.board.op(Some(self.token), frame)? {
+        Self::document(self.board.op(Some(self.token), frame)?)
+    }
+
+    /// Reads the image the `image` frame `frame` asks for, whole.
+    ///
+    /// It is [`Composer::read`] for a region in more runs than one answer
+    /// carries: the pages read in order as one state (`whole_image_read`),
+    /// the document a `runs` answer holding every run, so a body is never
+    /// composed over a first page.
+    ///
+    /// # Errors
+    ///
+    /// [`Composer::read`]'s, at whichever page met them.
+    fn image(&self, frame: &Value) -> Result<Value, Unattested> {
+        Self::document(whole_image_read(self.board, Some(self.token), frame)?)
+    }
+
+    /// Returns the document a read answered.
+    ///
+    /// # Errors
+    ///
+    /// Returns a rejection as the board's refusal, verbatim, and the death
+    /// signal as [`Unattested::Died`].
+    fn document(answer: Answer) -> Result<Value, Unattested> {
+        match answer {
             Answer::Closed => Err(Unattested::Died),
             Answer::Document(v) => match Rejection::of(&v) {
                 Some(r) => Err(r.refused(&v).into()),
@@ -777,7 +801,7 @@ impl Composer<'_> {
         for item in list {
             if let Some(source) = item["source"].as_str() {
                 let (from, width) = v_spec(&item["span"]).ok_or_else(|| fault(format!("the frame's `{what}` V-spec is not a content span"), "a V-spec's span is `{\"start\": \"1.<ordinal>\", \"width\": \"0.<width>\"}`"))?;
-                let v = self.read(&frames::image(source, from, width))?;
+                let v = self.image(&frames::image(source, from, width))?;
                 let runs = v["runs"].as_array().ok_or_else(|| fault("`image` answered no runs", v.to_string()))?;
                 for r in runs {
                     let i_start = r["i_start"].as_str().unwrap_or("");
@@ -828,7 +852,7 @@ impl Composer<'_> {
             .into());
         }
         if extent > 0 {
-            let image = self.read(&frames::image(origin, 1, extent))?;
+            let image = self.image(&frames::image(origin, 1, extent))?;
             let runs = image["runs"].as_array().map(Vec::as_slice).unwrap_or_default();
             let mut mapped = 0u64;
             for run in runs {

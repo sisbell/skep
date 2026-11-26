@@ -63,7 +63,7 @@ use skep_arrangement::{
     trunk_of, Base, Change, Edit, Placed, Run, SetMerge, Shot, ShotRun, VPos, VSpec,
 };
 use skep_content::Val;
-use skep_discovery::{FourSet, SlotSpec};
+use skep_discovery::{FourSet, GoOn, SlotSpec};
 use skep_febe::{
     Codec, Deposit, FaultSite, ISpan, Op, OpKind, ParseError, Rejection, ReqId, Request, Response,
     SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
@@ -720,14 +720,17 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         // The edit under its two names (wire.md §Arrangement, `edit` and
         // `set_arrangement`): one frame, a list of positional changes to
-        // one draft, the typed state REQUIRED as on the five, and the three
-        // optional members — the head pair, the base pair and the merge's
-        // sides, read against the head. What the name decides here is what
-        // a change carries: `set_arrangement`'s place runs in `reinstate`'s
-        // form (the landing lane), `edit`'s mint values in `insert`'s; the
-        // other name's member is an unknown field of the change, and so is
-        // the retired top-level `runs` of the frame. Outside the checked
-        // set under both: `attest` is an unknown field `finish` refuses.
+        // one draft, the typed state REQUIRED as on the five, and the
+        // optional head pair. What the name decides here is what a change
+        // carries — `set_arrangement`'s place runs in `reinstate`'s form
+        // (the landing lane), `edit`'s mint values in `insert`'s; the other
+        // name's member is an unknown field of the change, and so is the
+        // retired top-level `runs` of the frame — and whether the frame
+        // carries a landing's terms: the base pair and the merge's sides,
+        // read against the head, are `set_arrangement`'s alone, and under
+        // `edit` each is an unknown field `finish` refuses, so no `edit`
+        // row carries a landing. Outside the checked set under both:
+        // `attest` is an unknown field `finish` refuses.
         "set_arrangement" => Op::SetArrangement {
             doc: fields.addr("doc")?,
             arrangement: fields.edit(Placing::Runs)?,
@@ -822,11 +825,14 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         "find_docs_containing" => Op::FindDocsContaining { regions: fields.regions("regions")? },
         // `image`'s `own` reads `d`'s own arrangement where set (wire.md §Link
-        // discovery reads); absent, `null` and `false` alike float.
+        // discovery reads); absent, `null` and `false` alike float. `cur` is
+        // the continuation of a paged image: the go-on the page before
+        // handed back, whole; absent and `null` alike a first page.
         "image" => Op::Image {
             d: fields.addr("d")?,
             region: fields.spans("region")?,
             own: fields.flag("own")?,
+            cur: fields.go_on("cur")?,
         },
         "find_links_v" => Op::FindLinksV { d: fields.addr("d")?, region: fields.spans("region")? },
         "find_links_ftt" => Op::FindLinksFtt { q: fields.fourset("q")? },
@@ -1135,13 +1141,19 @@ impl Fields {
 
     /// Takes an edit's members beside `doc` and `as_of` (wire.md
     /// §Arrangement, `edit` and `set_arrangement`): `changes`, then the
-    /// optional `head` and `base` pairs ([`p_extent_pair`]) and the optional
-    /// `merge` object, whose member `sides` is a list of addresses under the
-    /// cap and whose optional member `at` is the position of a marker put
-    /// back (skep #870); absent and explicit `null` read alike as absent on
-    /// the three and on `at`. A `merge` carried without a `head` is refused,
-    /// the marker's head being the frame's, and a `merge.at` without a
-    /// `base`, the marker being recorded only beside a base.
+    /// optional `head` pair ([`p_extent_pair`]) and, where the changes
+    /// place runs — `set_arrangement`'s — the optional `base` pair and the
+    /// optional `merge` object, whose member `sides` is a list of addresses
+    /// under the cap and whose optional member `at` is the position of a
+    /// marker put back (skep #870); absent and explicit `null` read alike as
+    /// absent on the three and on `at`. A `merge` carried without a `head`
+    /// is refused, the marker's head being the frame's, and a `merge.at`
+    /// without a `base`, the marker being recorded only beside a base.
+    ///
+    /// A landing is `set_arrangement`'s alone. Where the changes mint
+    /// values — `edit`'s — `base` and `merge` are not taken, so a frame
+    /// carrying either is refused by `finish` as an unknown field, nothing
+    /// written, and no `edit` row carries a landing's terms.
     ///
     /// `changes` is one wire list under [`MAX_WIRE_LIST`], each element an
     /// object of `at`, `width` and the one member `placing` names — `values`
@@ -1163,7 +1175,8 @@ impl Fields {
     /// object of its three members, where a member of it is refused, where
     /// its values pass the frame's cap, or where it begins below the reach
     /// of the change before it; naming no entry where the frame's runs pass
-    /// the cap, where a present `head`, `base` or `merge` is refused, where
+    /// the cap, where a present `head` is refused, and under
+    /// [`Placing::Runs`] where a present `base` or `merge` is refused, where
     /// `merge` stands without `head`, or where `merge.at` stands without
     /// `base`.
     fn edit(&mut self, placing: Placing) -> Result<Edit, Refusal> {
@@ -1212,10 +1225,21 @@ impl Fields {
             changes.push(change);
         }
         let head = self.extent_pair_opt("head")?;
-        let base = self.extent_pair_opt("base")?;
-        let merge = match self.take_opt("merge") {
-            None => None,
-            Some(v) => Some(p_set_merge(&v).map_err(|e| PErr(format!("field 'merge': {e}")))?),
+        // A landing's terms ride `set_arrangement` alone: under `edit`
+        // neither member is taken, and `finish` refuses the one a frame
+        // carries.
+        let (base, merge) = match placing {
+            Placing::Values => (None, None),
+            Placing::Runs => {
+                let base = self.extent_pair_opt("base")?;
+                let merge = match self.take_opt("merge") {
+                    None => None,
+                    Some(v) => {
+                        Some(p_set_merge(&v).map_err(|e| PErr(format!("field 'merge': {e}")))?)
+                    }
+                };
+                (base, merge)
+            }
         };
         if merge.is_some() && head.is_none() {
             return Err(PErr("field 'merge': carried without 'head', which is the marker's own".into()).into());
@@ -1346,6 +1370,20 @@ impl Fields {
         match self.0.remove("replaces") {
             None => Ok(None),
             Some(v) => p_addr(&v).map(Some).map_err(|e| PErr(format!("field 'replaces': {e}"))),
+        }
+    }
+
+    /// Takes a paged read's continuation `k`: the go-on of the page before.
+    ///
+    /// Absent and explicit `null` alike read `None`, a first page.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the member is present and no go-on ([`p_go_on`]).
+    fn go_on(&mut self, k: &'static str) -> PResult<Option<GoOn>> {
+        match self.take_opt(k) {
+            None => Ok(None),
+            Some(v) => p_go_on(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}"))),
         }
     }
 
@@ -2207,6 +2245,29 @@ fn p_set_merge(v: &Value) -> PResult<SetMerge> {
         Some(v) => Some(Seq(p_u64(v).map_err(|e| PErr(format!("at: {e}")))?)),
     };
     Ok(SetMerge { sides, at })
+}
+
+/// Parses a go-on (wire.md §Value encodings, **Go-ons**): M8's [`GoOn`].
+///
+/// It is the object a short page hands back as `next` and a continuation
+/// sends whole as `cur`: `at`, the next page's first content ordinal, a
+/// natural; `surface`, the address of the arrangement the page was read
+/// from; and `arranged_at`, that arrangement's position as the page read
+/// it, a non-negative integer as every position is, absent and `null`
+/// alike none.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of the three members alone, where
+/// `at` or `surface` is missing or refused, or where a present
+/// `arranged_at` is no non-negative integer.
+fn p_go_on(v: &Value) -> PResult<GoOn> {
+    let m = p_obj(v, &["arranged_at", "at", "surface"])?;
+    let arranged_at = match m.get("arranged_at") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Seq(p_u64(v).map_err(|e| PErr(format!("arranged_at: {e}")))?)),
+    };
+    Ok(GoOn { at: field(m, "at", p_nat)?, surface: field(m, "surface", p_addr)?, arranged_at })
 }
 
 /// Guards which keys a sub-object may carry.

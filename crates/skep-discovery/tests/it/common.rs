@@ -25,9 +25,9 @@ use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
     delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_on,
-    in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
-    Cursor, FourSet, HomeCounts, LinkRows, OrphanError, OrphanReport, QueryError, SupClaim,
-    Window, MAX_IMAGE_RUNS,
+    image_page_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on,
+    window_v_on, Cursor, FourSet, GoOn, HomeCounts, ImagePage, LinkRows, OrphanError,
+    OrphanReport, QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
 };
 use skep_kernel::{
     CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot, WorldState,
@@ -406,6 +406,19 @@ pub fn kernel() -> Kernel<World> {
     kernel_over(genesis_world())
 }
 
+/// The seeded kernel with a second principal seated at a second account,
+/// `[1,0,2]`: the forker of a cross-owner `version`, which mints a fresh
+/// document there sharing its source's arrangement — the one way a published
+/// document comes to hold an arrangement of many runs as its own.
+pub fn kernel_with_a_second_account() -> Kernel<World> {
+    let mut world = genesis_world();
+    world.m3 = world
+        .m3
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)));
+    kernel_over(world)
+}
+
 /// An in-memory kernel over `world`.
 fn kernel_over(world: World) -> Kernel<World> {
     let cfg = KernelConfig {
@@ -628,6 +641,16 @@ pub struct Reads<'k>(pub &'k Kernel<World>);
 impl Reads<'_> {
     pub fn image(&self, d: &Address, region: &[Span]) -> Result<Vec<Run>, QueryError> {
         image_on(&self.0.snapshot(), d, region)
+    }
+
+    pub fn image_page(
+        &self,
+        d: &Address,
+        region: &[Span],
+        own: bool,
+        cur: Option<&GoOn>,
+    ) -> Result<ImagePage, QueryError> {
+        image_page_on(&self.0.snapshot(), d, region, own, cur)
     }
 
     pub fn findlinks_v(&self, d: &Address, region: &[Span]) -> Result<Vec<Address>, QueryError> {

@@ -67,7 +67,8 @@ use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::parse_address;
 use skep_client::board::{
-    acked_addr, acked_at, frames, Answer, Board, ChainAtAnswer, Opened, Rejection, Scope, SessionBody, Token,
+    acked_addr, acked_at, frames, paged_image, Answer, AtAnswer, Board, ChainAtAnswer, Opened, Rejection, Scope,
+    SessionBody, Token,
 };
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::DialError;
@@ -498,21 +499,33 @@ impl<'b> Writer<'b> {
         }
     }
 
-    /// Makes one read under the session, answering its document.
+    /// Makes one read of a paged image, at the head or as of `at`.
+    ///
+    /// It answers the document, a rejection included, for the paged read to
+    /// follow or begin again.
     ///
     /// # Errors
     ///
-    /// A rejection is the board's refusal, the death signal a halt, and a
-    /// transport halt, or a refusal the board answers by HTTP status, stands
-    /// as it is.
-    pub fn read(&mut self, frame: &Value) -> Result<Value, Halt> {
+    /// The death signal is a halt; a position the board refuses — every
+    /// reconstruction permit in use, reclaimed, past the head or inside a
+    /// commit — is this tool's halt naming it; a transport halt stands as
+    /// it is.
+    fn page(&mut self, frame: &Value, at: Option<u64>) -> Result<Value, Halt> {
         self.reads += 1;
-        match self.session.op(frame)? {
-            Answer::Document(v) => match Rejection::of(&v) {
-                Some(r) => Err(r.refused(&v)),
-                None => Ok(v),
-            },
-            Answer::Closed => Err(session_closed()),
+        let Some(at) = at else {
+            return match self.session.op(frame)? {
+                Answer::Document(v) => Ok(v),
+                Answer::Closed => Err(session_closed()),
+            };
+        };
+        match self.board.op_at(Some(self.session.token()), at, frame)? {
+            AtAnswer::Document(v) => Ok(v),
+            AtAnswer::Closed => Err(session_closed()),
+            refused => Err(Halt::face(
+                format!("the board did not answer `image` as of position {at}"),
+                format!("{refused:?}"),
+                "run again: the manifest holds what landed, and the run resumes after it",
+            )),
         }
     }
 
@@ -616,17 +629,25 @@ impl<'b> Writer<'b> {
         Ok(at)
     }
 
-    /// Reads `image` over content ordinals of `doc`.
+    /// Reads `image` over content ordinals of `doc`, whole.
     ///
     /// The ordinals run `from ..`, `width` of them; it answers the V→I runs,
-    /// each with its origin.
+    /// each with its origin. A region in more runs than one answer carries
+    /// is read a page a frame, each counted among the reads, as one state
+    /// (`skep_client`'s `paged_image`): a document written between two
+    /// pages is read again from its first, and past the restart bound every
+    /// page is read as of the last first page's position.
     ///
     /// # Errors
     ///
-    /// Returns the halt the read comes to, and one where the answer holds no
-    /// runs this tool can read.
+    /// Returns the halt the read comes to — at a position, the board's
+    /// refusal of it among them — and one where the answer holds no runs
+    /// this tool can read.
     pub fn image(&mut self, doc: &str, from: u64, width: u64) -> Result<Vec<Run>, Halt> {
-        let v = self.read(&frames::image(doc, from, width))?;
+        let v = paged_image(&frames::image(doc, from, width), |frame, at| self.page(frame, at))?;
+        if let Some(r) = Rejection::of(&v) {
+            return Err(r.refused(&v));
+        }
         let runs = v["runs"].as_array().ok_or_else(|| unexpected("image", &v))?;
         runs.iter()
             .map(|r| {

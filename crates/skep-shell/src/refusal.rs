@@ -477,8 +477,8 @@ impl Name {
     /// Each crosses as typed data under this one name, its `arm` the
     /// library's arm in snake case and the arm's members beside it
     /// (`shell/merge.rs`'s `merge_refusal`, which the refusals of
-    /// `history.past` and `history.restore` cross through too): `too_fragmented
-    /// {doc, runs_seen}`, `history_busy`, `history_reclaimed {at, floor}`,
+    /// `history.past` and `history.restore` cross through too):
+    /// `history_busy`, `history_reclaimed {at, floor}`,
     /// `beyond_head {at, head}`, `not_a_position {at, nearest}`, `side_moved
     /// {side, at, before, after}` (a side `merge.compose` read at the head —
     /// the head, the draft, the fork — or the draft it landed over changed

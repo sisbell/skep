@@ -464,8 +464,9 @@ fn a_pair_over_an_earlier_pairs_new_text_is_minted_at_the_board_as_what_stands()
 /// same, the board asked no image.
 ///
 /// A draft of 5,001 runs — a text with a byte of another stretch placed
-/// after every other byte of its middle — answers `image_too_large` to a
-/// read of its whole image. `text.edit` of two pairs, at its head and at its
+/// after every other byte of its middle — answers a read of its whole image
+/// one page of it, the budget's runs, and where the rest begins. `text.edit`
+/// of two pairs, at its head and at its
 /// tail, lands: `edited`, both words changed, by ONE `edit` frame after the
 /// draft's metadata, its extent and its text — no `image` among the frames
 /// the call sent (the mutant that reads the draft's image before it writes
@@ -482,8 +483,8 @@ fn a_draft_in_more_runs_than_an_image_answers_is_edited_and_no_image_is_asked() 
     let read_at = position(&g.shell, &g.session, &draft);
     let between: Vec<Value> = (0..pairs).map(|k| skep_client::board::frames::minted(4 + 2 * k + 2, 0, ".")).collect();
     g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::edit(&draft, &between, read_at, None)})).unwrap_or_else(|r| panic!("{r}"));
-    let image = g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::image(&draft, 1, u64::MAX)})).unwrap_err();
-    assert_eq!(image.name(), "image_too_large", "the premise: more runs than an image answers: {image}");
+    let image = g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::image(&draft, 1, u64::MAX)})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((image["resp"].as_str(), image["ispans"].as_array().map(Vec::len)), (Some("image_page"), Some(4_096)), "the premise: more runs than one image answer carries");
     let rows = Watched::over(&g.shell, |_: &Value, _: &str| None);
     let args = json!({"doc": draft, "edits": [{"old": "HEAD", "new": "head"}, {"old": "TAIL", "new": "tail"}]});
     let answer = edit_through(&rows, &g.session, &args).unwrap_or_else(|r| panic!("{r}"));

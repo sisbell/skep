@@ -226,3 +226,25 @@ fn a_home_account_deeper_than_the_namespace_reads_no_set() {
     let deep = format!("1.0.1{}", ".1".repeat(crate::address::MAX_PRINCIPAL_COMPONENTS));
     assert_eq!(set_opening_at(&fake::board(&Fake::unread()), &deep, 9).expect("no read, so no fault"), None);
 }
+
+/// A home in more runs than one answer carries is inverted whole: 5,000
+/// runs read in two frames as a guest, every run at its own ordinal (the
+/// mutant that takes the first page for the image answers no map, and the
+/// home's records read as unreadable).
+#[test]
+fn a_long_homes_inversion_is_read_whole_in_pages() {
+    let home = Arc::new(answers::paging::Paged::of("1.0.1.0.1", 5_000));
+    let serving = home.clone();
+    let fake = Fake::new(move |req| {
+        let f = fake::frame(req);
+        match f["op"].as_str().unwrap_or("?") {
+            "retrieve_doc_v_span_set" => fake::json(200, json!({"as_of": 9, "resp": "span_set", "set": [{"start": "1.1", "width": "0.5000"}]})),
+            "image" => fake::json(200, serving.answer(&f, None)),
+            other => panic!("the inversion sends no `{other}`"),
+        }
+    });
+    let runs = inversion(&fake::board(&fake), "1.0.1.0.1").expect("the inversion");
+    assert_eq!(runs.len(), 5_000);
+    assert_eq!(answers::ordinal_of(&runs, &home.runs[4_499].0), Some(4_500), "an atom on the second page, at its own ordinal");
+    assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set", "POST /op image", "POST /op image"]);
+}

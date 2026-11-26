@@ -288,9 +288,7 @@ impl Writer<'_> {
         }
         let image = match self.reader.image(member, None, 1, placed) {
             Ok(runs) => runs,
-            Err(Refusal::Unreadable(_)) | Err(Refusal::TooFragmented { .. }) => {
-                return Ok(Holds::Other)
-            }
+            Err(Refusal::Unreadable(_)) => return Ok(Holds::Other),
             Err(e) => return Err(e),
         };
         let actual = runs_of(&image)?;

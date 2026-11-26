@@ -1008,30 +1008,95 @@ fn a_forks_anchor_is_its_recorded_base_else_its_source_each_in_the_documents_cha
     }
 }
 
-/// `image` IN PARTS: a head of three runs refused `image_too_large`
-/// whole is re-asked in halves, the parts re-joined by I-adjacency —
-/// the run a part boundary cut is one run again — so `counts.a` is 3,
-/// not 4, and M is the same list.
+/// **`image` in pages.** A head of three runs on a board whose page is two is
+/// answered its first two and where the rest begins, and read on from
+/// there with the go-on sent back whole — two frames, each answered, the
+/// second the rest of the span from the reach of the page's last run, no
+/// run cut and none joined — so `counts.a` is 3 and M is the same list.
 #[test]
-fn an_image_in_parts_is_rejoined_and_coalesced_before_counting() {
+fn an_image_past_the_boards_page_is_read_page_by_page_no_run_cut() {
     let (dialer, board, _) = open(World::race());
     dialer.world().image_cap = 2;
     let merged = compose(&board, Some(&token()), &race_inputs()).expect("composed");
-    let head: Vec<(u64, u64)> = dialer
-        .frames("image")
-        .iter()
-        .filter(|f| f["d"] == format!("{D}.2"))
-        .map(|f| span(&f["region"][0]))
-        .collect();
-    assert_eq!(head, [(1, 15), (1, 7), (8, 8)], "the whole region refused, then its halves");
+    let frames: Vec<Value> = dialer.frames("image").into_iter().filter(|f| f["d"] == format!("{D}.2")).collect();
+    let head: Vec<(u64, u64)> = frames.iter().map(|f| span(&f["region"][0])).collect();
+    assert_eq!(head, [(1, 15), (9, 7)], "the whole region, then the rest from the page's reach");
+    assert!(frames[0].get("cur").is_none(), "a first page carries no go-on");
+    assert_eq!(frames[1]["cur"]["at"], "9", "the continuation sends the go-on back: {}", frames[1]);
+    assert_eq!(frames[1]["cur"]["surface"], format!("{D}.2"));
     assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 1, m: 3 });
     assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)]);
-    // Down to one position still refused: the fragmentation measured.
-    dialer.world().image_cap = 0;
-    assert!(matches!(
-        compose(&board, Some(&token()), &race_inputs()),
-        Err(Refusal::TooFragmented { runs_seen: 0, .. })
-    ));
+}
+
+/// **The reader reads a long document whole**, a page a frame and no frame
+/// more: a draft of 5,000 runs is two `image` frames and one of 12,289
+/// four, each the rest of the span from where the page before it ended,
+/// none of a halved width — at the head, as of a position through
+/// `/op-at`, and of the draft's own arrangement, sent with `own` on every
+/// page; the image holds every run at its own ordinal, and its extent is
+/// the extent read (the mutant that takes the first page for the image
+/// answers 4,096 runs under an extent of 5,000).
+#[test]
+fn the_reader_images_a_long_document_whole_a_page_a_frame() {
+    for (count, pages) in [(5_000u64, 2u64), (12_289, 4)] {
+        let long: Vec<Run> = (1..=count).map(|k| run(D, 2 * k, 1)).collect();
+        let mut world = World::new();
+        world.doc(S, false, ACCOUNT, long.clone());
+        let then = world.position;
+        world.change(S, vec![run(D, 1, 3)]);
+        world.change(S, long.clone());
+        let (dialer, board, _) = open(world);
+        let token = token();
+        let reader = Reader::new(&board, Some(&token), OnEnd::Rerun);
+        let spans = |dialer: &Scripted| -> Vec<(u64, u64)> { dialer.frames("image").iter().map(|f| span(&f["region"][0])).collect() };
+        let expected: Vec<(u64, u64)> = (0..pages).map(|page| (1 + page * 4_096, count - page * 4_096)).collect();
+        let whole = |extent: u64, runs: &[crate::board::IRun]| {
+            assert_eq!((extent, runs.len() as u64), (count, count));
+            assert!(runs.iter().enumerate().all(|(k, r)| (r.ordinal, r.first, r.width) == (k as u64 + 1, 2 * (k as u64 + 1), 1)), "every run at its own ordinal");
+        };
+        // At the head.
+        let at_head = reader.imaged(&a(S), None).expect("imaged at the head");
+        whole(at_head.extent, &at_head.runs);
+        assert_eq!(spans(&dialer), expected, "{count} runs: ⌈R ÷ 4,096⌉ frames, each the rest of the span");
+        assert!(dialer.positions("image").is_empty() && dialer.frames("image")[1..].iter().all(|f| f["cur"]["surface"] == S));
+        // As of a position: every page through `/op-at` there.
+        dialer.clear();
+        let past = reader.imaged(&a(S), Some(then)).expect("imaged at a position");
+        whole(past.extent, &past.runs);
+        assert_eq!((spans(&dialer), dialer.positions("image")), (expected.clone(), vec![then; pages as usize]));
+        // Its own arrangement: `own` on every page.
+        dialer.clear();
+        let own = reader.imaged_own(&a(S), None, count).expect("its own arrangement imaged");
+        whole(own.extent, &own.runs);
+        assert!(dialer.frames("image").len() as u64 == pages && dialer.frames("image").iter().all(|f| f["own"] == true));
+    }
+}
+
+/// **A draft written under the reader.** A continuation refused `page_moved` is
+/// begun again from the first page and the new state answered whole; and a
+/// draft that moves at every reading the bound allows is read once more as
+/// of the last first page's position, every page through `/op-at` — the
+/// frames at a position counted, and none at the head after them.
+#[test]
+fn a_moved_draft_is_read_again_and_past_the_bound_at_one_position() {
+    let long: Vec<Run> = (1..=5_000u64).map(|k| run(D, 2 * k, 1)).collect();
+    let mut world = World::new();
+    world.doc(S, false, ACCOUNT, long);
+    let (dialer, board, _) = open(world);
+    let token = token();
+    let reader = Reader::new(&board, Some(&token), OnEnd::Rerun);
+    dialer.world().page_moved = 1;
+    assert_eq!(reader.imaged(&a(S), None).expect("read again").runs.len(), 5_000);
+    assert_eq!(dialer.names().iter().filter(|n| *n == "image").count(), 4, "the first page and its refused continuation, then both pages again");
+    assert!(dialer.positions("image").is_empty(), "one restart, at the head");
+    dialer.clear();
+    dialer.world().page_moved = PAGE_RESTARTS + 1;
+    let head = dialer.world().position;
+    assert_eq!(reader.imaged(&a(S), None).expect("read at a position").runs.len(), 5_000);
+    let at_head = dialer.ops().iter().filter(|o| *o == "image").count() as u32;
+    assert_eq!(at_head, 2 * (PAGE_RESTARTS + 1), "the first reading and the bound's restarts, each refused at its second page");
+    assert_eq!(dialer.positions("image"), [head, head], "then every page at the position the last first page stood at");
+    assert_eq!(dialer.ops().iter().rev().take(2).filter(|o| *o == "at:image").count(), 2, "and nothing at the head after them");
 }
 
 /// A SUB-RUN value read is mapped to the side's own V-ordinals (the

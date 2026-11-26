@@ -44,6 +44,7 @@ mod health;
 mod history;
 mod http_lifecycle;
 mod identity_slice;
+mod image_page;
 mod ispan_slot;
 mod line_numbers;
 mod link_age;

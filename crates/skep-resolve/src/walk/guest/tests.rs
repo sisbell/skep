@@ -372,3 +372,43 @@ fn a_binding_listed_from_another_home_is_no_candidate() {
     let (face, _) = guest(&board, "1.2").expect("the guest resolve");
     assert!(matches!(face, Resolution::Bound { .. }), "{face:?}");
 }
+
+/// A board whose home arranges 5,000 atoms in as many runs, the atom at
+/// V-ordinal 4,500 the record asked for: the home's image is answered as the
+/// wire pages it, and `retrieve_v` answers that one position alone. Every
+/// `image` frame's first ordinal is kept.
+struct LongHome {
+    images: Rc<RefCell<Vec<u64>>>,
+}
+
+impl Transport for LongHome {
+    fn exchange(&self, _: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        assert_eq!(path, "/op", "the guest reads the head alone");
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        let answer = match frame["op"].as_str() {
+            Some("retrieve_doc_v_span_set") => json!({ "resp": "span_set", "set": [{ "start": "1.1", "width": "0.5000" }] }),
+            Some("image") => {
+                let start = frame["region"][0]["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|n| n.parse().ok()).expect("a start");
+                self.images.borrow_mut().push(start);
+                crate::board::paged_image_of(&frame, 5_000, 9)
+            }
+            Some("retrieve_v") if frame["specs"][0]["span"]["start"] == "1.4500" => json!({ "resp": "delivery", "items": [{ "atom": "the record" }] }),
+            _ => panic!("a read this board does not answer: {frame}"),
+        };
+        Ok((200, answer.to_string().into_bytes()))
+    }
+}
+
+/// **The head's whole image** of a home in more runs than one answer carries:
+/// the append-only guess misses, the image is read whole — two frames, the
+/// second from the first's go-on — and the atom is read at its own V-ordinal,
+/// on the second page (the mutant that takes the first page for the image
+/// locates nothing, and the record reads as absent).
+#[test]
+fn an_atom_on_the_second_page_of_its_homes_image_is_found_at_the_head() {
+    let images = Rc::new(RefCell::new(Vec::new()));
+    let board = Board::new(Box::new(LongHome { images: images.clone() }));
+    let (home, atom) = (a(ORG_DOC1), a(&format!("{ORG_DOC1}.0.1.9000")));
+    assert_eq!(atom_at_head(&board, &home, &atom), Ok(Some("the record".to_string())));
+    assert_eq!(*images.borrow(), [9_000, 1, 4_097], "the guess at the atom's own ordinal, then the whole image in two frames");
+}

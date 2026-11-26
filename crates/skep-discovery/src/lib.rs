@@ -90,9 +90,12 @@
 //! from. The region family floats through [`image_on`], and the pointwise
 //! pair each through its own read of the runs, so all of them read one
 //! arrangement for `d`. The two that do not float read `d`'s own
-//! arrangement. [`image_named_on`] does so by design: at a bare published
-//! `d` that has a member it answers the arrangement `d` held before its first
-//! version, which a draft begun before version 1 was copied from (PUB-2.66).
+//! arrangement. [`image_page_on`] does so where its caller asks, by design:
+//! at a bare published `d` that has a member it then answers the arrangement
+//! `d` held before its first version, which a draft begun before version 1
+//! was copied from (PUB-2.66); unasked it floats as `image_on` does, and a
+//! continuation of it reads the arrangement its first page was answered
+//! from, never the one `d`'s readers float to by then.
 //! [`delete_orphans_on`] previews DELETE, which edits `d`'s own arrangement
 //! and refuses every published target, so on every `d` DELETE admits, `d` IS
 //! its reading surface. On a published `d` DELETE refuses and the preview
@@ -145,7 +148,7 @@
 //!
 //! Neither is the PER-RUN MASK (PUB-6.41, M6's `retrieve_v_masked`), which
 //! withholds in place; nothing here applies it. [`image_on`] and
-//! [`image_named_on`] alone take no predicate: their answers name I-runs and
+//! [`image_page_on`] alone take no predicate: their answers name I-runs and
 //! no link. The division of labour: a
 //! NAMED document's own readability is the caller's consult, before
 //! dispatch; the homes of the links an answer is built from — each link whose
@@ -204,7 +207,9 @@
 //! links, and no caller can tell one from a true answer.
 //! [`MAX_IMAGE_RUNS`] is one constant held at the four reads of a document's
 //! runs, each over the run count its own work multiplies; the constant states
-//! the four counts and how their refusals relate. Its SQUARE holds the two
+//! the four counts and how their refusals relate. The one read it cuts
+//! short is [`image_page_on`], whose answer names no link and says, on
+//! itself, that it is a page and where the rest begins. Its SQUARE holds the two
 //! joins a run count alone does not price — the run-list walk [`image_on`]
 //! asks of M5, and the touch test of a link's whole coverage behind
 //! [`addressably_discoverable_from_on`]. [`MAX_ANSWER_SPANS`] bounds what an
@@ -271,10 +276,17 @@
 //!   region's whole walk held to `MAX_IMAGE_RUNS²` ahead of the first pull,
 //!   and the runs it pulls to `MAX_IMAGE_RUNS`, the one past that refused
 //!   before the next is built.
-//! * [`image_named_on`] — [`image_on`]'s reads and budgets, over `d`'s own
-//!   arrangement in place of its reading surface: one read of M5's `#runs`
-//!   for `d`'s own content and, per region span, one lazy `iter_resolve` of
-//!   `d`'s own run-list, held to the same square and the same budget.
+//! * [`image_page_on`] — [`image_on`]'s reads and its square, over the
+//!   arrangement it reads — `d`'s reading surface, `d`'s own, or the one a
+//!   continuation names: one read of M5's `#runs` for that arrangement's
+//!   content and, per region span, one lazy `iter_resolve` of its run-list,
+//!   the walk held to the same square, the pull stopped at the run past
+//!   `MAX_IMAGE_RUNS`, which ends the page, and for a short page one lookup
+//!   of M5's `arranged_at`. A continuation adds one M3 registration lookup
+//!   and at most two publication reads, and one `arranged_at` lookup where
+//!   the arrangement takes in-place edits. A page deep in a fragmented
+//!   document walks every run left of it, so a whole image read in pages
+//!   walks the run-list once a page.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
 //!   extents at the three v1 slots, then, per candidate home, one test of
@@ -434,9 +446,9 @@ mod budget;
 // computed and the caller's predicate asked about it — the reader that
 // answers once per home, and the cursor's home a window resumes in.
 mod home;
-// The plain values the reads take and return — the window pair, the count
-// by home, the lineage claim, the orphan report — and the two typed
-// rejections.
+// The plain values the reads take and return — the window pair, the paged
+// image's go-on and page, the count by home, the lineage claim, the orphan
+// report — and the two typed rejections.
 mod types;
 // M7's link sets as the reads build and walk them: the v1 slot list, the
 // extents' lift, a home's probes and the disjunction over its slots, the
@@ -445,8 +457,8 @@ mod types;
 mod sets;
 // A region's shape — its constructor and its gate — and `image_on`, its V→I
 // resolution: the region resolver every region-family read chains into M7's
-// matcher; and `image_named_on`, the same resolution over `d`'s own
-// arrangement.
+// matcher; and `image_page_on`, the same resolution answered in pages, with
+// the one check a paged read's continuation passes.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v`, the count by
 // home and RETRIEVEENDSETS, read out of one selection index home by home —
@@ -467,7 +479,7 @@ mod lineage;
 
 pub use budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS};
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec};
-pub use image::{content_vspan, image_named_on, image_on};
+pub use image::{content_vspan, image_on, image_page_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
@@ -476,7 +488,8 @@ pub use region::{
 };
 pub use survival::delete_orphans_on;
 pub use types::{
-    Cursor, HomeCounts, LinkRow, LinkRows, OrphanError, OrphanReport, QueryError, SupClaim, Window,
+    Cursor, GoOn, HomeCounts, ImagePage, LinkRow, LinkRows, OrphanError, OrphanReport, QueryError,
+    SupClaim, Window,
 };
 // The 1-based standard slot numerals every query here indexes by, and the two
 // M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
@@ -522,6 +535,8 @@ const _: fn() = || {
     owed::<FourSet>();
     owed::<SlotSpec>();
     owed::<Window>();
+    owed::<GoOn>();
+    owed::<ImagePage>();
     owed::<HomeCounts>();
     owed::<LinkRow>();
     owed::<LinkRows>();

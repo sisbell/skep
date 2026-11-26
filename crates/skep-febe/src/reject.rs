@@ -682,12 +682,34 @@ pub enum RejectCode {
     TooManyItems,
     // ── M8 link discovery read (the last two are M8's own budget refusals —
     //    one for the arrangement runs a request materializes or joins
-    //    against, one for the spans a RETRIEVEENDSETS answer carries) ──
+    //    against, one for the spans a RETRIEVEENDSETS answer carries; the
+    //    one before them is the paged image's, a continuation of a moved
+    //    draft) ──
     /// No visible link occupies the address, or the slot is past its arity.
     NotALink,
     /// A region span is not the shape a content V-span takes.
+    ///
+    /// Also a paged read's continuation that names an arrangement other
+    /// than its document's own or the member it floated to, or whose region
+    /// does not begin where its go-on says the rest does.
     BadRegion,
+    /// A paged read's continuation names a state its arrangement has left.
+    ///
+    /// The go-on a page hands back names the arrangement the page was read
+    /// from and that arrangement's `arranged_at`; where the arrangement
+    /// takes in-place edits — a draft's, a private document's — and its
+    /// `arranged_at` has moved, the continuation is refused, nothing
+    /// answered, so no page set holds two states. Carries `site.addr`, the
+    /// document read. Permanent by the catch-all: a position only rises, so
+    /// the same continuation is never answered, and the act that is
+    /// answered is another request, the read begun again from its first
+    /// page.
+    PageMoved,
     /// A read would materialize or join more arrangement runs than its budget.
+    ///
+    /// Never an `image`'s for the runs its region resolves, which it
+    /// answers in pages: there it is the run-list walk past the budget's
+    /// square alone.
     ImageTooLarge,
     /// A RETRIEVEENDSETS answer would carry more spans than its budget.
     EndsetsTooLarge,

@@ -504,7 +504,7 @@ fn identity_pairs(
     };
     let image = |pos: &str| -> Option<skep_address::Address> {
         let span = parse_vpos(pos)?.region(1).span()?;
-        match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span], own: false }) {
+        match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span], own: false, cur: None }) {
             Response::Runs { runs, .. } => runs.first().map(|r| r.i_start().clone()),
             _ => None,
         }

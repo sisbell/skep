@@ -1282,7 +1282,6 @@ impl Shell {
             R::NoMerge { draft } => Refusal::shell(Name::NO_MERGE, json!({"draft": s(&draft)})),
             R::NoWithdrawal { draft, at } => Refusal::shell(Name::NO_MERGE, json!({"draft": s(&draft), "withdrawal": at})),
             R::NotPast { draft, at, current } => other("not_past", json!({"draft": s(&draft), "at": at, "current": current})),
-            R::TooFragmented { doc, runs_seen } => other("too_fragmented", json!({"doc": s(&doc), "runs_seen": runs_seen})),
             R::HistoryBusy => other("history_busy", json!({})),
             R::HistoryReclaimed { at, floor } => other("history_reclaimed", json!({"at": at, "floor": floor})),
             R::BeyondHead { at, head, .. } => other("beyond_head", json!({"at": at, "head": head})),

@@ -444,7 +444,7 @@ fn the_link_family_answers_end_to_end() {
         !runs(ex(
             &fx.febe,
             fx.user,
-            Op::Image { d: d.clone(), region: region.clone(), own: false }
+            Op::Image { d: d.clone(), region: region.clone(), own: false, cur: None }
         ))
         .is_empty(),
         "the region has a V→I image"

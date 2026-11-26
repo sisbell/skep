@@ -593,23 +593,31 @@ fn a_members_own_words_are_written_under_the_members_chain() {
 /// A state is refused at the cap counted on the runs its write would send.
 ///
 /// The trunk's words and a member's alternate I-adjacent, one core run of
-/// `E` and 4,097 written runs, read in halves past the board's run budget:
-/// [`Refusal::OverCap`] with the written count, nothing sent (the mutant
-/// that counts the core's runs answers the state).
+/// `E` and 4,097 written runs, read whole in two pages past the board's run
+/// budget, each through `/op-at`: [`Refusal::OverCap`] with the written
+/// count, nothing sent (the mutant that counts the core's runs answers the
+/// state; the one that takes the first page for the image counts 4,096 and
+/// sends it).
 #[test]
 fn a_state_whose_written_runs_pass_the_cap_is_refused_however_few_its_core_runs() {
     let (e, m) = (format!("{E}.0.1"), format!("{M}.0.1"));
     let region = move |from: u64, width: u64| {
-        if width as usize > MAX_IMAGE_RUNS {
-            return json!({"resp": "rejected", "code": "image_too_large", "disposition": "permanent", "op": "image"});
+        let page = width.min(MAX_IMAGE_RUNS as u64);
+        let runs: Vec<(&str, u64, u64)> = (from..from + page).map(|p| (if p % 2 == 1 { e.as_str() } else { m.as_str() }, p, 1)).collect();
+        let mut answer = runs_at(&runs);
+        // Past the budget: the page under its own shape, and the go-on.
+        if width > page {
+            answer["ispans"] = answer["runs"].take();
+            answer["resp"] = json!("image_page");
+            answer["next"] = json!({"at": (from + page).to_string(), "surface": S, "arranged_at": null});
+            answer.as_object_mut().expect("an answer").remove("runs");
         }
-        let runs: Vec<(&str, u64, u64)> = (from..from + width).map(|p| (if p % 2 == 1 { e.as_str() } else { m.as_str() }, p, 1)).collect();
-        runs_at(&runs)
+        answer
     };
     let fake = holding(SHOT_RUN_CAP as u64 + 1, region, Vec::new(), Value::Null);
     assert_eq!(past(&fake::board(&fake), &token(), &a(S), 12), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
-    let reads = ["POST /op doc_metadata", "POST /op-at retrieve_doc_v_span_set", "POST /op-at image", "POST /op-at image", "POST /op-at image", "POST /op find_links_ftt"];
-    assert_eq!(fake.log(), reads, "the image read in halves past the budget; nothing sent");
+    let reads = ["POST /op doc_metadata", "POST /op-at retrieve_doc_v_span_set", "POST /op-at image", "POST /op-at image", "POST /op find_links_ftt"];
+    assert_eq!(fake.log(), reads, "the image read in two pages past the budget, each at the position; nothing sent");
 }
 
 /// A board's record mapping the state past the largest ordinal is faced.

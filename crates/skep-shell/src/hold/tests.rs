@@ -1026,7 +1026,17 @@ impl Dialer for Fake {
                 let region = &body["region"][0];
                 let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);
                 let width = region["width"].as_str().and_then(|s| s.strip_prefix("0.")).and_then(|s| s.parse().ok()).unwrap_or(0);
-                return Ok(ok(json!({"resp": "runs", "runs": self.image_runs(from, width), "as_of": self.read_as_of()})));
+                let mut runs = self.image_runs(from, width);
+                // Past the board's run budget: the runs that fit, each
+                // whole, under a `resp` of their own, and where the rest
+                // begins (wire.md §The response envelope, `image_page`).
+                if runs.len() > 1 << 12 {
+                    runs.truncate(1 << 12);
+                    let reach = from + runs.iter().map(|run| run["width"].as_str().unwrap().parse::<u64>().unwrap()).sum::<u64>();
+                    let next = json!({"at": reach.to_string(), "surface": body["d"], "arranged_at": null});
+                    return Ok(ok(json!({"resp": "image_page", "ispans": runs, "next": next, "as_of": self.read_as_of()})));
+                }
+                return Ok(ok(json!({"resp": "runs", "runs": runs, "as_of": self.read_as_of()})));
             }
             if body["op"].as_str() == Some("retrieve_v") {
                 if body["specs"][0]["doc"].as_str() == Some(HEAD_MEMBER_1) {

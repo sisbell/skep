@@ -735,10 +735,13 @@ pub struct Replaced {
 /// that position or between the two reads, [`Refusal::SideMoved`] naming it,
 /// `at` the composition's position — a landing typed against it would be
 /// refused `arrangement_moved`, and the way on is to compose again; a board
-/// serving no `arranged_at`, faced; a draft in more pieces than `image`
-/// answers, [`Refusal::TooFragmented`]; the death signal under the token,
+/// serving no `arranged_at`, faced; the death signal under the token,
 /// [`Refusal::SessionEnded`]; an `image` run that is no content I-address,
-/// a transport halt and the board's other refusals, [`Refusal::Halt`].
+/// a transport halt and the board's other refusals, [`Refusal::Halt`]. A
+/// draft in more runs than one `image` answers is read in pages, each
+/// answered, and the fence stands over all of them: a draft written
+/// between two pages is refused there by the board, read again, and
+/// refused here as moved.
 pub fn replaced(
     board: &Board,
     token: Option<&Token>,

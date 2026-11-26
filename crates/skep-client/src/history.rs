@@ -213,9 +213,9 @@ pub struct Restored {
 ///   before any read at a position;
 /// - the state's reads' at `at`: [`Refusal::HistoryReclaimed`],
 ///   [`Refusal::NotAPosition`], [`Refusal::NoSuchDocument`] for a draft that
-///   did not exist then, [`Refusal::HistoryBusy`] past the retries,
-///   [`Refusal::TooFragmented`]; a run that is no content I-address, or an
-///   image that reaches the largest ordinal, the board's fault, faced;
+///   did not exist then, [`Refusal::HistoryBusy`] past the retries; a run
+///   that is no content I-address, or an image that reaches the largest
+///   ordinal, the board's fault, faced;
 /// - the records' reads' refusals at the head;
 /// - a record mapping the state past the largest ordinal, the board's
 ///   fault, faced (SP-19);

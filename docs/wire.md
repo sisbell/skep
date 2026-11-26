@@ -1101,6 +1101,29 @@ span array. An empty array is the empty constraint and is read as
 continuation is the cursor value you hold; there is no server-side
 iterator.
 
+**Go-ons** (a paged read) are `{"at": <nat>, "surface": <address>,
+"arranged_at": <position or null>}`: where a read cut short at a budget
+goes on, and the ONE STATE its pages are of. `at` is the next page's
+first content ordinal; `surface` the arrangement the page was answered
+from — the address the read named, or the trunk head a bare published
+document's readers floated to when the first page was read; and
+`arranged_at` that arrangement's position as the page read it
+(`doc_metadata`'s member of that name, asked of `surface`), `null` where
+the board keeps none. A short page hands one back as `next`; the
+continuation sends it back WHOLE under `cur`, the one member name a
+continuation rides on this wire, and absent or `null` it is a first
+page. The board holds no iterator here either: a continuation is
+answered from what it carries — read from `surface`, wherever the
+document's readers float by then, and for an arrangement that changes in
+place, a draft's or a private document's, only while its `arranged_at`
+is still the one sent, else refused with the page-moved code
+(§Rejection codes), nothing answered. A published document's arrangement
+and a version's take no in-place edit, only a deposit past their end, so
+their continuation is answered whatever has landed since. `image` is the
+read that pages so (§Link discovery reads); a page read at a past
+position is the one place the board keeps something between two frames,
+the position's reconstruction (§Reading history).
+
 **Windows** are `{"batch": [addresses…], "exhausted": bool, "next":
 cursor}` — `batch` in ascending address order; `exhausted: true` (a batch
 shorter than `n`) is the terminal signal.
@@ -1370,10 +1393,28 @@ full: an active link beside one retracted at position 8:
 
 **`runs`** — image: the V→I image of the region — its positions in order,
 never a set: a run the document places twice appears twice, at each place.
+The whole image of the region, always: at most `MAX_IMAGE_RUNS` = 4096
+runs, and the last page of an image read in pages.
 
 <!-- wire: response runs -->
 ```json
 {"as_of":9,"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}]}
+```
+
+**`image_page`** — image, cut short: the region resolves more than
+`MAX_IMAGE_RUNS` runs, and this is the page that fits. `ispans` is its
+first 4096 runs, each an I-span `{"i_start", "width"}` in the form
+`runs` carries, its V-position given by the order, EVERY ONE WHOLE — a
+page ends at a run's reach, never inside one. `next` is the go-on (§Value
+encodings, **Go-ons**): `at` the ordinal the first run not answered sits
+at, `surface` the arrangement the page was read from and `arranged_at`
+its position. A `resp` of its own and a member of its own, never `runs`
+with a member beside it: a reader that takes `runs` for the whole image
+finds none here, and cannot take a first page for the document.
+
+<!-- wire: response image_page -->
+```json
+{"as_of":9,"ispans":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}],"next":{"arranged_at":7,"at":"6","surface":"1.0.1.0.1"},"resp":"image_page"}
 ```
 
 **`bool`** — discoverable_from.
@@ -2152,17 +2193,28 @@ whatever its two lists hold, so its price is the document's run count and
 no narrower request passes — the act is a version of fewer runs.
 All permanent — no retry shrinks the request.
 
-Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large` (a
+Link-discovery reads: `not_a_link`, `bad_region` (also the image read's
+continuation naming an arrangement that is not its document's own nor a
+version its readers floated to, or whose region does not begin where its
+go-on says the rest does), `page_moved` (the image read's continuation
+of a draft or a private document written since its page was read: the
+go-on names the arrangement's position, that position has moved, and
+the pages read and the page asked for would be of two states — nothing
+is answered, the site naming the document. Permanent: a position only
+rises, so the same continuation is never answered, and the read that is
+answered is begun again from its first page), `image_too_large` (a
 read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product
 its own join is held to — each read counting the runs its own work
-multiplies: on the region family — image, find-links-v, count-v,
-window-v, retrieve-endsets — the run-list walk the region asks of the
-arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, held ahead of the
-first pull, or the runs its spans resolve, summed across the spans and
-counted as M5's lazy resolution pulls them — the run past the budget
-refused as it is pulled, before the next is built, so no region
-materializes a fragmented surface whole — past 4096; on the project
-read, the reading surface's content runs past 4096,
+multiplies: on the region family — find-links-v, count-v, window-v,
+retrieve-endsets — and on the image read, the run-list walk the region
+asks of the arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, held
+ahead of the first pull; on the region family, the runs its spans
+resolve, summed across the spans and counted as M5's lazy resolution
+pulls them — the run past the budget refused as it is pulled, before the
+next is built, so no region materializes a fragmented surface whole —
+past 4096, where the image read, never refused for those runs, ends its
+page and names where the rest begins (§Link discovery reads); on the
+project read, the reading surface's content runs past 4096,
 or the coverage × run product — the answer's pre-normalization size —
 past `MAX_ANSWER_SPANS` = 65536; on the discoverable-from read, the
 reading surface's content and link runs past 4096, or the link's whole
@@ -4141,9 +4193,9 @@ nothing written: `doc_not_registered`, `not_owner`, `published_target`;
 then, for a frame minting a cell, the media door's on its values, as on
 `insert` (§Media: `unbound_cell`, `lease_lapsed`, `unknown_cell_schema`,
 `index_rebuilding`), every value naming the kind judged in the frame's
-order; then `arrangement_moved`; then the three optional members'
-(below, as `set_arrangement` states them); then `empty_result` for a
-frame of no change that names neither a `base` nor a `merge`; then each
+order; then `arrangement_moved`; then the `head` pair's (below, as
+`set_arrangement` states it); then `empty_result` for a frame of no
+change; then each
 change's shape, the FIRST defective change deciding and every one of
 these naming it in `site.index`, its index in `changes`:
 `not_content_subspace`; `not_ascending`, for a caller the parse did not
@@ -4163,15 +4215,20 @@ first sending, which the feed settles: the first row past `as_of` naming
 `doc` is the frame's own where it is an `edit` under the sender's `key`
 (§The change feed).
 
-The three optional members `head`, `base` and `merge` ride it as they
-ride `set_arrangement`, below, with the same checks. An EMPTY `changes`
-is admitted ONLY beside a `base` or a `merge`: it changes no position,
-records what the two say, and moves the draft's typed state to its own
-position all the same.
+Of `set_arrangement`'s three optional members, below, it carries ONE:
+`head`, with that name's checks — the version the caller composed
+against, so the ack tells a head the trunk has moved past. `base` and
+`merge` are a LANDING's terms, and a landing is `set_arrangement`'s
+alone: an `edit` frame carrying either is refused at the parse —
+`malformed` under `unparseable`, its `detail` naming the member as an
+unknown field (§The request envelope) — with nothing written and no
+row. So no `edit` row carries a landing, and a landing's readers, which
+read `set_arrangement` rows, miss none. An EMPTY `changes` changes
+nothing and is refused `empty_result`.
 
 On the change feed its row carries `op: "edit"`, `docs` the draft, and
-the two terms `base` and `merge`, each `null` where the frame names
-none (§The change feed). This example changes the draft `1.0.1.0.64`
+the two terms `base` and `merge`, both `null` — an `edit` names
+neither (§The change feed). This example changes the draft `1.0.1.0.64`
 as read at position 12 — `Hi ` placed at its start, its fourth and
 fifth positions replaced by one character, and its ninth removed:
 
@@ -4184,7 +4241,11 @@ fifth positions replaced by one character, and its ninth removed:
 merge's landing into a draft, its undo, a withdrawal and a restore are
 sent by: one commit of a list of positional changes to one draft, typed
 against one state of it, with `edit`'s bounds, its refusals in `edit`'s
-order and its acks. Two things are this name's own. Each change carries
+order and its acks. Three things are this name's own: a landing's terms,
+`base` and `merge` below, which no other frame carries, an EMPTY
+`changes` beside either — it changes no position, records what the two
+say, and moves the draft's typed state to its own position all the
+same — and two more. Each change carries
 `runs` where `edit`'s carries `values` — `{"at", "width", "runs"}`, each
 run `origin`, `i_start`, `width`, the form `reinstate`'s take, placed by
 identity as `reinstate` places them, in the order given, I-adjacent runs
@@ -4207,7 +4268,8 @@ Three optional members, each absent or `null` alike absent:
 
 * `head` — `{"at": <address>, "extent": <nat>}`: the version the merge
   was composed on, and its content count AS READ at the compose — present
-  on a merge's landing, absent on an undo and on a plain edit.
+  on a merge's landing, absent on an undo and on a restore; the one of
+  the three an `edit` frame may carry too, for its `head_moved` alone.
   The board checks it against the draft's chain — `source_not_registered`
   where `at` names no registered document, then `base_not_in_chain` where
   it lies off the chain the draft's recorded base lies in (or, for a fork,
@@ -4230,8 +4292,8 @@ Three optional members, each absent or `null` alike absent:
   of it beyond its existence.
 * `base` — `{"at": <address>, "extent": <nat>}`: THE BASE TO RECORD. A
   landing sends the head pair; an undo sends the base read at the
-  position before the landing (§Reading history); a plain edit
-  sends none. Present, the draft's recorded base moves to it in the same
+  position before the landing (§Reading history); a restore sends
+  none. Present, the draft's recorded base moves to it in the same
   commit (`doc_metadata`'s `base` and `base_copied`), its `source` kept:
   the draft must have one — `no_base_to_record` otherwise — `at` must be
   registered (`source_not_registered`) and lie in the same chain
@@ -6160,19 +6222,70 @@ given regions' content. Its regions read the address named and carry no
 `region` arguments are arrays of depth-2 content V-spans in `d`.
 
 **`image`** — the V→I image of the region (which permanent addresses sit
-at those positions). → `runs`.
+at those positions). → `runs`; or, where the region resolves more than
+`MAX_IMAGE_RUNS` = 4096 runs, `image_page`: the first 4096, each whole,
+and `next`, where the rest begins. NEVER REFUSED FOR THE RUNS IT
+RESOLVES: a document in R runs is read whole in ⌈R ÷ 4096⌉ frames, each
+answered.
 
 <!-- wire: request image -->
 ```json
 {"d":"1.0.1.0.1","op":"image","region":[{"start":"1.1","width":"0.5"}]}
 ```
 
+THE CONTINUATION is the same frame with the rest of the region and the
+page's `next` sent back whole as `cur` (§Value encodings, **Go-ons**):
+`region`'s first span begins at `cur.at` — the rest of the span the page
+stopped in — and any spans after that one follow, as they stood. It
+answers the next page: `image_page` again, or `runs`, the last.
+
+<!-- wire: request image -->
+```json
+{"cur":{"arranged_at":7,"at":"4097","surface":"1.0.1.0.1"},"d":"1.0.1.0.1","op":"image","region":[{"start":"1.4097","width":"0.904"}]}
+```
+
+A PAGE SET IS ONE STATE, whoever reads it. The continuation is read from
+`cur.surface`, not from wherever `d`'s readers float by then: for a bare
+published `d` the pages after the first come from the version the first
+floated to, whatever has been published since, a version's content
+never moving under a reader (a deposit lands past its end); a
+continuation of a version named itself, and one under `own`, are
+answered across a landing likewise. Where `cur.surface` is a draft or a
+private document, it is answered only while that document's
+`arranged_at` is still `cur.arranged_at`; written since, the
+continuation is refused `page_moved` — `site.addr` the document,
+`permanent`: the same continuation is never answered — with NOTHING
+answered, and the reader begins again from its first page:
+
+<!-- wire: response rejected_page_moved -->
+```json
+{"code":"page_moved","disposition":"permanent","op":"image","resp":"rejected","site":{"addr":"1.0.1.0.64"}}
+```
+
+A reader that
+keeps meeting it reads at one position instead (§Reading history), where
+a state does not move. `cur.surface` is `d` itself or, for a read that
+floats, a version of the bare published `d`'s own chain — the only
+arrangements a first page of this read is answered from; any other, and
+a `region` that does not begin at `cur.at`, is `bad_region`. `d` is the
+one document consulted (§The read predicate): a version reads as its
+document does.
+
+A region of several spans is paged in region order: the page ends where
+the budget does, `next.at` an ordinal of the span the first run not
+answered belongs to — that span's own start where the page ended with
+the span before it — and the continuation's region is the rest of that
+span and the spans after it. Which span that is, a reader finds as it
+tells any several-span answer's runs apart, by their widths; one that
+cannot — spans that overlap, or one reaching past the document's end —
+asks one span a frame.
+
 With `own: true` the region resolves through `d`'s own arrangement,
 never its head (§The publish shot and head-float): for a published
 document with versions, the arrangement it held before version 1, which
 `doc_metadata`'s `own_count` counts; on every other document the answer
-is the one without the member. The refusals, their order and the run
-budget are the same, priced over the arrangement read, and `d` is
+is the one without the member. The refusals, their order and the
+pages are the same, over the arrangement read, and `d` is
 checked by the read predicate as it is without the member. Absent,
 `null` and `false` alike leave it unset, and the canonical form carries
 it only where set:
@@ -6664,10 +6777,37 @@ fresh token is the same class). A freshly started daemon answers
 positions committed long before it started. `/op-at` at the current head
 is byte-identical to the same frame on `/op`.
 
+**A paged read is one reconstruction.** An `image` at a position that
+answers `image_page` (§Link discovery reads) keeps the state it was
+answered from, and its slot of the pool below, for the continuation: the
+frame that sends that page's `next` back as `cur` — of the same `d`,
+with the same `own`, at the same `at`, under the same reader — is
+answered from the kept state, and so on to the last page. It rebuilds
+nothing and asks no slot, so it is never refused `history_busy`. A
+document in R runs read whole at a position is therefore ONE
+reconstruction and ⌈R ÷ 4096⌉ frames, and holds one of the pool's slots
+from its first page to its last. Each page's `as_of` is `at`, and each is
+byte-identical to the page a reconstruction of its own answers, the state
+being the position's either way: a continuation that joins no kept read —
+another position, another document, another reader, a `next` no kept
+read handed back, or a read let go — is rebuilt as every other
+historical read is, and answered the same page. The kept state is let go
+when the read ends — a page under `runs`, or a rejection the read itself
+answers; `withheld`, decided ahead of the read (§The read predicate),
+reaches no kept state — when its reader sends that read's first page
+again, and when no page has been asked of it for
+**`KEPT_READ_IDLE` = 10 s**: the next historical request lets an idle
+read go before it asks for a slot, so a reader that stopped mid-read
+holds none past that. A past state does not move, so a read at
+a position meets no `page_moved`; a reader refused it at the head a few
+times over reads here, at its first page's `as_of`. The predicate is
+each frame's own, the head's as it then stands.
+
 **Cost and retention.** Each historical read rebuilds the state at `at` by
 folding the journal forward from the nearest retained checkpoint at or
 below it — held in memory where the daemon wrote or started from it, and
-otherwise read from disk — per request, with no answer kept. This is an
+otherwise read from disk — per request, with no answer kept, a paged
+`image`'s reconstruction aside (above). This is an
 observation surface, not a
 serving path: fine for history panes and diff tooling, wrong for a hot
 loop — and never the "as published" switch, whose retracted half is the

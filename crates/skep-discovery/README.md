@@ -21,6 +21,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   one naming fewer homes; a descriptor naming a home reads that home's
   links by their key range; the claims naming a link are read off the
   coverage index, never by a walk of the supersession class.
+- **An image in pages** — `image_page_on` answers which permanent
+  addresses a region's positions hold, in order. Past 4,096 runs it
+  answers the runs that fit, each one whole, and where the rest
+  begins; a continuation is answered from the arrangement its first
+  page read, and refused where a draft has changed since, so a page
+  set is never two states.
 - **Orphan preview and lineage** — what a proposed delete would
   strand from a document; the supersession claims naming a link
   (one hop — the walks are the link store's).

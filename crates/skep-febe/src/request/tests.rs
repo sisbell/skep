@@ -187,7 +187,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             },
             true,
         ),
-        (Op::Image { d: doc(), region: vec![vspan()], own: false }, true),
+        (Op::Image { d: doc(), region: vec![vspan()], own: false, cur: None }, true),
         (Op::FindLinksV { d: doc(), region: vec![vspan()] }, true),
         (Op::FindLinksFtt { q: q() }, true),
         (Op::CountV { d: doc(), region: vec![vspan()] }, true),
@@ -338,7 +338,7 @@ fn doc_arguments_run_in_declaration_order() {
         vec![&d2, &d3, &d1],
         "a region read as named is consulted as a floating one is"
     );
-    let op = Op::Image { d: d3.clone(), region: vec![vspan()], own: true };
+    let op = Op::Image { d: d3.clone(), region: vec![vspan()], own: true, cur: None };
     assert_eq!(op.doc_arguments(), vec![&d3], "the image read as named consults `d`");
     let op = Op::Project { a: d1.clone(), slot: 1, d: d3.clone() };
     assert_eq!(op.doc_arguments(), vec![&d3], "the dual row consults `d`, never the link");

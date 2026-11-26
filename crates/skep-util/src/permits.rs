@@ -1,6 +1,7 @@
 //! A counting permit pool — a try-acquire with no queue and no blocking,
 //! whose guard returns its slot on drop — the ONE mechanism behind the
-//! daemon's six bounded pools: the reconstruction budget (`history.rs`),
+//! daemon's six bounded pools: the reconstruction budget (`history.rs`,
+//! which holds a permit across requests in its owned form, [`OwnedPermit`]),
 //! the class-scan pool and the per-document pool's ceiling
 //! (`server/scan.rs`; the per-document widths are a keyed table inside
 //! that ceiling, whose permit returns both its slots on drop), the fetch
@@ -23,7 +24,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::notice::Class;
@@ -79,6 +80,46 @@ impl Permits {
 }
 
 impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        self.pool.available.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// One held permit that owns its hold on the pool it came from.
+///
+/// It is [`Permit`] for a holder that keeps the slot past the call that
+/// took it: a permit stored beside its pool, or handed to another request,
+/// cannot borrow the pool, so it shares it. Dropping it releases the slot in
+/// the pool that issued it, exactly as a borrowed permit's drop does, and a
+/// slot is one slot whichever form holds it — the two forms spend one count.
+/// `#[doc(hidden)]` on [`Permit`]'s standing: the history surface holds it,
+/// and no other pool does.
+#[doc(hidden)]
+#[derive(Debug)]
+#[must_use = "a permit dropped at once returns its slot at once: bind it for as long as the \
+              work it licenses runs"]
+pub struct OwnedPermit {
+    pool: Arc<Permits>,
+}
+
+impl Permits {
+    /// Returns one permit that owns its hold on this pool, or `None`.
+    ///
+    /// It is [`Permits::try_acquire`] for a pool held in an [`Arc`]: the same
+    /// count, taken the same way and never blocking, the permit keeping the
+    /// pool alive instead of borrowing it.
+    #[must_use = "a permit dropped at once returns its slot at once"]
+    pub fn try_acquire_owned(self: &Arc<Self>) -> Option<OwnedPermit> {
+        // The slot is taken through the borrowed permit and its guard
+        // forgotten, so the count moves in one place, `try_acquire`.
+        self.try_acquire().map(|permit| {
+            std::mem::forget(permit);
+            OwnedPermit { pool: Arc::clone(self) }
+        })
+    }
+}
+
+impl Drop for OwnedPermit {
     fn drop(&mut self) {
         self.pool.available.fetch_add(1, Ordering::Release);
     }

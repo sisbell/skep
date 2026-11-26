@@ -1704,6 +1704,29 @@ fn a_base_moved_by_its_extent_alone_is_re_stated() {
     sd.shutdown();
 }
 
+/// The whole-draft read follows the image's pages: a draft cut into 5,001
+/// runs by one call is read whole, every run the board holds in its order,
+/// none joined to its neighbour (the mutant that takes the first page for
+/// the image answers `shape`, the panel's selection never a first page of
+/// the draft).
+#[test]
+fn the_whole_draft_read_follows_the_images_pages() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let d = g.draft(&"a".repeat(2_501));
+    let cuts: Vec<Value> = (2..=2_501).map(|at| frames::minted(at, 0, "b")).collect();
+    g.op(frames::edit(&d, &cuts, g.position(), None));
+    let session = g.shell.sessions.get(&g.session).expect("the session");
+    let draft = skep_client::address::parse_address(&d).expect("an address");
+    let runs = g.shell.whole_draft(&session, &draft).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(runs.len(), 5_001, "every run of the draft");
+    // The original bytes one position apiece, a minted byte between each two.
+    let expected: Vec<(u64, u64)> = (1..=5_001u64).map(|position| (if position % 2 == 1 { position.div_ceil(2) } else { 2_501 + position / 2 }, 1)).collect();
+    assert_eq!(runs.iter().map(|run| (run.i_start, run.width)).collect::<Vec<_>>(), expected);
+    assert!(runs.iter().all(|run| run.origin == draft));
+}
+
 /// Checks that a panel of the whole draft re-takes the draft on a moved base
 /// (skep #934; P4's "publish all of this draft", PUB-3.108's "what the draft
 /// now arranges"), at a first version and at a later one.

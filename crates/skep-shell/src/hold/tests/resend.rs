@@ -4807,6 +4807,32 @@ fn a_resent_line_refused_stale_is_shifted_through_the_change_and_kept() {
     assert_eq!(g.states(), ["holding", "sending", "kept"], "shifted and kept, never moved");
 }
 
+/// Checks that a line is shifted in a document of more runs than one image
+/// answer carries.
+///
+/// The held delete of `b` and `c` again, and another writer's change put
+/// 4,500 runs before the text: `a`, the line's `before` anchor, stands at
+/// position 4,501, on the image's second page. The shift reads the image
+/// whole, two frames, finds the anchor there and dials the delete at 4,502;
+/// acked and kept (the mutant that takes the first page for the image finds
+/// no anchor, and the line is held moved, its anchor lost).
+#[test]
+fn a_line_whose_anchor_stands_on_the_images_second_page_is_shifted_and_kept() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&delete_at(DOC, 2, 2, typed), spanned(Some(&i(1)), None, &[(&i(2), 2)]), "unreachable", false);
+    let mut image: Vec<Value> = (0..4_500).map(|k| run(&i(100 + 2 * k), 1)).collect();
+    image.push(run(&i(1), 3));
+    *g.fake.image.lock().unwrap() = image;
+    g.fake.move_arrangement(DOC, 77);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), g.fake.image_reads.load(Ordering::SeqCst)), (2, 2), "refused once, shifted by one image read of two pages, sent again");
+    assert_eq!((sent[1]["p"]["ordinal"].as_str(), sent[1]["width"].as_str(), sent[1]["as_of"].as_u64()), (Some("4502"), Some("2"), Some(77)), "the delete after its anchor, on the second page: {:?}", sent[1]);
+    assert!(g.lines().is_empty() && !held_file(&g).exists(), "kept, the file gone");
+    assert_eq!(g.states(), ["holding", "sending", "kept"], "shifted and kept, never moved");
+}
+
 /// Checks that a rearrange landed unseen is held moved, never applied twice.
 ///
 /// The read cannot see the landing (skep #751). A rearrange of `abcd` swapping

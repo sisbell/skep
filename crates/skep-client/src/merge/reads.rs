@@ -28,10 +28,13 @@
 //! that holds them; and the prior
 //! records for the key, so a standing record is known before anything is
 //! written (§3, idempotence).
-//! Every `image` past the run budget is re-asked in halves and the parts
-//! re-joined by I-adjacency (§8: "a region past the budget can be asked in
-//! parts"), every value read past the delivery budget or the dialer's
-//! answer cap likewise.
+//! Every `image` past the run budget is read in pages, each answered — the
+//! board's page and its go-on followed, no run cut and none re-joined — and
+//! the pages are one state's: at the head a continuation the board refuses
+//! because the draft changed begins the read again, a bounded number of
+//! times, and then the pages are read at one position. Every value read
+//! past the delivery budget or the dialer's answer cap is re-asked in
+//! halves (§8).
 //!
 //! **The base, from the records** (the owner's ruling of 2026-11-02: a
 //! version tree takes a daughter's parent from the base the board recorded,
@@ -218,10 +221,25 @@ pub(super) const MAX_DELIVERY_ITEMS: u64 = 1 << 17;
 /// How many times a `history_busy` on a read at a position is retried.
 ///
 /// Past them the read is [`Refusal::HistoryBusy`] (§7: "retry with backoff,
-/// bounded"). A composition naming no position, and a landing into a draft
-/// with a recorded base or by a shot, read at the head and never meet it;
-/// a landing into a draft with none reads the past states its rows' walk
+/// bounded"), each wait 20 ms longer than the last, 200 ms in all. A
+/// composition naming no position, and a landing into a draft with a
+/// recorded base or by a shot, read at the head and never meet it; a
+/// landing into a draft with none reads the past states its rows' walk
 /// needs (the `landings` module's doc).
+///
+/// The retries wait out a short reconstruction and no long one. The board
+/// admits two reconstructions and refuses a third at once, never queueing
+/// it. One a commit above its base ran 14 ms and one sixteen above it
+/// 170 ms, measured in process, which these waits outlast. A paged read of
+/// a long draft holds its permit from its first page to its last — one
+/// reconstruction, 8 to 11 s for a draft of 65,536 runs a checkpoint
+/// cadence above its base — and a third reader behind two such waited one
+/// whole read of another, 24 s. No wait a call should make inside itself
+/// covers that, and polling a door that never queues only meets it again:
+/// the reader is told `HistoryBusy`, which names the cause and is safe to
+/// ask again. A page of this reader's own paged read is not refused so
+/// while its read is kept: it joins the reconstruction its first page
+/// made and asks the pool nothing.
 const HISTORY_BUSY_RETRIES: u32 = 4;
 
 // ── compose ───────────────────────────────────────────────────────────────

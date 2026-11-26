@@ -16,9 +16,9 @@ use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, Edited
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
-    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_named_on,
-    image_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on,
-    window_v_on, HomeCounts, LinkRows,
+    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_page_on,
+    in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
+    HomeCounts, ImagePage, LinkRows,
 };
 use skep_kernel::{Attestation, Seq};
 use skep_links::{Deposited, Invalid, LinkRec};
@@ -27,7 +27,7 @@ use skep_retrieval::{Query, MAX_DELIVERY_ITEMS};
 
 use super::door::{consult_read, home_readable};
 use super::{OperationSurface, WriteCtx};
-use crate::lower::{lower_read, lower_txn};
+use crate::lower::{lower_paged_read, lower_read, lower_txn};
 use crate::publication::{birth_version, covered_universal_grants, require_registered_document};
 use crate::reject::{rejection, RejectCode, Rejection};
 use crate::request::Op;
@@ -685,11 +685,19 @@ where
             // ── link discovery reads (→ M8, §2): M8's *_on reads over M10's
             //    one snapshot.
             // `own` picks the arrangement: `d`'s reading surface, or `d`'s
-            // own. `d` was consulted above either way.
-            Op::Image { d, region, own } => {
-                let image = if own { image_named_on } else { image_on };
-                let runs = image(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
-                Ok(Response::Runs { runs, as_of })
+            // own; a continuation names the one its first page read, which
+            // M8 holds to `d`'s own or a member of `d`'s chain, so `d`,
+            // consulted above, is the one document read either way (a member
+            // reads as its document does, PUB-2.15). An image that fits is
+            // `Runs`; one cut short at the run budget is the page under its
+            // own shape, the go-on beside it.
+            Op::Image { d, region, own, cur } => {
+                let ImagePage { runs, next } = image_page_on(&snap, &d, &region, own, cur.as_ref())
+                    .map_err(|e| lower_paged_read(kind, e, &d))?;
+                Ok(match next {
+                    None => Response::Runs { runs, as_of },
+                    Some(next) => Response::ImagePage { runs, next, as_of },
+                })
             }
             // The result-set family: every reader drops each link whose home
             // the reader may not read, threaded the predicate. `d` was

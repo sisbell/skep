@@ -29,7 +29,11 @@
 //! windowed, published since by its owner — come back as the words that
 //! owner published, the record read in the owner's account; the grant
 //! revoked, no record is answered and the board refuses the write
-//! `withheld` naming that draft.
+//! `withheld` naming that draft. A draft past the run budget — cut into
+//! 5,001 runs, put back to the one run it was, then asked for the state of
+//! 5,001 again: that state read whole in two pages through `/op-at`, the
+//! board rebuilding the position once for both, and refused at the cap on
+//! the runs one write places, counted over every run.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -110,6 +114,38 @@ fn a_draft_is_put_back_to_a_past_state_in_one_write_and_back_again() {
     assert!(again.position > restored.position);
     assert_eq!(image(&rig.board, &token, &d, 14), whole, "the whole text again");
     assert_eq!(text_of(&rig, &token, &d, 14), "the cat sat!!!");
+    session.close().expect("close");
+}
+
+/// A draft of 5,001 runs is restored to the one run it held before it was
+/// cut, the past state one page; and its state of 5,001 runs, read back, is
+/// read whole — two pages through `/op-at`, the kernel loading one base for
+/// the extent and one for both pages — and refused at the cap on what one
+/// write places, counted on every run of it: a read that took the first
+/// page for the image would count 4,096 and answer a state.
+#[test]
+fn a_draft_past_the_run_budget_is_put_back_and_its_past_state_is_read_in_pages() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let d = draft(&rig);
+    let d_s = d.to_string();
+    let whole = insert_text(&rig.board, &rig.bare, &d_s, 1, &"a".repeat(2_501));
+    // One call of 2,500 placements: the one run cut into 5,001.
+    let cuts: Vec<Value> = (2..=2_501).map(|at| frames::minted(at, 0, "b")).collect();
+    let typed = typed_at(&rig.board, &rig.bare, &d_s);
+    let cut = acked_at(&acked(rig.board.op(Some(&rig.bare), &frames::edit(&d_s, &cuts, typed, None)))).expect("the cut's position");
+    // The state before the cut: one run, one page, and a restore that lands.
+    let p = past(&rig.board, &token, &d, whole).expect("the state of one run");
+    assert_eq!((p.state.clone(), p.held), (vec![Run::new(d.clone(), 1, 2_501)], Some(5_001)));
+    let restored = restore(&rig.board, &token, &p).expect("a draft of 5,001 runs put back to one");
+    assert_eq!(image(&rig.board, &token, &d, 2_501), vec![(format!("{d}.0.1.1"), 2_501)]);
+    // The state of 5,001 runs, read back at the position it stood at.
+    let loaded = rig.sd.daemon().bases_loaded();
+    let refused = past(&rig.board, &token, &d, cut);
+    assert_eq!(refused, Err(Refusal::OverCap { runs: 5_001, cap: 4_096 }), "read whole, every run counted");
+    assert_eq!(rig.sd.daemon().bases_loaded() - loaded, 2, "the extent's reconstruction, and one for both pages of the image");
+    assert_eq!(rig.position(), restored.position, "the refused read wrote nothing");
     session.close().expect("close");
 }
 

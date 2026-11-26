@@ -72,8 +72,8 @@ pub(crate) mod fake;
 mod tests;
 
 pub use answers::{
-    edition_claims as edition_claim_rows, history, homes, line_numbers, link_page, link_value, merge_marker, whole_image, EditionClaim, Flagged, History, HistoryRow, HomeCount, IRun, Image,
-    LineNumbers, LinkPage, LinkSpan, LinkValue, MergeMarker, ToFilter,
+    edition_claims as edition_claim_rows, history, homes, image_pass, in_one_state, line_numbers, link_page, link_value, merge_marker, paged_image, whole_image, whole_image_read, EditionClaim,
+    Flagged, History, HistoryRow, HomeCount, IRun, Image, LineNumbers, LinkPage, LinkSpan, LinkValue, MergeMarker, Pass, ToFilter, PAGE_RESTARTS,
 };
 
 /// The enroll credential type address, the first of the three.

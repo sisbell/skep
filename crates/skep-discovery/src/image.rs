@@ -6,22 +6,27 @@
 //! M5; it names no link, stabs nothing and asks no reader, so it is the
 //! family's resolver and not a member.
 //!
-//! Its twin, `image_named_on`, resolves the region through `d`'s own
-//! arrangement instead, behind the same gates and budgets: the one image
-//! that does not float, and no family's resolver.
+//! Beside it, [`image_page_on`], the image a reader asks for itself and no
+//! family's resolver: the same gates, the same square and the same count,
+//! but past the run budget it answers the page that fits and where the rest
+//! begins, and it reads `d`'s own arrangement where asked, the one image
+//! that does not float. Its continuation is held to one state here
+//! (`continued_surface`), the one check every paged read's continuation
+//! passes.
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the module that judges a region is the
 //! module that publishes how to build one.
 
-use num_traits::ToPrimitive;
-use skep_address::{Address, Nat, Span};
-use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
+use num_traits::{One, ToPrimitive};
+use skep_address::{Address, Level, Nat, Span};
+use skep_arrangement::{
+    as_ordinal_vspan, ordinal_vspan, published_target, reading_surface, trunk_of, Run, VPos,
+};
 use skep_kernel::Snapshot;
-use skep_namespace::M3State;
 
 use crate::budget::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
-use crate::types::QueryError;
+use crate::types::{GoOn, ImagePage, QueryError};
 use crate::DiscoveryWorld;
 
 /// The V-span shape every region-family request must have: `count` positions
@@ -139,67 +144,210 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// the one place the float is decided. The whole region family inherits it
 /// through this function: `findlinks_v`, `count_v`, `window_v` and
 /// `retrieve_endsets` float exactly as `image` does. The document gate runs
-/// on the address named, ahead of the float (PUB-6.37). [`image_named_on`]
-/// is the same resolution over `d`'s own arrangement, which does not float.
+/// on the address named, ahead of the float (PUB-6.37).
+///
+/// [`image_page_on`] is the same resolution for a reader of the image
+/// itself: it answers a region past the run budget in pages where this
+/// refuses it, and reads `d`'s own arrangement where asked.
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
 ) -> Result<Vec<Run>, QueryError> {
-    image_of(s.world(), d, region, reading_surface)
+    let surface = |w: &W| Ok(reading_surface(w.m3(), d));
+    image_of(s.world(), d, region, surface, PastBudget::Refused).map(|image| image.runs)
 }
 
-/// Returns the V→I image of `region` through `d`'s own arrangement.
+/// Returns one page of the V→I image of `region`: what fits, and the go-on.
 ///
-/// It is [`image_on`] save for the arrangement it reads: `d`'s own, never
-/// its reading surface. The gates, the run budget and its square, the
-/// refusals and their order, and the answer's shape are [`image_on`]'s, each
-/// priced and pulled over `d`'s own arrangement where `image_on` reads `d`'s
-/// reading surface. The two part at exactly a bare published `d` whose chain
-/// has a member: there this answers the arrangement `d` held before its first
-/// version — frozen since that version's mint, a published document refusing
-/// every in-place edit and a declared deposit landing on the head (PUB-2.66)
-/// — where `image_on` answers the head (PUB-2.53). That arrangement is what a
-/// draft begun before version 1 was copied from, and what a shot naming `d`
-/// as its base reads its extent against. A version member, a private document
-/// and a memberless published document are each their own reading surface,
-/// and the two answer alike.
+/// It is [`image_on`]'s resolution for a reader of the image itself, never
+/// refused for the runs its region resolves. A region resolving at most
+/// [`MAX_IMAGE_RUNS`] runs is answered whole, as `image_on` answers it, and
+/// `next` is `None`. One resolving more answers its first `MAX_IMAGE_RUNS`
+/// runs, every one whole, and `next` names where the rest begins
+/// ([`GoOn`]): the V-ordinal the first run not answered sits at, the
+/// arrangement the page was read from, and that arrangement's `arranged_at`.
+/// The run past the budget is pulled and counted as `image_on` pulls it, so
+/// the read holds the page and one run, never the region's whole image.
 ///
-/// The document gate runs on the address named, as `image_on`'s does
-/// (PUB-6.37). No region-family read resolves through this: they float.
+/// **The arrangement read.** With no `cur`: `d`'s reading surface, as
+/// `image_on` reads it (PUB-2.49, PUB-2.53), or with `own` the arrangement
+/// of the address named, which does not float — at a bare published `d`
+/// whose chain has a member, the arrangement `d` held before its first
+/// version, frozen since that version's mint (PUB-2.66), which a draft begun
+/// before version 1 was copied from and a shot naming `d` as its base reads
+/// its extent against. A version member, a private document and a
+/// memberless published document are each their own reading surface, and
+/// the two answer alike. With `cur`, the arrangement it names.
+///
+/// **A continuation.** `cur` is the `next` of the page before, whole, and
+/// `region` the rest of the region that page was cut from: its first span
+/// begins at `cur.at`, the rest of the span the page stopped in, and the
+/// spans after it follow. The page is read from `cur.surface`, wherever
+/// `d`'s readers float by now, so a page set is one arrangement's:
+///
+/// * `cur.surface` is `d` itself, or — for a read that floats, of a bare
+///   published `d` — a registered member of `d`'s own chain, the only
+///   arrangements a first page of this read is answered from. A member
+///   reads as its document does (PUB-2.15), so the continuation asks no
+///   reader a second time;
+/// * where that arrangement takes in-place edits — its document is not
+///   published — its `arranged_at` is still `cur.arranged_at`. A published
+///   document's arrangement and a member's take a deposit past their end
+///   alone, their prefix never moving (PUB-2.43), so they are answered
+///   whatever has landed since.
+///
+/// **Several spans.** They are answered in region order, as `image_on`
+/// answers them, and the page ends wherever the budget does: `next.at` is
+/// an ordinal of the span the first run not answered belongs to. A reader
+/// finds that span as it tells any several-span answer's runs apart, by
+/// their widths.
+///
+/// The document gate runs on the address named, ahead of the float and of
+/// the continuation (PUB-6.37). No region-family read resolves through
+/// this: they refuse past the budget ([`image_on`]).
 ///
 /// # Errors
 ///
-/// [`image_on`]'s, in its order: [`QueryError::DocNotRegistered`], then
-/// [`QueryError::BadRegion`], then [`QueryError::ImageTooLarge`] for a walk
-/// past the square or runs past the budget of `d`'s own arrangement.
-pub fn image_named_on<W: DiscoveryWorld>(
+/// In this order, the first that holds answering:
+///
+/// 1. [`QueryError::DocNotRegistered`] where `d` names no registered
+///    document.
+/// 2. [`QueryError::BadRegion`] where a span of `region` is not the shape
+///    [`content_vspan`] builds.
+/// 3. For a continuation, [`QueryError::BadRegion`] where `cur.surface` is
+///    not an arrangement this read of `d` is answered from, or `region`
+///    does not begin at `cur.at`.
+/// 4. For a continuation, [`QueryError::PageMoved`] where `cur.surface`
+///    takes in-place edits and its `arranged_at` is not `cur.arranged_at`.
+/// 5. [`QueryError::ImageTooLarge`] where the run-list walk the region asks
+///    of the arrangement read is past the square of [`MAX_IMAGE_RUNS`] —
+///    never for the runs the region resolves.
+pub fn image_page_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-) -> Result<Vec<Run>, QueryError> {
-    image_of(s.world(), d, region, |_, named| named.clone())
+    own: bool,
+    cur: Option<&GoOn>,
+) -> Result<ImagePage, QueryError> {
+    let w = s.world();
+    let surface = |w: &W| match cur {
+        Some(cur) => continued_surface(w, d, region, own, cur),
+        None if own => Ok(d.clone()),
+        None => Ok(reading_surface(w.m3(), d)),
+    };
+    let Resolved { runs, surface, rest } = image_of(w, d, region, surface, PastBudget::Paged)?;
+    let next = rest.map(|at| {
+        let arranged_at = w.m5().arranged_at(&surface);
+        GoOn { at, surface, arranged_at }
+    });
+    Ok(ImagePage { runs, next })
 }
 
-/// Returns the image of `region` over the arrangement `surface` picks for `d`.
+/// Returns the arrangement the continuation `cur` of a read of `d` reads.
 ///
-/// It is the gates and the resolution both images run: the document gate,
-/// then the region gate, then `surface` asked of `d` — after both gates, so
-/// it is asked of a registered document alone (PUB-6.37) — then the run
-/// budget's square and the budget over what that arrangement holds. One
-/// body, so the two images cannot come apart in what they refuse or in which
-/// order.
+/// It is the one check a paged read's continuation passes, whichever read
+/// it continues: the arrangement `cur` names is one a first page of the
+/// read is answered from, `region` goes on where `cur` says the rest
+/// begins, and the arrangement is still in the state `cur` names where it
+/// can leave it. [`image_page_on`] states each clause.
+///
+/// **Precondition.** `d` is a registered document and every span of
+/// `region` an ordinal V-span: the document gate and the region gate have
+/// run. M3's publication read is answered for registered addresses alone
+/// (PUB-6.37), and each address it is asked of here is `d`, or a member
+/// this function has found registered.
+///
+/// # Errors
+///
+/// [`QueryError::BadRegion`] where `cur.surface` is neither `d` nor, for a
+/// floating read of a bare published `d`, a registered member of `d`'s own
+/// chain, and where `region` holds no span or its first does not begin at
+/// `cur.at`; then [`QueryError::PageMoved`] where the document of
+/// `cur.surface` is not published and its `arranged_at` is not
+/// `cur.arranged_at`.
+pub(crate) fn continued_surface<W: DiscoveryWorld>(
+    w: &W,
+    d: &Address,
+    region: &[Span],
+    own: bool,
+    cur: &GoOn,
+) -> Result<Address, QueryError> {
+    let m3 = w.m3();
+    let named = cur.surface == *d;
+    // The trunk head a floating read of the bare document answers from is a
+    // member of the trunk's own chain, `d.k`: a daughter chain floats nothing.
+    let floated = !own
+        && !named
+        && trunk_of(d) == *d
+        && cur.surface.level() == Level::Document
+        && cur.surface.document_field().is_some_and(|field| field.len() == 2)
+        && trunk_of(&cur.surface) == *d
+        && m3.is_registered_document(&cur.surface)
+        && published_target(m3, d);
+    if !named && !floated {
+        return Err(QueryError::BadRegion);
+    }
+    let begins =
+        region.first().and_then(as_ordinal_vspan).is_some_and(|first| *first.ordinal == cur.at);
+    if !begins {
+        return Err(QueryError::BadRegion);
+    }
+    if !published_target(m3, &cur.surface) && w.m5().arranged_at(&cur.surface) != cur.arranged_at {
+        return Err(QueryError::PageMoved);
+    }
+    Ok(cur.surface.clone())
+}
+
+/// What the runs a region resolves past the run budget do to its read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PastBudget {
+    /// The read is refused `ImageTooLarge`: the region family's resolver.
+    Refused,
+    /// The read ends its page at the budget and says where the rest begins.
+    Paged,
+}
+
+/// A region's image over one arrangement, as far as the budget let it run.
+struct Resolved {
+    /// The runs, in region-span order and V-order within each span.
+    runs: Vec<Run>,
+    /// The arrangement they were read from.
+    surface: Address,
+    /// The V-ordinal the first run not answered sits at.
+    ///
+    /// `Some` exactly where the region resolves a run past the budget and
+    /// the read is paged.
+    rest: Option<Nat>,
+}
+
+/// Returns the image of `region` over the arrangement `surface` picks.
+///
+/// It is the gates and the resolution every image runs: the document gate,
+/// then the region gate, then `surface` asked — after both gates, so it is
+/// asked of a registered document and a well-shaped region alone (PUB-6.37)
+/// — then the run budget's square and the budget over what that arrangement
+/// holds, `past` saying what a run past the budget does. One body, so the
+/// images cannot come apart in what they refuse or in which order.
+///
+/// # Errors
+///
+/// [`QueryError::DocNotRegistered`], then [`QueryError::BadRegion`], then
+/// `surface`'s own refusal, then [`QueryError::ImageTooLarge`] for a walk
+/// past the square, and for runs past the budget under
+/// [`PastBudget::Refused`].
 fn image_of<W: DiscoveryWorld>(
     w: &W,
     d: &Address,
     region: &[Span],
-    surface: impl FnOnce(&M3State, &Address) -> Address,
-) -> Result<Vec<Run>, QueryError> {
+    surface: impl FnOnce(&W) -> Result<Address, QueryError>,
+    past: PastBudget,
+) -> Result<Resolved, QueryError> {
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
     }
     check_region(region)?;
-    let surface = surface(w.m3(), d);
+    let surface = surface(w)?;
     // The surface's run count, off M5's own `#runs` — one map lookup, reading
     // no run — because the walk is priced against it: M5's card on
     // `iter_resolve` names `#runs` that walk's ceiling.
@@ -209,17 +357,26 @@ fn image_of<W: DiscoveryWorld>(
     }
     let mut runs: Vec<Run> = Vec::new();
     for span in region {
+        // The V-ordinal the next run pulled sits at: M5 clips a span to the
+        // positions from 1, and the runs it yields tile them from there
+        // (D-SEQ★), so each run begins where the one before it ends.
+        let mut at = as_ordinal_vspan(span)
+            .map_or_else(Nat::one, |v| std::cmp::max(v.ordinal.clone(), Nat::one()));
         // Pulled, and counted as it is pulled: M5's `iter_resolve` builds each
-        // run only when asked for it, so the run past the budget is refused
+        // run only when asked for it, so the run past the budget is met
         // before the next exists, and M8 holds at most the budget and the run
-        // that trips it. Every run pulled is answered, so the answer's length
-        // is the count.
+        // that trips it. Every run pulled before it is answered, so the
+        // answer's length is the count.
         for r in w.m5().iter_resolve(&surface, span) {
             if runs.len() == MAX_IMAGE_RUNS {
-                return Err(QueryError::ImageTooLarge);
+                return match past {
+                    PastBudget::Refused => Err(QueryError::ImageTooLarge),
+                    PastBudget::Paged => Ok(Resolved { runs, surface, rest: Some(at) }),
+                };
             }
+            at += r.width();
             runs.push(r);
         }
     }
-    Ok(runs)
+    Ok(Resolved { runs, surface, rest: None })
 }

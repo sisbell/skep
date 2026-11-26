@@ -255,7 +255,7 @@ pub use skep_content::Val; // M4
                            // M8, `SlotSpec` included: every field of a
                            // `FourSet` is one, so the three descriptor ops
                            // are unbuildable without it.
-pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
+pub use skep_discovery::{Cursor, FourSet, GoOn, OrphanReport, SlotSpec, SupClaim, Window};
 // M2, `AttestationError` included: `Attestation::new` is the one constructor
 // of the value `Request::attest` carries, and its refusal travels with it —
 // the rule above — so a caller assembling a signed request spells one crate

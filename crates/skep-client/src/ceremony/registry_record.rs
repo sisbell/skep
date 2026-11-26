@@ -222,7 +222,7 @@ pub fn endpoint_history(board: &Board, token: Option<&Token>, home: &str) -> Res
             continue;
         }
         if image.is_none() {
-            image = Some(answered(board, token, &frames::image(home, 1, extent), during)?);
+            image = Some(imaged(board, token, &frames::image(home, 1, extent), during)?);
         }
         let runs = image.as_ref().and_then(|image| answers::i_runs(image, extent));
         let Some(ordinal) = runs.and_then(|runs| answers::ordinal_of(&runs, &from.start)) else { continue };
@@ -905,7 +905,7 @@ impl<'b> Atoms<'b> {
                 if extent == 0 {
                     return Ok(None);
                 }
-                let image = answered(self.board, self.token, &frames::image(home, 1, extent), during)?;
+                let image = imaged(self.board, self.token, &frames::image(home, 1, extent), during)?;
                 let Some(runs) = answers::i_runs(&image, extent) else { return Ok(None) };
                 self.maps.retain(|(h, ..)| h != home);
                 self.maps.push((home.to_string(), extent, runs));
@@ -981,6 +981,26 @@ fn read(board: &Board, token: Option<&Token>, frame: &Value, during: &str) -> Re
 /// [`read`]'s errors, and the board's refusal as it answered.
 fn answered(board: &Board, token: Option<&Token>, frame: &Value, during: &str) -> Result<Value, Halt> {
     read(board, token, frame, during)?.map_err(|(r, v)| r.refused(&v))
+}
+
+/// Returns the whole image the `image` frame `frame` asks for.
+///
+/// It is [`answered`] for a home in more runs than one answer carries: the
+/// pages read in order as one state ([`answers::whole_image_read`]), the
+/// document a `runs` answer holding every run.
+///
+/// # Errors
+///
+/// [`answers::whole_image_read`]'s errors; the death signal, faced; and
+/// the board's refusal as it answered.
+fn imaged(board: &Board, token: Option<&Token>, frame: &Value, during: &str) -> Result<Value, Halt> {
+    match answers::whole_image_read(board, token, frame)? {
+        Answer::Closed => Err(closed_face(during)),
+        Answer::Document(v) => match Rejection::of(&v) {
+            Some(r) => Err(r.refused(&v)),
+            None => Ok(v),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1119,5 +1139,41 @@ mod tests {
         assert_eq!(empty.log(), ["POST /op retrieve_doc_v_span_set"], "a home with no content is asked nothing more");
         let unminted = Fake::new(|_| fake::json(200, json!({"code": "doc_not_registered", "disposition": "permanent", "op": "retrieve_doc_v_span_set", "resp": "rejected"})));
         assert_eq!(endpoint_history(&fake::board(&unminted), None, HOME), Ok(Vec::new()), "a home not yet minted holds no deposit");
+    }
+
+    /// A home in more runs than one answer carries is read whole.
+    ///
+    /// The home holds 5,000 runs and the record's atom is the 4,500th: the
+    /// endpoint history and the atom read each image the home in two
+    /// frames and read the atom at its own ordinal, on the second page (the
+    /// mutant that takes the first page for the image finds no atom there,
+    /// so the history holds no deposit and the atom reads as absent).
+    #[test]
+    fn a_long_homes_records_are_read_through_its_whole_image() {
+        let home = std::sync::Arc::new(answers::paging::Paged::of(HOME, 5_000));
+        let atom = home.runs[4_499].0.clone();
+        let link = format!("{HOME}.0.2.1");
+        let record = r#"{"type":"endpoint","origins":["https://a.example"]}"#;
+        let board = {
+            let (home, atom, link) = (home.clone(), atom.clone(), link.clone());
+            Fake::new(move |req| {
+                let f = fake::frame(req);
+                match f["op"].as_str().unwrap_or("?") {
+                    "retrieve_doc_v_span_set" => fake::json(200, json!({"as_of": 9, "resp": "span_set", "set": [{"start": "1.1", "width": "0.5000"}]})),
+                    "find_links_v_history" => fake::json(200, json!({"as_of": 9, "resp": "links", "links": [{"a": link, "at": 5, "retracted_at": null}], "next": null, "exhausted": true})),
+                    "read_link" => fake::json(200, json!({"as_of": 9, "at": 5, "resp": "link_value", "link": {"slots": [frames::unit_span(&atom), [], frames::unit_span(&t_endpoint().to_string())]}})),
+                    "image" => fake::json(200, home.answer(&f, None)),
+                    "retrieve_v" if f["specs"][0]["span"]["start"] == "1.4500" => fake::json(200, json!({"as_of": 9, "items": [{"atom": record}], "resp": "delivery"})),
+                    other => panic!("the read sends no {other:?}: {f}"),
+                }
+            })
+        };
+        let history = endpoint_history(&fake::board(&board), None, HOME).expect("the history");
+        assert_eq!(history, [EndpointRecord { link, origins: vec!["https://a.example".into()], replaces: None, honored: true, nullified: false }]);
+        assert_eq!(home.served(), [(None, 1, 5_000, false), (None, 4_097, 904, true)], "the image whole, two frames");
+        let dialed = fake::board(&board);
+        let mut atoms = Atoms::new(&dialed, None);
+        assert_eq!(atoms.read(HOME, &atom).expect("the atom's read"), Some(record.as_bytes().to_vec()));
+        assert_eq!(home.served().len(), 4, "the atoms' own image, two frames more");
     }
 }

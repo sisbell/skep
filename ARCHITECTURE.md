@@ -584,7 +584,9 @@ hint; `http.rs` the written-out HTTP/1.1 client behind a `Transport`
 trait, plain `http` alone — an `https` root is `skep-client`'s to dial,
 through its `resolve.rs`, which fills the trait over the client's dialer;
 `board.rs` the typed reads over any transport (`Board`), every
-read counted by kind; `mirror.rs` the `/changes` consumer's types and
+read counted by kind, and the crate's own paged image read, which the
+mirror and the guest walk both go through — this crate takes no
+`skep-client`; `mirror.rs` the `/changes` consumer's types and
 state, the journal copy and the fetch cache under the caller's directory,
 and the fold, with four children — `mirror/base.rs` the base's check, its
 refusals and the sync, `mirror/keys.rs` the credential pass that folds
@@ -711,7 +713,10 @@ each ceremony:
   in `dial/tests.rs`; `halt.rs` the one error family and its exit codes;
   `board.rs` the wire's endpoints over a dialer, `board/frames.rs`, which
   spells every frame the crate sends, and `board/answers.rs`, which
-  decodes every read answer it reads — its unit suite in `board/tests.rs`,
+  decodes every read answer it reads and holds the one paged read — an
+  image followed page by page as one state, with its restart bound —
+  that every image reader of this crate, of `skep-shell` and of the dev
+  binary goes through — its unit suite in `board/tests.rs`,
   and under `cfg(test)` `board/fake.rs`, the fake board the crate's unit
   suites dial; `derive.rs` the pure derivations over board reads;
   `text.rs` the minimal changes that make one text into another, a
@@ -1566,7 +1571,7 @@ no slice, no journal record, no fold, no index. Every read is a free
 function over the `&Snapshot` its caller hands it, composed from
 `skep-links`' matcher and typed reads, `skep-arrangement`'s reading surface
 and run counts, and `skep-namespace`'s registry; every read but `image_on`
-also takes the caller's reader predicate. `skep-febe`'s dispatch is its one
+and `image_page_on` also takes the caller's reader predicate. `skep-febe`'s dispatch is its one
 production caller.
 
 Its modules are declared in `src/lib.rs` in dependency order, each with a
@@ -1575,7 +1580,9 @@ and an item by its home module, never through the root's re-exports.
 `tests/it/tidy.rs` checks that, and that every file under `src/` and
 `tests/it/` is declared. `budget.rs`, `home.rs`, `types.rs` and `sets.rs`
 are what the reads share; `image.rs` is the region resolver every
-region-family read chains into the link store's matcher; `region.rs`,
+region-family read chains into the link store's matcher, and beside it
+the image answered in pages with the one check a paged read's
+continuation passes, whichever read it continues; `region.rs`,
 `descriptor.rs`, `pointwise.rs`, `survival.rs` and `lineage.rs` each hold
 one family, pair or read.
 
@@ -2037,7 +2044,8 @@ through the store's install — nothing above their own layer.
    class pool and the per-document pool): what the routes and the
    transport both speak.
 4. **The leaves** — `history.rs` (reading the world at an earlier
-   position), `limits.rs` (the daemon's own bounds; the ones the core
+   position, and the one reconstruction it keeps between the pages of a
+   paged read), `limits.rs` (the daemon's own bounds; the ones the core
    reads are `skep_core::limits`'s, and the media resource's own numbers
    `skep-media`'s `limits`, the daemon taking the ones it reads from
    there, each `pub` for it) and `panics.rs` (the panic hook's tally: the

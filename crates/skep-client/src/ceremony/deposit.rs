@@ -264,9 +264,10 @@ pub(crate) fn closed_face(during: &str) -> Halt {
 /// Reads the record back — AUTH-5.5's read-back.
 ///
 /// The bytes at the atom's address are the record written — the I→V
-/// inversion over `image`, then `retrieve_v` (AUTH-2.114); an atom the
-/// arrangement does not hold, or an I-map that does not read whole, does
-/// not read back (AUTH-2.115).
+/// inversion over `image`, read whole in pages where the home holds more
+/// runs than one answer carries, then `retrieve_v` (AUTH-2.114); an atom
+/// the arrangement does not hold, or an I-map that does not read whole,
+/// does not read back (AUTH-2.115).
 ///
 /// # Errors
 ///
@@ -286,7 +287,7 @@ fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expec
     if extent == 0 {
         return Ok(false);
     }
-    let image = answered(board.op(token, &frames::image(home, 1, extent))?)?;
+    let image = answered(answers::whole_image_read(board, token, &frames::image(home, 1, extent))?)?;
     let Some(ordinal) = answers::i_runs(&image, extent).and_then(|runs| answers::ordinal_of(&runs, atom)) else { return Ok(false) };
     let v = answered(board.op(token, &frames::retrieve_v(home, ordinal, 1))?)?;
     Ok(answers::first_atom(&v).as_deref() == Some(expected.as_bytes()))
@@ -727,6 +728,31 @@ mod tests {
         });
         let halt = Halt::from(read(&refused).expect_err("the board refused"));
         assert!(matches!(&halt, Halt::Refused(r) if r.token() == "image_too_large"), "{halt}");
+    }
+
+    /// A read-back over a home in more runs than one answer carries.
+    ///
+    /// The home holds 5,000 runs and the atom is the 4,500th: the image is
+    /// read whole, two frames, and the atom's bytes are read at its own
+    /// ordinal on the second page (the mutant that takes the first page for
+    /// the image finds no atom, and the record does not read back).
+    #[test]
+    fn a_read_back_reads_a_long_home_whole_in_pages() {
+        let home = Arc::new(answers::paging::Paged::of(HOME, 5_000));
+        let atom = home.runs[4_499].0.clone();
+        let serving = home.clone();
+        let fake = Fake::new(move |req| {
+            let f = fake::frame(req);
+            match f["op"].as_str().unwrap_or("?") {
+                "retrieve_doc_v_span_set" => fake::json(200, span_set(5_000)),
+                "image" => fake::json(200, serving.answer(&f, None)),
+                "retrieve_v" => fake::json(200, delivery(if f["specs"][0]["span"]["start"] == "1.4500" { "REC" } else { "XXX" })),
+                other => panic!("the read-back sends no `{other}`"),
+            }
+        });
+        assert_eq!(read_back(&fake::board(&fake), Some(&token()), HOME, &atom, "REC"), Ok(true));
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set", "POST /op image", "POST /op image", "POST /op retrieve_v"]);
+        assert_eq!(home.served(), [(None, 1, 5_000, false), (None, 4_097, 904, true)]);
     }
 
     /// An extent at the top of the ordinal range leaves no ordinal after it.

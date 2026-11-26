@@ -520,8 +520,8 @@ fn a_baseless_landing_is_not_taken_back_where_the_trunks_word_stands_for_a_membe
 /// An undo is refused at the cap counted on the runs it would write.
 ///
 /// C holds the trunk's words and a member's by turns at adjoining ordinals:
-/// 4,097 runs as the board serves them, read in halves past its run budget,
-/// and one run of `D` as the core joins them. The undo answers `OverCap`
+/// 4,097 runs as the board serves them, read in two pages past its run
+/// budget, and one run of `D` as the core joins them. The undo answers `OverCap`
 /// with the written count after the records' read and before any frame:
 /// nothing sent, nothing committed, the marker standing (the mutant that
 /// counts the core's runs sends the frame).
@@ -534,7 +534,7 @@ fn an_undo_is_refused_over_cap_on_the_runs_it_would_write_however_few_the_core_j
     let rows = dialer.world().rows.len();
     dialer.clear();
     assert_eq!(undo(&board, merger(&session, &signer), &a(S), &a(K), None, None), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
-    assert_eq!(dialer.frames("image").len(), 3, "the premise: C read in halves past the board's run budget: {:?}", dialer.names());
+    assert_eq!(dialer.frames("image").len(), 2, "the premise: C read in two pages past the board's run budget: {:?}", dialer.names());
     let query = &dialer.frames("find_links_ftt")[0]["q"];
     assert_eq!(query["from"], json!([frames::i_span(&format!("{D}.0.1.1"), SHOT_RUN_CAP as u64 + 1)]), "the premise: one run of D as the core joins them, the records read first");
     assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "nothing sent");

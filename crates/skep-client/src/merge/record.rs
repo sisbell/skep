@@ -1815,16 +1815,14 @@ fn bodies(
 /// Returns `journal`'s image, the atoms of its records arranged in it.
 ///
 /// `None` where the journal is not readable to this reader, is not
-/// registered, is in more pieces than `image` answers or holds no position.
+/// registered or holds no position.
 ///
 /// # Errors
 ///
 /// The extent's and the image's other refusals, each as itself.
 fn journal_image(reader: &Reader<'_>, journal: &Address) -> Result<Option<Vec<IRun>>, Refusal> {
     let absent = |e: Refusal| match e {
-        Refusal::Unreadable(_) | Refusal::NoSuchDocument(_) | Refusal::TooFragmented { .. } => {
-            Ok(None)
-        }
+        Refusal::Unreadable(_) | Refusal::NoSuchDocument(_) => Ok(None),
         e => Err(e),
     };
     let extent = match reader.extent(journal, None) {

@@ -35,7 +35,7 @@ use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind};
 
 use super::face_of;
 use crate::board::{
-    atom_of, content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame,
+    atom_of, content_extent, content_ordinal_in, retrieve_frame, runs_of, span_set_frame,
     v_ordinal_in, Board, BoardError, LinkSlots,
 };
 use crate::index::Ledger;
@@ -246,7 +246,7 @@ fn atom_at_head(board: &Board, home: &Address, addr: &Address) -> Result<Option<
         Ok(atom_of(&board.op(&retrieve_frame(home, ordinal))?))
     };
     let image = |from: u64, width: u64| -> Result<Vec<(Address, u64)>, BoardError> {
-        Ok(runs_of(&board.op(&image_frame(home, from, width))?).unwrap_or_default())
+        Ok(runs_of(&board.image(home, from, width, None)?).unwrap_or_default())
     };
     if let Some(n) = content_ordinal_in(home, addr) {
         let runs = image(n, 1)?;

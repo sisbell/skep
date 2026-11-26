@@ -125,7 +125,7 @@ use skep_address::Address;
 
 use crate::address::{account_of, document_of, parse_address};
 use crate::board::answers::{self, IRun, LinkValue, Metadata};
-use crate::board::{frames, Answer, Board, Rejection, Token};
+use crate::board::{frames, Answer, AtAnswer, Board, Rejection, Token};
 use crate::halt::Halt;
 use crate::sign::Signer;
 
@@ -665,39 +665,70 @@ impl<'a> Door<'a> {
         Ok(answers::content_extent(&v))
     }
 
-    /// Images content ordinals `from ..` of `doc`, `width` of them — whole
-    /// where the runs are under the run budget, else in parts, halving on
-    /// `image_too_large` until each part answers, never refused: a run cut
-    /// by a part boundary is re-joined by I-adjacency.
+    /// Images content ordinals `from ..` of `doc`, `width` of them, whole.
+    ///
+    /// It is one frame where the runs are within the board's run budget,
+    /// else a page a frame, each answered and counted
+    /// ([`paged_image`](answers::paged_image)): the pages are one state's,
+    /// a moved draft's read begun again and past the restart bound read at
+    /// one position. The runs are the board's as it served them, in V
+    /// order, each run's `ordinal` the document's own; no page cuts a run,
+    /// so none is joined here.
+    ///
+    /// # Errors
+    ///
+    /// The board's refusal of the read, mapped by [`Door::refuse`]; an
+    /// answer that is no image, faced; [`Door::read`]'s errors, and at a
+    /// position [`Door::read_at`]'s.
     pub(crate) fn image(&self, doc: &str, from: u64, width: u64) -> Result<Vec<IRun>, Fault> {
-        let mut out: Vec<IRun> = Vec::new();
-        self.image_into(doc, from, width, &mut out)?;
-        Ok(out)
-    }
-
-    fn image_into(&self, doc: &str, from: u64, width: u64, out: &mut Vec<IRun>) -> Result<(), Fault> {
         if width == 0 {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let frame = frames::image(doc, from, width);
-        let v = self.read(&frame)?;
+        let v = answers::paged_image(&frame, |frame, at| match at {
+            None => self.read(frame),
+            Some(at) => self.read_at(at, frame),
+        })?;
         if let Some(r) = Rejection::of(&v) {
-            if r.key() != "image_too_large" || width == 1 {
-                return Err(self.refuse(doc, &r, &v));
-            }
-            let left = width / 2;
-            self.image_into(doc, from, left, out)?;
-            return self.image_into(doc, from + left, width - left, out);
+            return Err(self.refuse(doc, &r, &v));
         }
-        let runs = answers::i_runs(&v, width).ok_or_else(|| shape(&frame, &v))?;
-        for mut run in runs {
+        let mut runs = answers::i_runs(&v, width).ok_or_else(|| shape(&frame, &v))?;
+        for run in &mut runs {
             run.ordinal += from - 1;
-            match out.last_mut() {
-                Some(last) if last.prefix == run.prefix && last.first + last.width == run.first && last.ordinal + last.width == run.ordinal => last.width += run.width,
-                _ => out.push(run),
+        }
+        Ok(runs)
+    }
+
+    /// Sends one frame as of `at` under the token and answers its document.
+    ///
+    /// It is [`Door::read`] through `/op-at`, counted as it counts and
+    /// reissued at `history_busy` as it reissues: the one read this door
+    /// makes at a position, a paged image's pages once its draft has kept
+    /// moving at the head.
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::SessionEnded`] at the death signal; [`Fault::Busy`] past the
+    /// reissues; the board's refusal of the position and
+    /// [`Board::op_at`]'s errors, [`Fault::Halt`].
+    fn read_at(&self, at: u64, frame: &Value) -> Result<Value, Fault> {
+        for attempt in 0..=SCAN_BUSY_REISSUES {
+            self.count();
+            match self.board.op_at(Some(self.token), at, frame).map_err(Fault::Halt)? {
+                AtAnswer::Busy if attempt < SCAN_BUSY_REISSUES => {
+                    thread::sleep(Duration::from_millis(20 * u64::from(attempt + 1)));
+                }
+                AtAnswer::Busy => return Err(Fault::Busy),
+                answered => {
+                    return match answers::at_document(answered) {
+                        Ok(Some(v)) => Ok(v),
+                        Ok(None) => Err(Fault::SessionEnded),
+                        Err(refused) => Err(Fault::Halt(Halt::Refused(refused))),
+                    };
+                }
             }
         }
-        Ok(())
+        Err(Fault::Busy)
     }
 
     /// Reads the values at content ordinals `from ..` of `doc`, `width` of

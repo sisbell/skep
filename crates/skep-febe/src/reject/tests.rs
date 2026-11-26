@@ -315,6 +315,10 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::TooManyItems
         | RejectCode::NotALink
         | RejectCode::BadRegion
+        // The moved continuation: a position only rises, so the same
+        // continuation is never answered and the reader begins its read
+        // again, another request.
+        | RejectCode::PageMoved
         | RejectCode::ImageTooLarge
         | RejectCode::EndsetsTooLarge => Disposition::Permanent,
     }
@@ -323,7 +327,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 96] = [
+const ALL_CODES: [RejectCode; 97] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -418,6 +422,7 @@ const ALL_CODES: [RejectCode; 96] = [
     RejectCode::TooManyItems,
     RejectCode::NotALink,
     RejectCode::BadRegion,
+    RejectCode::PageMoved,
     RejectCode::ImageTooLarge,
     RejectCode::EndsetsTooLarge,
 ];

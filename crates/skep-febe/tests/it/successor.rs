@@ -106,7 +106,7 @@ fn a_successor_slot_over_the_span_budget_is_refused_before_any_transaction() {
     ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 2), width: nat(1), as_of: head(&fx) }));
     let region = || vspan(1, 1, 2);
     assert_eq!(
-        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![region()], own: false }))
+        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![region()], own: false, cur: None }))
             .len(),
         2,
         "the fixture is fragmented: one spec over this region resolves to two spans"

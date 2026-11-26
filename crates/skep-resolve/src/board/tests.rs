@@ -431,3 +431,94 @@ fn an_answer_past_the_cap_is_no_answer_a_typed_read_takes() {
     assert_eq!(board.health(), Err(refused.clone()), "/health");
     assert_eq!(board.chain_at(5), Err(refused), "/chain");
 }
+
+/// A board holding one home of `runs` one-position runs, its `image`
+/// answered as the wire pages it ([`paged_image_of`]): each answer at the
+/// head one position past the last, the next `moved` continuations at the
+/// head refused `page_moved`, and every frame kept — the position it was
+/// read at, its span's first ordinal, and whether it carried a go-on.
+struct Paging {
+    runs: u64,
+    moved: Cell<u32>,
+    head: Cell<u64>,
+    asked: Rc<RefCell<Vec<(Option<u64>, u64, bool)>>>,
+}
+
+impl Transport for Paging {
+    fn exchange(&self, _: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        let request: Value = serde_json::from_slice(body).expect("a JSON body");
+        let (frame, at) = if path == "/op-at" { (&request["frame"], request["at"].as_u64()) } else { (&request, None) };
+        let start = frame["region"][0]["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|n| n.parse().ok()).expect("an image");
+        let continued = !frame["cur"].is_null();
+        self.asked.borrow_mut().push((at, start, continued));
+        if continued && at.is_none() && self.moved.get() > 0 {
+            self.moved.set(self.moved.get() - 1);
+            return Ok((200, json!({ "resp": "rejected", "op": "image", "code": "page_moved", "site": { "addr": frame["d"] } }).to_string().into_bytes()));
+        }
+        let as_of = at.unwrap_or_else(|| self.head.replace(self.head.get() + 1));
+        Ok((200, paged_image_of(frame, self.runs, as_of).to_string().into_bytes()))
+    }
+}
+
+/// A paging board over `runs` runs whose next `moved` continuations are
+/// refused, and the frames it is asked.
+fn paging(runs: u64, moved: u32) -> (Board, Rc<RefCell<Vec<(Option<u64>, u64, bool)>>>) {
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    (Board::new(Box::new(Paging { runs, moved: Cell::new(moved), head: Cell::new(100), asked: asked.clone() })), asked)
+}
+
+/// **An image past one answer is read whole**, a page a frame and no frame
+/// more: 5,000 runs in two frames and 12,289 in four, each the rest of the
+/// span from where the page before it ended, the go-on sent back whole;
+/// every run in one `runs` answer, its `as_of` the first page's; at the
+/// head over `/op`, and as of a position every frame over `/op-at` there
+/// (the mutant that takes the first page for the image answers a short
+/// page, which no reader of `runs` takes for one).
+#[test]
+fn an_image_past_one_answer_is_read_whole_a_page_a_frame() {
+    let doc = a("1.0.2.0.1");
+    for (runs, pages) in [(5_000u64, 2u64), (12_289, 4), (4_096, 1)] {
+        for at in [None, Some(7)] {
+            let (board, asked) = paging(runs, 0);
+            let answer = board.image(&doc, 1, runs, at).expect("answered");
+            let read = runs_of(&answer).expect("an image");
+            assert_eq!((answer["resp"].as_str(), read.len() as u64), (Some("runs"), runs), "{runs} runs, every one");
+            assert_eq!(read[runs as usize - 1], (a(&format!("{doc}.0.1.{}", 2 * runs)), 1));
+            assert_eq!(answer["as_of"].as_u64(), Some(at.unwrap_or(100)), "the first page's position");
+            let expected: Vec<(Option<u64>, u64, bool)> = (0..pages).map(|page| (at, 1 + page * 4_096, page > 0)).collect();
+            assert_eq!(*asked.borrow(), expected, "{runs} runs at {at:?}: ⌈R ÷ 4,096⌉ frames");
+            assert_eq!((board.reads().image, board.reads().op_at), (pages, if at.is_some() { pages } else { 0 }), "each page a read, counted");
+        }
+    }
+    // A window inside the home, past the budget too.
+    let (board, asked) = paging(9_000, 0);
+    assert_eq!(runs_of(&board.image(&doc, 501, 8_500, None).expect("answered")).map(|runs| runs.len()), Some(8_500));
+    assert_eq!(*asked.borrow(), [(None, 501, false), (None, 4_597, true), (None, 8_693, true)]);
+}
+
+/// **A moved image is begun again**, and past the bound read at one position: a
+/// continuation refused `page_moved` restarts the read from its first page,
+/// at most [`PAGE_RESTARTS`] times; a home that moves at every reading the
+/// bound allows is read once more as of the last first page's position,
+/// every page over `/op-at`, and that state answered whole.
+#[test]
+fn a_moved_image_is_begun_again_and_past_the_bound_read_at_one_position() {
+    let doc = a("1.0.2.0.1");
+    let (board, asked) = paging(5_000, 1);
+    assert_eq!(runs_of(&board.image(&doc, 1, 5_000, None).expect("answered")).map(|runs| runs.len()), Some(5_000));
+    assert_eq!(*asked.borrow(), [(None, 1, false), (None, 4_097, true), (None, 1, false), (None, 4_097, true)], "begun again from its first page");
+    let (board, asked) = paging(5_000, PAGE_RESTARTS + 1);
+    let answer = board.image(&doc, 1, 5_000, None).expect("answered");
+    let at_head = asked.borrow().iter().filter(|frame| frame.0.is_none()).count() as u32;
+    assert_eq!(at_head, 2 * (PAGE_RESTARTS + 1), "the first reading and the bound's restarts, each refused at its second page");
+    // Each first page answered stands one position on; a refusal answers
+    // at none.
+    let stood = 100 + u64::from(PAGE_RESTARTS);
+    assert_eq!(asked.borrow()[at_head as usize..], [(Some(stood), 1, false), (Some(stood), 4_097, true)], "then every page as of the last first page's position");
+    assert_eq!((runs_of(&answer).map(|runs| runs.len()), answer["as_of"].as_u64()), (Some(5_000), Some(stood)), "that state, whole");
+    // A read as of a position, of a home that moves at every reading at
+    // the head: its state does not move, and it is answered whole.
+    let (board, _) = paging(5_000, u32::MAX);
+    let answer = board.image(&doc, 1, 5_000, Some(7)).expect("answered");
+    assert_eq!(runs_of(&answer).map(|runs| runs.len()), Some(5_000), "a read at a position meets no such refusal");
+}

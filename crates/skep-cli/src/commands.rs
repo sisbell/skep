@@ -630,7 +630,6 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::TwoDrafts => "two_drafts",
         Refusal::Unreadable(_) | Refusal::LineTextWithheld { .. } | Refusal::WindowWithheld { .. } => "withheld",
         Refusal::NoSuchDocument(_) => "doc_not_registered",
-        Refusal::TooFragmented { .. } => "image_too_large",
         Refusal::HistoryBusy => "history_busy",
         Refusal::HistoryReclaimed { .. } => "history_reclaimed",
         Refusal::BeyondHead { .. } => "beyond_head",

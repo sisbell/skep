@@ -10,11 +10,13 @@
 //! whichever edit it is; the frame's caps and the retired whole form
 //! refused at the parse; a frame sent again under its `id` landing once,
 //! and after a restart refused as typed before its own commit, whose row
-//! the feed then shows under the session's key; a `set_arrangement` of
-//! one changed stretch landing in a draft of 5,000 runs, whose image the
-//! board no longer serves whole; and the media door and the cell index —
-//! a cell no lease binds refused through `edit`, and a bound cell minted
-//! through it kept by a pruner pass once its lease has lapsed.
+//! the feed then shows under the session's key; a landing's base and
+//! merge refused on an `edit` frame and carried by `set_arrangement`
+//! alone; a `set_arrangement` of one changed stretch landing in a draft of
+//! 5,000 runs, whose image the board serves in pages; and the media door
+//! and the cell index — a cell no lease binds refused through `edit`, and
+//! a bound cell minted through it kept by a pruner pass once its lease has
+//! lapsed.
 //!
 //! Every suite runs post-claim on a CLAIMED-PERMISSIVE board (`spawn`).
 
@@ -246,13 +248,17 @@ fn an_edit_sent_again_lands_once_and_its_row_tells_a_sender_who_lost_the_answer(
     sd.shutdown();
 }
 
-/// THE FEED'S NAMES. One operation, two rows by the name its frame came
-/// under: an `edit` frame's row is `edit`, a `set_arrangement` frame's is
-/// `set_arrangement`, and each carries the base and the merge its frame
-/// names — a landing sent under either name records its base and stamps its
-/// marker, and tells a head the trunk has moved past beside either ack.
+/// **The feed's names, and a landing's one name.** One operation, two rows by
+/// the name its frame came under: an `edit` frame's row is `edit`, a
+/// `set_arrangement` frame's is `set_arrangement`. A landing is
+/// `set_arrangement`'s alone: an `edit` frame carrying `base`, and one
+/// carrying `merge` beside `head`, are each refused at the parse, nothing
+/// written and no row; a landing under `set_arrangement` records its base
+/// and stamps its marker, its row carrying both, and tells a head the trunk
+/// has moved past beside its ack; and an `edit` naming such a head lands and
+/// tells the same, its row carrying no landing's terms.
 #[test]
-fn the_feed_names_a_call_by_its_frame_and_both_names_carry_the_landings_terms() {
+fn the_feed_names_a_call_by_its_frame_and_a_landing_is_set_arrangements_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -263,40 +269,75 @@ fn the_feed_names_a_call_by_its_frame_and_both_names_carry_the_landings_terms() 
     let draft = stage_of(port, &owner, &v1);
     let side = format!("{v1}.1");
     let before = head_position(port);
-    // A landing under `set_arrangement` that changes no position: no change
-    // at all beside its base and its merge.
+    // A landing that changes no position: no change at all beside its base
+    // and its merge.
     let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, 0, &[], Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None));
     let landed = acked_at(expect_resp(&ack, "ack"));
     let meta = doc_metadata(port, Some(&owner), &draft);
     assert_eq!(meta["merge"]["at"].as_u64(), Some(landed), "the marker stamped at the landing: {meta}");
     assert_eq!(meta["arranged_at"].as_u64(), Some(landed), "and the draft's position moved by a call of no change: {meta}");
     assert_eq!(text_of(port, Some(&owner), &draft, 1, 3), "abc", "no position changed");
-    // The head moves on; a landing under `edit`, minting, names the old one.
+    // The head moves on.
     let v2 = acked_addr(&version_of(port, &signed, &edition, None));
-    let mut frame: Value = serde_json::from_str(&edit_frame(&draft, &[(4, 0, "!")], None)).expect("a frame");
-    frame["head"] = json!({"at": v1, "extent": "3"});
-    frame["base"] = json!({"at": v1, "extent": "3"});
-    frame["merge"] = json!({"sides": [side]});
-    let ack = op(port, Some(&owner), &frame.to_string());
+    // An `edit` frame carries no landing: its base, and its merge beside a
+    // head, are each an unknown field of the frame.
+    let minting = |members: Value| {
+        let mut frame: Value = serde_json::from_str(&edit_frame(&draft, &[(4, 0, "!")], None)).expect("a frame");
+        for (name, member) in members.as_object().expect("members") {
+            frame[name] = member.clone();
+        }
+        frame.to_string()
+    };
+    let unlanded = head_position(port);
+    for (members, named) in [
+        (json!({"base": {"at": v1, "extent": "3"}}), "unknown field 'base'"),
+        (json!({"head": {"at": v1, "extent": "3"}, "merge": {"sides": [side]}}), "unknown field 'merge'"),
+    ] {
+        let refusal = op(port, Some(&owner), &minting(members));
+        let rejection = expect_resp(&refusal, "rejected");
+        assert_eq!((rejection["code"].as_str(), rejection["op"].as_str()), (Some("malformed"), Some("unparseable")), "{rejection}");
+        assert!(rejection["detail"].as_str().is_some_and(|detail| detail.contains(named)), "{rejection}");
+    }
+    assert_eq!(head_position(port), unlanded, "nothing written");
+    assert_eq!(text_of(port, Some(&owner), &draft, 1, 4), "abc", "and nothing minted");
+    assert_eq!(doc_metadata(port, Some(&owner), &draft)["merge"]["at"].as_u64(), Some(landed), "the marker as the first landing left it");
+    // A second landing, under the one name a landing has, placing the
+    // draft's own first byte at its end and naming the head it read.
+    let first = image_runs(port, Some(&owner), &draft, 1, 1).into_iter().next().expect("the first run");
+    let placed = [(origin_of(&first.0), first.0.clone(), 1u64)];
+    let placed: Vec<(&str, &str, u64)> = placed.iter().map(|(o, s, w)| (o.as_str(), s.as_str(), *w)).collect();
+    let ack = op(port, Some(&owner), &changes_frame("set_arrangement", &draft, &[(4, 0, &placed)], Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None));
+    let relanded = acked_at(expect_resp(&ack, "ack"));
+    assert_eq!(ack["head_moved"].as_str(), Some(v2.as_str()), "the tell rides the landing's ack: {ack}");
+    assert_eq!(doc_metadata(port, Some(&owner), &draft)["merge"]["at"].as_u64(), Some(relanded));
+    assert_eq!(text_of(port, Some(&owner), &draft, 1, 4), "abca");
+    // An edit naming the head it read: it lands, and tells the same.
+    let ack = op(port, Some(&owner), &minting(json!({"head": {"at": v1, "extent": "3"}})));
     let minted_at = acked_at(expect_resp(&ack, "ack_addr"));
     assert_eq!(ack["head_moved"].as_str(), Some(v2.as_str()), "the tell rides the address ack: {ack}");
-    assert_eq!(text_of(port, Some(&owner), &draft, 1, 4), "abc!");
-    assert_eq!(doc_metadata(port, Some(&owner), &draft)["merge"]["at"].as_u64(), Some(minted_at));
+    assert_eq!(text_of(port, Some(&owner), &draft, 1, 5), "abc!a");
+    assert_eq!(doc_metadata(port, Some(&owner), &draft)["merge"]["at"].as_u64(), Some(relanded), "an edit stamps no marker");
     let rows: Vec<Value> = changes_since(port, &owner, before).into_iter().filter(|r| r["docs"] == json!([draft])).collect();
     let named: Vec<(Option<&str>, Option<u64>)> = rows.iter().map(|r| (r["op"].as_str(), r["at"].as_u64())).collect();
-    assert_eq!(named, vec![(Some("set_arrangement"), Some(landed)), (Some("edit"), Some(minted_at))], "{rows:?}");
-    for row in &rows {
+    assert_eq!(
+        named,
+        vec![(Some("set_arrangement"), Some(landed)), (Some("set_arrangement"), Some(relanded)), (Some("edit"), Some(minted_at))],
+        "the refused frames left no row: {rows:?}"
+    );
+    for row in &rows[..2] {
         assert_eq!(row["base"].as_str(), Some(v1.as_str()), "the base its frame named: {row}");
         assert_eq!(row["merge"], json!({"head": v1, "sides": [side]}), "the merge its frame named: {row}");
     }
+    assert!(rows[2]["base"].is_null() && rows[2]["merge"].is_null(), "an edit's row carries no landing: {}", rows[2]);
     sd.shutdown();
 }
 
 /// A DRAFT PAST THE IMAGE'S RUN BUDGET TAKES A WRITE. One call of 2,500
-/// placements cuts a draft's one run into 5,000; the board then serves no
-/// whole image of it, and a `set_arrangement` of one changed stretch — one
-/// change naming two positions, placing one run by identity — lands all the
-/// same, every other run of the draft standing; so does an `edit` there.
+/// placements cuts a draft's one run into 5,000; the board then serves its
+/// image a page at a time, and a `set_arrangement` of one changed stretch —
+/// one change naming two positions, placing one run by identity — lands
+/// reading none of it, every other run of the draft standing; so does an
+/// `edit` there.
 #[test]
 fn a_draft_of_five_thousand_runs_takes_a_change_of_one_stretch() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -310,7 +351,7 @@ fn a_draft_of_five_thousand_runs_takes_a_change_of_one_stretch() {
     expect_resp(&op(port, Some(&owner), &edit_frame(&draft, &cuts, None)), "ack_addr");
     assert_eq!(content_extent(port, Some(&owner), &draft), 5_001);
     let whole = op(port, Some(&owner), &image_frame(&draft, 1, 5_001));
-    assert_eq!(expect_resp(&whole, "rejected")["code"].as_str(), Some("image_too_large"), "5,001 runs: {whole}");
+    assert_eq!(expect_resp(&whole, "image_page")["ispans"].as_array().map(Vec::len), Some(4_096), "5,001 runs, the first page of them");
     assert_eq!(text_of(port, Some(&owner), &draft, 1, 7), "abababa");
     // One stretch: positions 3 and 4 (`a`, `b`) replaced by the draft's own
     // first byte, placed by identity.

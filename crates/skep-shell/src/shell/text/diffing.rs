@@ -88,7 +88,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 use skep_client::address::is_address_text;
-use skep_client::board::{frames, whole_image, Image};
+use skep_client::board::{frames, paged_image, whole_image, Image};
 use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::text::diff::{Gone, Identity, Note, Source, Unplanned};
 
@@ -148,14 +148,42 @@ impl<'a> Asked<'a> {
 
 /// Reads the whole image of `of`, and the position it was read at.
 ///
+/// The image is read in pages where `of` holds more runs than one answer
+/// carries, each page a call of the `op` row, as one state
+/// (`paged_image`): a draft written between two pages is read again from
+/// its first, and past the restart bound every page is read as of the last
+/// first page's position, the row's `/op-at` form. The position answered is
+/// the first page's.
+///
 /// # Errors
 ///
 /// The inner error is the call's own answer: `unread` naming `image` for an
 /// answer that is no whole image. The outer one is the board's or the
 /// shell's refusal of the read.
 fn image(calls: &impl Calls, doc: &str, of: &str) -> Result<Result<(Image, u64), Answer>, Refusal> {
-    let answer = calls.op(frames::image(of, 1, WHOLE_CONTENT))?;
+    let answer = paged_image(&frames::image(of, 1, WHOLE_CONTENT), |frame, at| page(calls, frame, at))?;
     Ok(whole_image(&answer).zip(answer["as_of"].as_u64()).ok_or_else(|| unread(doc, "image")))
+}
+
+/// Sends one frame of a paged image through the `op` row.
+///
+/// The frame goes at the head, or as of `at` in the row's `/op-at` form. The
+/// row answers a rejection as the board's refusal; the one a paged read
+/// acts on, `page_moved`, is handed back as the document the board sent, so
+/// the read begins again where the draft changed under it.
+///
+/// # Errors
+///
+/// The row's refusal, every other verdict of the board's among them.
+fn page(calls: &impl Calls, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
+    let sent = match at {
+        None => frame.clone(),
+        Some(at) => json!({"at": at, "frame": frame}),
+    };
+    match calls.op(sent) {
+        Err(Refusal::Board(refused)) if refused.status == 200 && refused.code == "page_moved" => Ok(refused.body),
+        answered => answered,
+    }
 }
 
 /// The draft as the call reads it: its image, its text, and the position.

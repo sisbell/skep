@@ -263,6 +263,33 @@ pub fn image(doc: &str, from: u64, width: u64) -> Value {
     json!({"op": "image", "d": doc, "region": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
 }
 
+/// Builds the continuation of the paged `image` frame `page`.
+///
+/// It is `page` with its one span cut to the rest — from the go-on's
+/// ordinal `next.at` to the span's own reach — and `next` beside it as
+/// `cur`, whole as the board handed it back (wire.md §Link discovery reads,
+/// `image`): the board reads the page from the arrangement the go-on names,
+/// and refuses it where a draft has changed since. `own` and every other
+/// member ride as they stood.
+///
+/// `None` where `page` is no `image` frame of one content span in this
+/// crate's spelling, or `next` names no ordinal inside that span past its
+/// start: no continuation of this frame begins there.
+pub fn image_continued(page: &Value, next: &Value) -> Option<Value> {
+    let natural = |text: &str| text.parse::<u64>().ok().filter(|n| n.to_string() == text);
+    let [span] = page["region"].as_array()?.as_slice() else { return None };
+    let from = natural(span["start"].as_str()?.strip_prefix("1.")?)?;
+    let width = natural(span["width"].as_str()?.strip_prefix("0.")?)?;
+    let at = natural(next["at"].as_str()?)?;
+    // The span's positions run from `from` for `width`; the rest is what
+    // lies at and past `at`, which the page before stopped short of.
+    let read = at.checked_sub(from).filter(|read| (1..width).contains(read))?;
+    let mut frame = page.clone();
+    frame["region"] = json!([{"start": format!("1.{at}"), "width": format!("0.{}", width - read)}]);
+    frame["cur"] = next.clone();
+    Some(frame)
+}
+
 /// Builds `image` with `own: true` over content ordinals `from ..` of `doc`.
 ///
 /// It reads `doc`'s own arrangement, never floated to a head (wire.md §Link

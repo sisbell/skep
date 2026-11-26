@@ -6,7 +6,8 @@
 //! [`MAX_ANSWER_SPANS`], which bounds what an answer built of spans carries.
 //! Each read applies its own; the numbers and their argument live here
 //! because the region family, the pointwise pair and the preview all apply
-//! them.
+//! them. One read holds the run budget as a page's size and no refusal: the
+//! paged image, which answers what fits and says where the rest begins.
 
 /// The most arrangement I-runs one request may make M8 materialize or join
 /// against, and so the ceiling on the multiplier the REQUEST applies to the
@@ -21,9 +22,11 @@
 ///   depends on the region asked and not on `d` alone — counted a run at a
 ///   time as M5's lazy resolution is pulled, the granularity M6's coverage
 ///   budget counts at, and that read's card states what the count leaves M8
-///   holding; [`crate::image_named_on`] counts the same, of `d`'s own
-///   arrangement where `image_on` counts its reading surface's, in the one
-///   body the two share;
+///   holding; [`crate::image_page_on`] counts the same in the one body the
+///   two share, of whichever arrangement it reads, and where the count
+///   passes the budget it ends its page there and names where the rest
+///   begins, so this constant is the most runs one of its pages carries and
+///   no document is refused it for its runs;
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
 ///   joins the coverage against the content runs alone; its product is held
 ///   at [`MAX_ANSWER_SPANS`], not at this constant's square;

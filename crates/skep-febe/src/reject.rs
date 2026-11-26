@@ -151,13 +151,16 @@ pub struct FaultSite {
     /// (`KeptPlaceMoved`: the `runs` entry whose place the draft `addr`
     /// names no longer honours; `StrayPlaceUnrecorded`: the `runs` entry no
     /// record the caller may read covers whole, `addr` the draft being
-    /// re-windowed at it), by the publication's deposit plan (the six deposit codes,
+    /// re-windowed at it), by the edit's per-change verdicts (the change in
+    /// the request's `changes`, whichever of its runs or its positions is at
+    /// fault), by the publication's deposit plan (the six deposit codes,
     /// and every slot-form and class-fence code a `links` entry answers:
     /// the entry's position in its own list — `links`, `retract` or
     /// `read_with` — never a span's within a slot), and by a transport's
     /// codec refusing the shape of one entry of a request's own list
     /// (`Malformed`, through `Rejection::unparseable`: a `publish`'s
-    /// `places`, `links`, `retract` or `read_with` entry); the guard's
+    /// `places`, `links`, `retract` or `read_with` entry, an edit's
+    /// `changes` entry); the guard's
     /// `SlotTooLarge` names its slot and no index, the slot rather than one
     /// spec being at fault.
     pub index: Option<usize>,
@@ -188,8 +191,8 @@ pub struct FaultSite {
     /// `arrangement_moved`'s alone, beside `current`: the frame's `as_of`,
     /// echoed, so a client holding several frames on one document knows
     /// which state the refused one named. Filled by M5's six
-    /// `ArrangementMoved` verdicts — the five edits' and the landing's — and
-    /// nothing else.
+    /// `ArrangementMoved` verdicts — the five in-place edits' and the edit's,
+    /// under either of its names — and nothing else.
     pub as_of: Option<Seq>,
     /// The position the refused edit's document last changed its arrangement
     /// at (skep #442).
@@ -235,10 +238,12 @@ pub enum RejectCode {
     DocNotRegistered,
     /// A source the operation reads is not a registered document.
     ///
-    /// Also `set_arrangement`'s (the landing lane; skep #764): the head the
+    /// Also the edit's, under either of its names, `edit` and
+    /// `set_arrangement` (the landing lane; skep #764, #1082): the head the
     /// merge was composed on, on every draft, or the base to record, names
     /// no registered document — asked ahead of the chain, as the shot asks
-    /// its base's (PUB-6.37).
+    /// its base's (PUB-6.37) — or the origin of a run one of its changes
+    /// places does, that change named in `site.index`.
     SourceNotRegistered,
     /// A delegated prefix's parent is not a registered entity.
     ParentNotRegistered,
@@ -300,8 +305,12 @@ pub enum RejectCode {
     /// A copy spec's span is not an ordinal V-span.
     NotOrdinalVSpan,
     /// An address a placed run names holds no stored value.
+    ///
+    /// An edit's change that places such a run is named in `site.index`.
     DanglingSource,
     /// A placement, or the walk resolving its specs, exceeds its budget.
+    ///
+    /// An edit's runs are counted over all its changes together.
     TooManyRuns,
     /// A publish shot exceeds its re-insert budget.
     ///
@@ -313,15 +322,25 @@ pub enum RejectCode {
     /// `TooManyRuns`'s reason: a shot cannot be split to meet it.
     TooManyValues,
     /// The net placement is empty, or a reinstate names no run.
+    ///
+    /// Also an edit's: a request of no change that records no base and
+    /// carries no merge, naming no site, and a change that removes nothing
+    /// and places nothing, named in `site.index`.
     EmptyResult,
     /// A delete's start names no arranged content position.
+    ///
+    /// Also the start of an edit's change that removes, named in
+    /// `site.index`.
     NotArranged,
     /// A position or range lies outside the bounds its operation admits.
+    ///
+    /// An edit's change whose positions do is named in `site.index`.
     OutOfBounds,
     /// An in-place edit typed against an older state of its document (skep
     /// #442).
     ///
-    /// The five edits — `insert`, `delete`, `copy`, `reinstate`, `rearrange`
+    /// The seven edits — `insert`, `delete`, `copy`, `reinstate`,
+    /// `rearrange`, `edit` and `set_arrangement`
     /// — each name the document state their positions are true of (`as_of`);
     /// where the document's content arrangement last changed at a position
     /// past it, M5 refuses the edit behind `published_target` and ahead of
@@ -337,6 +356,10 @@ pub enum RejectCode {
     /// A rearrange holds neither three cuts nor four.
     BadCutCount,
     /// A rearrange's cuts are not strictly ascending.
+    ///
+    /// Also an edit's change that begins before the change before it ends,
+    /// named in `site.index`: the changes are ascending and apart in the
+    /// coordinates of the typed state.
     NotAscending,
     /// A rearrange's document has an empty content subspace.
     EmptyContentSubspace,
@@ -396,10 +419,12 @@ pub enum RejectCode {
     /// A supplied run is not a content run of its stated origin.
     ///
     /// Address arithmetic on the request; discloses nothing about what exists.
+    /// An edit's change that places such a run is named in `site.index`.
     BadRun,
     /// The base is neither the document nor a member of its chain (PUB-2.37).
     ///
-    /// Also `set_arrangement`'s (the landing lane; skep #764): the head the
+    /// Also the edit's, under either of its names (the landing lane; skep
+    /// #764): the head the
     /// merge was composed on, or the base to record, is no member of the
     /// chain the draft's recorded base lies in, or of its fork's source's
     /// document.
@@ -410,13 +435,13 @@ pub enum RejectCode {
     BaseSuperseded,
     /// The base extent exceeds the base's current content count.
     ///
-    /// Also `set_arrangement`'s: the head's extent as read at the compose,
-    /// on a draft with a chain, or the base's to record, past that member's
-    /// current count.
+    /// Also the edit's, under either of its names: the head's extent as read
+    /// at the compose, on a draft with a chain, or the base's to record,
+    /// past that member's current count.
     BaseExtentTooLarge,
-    /// A `set_arrangement` into a fork whose source is not the head named
-    /// (the landing lane; the owner's ruling N4 and its precision P5; skep
-    /// #764).
+    /// An edit naming a head into a fork whose source is not that head, the
+    /// landing `set_arrangement` sends (the landing lane; the owner's ruling
+    /// N4 and its precision P5; skep #764).
     ///
     /// The destination has no recorded base and its source — the surface a
     /// `version` minted it sharing, immutable — is a published surface
@@ -428,8 +453,8 @@ pub enum RejectCode {
     /// head is admitted, gaining no base and no marker. Nothing is
     /// committed.
     ForkBaseMoved,
-    /// A `set_arrangement` naming a base to record for a document the board
-    /// records no base for (the landing lane; skep #764).
+    /// An edit naming a base to record for a document the board records no
+    /// base for, under either of its names (the landing lane; skep #764).
     ///
     /// A free-standing draft — one `create_new_document` or `fork` minted
     /// and never staged, an alternative of such a draft — and an admitted
@@ -438,7 +463,8 @@ pub enum RejectCode {
     /// Permanent by the catch-all: no reissue of the same frame records a
     /// base. Nothing is committed.
     NoBaseToRecord,
-    /// A `set_arrangement` merge naming an unstamped position (skep #870).
+    /// An edit's merge naming an unstamped position, under either of its
+    /// names (skep #870).
     ///
     /// The board stamped no such marker on the document at it (the landing
     /// lane).

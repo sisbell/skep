@@ -14,10 +14,10 @@
 //!   then put back as it stood, or cleared where it carried none — typed
 //!   against the landing's position, or against a later one where **The
 //!   typed position** says (P3);
-//! * [`withdraw`] takes the merge out and keeps the words — the draft's
-//!   current arrangement sent back whole as read, each word under the chain
-//!   that minted it (**The mapping**), its recorded base re-sent unmoved,
-//!   no `merge` — typed against the position it read the draft at.
+//! * [`withdraw`] takes the merge out and keeps the words — no change of
+//!   the draft's arrangement named (**The changes**), its recorded base
+//!   re-sent unmoved, no `merge` — typed against the position it read the
+//!   draft at.
 //!
 //! A third act takes a withdrawal back (skep #870; B3-S11, D6 BM-36):
 //! [`unwithdraw`] puts the marker the withdrawal cleared back as it stood —
@@ -120,12 +120,34 @@
 //!   the standing landing is that landing's take-back, the same write as
 //!   the undo's.
 //!
+//! **The changes.** A `set_arrangement` names what it changes (wire.md
+//! §Arrangement, `set_arrangement`), never the draft's whole run list, and
+//! each act sends the form the reads it holds allow, no read made for it.
+//! An act that holds the draft's image at the position its write is typed
+//! against sends the one stretch by which the state it means differs from
+//! that image, the leading and the trailing positions the two share left
+//! standing, and no change at all where they share every one
+//! (`net_changes`): the withdrawal's undo, whose words mapped differ from
+//! the draft's only where a record moved them, and a landing into a draft
+//! that is a side of its merge, read at the composition's position. A
+//! withdrawal changes no word, so it names no change, beside its base. An
+//! act that holds no such read — the undo, which reads the draft before
+//! the landing and never at the position it types, and a restore — sends
+//! one change over every position the draft holds, their count the
+//! `own_count` its live `doc_metadata` read answered (`whole_change`): the
+//! board refuses the write where the draft changed since the typed
+//! position, so a write that lands found the draft holding that many. The
+//! two forms leave one state. A lost answer's read compares the draft with
+//! the whole state the act meant (`landed_at`), never with the changes.
+//!
 //! **The pre-landing read.** The state before a commit at position `at` is
 //! read through `/op-at` at the answer for `at − 1`: a landing with a base
-//! record is one commit of three records, so `at − 1` lies inside it and
-//! the board answers `not_a_position` naming the greatest position at or
-//! below as `nearest`; the library then reads at `nearest`, never at
-//! `at − 1` itself, and never at the head. `image` and `doc_metadata` of
+//! record is one commit of two records, its changes' and its base's, so
+//! `at − 1` lies inside it and the board answers `not_a_position` naming
+//! the greatest position at or below as `nearest`; the library then reads
+//! at `nearest`, never at `at − 1` itself, and never at the head; a landing
+//! with no base is one record, and `at − 1` is the position before it,
+//! read as it answers. `image` and `doc_metadata` of
 //! the draft are both read at that one position. `history_reclaimed` there
 //! is [`Refusal::HistoryReclaimed`] — the state before the merge is no
 //! longer on this board, and nothing is sent; `doc_not_registered` there
@@ -158,12 +180,14 @@
 //! a record can name, records being homed only in private drafts, whose
 //! chains carry no member's component — and asks each span once, however
 //! many of the states it maps hold it. A withdrawal reads no record and
-//! maps nothing: the words it keeps go back as read.
-//! Each run is written as [`written_runs`] spells it — its own first
-//! I-address, its `origin` the document that minted it, a member's version
-//! component kept (wire.md §Arrangement, `publish`). At each of the three
-//! acts, a state in more runs than one write may name, counted on the runs
-//! the write sends, is [`Refusal::OverCap`], nothing sent.
+//! maps nothing: the words it keeps stand as read.
+//! Each run a write places is written as [`written_runs`] spells it — its
+//! own first I-address, its `origin` the document that minted it, a
+//! member's version component kept (wire.md §Arrangement, `publish`). A
+//! write whose changes place more runs than one frame may name, counted on
+//! the runs the write sends, is [`Refusal::OverCap`], nothing sent: the
+//! undo's on the whole of C mapped, the withdrawal's undo's on the stretch
+//! its mapping moved, and a withdrawal's never, placing none.
 //!
 //! **The typed position (P3).** The undo's one write is typed against the
 //! landing's position — the command's and an agent's rule, `own_ack` none —
@@ -589,7 +613,12 @@ pub fn undo(
         None => owners_records(reader, &runs_of(image.runs())?)?,
     };
     let sent = mapped_image(&image, &records)?;
-    let runs = capped_runs(&sent)?;
+    // THE ONE CHANGE: the undo holds C, the state it puts back, and no read
+    // of the draft at the position its write is typed against, so it
+    // replaces every position the draft holds — its own count as the first
+    // read answered it — by C's runs.
+    let changes = whole_change(draft, meta.own_count, &sent)?;
+    let wanted = written_runs(&sent)?;
     // THE TYPED POSITION (P3): the landing's, the put-back's where only the
     // take-back and its undo moved the words since, or the caller's own
     // last ack where it is later.
@@ -603,7 +632,7 @@ pub fn undo(
         earlier.iter().flat_map(|e| &e.marker.sides).map(String::as_str).collect();
     let frame = frames::set_arrangement(
         &draft.to_string(),
-        &runs,
+        &changes,
         as_of,
         earlier.as_ref().map(|e| (e.marker.head.as_str(), e.head_copied)),
         base_text.as_ref().map(|(base, copied)| (base.as_str(), *copied)),
@@ -613,7 +642,7 @@ pub fn undo(
     writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
     let restores = earlier.as_ref().map(|e| e.at);
     let act = Act::Undo { landing, put_back, own_ack: own_ack.is_some(), earlier: restores };
-    let position = send(&writer, &frame, draft, as_of, act)?;
+    let position = send(&writer, &frame, &wanted, draft, as_of, act)?;
     // The record is judged by the landing taken back and the one standing
     // again (**The record.**).
     let markers = Markers { taken: &taken, landing, earlier: landed_before };
@@ -876,13 +905,14 @@ fn put_back_of(
 /// Takes the merge out of a draft and keeps its words.
 ///
 /// The draft's `doc_metadata` is read live and its image as it stood at
-/// *that* read's position (`present`); the one write sends the image back
-/// whole as read — each run under the chain that minted it, no record read
-/// and nothing mapped (the module's doc, **The mapping**) — with the recorded
-/// base re-sent unmoved — address and extent as read — and no `merge`,
-/// typed against that position, so the marker is cleared and the draft's
-/// words and base stay as they are; an inherited marker is taken out the
-/// same way. The record and the journal are as [`undo`]'s.
+/// *that* read's position (`present`); the one write names no change of
+/// the draft's words — no record read and nothing mapped (the module's doc,
+/// **The changes**, **The mapping**) — with the recorded base re-sent
+/// unmoved — address and extent as read — and no `merge`, typed against
+/// that position, so the marker is cleared and the draft's words and base
+/// stay as they are; an inherited marker is taken out the same way. The
+/// image is the state a lost answer's read looks for. The record and the
+/// journal are as [`undo`]'s.
 ///
 /// # Errors
 ///
@@ -895,10 +925,8 @@ fn put_back_of(
 ///   a draft with no recorded base carries none even where a merge landed
 ///   in it, a landing [`undo`] takes back by the draft's rows;
 /// - the image's reads' refusals (`present`), and an image whose
-///   positions reach the largest ordinal, the board's fault, faced;
-/// - [`Refusal::OverCap`] where the image is in more runs than one write
-///   may name, nothing sent; then a run of it that is no content
-///   I-address, the board's fault, faced;
+///   positions reach the largest ordinal, the board's fault, faced; then a
+///   run of it that is no content I-address, the board's fault, faced;
 /// - a journal named that cannot take the record, as [`undo`]'s, nothing
 ///   sent (P13);
 /// - the one write's, as [`undo`]'s, `arrangement_moved` saying the draft
@@ -936,12 +964,16 @@ pub fn withdraw(
     // THE ONE POSITION: the image as of the metadata's read, sent back as
     // read — no record is read and none maps it.
     let image = present(reader, draft, as_of, meta.arranged_at)?;
-    let runs = capped_runs(&mapped_image(&image, &[])?)?;
+    // THE CHANGE: none. The draft's own words stand as read, so the write
+    // names no change beside its base; the image, at its own spelling, is
+    // the state a lost answer's read looks for.
+    let sent = mapped_image(&image, &[])?;
+    let wanted = written_runs(&sent)?;
     let stem = format!("withdraw:{draft}:{as_of}");
     let base_text = base.0.to_string();
     let frame = frames::set_arrangement(
         &draft.to_string(),
-        &runs,
+        &[],
         as_of,
         None,
         Some((base_text.as_str(), base.1)),
@@ -949,7 +981,7 @@ pub fn withdraw(
         Some(&format!("{stem}.arrangement")),
     );
     writer.check_journal(journal, &format!("the merge cannot be taken out of {draft}"))?;
-    let position = send(&writer, &frame, draft, as_of, Act::Withdraw)?;
+    let position = send(&writer, &frame, &wanted, draft, as_of, Act::Withdraw)?;
     // The record is judged by the marker taken out, as an undo's is; one
     // naming no position bounds none.
     let landing = marker.at.unwrap_or(u64::MAX);
@@ -1079,7 +1111,13 @@ pub fn unwithdraw(
     // THE MAPPING: the draft's words as they stand, through the records.
     let image = present(reader, draft, read_at, meta.arranged_at)?;
     let records = owners_records(reader, &runs_of(image.runs())?)?;
-    let runs = capped_runs(&mapped_image(&image, &records)?)?;
+    // THE CHANGE: the image is the draft as it stands, which is the draft at
+    // the position the write is typed against wherever the write lands —
+    // the board refuses it where the draft changed since — so the write
+    // names the one stretch the mapping moved, and none where it moved none.
+    let sent = mapped_image(&image, &records)?;
+    let changes = net_changes(&image, &sent)?;
+    let wanted = written_runs(&sent)?;
     // THE TYPED POSITION (P3): the withdrawal's, or the caller's own last
     // ack where it is later.
     let as_of = own_ack.map_or(withdrawal, |own| own.max(withdrawal));
@@ -1088,7 +1126,7 @@ pub fn unwithdraw(
     let sides: Vec<&str> = cleared.marker.sides.iter().map(String::as_str).collect();
     let frame = frames::set_arrangement(
         &draft.to_string(),
-        &runs,
+        &changes,
         as_of,
         Some((cleared.marker.head.as_str(), cleared.head_copied)),
         Some((base_text.as_str(), base.1)),
@@ -1097,7 +1135,7 @@ pub fn unwithdraw(
     );
     writer.check_journal(journal, &format!("the merge cannot be put back into {draft}"))?;
     let act = Act::Unwithdraw { withdrawal, own_ack: own_ack.is_some(), marker: cleared.at };
-    let position = send(&writer, &frame, draft, as_of, act)?;
+    let position = send(&writer, &frame, &wanted, draft, as_of, act)?;
     let record = restore_record(board, merger, kind, draft, &cleared, &stem, journal)?;
     Ok(Unwithdrawn { draft: draft.clone(), position, record })
 }
@@ -1350,21 +1388,146 @@ fn present(
     Ok(reader.imaged(draft, Some(at))?.into_image()?)
 }
 
-/// Returns `sent`'s runs as a take-back's one write spells them, capped.
+/// The stretch by which one image differs from another.
 ///
-/// The count is of the runs the write names, `sent`'s own: a trunk's run
-/// and a member's beside it are two, however the core's runs join them.
+/// `removed` positions of the standing image from ordinal `at` on give way
+/// to `placed`: everything before `at`, and everything past the removed
+/// positions, the two images hold alike, position for position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::merge) struct Stretch {
+    /// The ordinal of the first position that differs, in the standing
+    /// image.
+    pub(in crate::merge) at: u64,
+    /// How many positions of the standing image give way.
+    pub(in crate::merge) removed: u64,
+    /// The words that stand in their place, in order.
+    pub(in crate::merge) placed: Image,
+}
+
+/// Returns the one stretch by which `wanted` differs from `standing`, or
+/// `None` where the two hold the same words in the same order.
+///
+/// The leading positions the two images share, and then the trailing ones,
+/// are left out, compared position by position — one I-address, under the
+/// chain that minted it, at the same place in both — whatever the runs' own
+/// boundaries are, so two images that cut one stretch of a chain into
+/// different runs share it all the same, and a member's own word is never
+/// taken for the trunk's of the same ordinal. What is left between is the
+/// stretch: one change of a `set_arrangement` that makes a draft holding
+/// `standing` hold `wanted`. It reads nothing: both images are the caller's.
+pub(in crate::merge) fn changed_stretch(standing: &Image, wanted: &Image) -> Option<Stretch> {
+    /// Returns how many positions two walks share from their starts, at
+    /// most `most`: each walk hands back a run's chain, a key that grows by
+    /// one a position, and the positions it holds.
+    fn shared<'a>(
+        mut one: impl Iterator<Item = (&'a str, u64, u64)>,
+        mut other: impl Iterator<Item = (&'a str, u64, u64)>,
+        most: u64,
+    ) -> u64 {
+        let (mut a, mut b) = (one.next(), other.next());
+        let mut count = 0u64;
+        while let (Some((chain_a, key_a, left_a)), Some((chain_b, key_b, left_b))) = (a, b) {
+            if chain_a != chain_b || key_a != key_b || count >= most {
+                break;
+            }
+            let step = left_a.min(left_b).min(most - count);
+            count += step;
+            a = if step == left_a { one.next() } else { Some((chain_a, key_a.saturating_add(step), left_a - step)) };
+            b = if step == left_b { other.next() } else { Some((chain_b, key_b.saturating_add(step), left_b - step)) };
+        }
+        count
+    }
+    // From the starts: each run by its first ordinal, walked upwards.
+    fn forward(image: &Image) -> impl Iterator<Item = (&str, u64, u64)> {
+        image.runs().iter().map(|run| (run.prefix.as_str(), run.first, run.width))
+    }
+    // From the ends: each run by its last ordinal, walked downwards, the
+    // key counted down from the top so it grows a position all the same.
+    fn backward(image: &Image) -> impl Iterator<Item = (&str, u64, u64)> {
+        image.runs().iter().rev().map(|run| (run.prefix.as_str(), u64::MAX - (run.first + (run.width - 1)), run.width))
+    }
+    let (held, sent) = (standing.extent(), wanted.extent());
+    let lead = shared(forward(standing), forward(wanted), held.min(sent));
+    let tail = shared(backward(standing), backward(wanted), held.min(sent) - lead);
+    let (removed, placing) = (held - lead - tail, sent - lead - tail);
+    if removed == 0 && placing == 0 {
+        return None;
+    }
+    // `wanted`'s positions `lead + 1 ..= lead + placing`, as runs of their
+    // own: each a part of one of `wanted`'s, so the image's invariant holds.
+    let parts = wanted.runs().iter().filter_map(|run| {
+        let before = run.ordinal - 1;
+        let (from, to) = (before.max(lead), (before + run.width).min(lead + placing));
+        (from < to).then(|| (run.prefix.clone(), run.first + (from - before), to - from))
+    });
+    let placed = Image::tiled(parts).unwrap_or_default();
+    Some(Stretch { at: lead + 1, removed, placed })
+}
+
+/// Returns `placed`'s runs as a `set_arrangement`'s change spells them,
+/// capped.
 ///
 /// # Errors
 ///
-/// [`Refusal::OverCap`] where `sent` is in more runs than one write may
+/// [`Refusal::OverCap`] where `placed` is in more runs than one write may
 /// name, before any is spelled; then [`written_runs`]'s.
-fn capped_runs(sent: &Image) -> Result<Vec<Value>, Refusal> {
-    let runs = sent.runs().len();
+fn capped_runs(placed: &Image) -> Result<Vec<Value>, Refusal> {
+    let runs = placed.runs().len();
     if runs > SHOT_RUN_CAP {
         return Err(Refusal::OverCap { runs, cap: SHOT_RUN_CAP });
     }
-    Ok(written_runs(sent)?)
+    Ok(written_runs(placed)?)
+}
+
+/// Returns the changes that make a draft holding `standing` hold `wanted`.
+///
+/// It is what an act sends where it holds the draft's image at the position
+/// its write is typed against: the one stretch that differs
+/// ([`changed_stretch`]), as one change, and no change at all where the two
+/// are one — which the board admits beside a base or a merge. The frame
+/// then names the runs it changes and never the draft's whole list.
+///
+/// # Errors
+///
+/// [`Refusal::OverCap`] where the stretch places more runs than one write
+/// may name, counted on the runs the write sends, nothing sent; then
+/// [`written_runs`]'s.
+pub(in crate::merge) fn net_changes(standing: &Image, wanted: &Image) -> Result<Vec<Value>, Refusal> {
+    match changed_stretch(standing, wanted) {
+        None => Ok(Vec::new()),
+        Some(Stretch { at, removed, placed }) => Ok(vec![frames::placed(at, removed, &capped_runs(&placed)?)]),
+    }
+}
+
+/// Returns the one change that sets a draft of `count` positions to
+/// `wanted` whole.
+///
+/// It is what an act sends where it holds no read of the draft at the
+/// position its write is typed against: every position the draft holds
+/// replaced by `wanted`'s runs — `count` the draft's own content count as
+/// the act's `doc_metadata` read answered it, which is the count at the
+/// typed position wherever the write lands, the board refusing it
+/// `arrangement_moved` where the draft changed since. No change where the
+/// draft is empty and so is `wanted`.
+///
+/// # Errors
+///
+/// A board that served no count, faced, nothing sent; [`Refusal::OverCap`]
+/// where `wanted` is in more runs than one write may name, counted on the
+/// runs the write sends, nothing sent; then [`written_runs`]'s.
+pub(crate) fn whole_change(draft: &Address, count: Option<u64>, wanted: &Image) -> Result<Vec<Value>, Refusal> {
+    let runs = capped_runs(wanted)?;
+    let count = count.ok_or_else(|| {
+        Halt::face(
+            "`doc_metadata` answered no `own_count`",
+            format!("the read of {draft} named no content count of its own (wire.md §The response envelope, `doc_metadata`), and the write replaces every position the draft holds"),
+            "this board is not speaking the wire this client expects; nothing was written",
+        )
+    })?;
+    if count == 0 && runs.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![frames::placed(1, count, &runs)])
 }
 
 /// Sends the one write, answering its position.
@@ -1378,11 +1541,14 @@ fn capped_runs(sent: &Image) -> Result<Vec<Value>, Refusal> {
 /// status codes) — the draft's own rows past `as_of` are read for the
 /// write's (`landed_at`; the module's doc, **The lost answer**), and a
 /// write no row confirms is answered unconfirmed ([`OnEnd::Unconfirmed`]).
+/// `wanted` is the whole list the act means the draft to hold, as
+/// [`written_runs`] spells it — the list its changes were cut from — which
+/// that read holds the draft to.
 ///
 /// # Errors
 ///
 /// As [`undo`]'s one write's.
-fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
+fn send(writer: &Writer<'_>, frame: &Value, wanted: &[Value], draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
     let during = act.during();
     let unconfirmed = OnEnd::Unconfirmed(act.lost());
     let Asked { answer, again } = send_write(writer.board, writer.merger.token, frame);
@@ -1397,7 +1563,7 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
         Err(h) if again || answer_lost(&h) => h,
         Err(h) => return Err(h.into()),
     };
-    let read_back = landed_at(&writer.reader, draft, as_of, frame);
+    let read_back = landed_at(&writer.reader, draft, as_of, frame, wanted);
     let cause = match read_back {
         Ok(Some(at)) => return Ok(at),
         Ok(None) => format!("{lost}; and no row of the draft's past the position the write was typed against, {as_of}, is the write's"),
@@ -1433,8 +1599,9 @@ fn answer_lost(h: &Halt) -> bool {
 /// the supplement, `drafts=true` (wire.md §The change feed) — is read, and
 /// it is the write's where it is a `set_arrangement` row carrying the
 /// frame's two terms, the base it records and its merge beside its head,
-/// and where the draft as of it holds the frame's runs as the frame spells
-/// them, I-adjacent pieces of one chain joined as every take-back joins
+/// and where the draft as of it holds `wanted`, the whole list the act
+/// meant to leave — never the frame's changes alone, which name only what
+/// differs — I-adjacent pieces of one chain joined as every take-back joins
 /// what it sends (`mapped_image`): the end the write meant. `None` where it
 /// is not — the write never landed, or is still on its way, which no read
 /// tells apart — and where no such row stands.
@@ -1449,14 +1616,16 @@ fn landed_at(
     draft: &Address,
     as_of: u64,
     frame: &Value,
+    wanted: &[Value],
 ) -> Result<Option<u64>, Refusal> {
-    const ARRANGING: [&str; 7] = [
+    const ARRANGING: [&str; 8] = [
         "insert",
         "delete",
         "copy",
         "reinstate",
         "rearrange",
         "set_arrangement",
+        "edit",
         "publish",
     ];
     let text = draft.to_string();
@@ -1491,7 +1660,7 @@ fn landed_at(
         &arranged_at(reader, draft, at, "the position the take-back's row names")?,
         &[],
     )?;
-    Ok((Value::Array(written_runs(&held)?) == frame["runs"]).then_some(at))
+    Ok((written_runs(&held)? == wanted).then_some(at))
 }
 
 /// Judges a `set_arrangement`'s answer `v` to `frame`, answering the write's
@@ -1602,23 +1771,31 @@ pub(crate) fn judge(
     })
 }
 
-/// Returns `frame`'s runs in V order, each as whether its origin is
-/// `origin`, the document the board's `withheld` names, and its width.
+/// Returns the positions `frame`'s changes leave, in V order, each stretch
+/// as whether the board's `withheld` names its origin and its width.
 ///
 /// The runs are a take-back's or a restore's one write's, each as
 /// [`written_runs`] spells it — its `origin` the document that minted it,
-/// its `width` a decimal string — so each reads back; `None` where one does
-/// not, so a refusal names no position where it cannot name the right one.
+/// its `width` a decimal string — and they stand where their change puts
+/// them: the positions the draft keeps before a change and between two are
+/// counted as stretches of no origin's, so a position named is one of the
+/// state the write means to leave. `None` where a change or a run does not
+/// read back, so a refusal names no position where it cannot name the
+/// right one.
 fn refused_runs(frame: &Value, origin: &Address) -> Option<Vec<(bool, u64)>> {
-    frame["runs"]
-        .as_array()?
-        .iter()
-        .map(|run| {
+    let (mut out, mut reach) = (Vec::new(), 1u64);
+    for change in frame["changes"].as_array()? {
+        let at: u64 = change["at"]["ordinal"].as_str()?.parse().ok()?;
+        let removed: u64 = change["width"].as_str()?.parse().ok()?;
+        out.push((false, at.checked_sub(reach)?));
+        for run in change["runs"].as_array()? {
             let minted = parse_address(run["origin"].as_str()?)?;
             let width = run["width"].as_str()?.parse().ok()?;
-            Some((minted == *origin, width))
-        })
-        .collect()
+            out.push((minted == *origin, width));
+        }
+        reach = at.checked_add(removed)?;
+    }
+    Some(out)
 }
 
 /// Returns the words of an undo refused `arrangement_moved` (P3).

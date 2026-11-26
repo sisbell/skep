@@ -499,26 +499,47 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublishError::TooManyValues);
     // The edition claim's refusal (skep #692), threading the edition.
     same_name(PublishError::ClaimRefused(doc()));
-    // The landing (skep #764, #870): the destination's four, the head's
-    // three — `SourceNotRegistered` the per-run four's too — its own three
-    // — the fork's source threaded through the site — and REINSTATE's
-    // per-run four, every one same-named.
-    same_name(SetArrangementError::DocNotRegistered);
-    same_name(SetArrangementError::NotOwner(doc()));
-    same_name(SetArrangementError::PublishedTarget);
-    same_name(SetArrangementError::BaseNotInChain);
-    same_name(SetArrangementError::BaseExtentTooLarge);
-    same_name(SetArrangementError::ForkBaseMoved(doc()));
-    same_name(SetArrangementError::NoBaseToRecord);
-    same_name(SetArrangementError::MarkerNotRestorable);
-    same_name(SetArrangementError::BadRun);
-    same_name(SetArrangementError::SourceNotRegistered);
-    same_name(SetArrangementError::DanglingSource);
-    same_name(SetArrangementError::TooManyRuns);
-    let (code, site) = SetArrangementError::ForkBaseMoved(doc()).lower();
+    // The edit, under either of its wire names (the landing lane, skep #764,
+    // #870; the one-commit edit): the destination's four, the head's three,
+    // the landing's own three — the fork's source threaded through the site
+    // — each change's shape and REINSTATE's per-run verdicts, every one
+    // same-named, and each verdict about one change naming it in the site.
+    same_name(EditError::DocNotRegistered);
+    same_name(EditError::NotOwner(doc()));
+    same_name(EditError::PublishedTarget);
+    same_name(EditError::BaseNotInChain);
+    same_name(EditError::BaseExtentTooLarge);
+    same_name(EditError::ForkBaseMoved(doc()));
+    same_name(EditError::NoBaseToRecord);
+    same_name(EditError::MarkerNotRestorable);
+    same_name(EditError::TooManyRuns);
+    for (error, code) in [
+        (EditError::SourceNotRegistered { change: Some(3) }, RejectCode::SourceNotRegistered),
+        (EditError::EmptyResult { change: Some(3) }, RejectCode::EmptyResult),
+        (EditError::NotContentSubspace { change: 3 }, RejectCode::NotContentSubspace),
+        (EditError::NotAscending { change: 3 }, RejectCode::NotAscending),
+        (EditError::NotArranged { change: 3 }, RejectCode::NotArranged),
+        (EditError::OutOfBounds { change: 3 }, RejectCode::OutOfBounds),
+        (EditError::BadRun { change: 3 }, RejectCode::BadRun),
+        (EditError::DanglingSource { change: 3 }, RejectCode::DanglingSource),
+    ] {
+        let (lowered, site) = error.clone().lower();
+        assert_eq!(lowered, code, "{error:?}");
+        assert_eq!(site.and_then(|s| s.index), Some(3), "{error:?}: the change rides the site's index");
+    }
+    // A verdict about the request, not one change of it, names no site.
+    for (error, code) in [
+        (EditError::SourceNotRegistered { change: None }, RejectCode::SourceNotRegistered),
+        (EditError::EmptyResult { change: None }, RejectCode::EmptyResult),
+    ] {
+        assert_eq!(error.lower(), (code, None));
+    }
+    // The mint's and the write's wrappers recurse, as INSERT's do.
+    assert_eq!(EditError::Mint(MintError::HomeNotRegistered).lower().0, RejectCode::HomeNotRegistered);
+    let (code, site) = EditError::ForkBaseMoved(doc()).lower();
     assert_eq!(code, RejectCode::ForkBaseMoved);
     assert_eq!(site.and_then(|s| s.addr), Some(doc()), "the fork's source rides the site");
-    let (code, site) = SetArrangementError::ArrangementMoved { as_of: Seq(3), current: Seq(5) }.lower();
+    let (code, site) = EditError::ArrangementMoved { as_of: Seq(3), current: Seq(5) }.lower();
     assert_eq!(code, RejectCode::ArrangementMoved);
     assert_eq!(site.map(|s| (s.as_of, s.current)), Some((Some(Seq(3)), Some(Seq(5)))), "the two positions ride the site");
 

@@ -2413,35 +2413,37 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     assert_eq!(line["base"], ack["at"], "the ack is noted for the base of the next hold on its home: {line}");
 }
 
-/// Checks that the ten unholdable writes are refused under a standing hold.
+/// Checks that the eleven unholdable writes are refused under a standing
+/// hold.
 ///
 /// §3c.4: `create_new_document` (skep #868), `fork`, `version`, `stage`,
-/// `create_well_known_document`, `set_arrangement`, `make_link`, `nullify`,
-/// `edit_link` and `publish`
+/// `create_well_known_document`, `set_arrangement`, `edit` (skep #1082),
+/// `make_link`, `nullify`, `edit_link` and `publish`
 /// arriving while the own node is stopped, the write path poisoned or the
 /// writes halted are refused at once under the hold's own name — `stopped`,
 /// `poisoned`, `halted` — naming the op, held never and dialed never, at
 /// the door's part the shell asks (`unholdable_refusal`) and at the hold's
-/// own check behind it (`send`); a write outside the ten — a
+/// own check behind it (`send`); a write outside the eleven — a
 /// `register_node` — dials as it dials under the same hold; the poisoned
 /// state is the dial's
 /// own `poisoned` answer, standing until a `/health` read says writes go;
 /// and a board that does not answer is no hold of the kind — the write
-/// meets the dial's own `unreachable` (the mutants that dial the ten
+/// meets the dial's own `unreachable` (the mutants that dial the eleven
 /// under a stop, hold them as bursts, leave the mint or the mailbox's mint
 /// out of the set so it fails `unreachable` under a stopped node, never
 /// clear the poison, or read an unreachable board as a standing hold).
 #[test]
-fn the_ten_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewhere() {
+fn the_eleven_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewhere() {
     let citation = "1.1.0.1.0.1.0.3.13";
-    let ten = || {
+    let eleven = || {
         vec![
             json!({"op": "create_new_document", "account": "1.0.1"}),
             json!({"op": "fork", "published": true}),
             json!({"op": "version", "d_src": DOC}),
             json!({"op": "stage", "from": DOC}),
             json!({"op": "create_well_known_document", "account": "1.0.1", "slot": 2}),
-            json!({"op": "set_arrangement", "doc": DOC, "runs": [{"origin": DOC, "i_start": format!("{DOC}.0.1.1"), "width": "1"}], "as_of": 1}),
+            json!({"op": "set_arrangement", "doc": DOC, "changes": [{"at": {"subspace": "1", "ordinal": "1"}, "width": "1", "runs": [{"origin": DOC, "i_start": format!("{DOC}.0.1.1"), "width": "1"}]}], "as_of": 1}),
+            json!({"op": "edit", "doc": DOC, "changes": [{"at": {"subspace": "1", "ordinal": "1"}, "width": "1", "values": ["a"]}], "as_of": 1}),
             json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}),
             json!({"op": "nullify", "home": OTHER, "target": format!("{OTHER}.0.2.1")}),
             json!({"op": "edit_link", "original": format!("{OTHER}.0.2.1"), "d_s": OTHER, "d_a": DOC, "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}}),
@@ -2449,7 +2451,8 @@ fn the_ten_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewh
         ]
     };
     let poisoned = || json!({"resp": "rejected", "code": "poisoned", "disposition": "retry", "op": "insert"});
-    assert_eq!(UNHOLDABLE_WRITES.len(), 10);
+    assert_eq!(UNHOLDABLE_WRITES.len(), 11);
+    assert!(UNHOLDABLE_WRITES.contains(&"edit"), "a draft's changes in one commit are unholdable, as the arrangement set whole is (skep #1082)");
     assert!(UNHOLDABLE_WRITES.contains(&"create_new_document"), "the mint is unholdable (skep #868)");
     assert!(UNHOLDABLE_WRITES.contains(&"create_well_known_document"), "the mailbox's mint is unholdable, as the mark behind it is");
     for cause in ["stopped", "poisoned", "halted"] {
@@ -2468,21 +2471,21 @@ fn the_ten_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewh
         }
         let sends = g.fake.sends();
         let lines = g.lines().len();
-        for frame in ten() {
+        for frame in eleven() {
             let op = frame["op"].as_str().unwrap();
-            assert!(UNHOLDABLE_WRITES.contains(&op), "{op} is of the ten");
+            assert!(UNHOLDABLE_WRITES.contains(&op), "{op} is of the eleven");
             let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, frame.clone(), None) else { panic!("{cause}: {op} is refused") };
             let v = refused.to_value();
             assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), Some(op)), "{cause}: {v}");
             assert_eq!(g.holds.unholdable_refusal("b-1", op).map(|r| r.name().to_string()), Some(cause.to_string()), "{cause}: the door's part the shell asks");
         }
-        assert_eq!((g.fake.sends(), g.lines().len()), (sends, lines), "{cause}: none of the ten is dialed or held");
-        // A write outside the ten, and outside the attest's checked set, so
+        assert_eq!((g.fake.sends(), g.lines().len()), (sends, lines), "{cause}: none of the eleven is dialed or held");
+        // A write outside the eleven, and outside the attest's checked set, so
         // the fake's plain ack answers it.
         let outside = json!({"op": "register_node", "account": "1.0.1"});
-        assert!(g.holds.unholdable_refusal("b-1", "register_node").is_none(), "{cause}: a write outside the ten meets no refusal of the kind");
-        let OpAnswer::Answered(Ok(acked)) = g.holds.send(&g.session, outside, None) else { panic!("{cause}: a write outside the ten dials") };
-        assert_eq!((acked["resp"].as_str(), g.fake.sends()), (Some("ack"), sends + 1), "{cause}: a write outside the ten dials as it dials");
+        assert!(g.holds.unholdable_refusal("b-1", "register_node").is_none(), "{cause}: a write outside the eleven meets no refusal of the kind");
+        let OpAnswer::Answered(Ok(acked)) = g.holds.send(&g.session, outside, None) else { panic!("{cause}: a write outside the eleven dials") };
+        assert_eq!((acked["resp"].as_str(), g.fake.sends()), (Some("ack"), sends + 1), "{cause}: a write outside the eleven dials as it dials");
     }
     // The poison ends at the read that says writes go.
     let g = ground();
@@ -2495,7 +2498,7 @@ fn the_ten_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewh
     let g = ground();
     g.fake.op_unreachable.store(true, Ordering::SeqCst);
     assert!(g.holds.unholdable_refusal("b-1", "make_link").is_none());
-    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, ten()[6].clone(), None) else { panic!("the dial fails as it fails") };
+    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, eleven()[7].clone(), None) else { panic!("the dial fails as it fails") };
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")), "{refused}");
     assert!(g.lines().is_empty(), "a write the hold never holds is held never");
 }

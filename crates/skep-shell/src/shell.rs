@@ -56,15 +56,17 @@
 //! The `text` family's five rows — `text.replace`, a text edit of a draft
 //! that replaces the bytes that differ alone, so every byte it did not
 //! change keeps its identity, `text.edit`, several such edits in one
-//! call, each made as its minimal changes and all of them landed or none
-//! (skep #1079), its landed answer showing the lines it changed (skep
+//! call, each made as its minimal changes and all of them landed or none,
+//! in one commit (skep #1079, #1082), its landed answer showing the lines
+//! it changed (skep
 //! #1080), `text.move`, whole lines of a draft moved by identity, by one
 //! `rearrange` about their starts, its landed answer showing them where
 //! they now stand (skep #1085), `text.mark`, a private copy of a draft's
 //! whole content by identity to diff against later, and `text.diff`, what
 //! changed in a draft since such a document, told by identity and written
-//! nowhere (skep #1091), each made of the `op`, `held` and `resolve`
-//! rows' calls within the one call the log keeps — are the child module
+//! nowhere (skep #1091), each made of the `op`, `held`, `resolve` and
+//! `changes` rows' calls within the one call the log keeps — are the child
+//! module
 //! `text`'s, `pub(super)` to the door, with the two caps it keeps
 //! ([`MAX_DRAFT_POSITIONS`], [`MAX_NEW_BYTES`]) and the figures of those
 //! rows ([`ROWS_CONTEXT_LINES`], [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`],
@@ -129,10 +131,11 @@
 //! principal's stands held on a draft it writes, in any state, refused
 //! `held_lines` naming the draft and the count (`Holds::held_lines`; §3c.4,
 //! THE HELD-LINES GATE; skep #849, #854) — the burst writes not gated, a
-//! burst on such a draft held `behind` the standing lines as before, and
-//! `text.edit`'s take-back not gated either: a `set_arrangement` it sends as
-//! a frame through `op`, naming no draft to the door, and only while no line
-//! of its own stands held (skep #1079); `resolve(send)` under a bare
+//! burst on such a draft held `behind` the standing lines as before, and an
+//! `edit` gated as those writes are: `text.replace`, `text.edit` and an
+//! `edit` frame through `op` each ask the gate of the draft the edit names,
+//! an edit being no burst, which would land ahead of a held line (skep
+//! #1082); `resolve(send)` under a bare
 //! session, refused by its own row (`write_in_bare_session`): it sends no
 //! write itself — the lines it hands back go out by a resend, which sends
 //! under no bare session — so it asks no door, and it stands at another
@@ -451,11 +454,11 @@ impl<'a> Write<'a> {
     ///
     /// It is a ceremony, whose walk's writes are the library's,
     /// `publication.open`, which reads, `node.start` or `node.restart`,
-    /// which starts the node, or a call of the `text` family whose every
-    /// write is a burst, `text.replace`, `text.edit` or `text.move`, its
-    /// writes frames sent through `op`, each meeting the door again on that
-    /// row's path. `text.mark`, whose first write is a mint, is judged by it
-    /// ([`Write::call`]).
+    /// which starts the node, or the call of the `text` family whose one
+    /// write is a burst, `text.move`, its write a frame sent through `op`,
+    /// meeting the door again on that row's path. `text.replace` and
+    /// `text.edit`, whose one write is an `edit` frame, and `text.mark`,
+    /// whose first write is a mint, are judged by it ([`Write::call`]).
     pub(super) fn unjudged(call: &'a str) -> Write<'a> {
         Write { named: Named::Call(call), kind: None, drafts: Vec::new() }
     }
@@ -2097,7 +2100,10 @@ impl Shell {
     /// Admits a session-form frame under `session` before any of it is sent.
     ///
     /// A write meets the shell's one write door ([`Shell::write_door`]) — a
-    /// follower as one its burst's hold answers for (`Write::follower`) —
+    /// follower as one its burst's hold answers for (`Write::follower`), and
+    /// an `edit` as a write over the draft it names, so one sent behind a
+    /// held line of the principal's on that draft is refused `held_lines`
+    /// and never lands ahead of the line —
     /// and a `publish` frame is refused: a publication crosses as
     /// `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b)).
@@ -2112,7 +2118,10 @@ impl Shell {
             // (`not_followed`): the standing hold is asked of it where it
             // dials, never ahead of its burst.
             let write = if follower { Write::follower(op) } else { Write::frame(op) };
-            self.write_door(Writer::Session(session), &write)?;
+            // An `edit` lands whatever lines stand held on its draft: the
+            // held-lines gate is asked of the draft the frame names.
+            let over = frame["doc"].as_str().filter(|_| op == "edit" && !follower).map(str::to_string);
+            self.write_door(Writer::Session(session), &write.over(over))?;
         }
         if op == "publish" {
             return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));

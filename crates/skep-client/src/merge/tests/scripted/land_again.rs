@@ -523,8 +523,7 @@ fn a_resume_finds_a_draft_landing_by_its_mark_never_by_the_drafts_words() {
             undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None).expect("undone");
         }
         let typed = dialer.world().position;
-        let frame =
-            frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, None, None, None, None);
+        let frame = frames::set_arrangement(plain, &whole_of(&dialer, plain, &draft_m()), typed, None, None, None, None);
         dialer.world().apply(&frame)["at"].as_u64().expect("the re-arrangement's ack");
         assert_eq!(dialer.world().docs.get(plain).unwrap().runs, draft_m(), "the premise, M");
         let rows = dialer.world().rows.len();
@@ -3101,9 +3100,9 @@ fn the_take_backs_refusals_are_mapped() {
         Refusal::WindowWithheld { origin: a(Z), positions: Vec::new() }
     );
     assert_eq!(
-        dialer.frames("set_arrangement")[0]["runs"],
-        frame_runs(&draft_c()),
-        "the premise: C as the write sends it"
+        dialer.frames("set_arrangement")[0]["changes"],
+        whole_changes(width_of(&draft_m()), &draft_c()),
+        "the premise: C as the write sends it, over every position the draft holds"
     );
     assert_eq!(
         refused("withheld", Some(D)),

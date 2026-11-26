@@ -9,26 +9,26 @@
 //! call, `text.replace(session, {doc, old, new})`, the `text` family's
 //! first, `pub(super)` to the door ([`Shell::text_replace`]), composed of
 //! rows the shell answers itself ([`Calls`]): `op` for its reads
-//! (`doc_metadata`, `retrieve_doc_v_span_set`, `retrieve_v`, `image`) and
-//! its bursts (`insert`, `delete`), each by that row's path — the write
-//! door, the hold, the attest — and `held` and `resolve` for the lines of
-//! its own the shell holds. The call log holds the one `text.replace`
-//! entry; the board's dials are logged as every dial is.
+//! (`doc_metadata`, `retrieve_doc_v_span_set`, `retrieve_v`) and its one
+//! write, an `edit` frame, by that row's path — the write door, the
+//! standing hold — and `changes` for the read that settles a lost answer.
+//! The call log holds the one `text.replace` entry; the board's dials are
+//! logged as every dial is.
 //!
 //! The family's second call, `text.edit` — several such edits in one call,
-//! each made as its minimal changes and all of them landed or none (skep
-//! #1079), its landed answer showing the lines it changed, numbered, drawn
+//! each made as its minimal changes and all of them one commit (skep #1079,
+//! #1082), its landed answer showing the lines it changed, numbered, drawn
 //! from the text it planned on (skep #1080; the caps on them
 //! [`ROWS_CONTEXT_LINES`], [`ROWS_MAX_RUN`], [`ROWS_RUN_HEAD`],
 //! [`ROWS_RUN_TAIL`], [`ROWS_MAX_LINE_CHARS`] and [`ROWS_MAX_BYTES`]) — is
 //! the child module `edit`'s, made of this module's pieces: its rows and the
-//! session they stand under, the text and its find, the writes, the lines an
-//! edit settles, the undo by identity and the answers.
+//! session they stand under, the text and its find, the one write and the
+//! answers.
 //!
 //! The family's third call, `text.move` — whole lines of a draft moved by
 //! identity, by one `rearrange` typed against the call's own read, its
 //! landed answer showing the lines where they now stand (skep #1085) — is
-//! the child module `moving`'s, made of this module's read, its write and
+//! the child module `moving`'s, made of this module's read, its burst and
 //! the line it settles. The lines the two calls' landed answers show are
 //! drawn by the child module `rows`.
 //!
@@ -50,11 +50,14 @@
 //! members first, each refused in another form before the session is looked
 //! up, as every row reads them ([`Asked::read`]); then the session; then
 //! the shell's one write door, asked once for the edit before its first
-//! read (SP-31) — a bare session, another window, and for `text.mark`,
-//! whose first write no hold holds, a hold standing at the board — each of
-//! its writes meeting the door again on the `op` row's path; then the
-//! reads; then the writes. `text.diff` reads its members, looks up its
-//! session and reads ([`Shell::text_read`]).
+//! read (SP-31) — a bare session, another window, a hold standing at the
+//! board for the calls whose first write no hold holds (`text.replace`,
+//! `text.edit` and `text.mark`), and for `text.replace` and `text.edit`,
+//! which write over the draft whatever lines stand held on it, a held line
+//! of the principal's on the draft (`held_lines`) — each of its writes
+//! meeting the door again on the `op` row's path; then the reads; then the
+//! writes. `text.diff` reads its members, looks up its session and reads
+//! ([`Shell::text_read`]).
 //!
 //! **The session** ([`Under`]). Every call names the session the edit
 //! stands under. A call the shell answers `session_died`, its reason naming
@@ -65,8 +68,7 @@
 //! edit a board restart meets ends as one it never met. A death naming no
 //! re-open, and a second death of the same call, are answered as they
 //! stand, as any refusal of that call is: the shell opens no session for
-//! the edit, so a write whose dial met such a death stays held, its drop
-//! refused too, and the edit answers `held` with cause `session_died`.
+//! the edit.
 //!
 //! **The text** ([`Text`]). The draft's content subspace is read whole, in
 //! parts of the delivery budget ([`READ_POSITIONS`]), and mapped: each
@@ -91,55 +93,44 @@
 //! so no character is split between kept bytes and new ones; what is left
 //! is the edit ([`Edit`]): an ordinal, a width removed, the bytes inserted.
 //!
-//! **The write.** An edit that only inserts or only removes is ONE commit,
-//! typed against the first read's position (`as_of`): it lands whole or the
-//! board refuses it. One that does both is TWO, since no op of the wire
-//! removes and mints in one commit: the new bytes are inserted directly
-//! after the old ones, typed against the first read, then the old ones are
-//! removed, typed against the insert's own commit. A refusal of the first
-//! leaves nothing. Where the second does not land — another writer's change
-//! committed between the two — the insert is undone *by identity*: the
-//! draft's image is read, the bytes the insert minted are found wherever
-//! they now stand, and they are removed, typed against that read
-//! ([`UNDO_TRIES`] times at most, against a draft that keeps moving); the
-//! edit then answers the refusal that stopped it, the draft as the other
-//! writer left it. Where the undo does not land either, the answer names
-//! the new bytes standing (`new_text`) and the old ones not removed
-//! (`old_text`), each by ordinal and width, the new ones by their I-address
-//! and their commit too, so the caller removes one of the two (SP-8: a
-//! refusal made after the first write names what that write left): it is
-//! `partial`, an error, where no line of the undo's is held, and `held`,
-//! naming the undo's line, where the shell would not drop it — a line that
-//! may yet remove the new bytes (*A held line*). The two spans stand
-//! unanswered in one case alone: a process that ends between the two
-//! commits answers nothing, and its caller reads the draft before it edits
-//! it again.
+//! **The write** ([`send_edit`]). The edit is ONE frame, the board's `edit`
+//! (wire.md §Arrangement): one change — the old bytes' positions removed
+//! and the new bytes minted in their place — typed against the first read's
+//! position (`as_of`), in one commit. It lands whole or the board refuses
+//! it, and no state stands between its removal and its insert, so nothing
+//! is ever taken back and no image of the draft is read. An `edit` is no
+//! burst: the shell holds no line of it, and a hold standing at the board
+//! refuses it at the door. The frame carries an `id` of the shell's own,
+//! drawn fresh for the call.
 //!
-//! **A held line.** `insert` and `delete` are bursts, which the shell holds
-//! where the board refuses or cannot take them, and a held line stops every
-//! later burst on its draft. The edit leaves none: each line of its own —
-//! the insert's, the removal's, an undo's — is dropped within the call
-//! (`resolve`, `drop`), the board's verdict read off it first, so a stale
-//! edit, a refused one and one the board could not take all answer
-//! `refused` with nothing standing and nothing queued. Two outcomes of a
-//! drop are answered as they are: `kept`, a write whose answer was lost and
-//! whose landing the shell's read found, is a write that landed; and a drop
-//! the shell refuses — it cannot tell whether the write landed while the
-//! board does not answer — leaves the line held, and the answer is `held`,
-//! an error, naming it and the write it is: `insert`, `delete`, or `undo`,
-//! an undo's removal of the new bytes, which may yet land while the old
-//! ones stand. The held queue is the principal's, every caller of it at the
-//! board sharing it ([`settle`]).
+//! **A lost answer.** A write whose answer is lost may have landed (the
+//! hold's `may_have_landed`). It is asked again once, the same frame under
+//! the same `id`: the board's memo answers a frame it applied with its
+//! acknowledgment, and a frame it never met lands now. Where that answer is
+//! lost too, or the frame is refused as typed against an older state — the
+//! memo gone at a restart or never written, and the draft moved, by the
+//! frame's own commit or by another's — the change feed settles it: the
+//! draft's rows past `as_of` are read (`changes`, the session's drafts page
+//! under the draft), and where the first is an `edit` under the session's
+//! own key it is the frame's own commit, since a frame typed against
+//! `as_of` lands only as the first change of the draft past it. The edit
+//! then answers landed at that row's position, the addresses its
+//! acknowledgment named unread. Any other first row, no row, a session
+//! holding no key and a feed read that does not answer leave it unsettled:
+//! the answer is `answer_lost`, an error naming `as_of` and what lost the
+//! answer — no verdict on the edit. The one re-send that cannot land twice
+//! is the same frame typed against that `as_of`; a caller reads the draft
+//! before editing it again.
 //!
 //! **The answer** ([`Answer`]). Every outcome is one JSON object keyed by
-//! `outcome`: `replaced`, `unchanged`, `refused`, `held` or `partial`
-//! (`shapes`' `TextReplaced`, `TextUnchanged`, `TextRefused`, `TextHeld`,
-//! `TextPartial`). A refusal the edit or the board decided is data; one
-//! where the shell could not get the board's verdict, a read the board
-//! answered in a form this shell does not read, a held line and a partial
-//! landing are errors, each carrying [`ERROR`], `true`, the one mark a
-//! transport reads for an error flag of its own. The board's refusal of a
-//! read, and the shell's, is the call's refusal.
+//! `outcome`: `replaced`, `unchanged`, `refused` or `answer_lost`
+//! (`shapes`' `TextReplaced`, `TextUnchanged`, `TextRefused`,
+//! `TextAnswerLost`). A refusal the edit or the board decided is data; a
+//! read the board answered in a form this shell does not read and a lost
+//! answer no read settled are errors, each carrying [`ERROR`], `true`, the
+//! one mark a transport reads for an error flag of its own. The board's
+//! refusal of a read, and the shell's of a read or of the write, is the
+//! call's refusal.
 
 use std::cell::RefCell;
 
@@ -151,9 +142,11 @@ use skep_client::search::MAX_DELIVERY_ITEMS;
 use skep_client::text::shared;
 
 use super::{Shell, Write, Writer};
+use crate::hold::may_have_landed;
+use crate::refs::DialId;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::SessionEntry;
-use crate::wire::{decode_hex, natural, MAX_INSERT_VALUES};
+use crate::wire::{decode_hex, natural, MAX_EDIT_VALUES};
 
 mod diffing;
 mod edit;
@@ -179,23 +172,19 @@ const READ_POSITIONS: u64 = MAX_DELIVERY_ITEMS;
 /// a call per connection one per connection.
 pub const MAX_DRAFT_POSITIONS: u64 = 64 * READ_POSITIONS;
 
-/// The most bytes of new text one edit inserts.
+/// The most bytes of new text one call inserts, every change of it counted.
 ///
-/// It is the board's cap on the values one `insert` mints, a byte of text
-/// being one value (`wire::MAX_INSERT_VALUES`, skep-core's codec's): an edit
-/// whose trimmed new text passes it is refused `too_large` before any write,
-/// where the board would refuse the frame.
-pub const MAX_NEW_BYTES: usize = MAX_INSERT_VALUES;
+/// It is the board's cap on the values one `edit` mints, a byte of text
+/// being one value (`wire::MAX_EDIT_VALUES`, skep-core's codec's): a call
+/// whose new bytes pass it is refused `too_large` before any write, where
+/// the board would refuse the frame.
+pub const MAX_NEW_BYTES: usize = MAX_EDIT_VALUES;
 
-/// The window of the image read an undo makes: the draft's whole content.
+/// The window of a read or a copy over a document's whole content.
 ///
 /// The board clips a region to the arrangement, so one read over it answers
-/// every run the draft arranges, whatever its extent; a draft past the
-/// board's run budget answers `image_too_large`, and the undo is not made.
+/// every run the document arranges, whatever its extent.
 const WHOLE_CONTENT: u64 = u64::MAX;
-
-/// How many times an undo is typed afresh against a draft that keeps moving.
-const UNDO_TRIES: usize = 3;
 
 /// The calls an edit makes, each under the session the edit stands under.
 ///
@@ -224,6 +213,21 @@ trait Calls {
     /// The row's refusal, `landing_unread` among them: the shell cannot
     /// tell whether the line's write landed, and drops nothing.
     fn drop_held(&self, held: u64) -> Result<Value, Refusal>;
+
+    /// Reads the first row of the change feed under the draft `doc` past
+    /// the position `since`, as the shell's `changes` row answers the
+    /// session's drafts page narrowed to one document and one entry.
+    ///
+    /// # Errors
+    ///
+    /// The row's refusal.
+    fn changes(&self, doc: &str, since: u64) -> Result<Value, Refusal>;
+
+    /// Returns the fingerprint of the key the session signs under, as a
+    /// feed row names its writer's (`key`).
+    ///
+    /// None where the session holds no key, or no session stands.
+    fn key(&self) -> Option<String>;
 }
 
 /// A row of the shell's an edit makes its calls through.
@@ -235,6 +239,8 @@ pub(super) enum Row {
     Held,
     /// `resolve(session, {held, act})`.
     Resolve,
+    /// `changes(session, {since, class, under})`.
+    Changes,
 }
 
 /// The rows an edit's calls go to, and the sessions they may name.
@@ -252,6 +258,12 @@ pub(super) trait Rows {
 
     /// Returns whether a live session stands under the reference `session`.
     fn stands(&self, session: &str) -> bool;
+
+    /// Returns the fingerprint of the key the session under the reference
+    /// `session` signs with, in the hex a feed row's `key` spells.
+    ///
+    /// None for a session holding no key, and where none stands.
+    fn key(&self, session: &str) -> Option<String>;
 }
 
 impl Rows for Shell {
@@ -260,11 +272,16 @@ impl Rows for Shell {
             Row::Op => self.op(args),
             Row::Held => self.held(args),
             Row::Resolve => self.resolve(args),
+            Row::Changes => self.changes(args),
         }
     }
 
     fn stands(&self, session: &str) -> bool {
         self.sessions.get(session).is_some()
+    }
+
+    fn key(&self, session: &str) -> Option<String> {
+        self.sessions.get(session)?.key().map(|key| key.to_hex())
     }
 }
 
@@ -341,6 +358,14 @@ impl<R: Rows + ?Sized> Calls for Under<'_, R> {
     fn drop_held(&self, held: u64) -> Result<Value, Refusal> {
         self.call(Row::Resolve, Value::from_iter([("held", Value::from(held)), ("act", Value::from("drop"))]))
     }
+
+    fn changes(&self, doc: &str, since: u64) -> Result<Value, Refusal> {
+        self.call(Row::Changes, json!({"since": since, "class": "drafts", "under": doc, "limit": 1}))
+    }
+
+    fn key(&self) -> Option<String> {
+        self.rows.key(&self.session.borrow())
+    }
 }
 
 /// Returns the session a death re-opened, where `answer` is a death naming
@@ -359,9 +384,10 @@ fn reopened(answer: &Result<Value, Refusal>) -> Option<String> {
 ///
 /// An answer is an error where the shell could not get the board's verdict
 /// on a write, where the board answered a read in a form this shell does
-/// not read, where a line of the edit's stays held, and where the edit
-/// landed in part (`shapes`' `TextRefused`, `TextHeld`, `TextPartial`); no
-/// data answer carries it.
+/// not read, where a line of a move's or a mark's stays held, and where an
+/// edit's answer was lost and no read settled it (`shapes`' `TextRefused`,
+/// `TextMoveHeld`, `TextMarkHeld`, `TextAnswerLost`); no data answer
+/// carries it.
 const ERROR: &str = "error";
 
 /// An edit's answer: one JSON object, and whether it is an error.
@@ -587,6 +613,16 @@ impl Text {
         }
     }
 
+    /// Returns the bytes of text at the positions `from` up to `to`.
+    ///
+    /// They are the bytes of the one stretch that holds every one of the
+    /// positions, and none where no stretch does — a position a value that
+    /// is no text takes among them, or one past the text.
+    fn bytes_at(&self, from: u64, to: u64) -> &[u8] {
+        let held = self.stretches.iter().find(|stretch| stretch.ordinal <= from && to <= stretch.ordinal + stretch.len as u64 && from <= to);
+        held.and_then(|stretch| self.bytes.get(stretch.at + (from - stretch.ordinal) as usize..stretch.at + (to - stretch.ordinal) as usize)).unwrap_or_default()
+    }
+
     /// Returns the text as a `rearrange` about `cuts` leaves the draft.
     ///
     /// Each region runs from its cut up to the next: three cuts exchange the
@@ -729,11 +765,6 @@ impl<'a> Edit<'a> {
         let (lead, tail) = shared(old, new);
         Edit { ordinal: found.saturating_add(lead as u64), removed: (old.len() - lead - tail) as u64, inserted: &new[lead..new.len() - tail] }
     }
-
-    /// Returns the ordinal the new bytes are inserted at: past the old ones.
-    fn after(&self) -> u64 {
-        self.ordinal.saturating_add(self.removed)
-    }
 }
 
 /// Returns how many content positions a `span_set` answer arranges.
@@ -750,54 +781,7 @@ fn content_extent(set: &Value) -> Option<u64> {
     }
 }
 
-/// Where the bytes an insert minted stand in a draft's image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Placed {
-    /// Nowhere: the draft arranges none of them.
-    Nowhere,
-    /// All of them, in their order, from this content ordinal on.
-    Whole(u64),
-    /// Some of them, or all of them in pieces.
-    Parted,
-}
-
-/// Returns where the `width` I-addresses from `addr` stand in `image`.
-///
-/// `image` is an `image` answer over a draft's whole content, its runs in
-/// arrangement order. `None` where it is no such answer, or `addr` is no
-/// I-address.
-fn placed(image: &Value, addr: &str, width: u64) -> Option<Placed> {
-    let split = |address: &str| -> Option<(String, u64)> {
-        let (prefix, last) = address.rsplit_once('.')?;
-        Some((prefix.to_string(), last.parse().ok()?))
-    };
-    let (prefix, first) = split(addr)?;
-    let end = first.checked_add(width)?;
-    // Each piece of the minted bytes a run holds: its ordinal, its first
-    // address's last component, its width.
-    let (mut pieces, mut ordinal) = (Vec::new(), 1u64);
-    for run in image["runs"].as_array()? {
-        let (run_prefix, run_first) = split(run["i_start"].as_str()?)?;
-        let run_width = natural(&run["width"])?;
-        let (lo, hi) = (run_first.max(first), run_first.checked_add(run_width)?.min(end));
-        let past = ordinal.checked_add(run_width)?;
-        if run_prefix == prefix && lo < hi {
-            pieces.push((ordinal + (lo - run_first), lo, hi - lo));
-        }
-        ordinal = past;
-    }
-    let Some(&(start, _, _)) = pieces.first() else { return Some(Placed::Nowhere) };
-    let (mut next_ordinal, mut next_address) = (start, first);
-    for (piece_ordinal, piece_first, piece_width) in pieces {
-        if piece_ordinal != next_ordinal || piece_first != next_address {
-            return Some(Placed::Parted);
-        }
-        (next_ordinal, next_address) = (piece_ordinal + piece_width, piece_first + piece_width);
-    }
-    Some(if next_address == end { Placed::Whole(start) } else { Placed::Parted })
-}
-
-/// What one write of an edit answered.
+/// What one burst of a call answered.
 #[derive(Debug)]
 enum Wrote {
     /// The board's ack.
@@ -806,7 +790,7 @@ enum Wrote {
     Held(Line),
 }
 
-/// A held line of the edit's own: its ordinal, and why the shell holds it.
+/// A held line of the call's own: its ordinal, and why the shell holds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {
     /// The ordinal `held` lists it by and `resolve` takes.
@@ -815,7 +799,7 @@ struct Line {
     cause: String,
 }
 
-/// What became of a held line of the edit's own.
+/// What became of a held line of the call's own.
 #[derive(Debug)]
 enum Settled {
     /// Dropped: its write did not land, and nothing of it is queued.
@@ -831,7 +815,8 @@ enum Settled {
     Standing(Line),
 }
 
-/// Sends one write of the edit's, and reads its answer.
+/// Sends one burst of a call's — a move's `rearrange`, a mark's `copy` — and
+/// reads its answer.
 ///
 /// # Errors
 ///
@@ -844,7 +829,7 @@ fn write(calls: &impl Calls, frame: Value) -> Result<Wrote, Refusal> {
     })
 }
 
-/// Settles a held line of the edit's own, so none is left to stop the draft.
+/// Settles a held line of the call's own, so none is left to stop the draft.
 ///
 /// The board's verdict is read off the line first (`held`): a refused run
 /// and a moved document each carry one. Then the line is dropped, and with
@@ -854,9 +839,9 @@ fn write(calls: &impl Calls, frame: Value) -> Result<Wrote, Refusal> {
 /// landed — the line gone, the shell's own resend having settled it at the
 /// write's ack. The held queue is the principal's, so that reading holds
 /// only while no other caller of the principal's at the board resolves the
-/// draft's lines during the edit: a transport serving one call at a time
+/// draft's lines during the call: a transport serving one call at a time
 /// keeps it, and under one serving calls at once a line another caller
-/// dropped first reads as a write that landed, and the edit's own drop
+/// dropped first reads as a write that landed, and the call's own drop
 /// takes the lines another caller held after its line.
 fn settle(calls: &impl Calls, line: Line) -> Settled {
     let verdict = calls.held().ok().and_then(|lines| lines.as_array()?.iter().find(|row| row["held"] == line.held).map(|row| row["refusal"].clone())).filter(|refusal| refusal["resp"] == "rejected");
@@ -868,55 +853,11 @@ fn settle(calls: &impl Calls, line: Line) -> Settled {
     }
 }
 
-/// What an undo left of the insert it takes back.
-#[derive(Debug)]
-enum Undone {
-    /// Nothing of the insert stands: its bytes removed, their removal found
-    /// landed, or arranged nowhere already.
-    Gone,
-    /// The insert's bytes stand, and no line of the undo's is held.
-    Stands,
-    /// The insert's bytes stand, and the undo's removal of them stays held:
-    /// the shell would not drop its line, which may yet remove them.
-    Held(Line),
-}
-
-/// Removes the bytes an insert minted, wherever they now stand.
-///
-/// The draft's whole image is read, the `width` addresses from `addr` found
-/// in it, and where they stand whole they are removed, typed against that
-/// read; a removal the board refuses as typed against an older state is
-/// made again from a fresh read, [`UNDO_TRIES`] times in all. Answers what
-/// it left ([`Undone`]); a removal whose line the shell would not drop ends
-/// the undo, no removal sent after it.
-fn undo(calls: &impl Calls, doc: &str, addr: &str, width: u64) -> Undone {
-    for _ in 0..UNDO_TRIES {
-        let Ok(image) = calls.op(frames::image(doc, 1, WHOLE_CONTENT)) else { return Undone::Stands };
-        let (Some(as_of), Some(placed)) = (image["as_of"].as_u64(), placed(&image, addr, width)) else { return Undone::Stands };
-        let ordinal = match placed {
-            Placed::Nowhere => return Undone::Gone,
-            Placed::Whole(ordinal) => ordinal,
-            Placed::Parted => return Undone::Stands,
-        };
-        match write(calls, frames::delete(doc, ordinal, width, as_of, None)) {
-            Ok(Wrote::Acked(_)) => return Undone::Gone,
-            Ok(Wrote::Held(line)) => match settle(calls, line) {
-                Settled::Landed => return Undone::Gone,
-                Settled::Dropped { verdict: Some(verdict), .. } if verdict["code"] == "arrangement_moved" => {}
-                Settled::Dropped { .. } => return Undone::Stands,
-                Settled::Standing(line) => return Undone::Held(line),
-            },
-            Err(_) => return Undone::Stands,
-        }
-    }
-    Undone::Stands
-}
-
 /// Returns the answer of an edit that landed.
 ///
-/// `at` is the commit the edit was whole at, and `addr` the first I-address
-/// the new bytes were minted at; each is absent where the write that would
-/// name it was found landed by the shell's read, its own answer lost.
+/// `at` is the edit's commit, and `addr` the first I-address the new bytes
+/// were minted at: absent where the edit minted none, and where the write
+/// was found landed by its feed row, its own answer lost.
 fn replaced(doc: &str, edit: &Edit<'_>, at: Option<u64>, addr: Option<&str>) -> Answer {
     let mut value = json!({"outcome": "replaced", "doc": doc, "ordinal": edit.ordinal.to_string(), "removed": edit.removed.to_string(), "inserted": edit.inserted.len().to_string()});
     if let Some(at) = at {
@@ -937,9 +878,9 @@ fn refused(doc: &str, cause: &str, detail: Value) -> Answer {
     Answer::data(value)
 }
 
-/// Returns the answer of an edit a write of which did not land.
+/// Returns the answer of a call a write of which did not land.
 ///
-/// Nothing of the edit stands and no line of it is held. With the board's
+/// Nothing of the write stands and no line of it is held. With the board's
 /// verdict on the write the answer is data, its cause the verdict's code;
 /// without one the shell could not get the write to the board, the cause
 /// is the hold's, and the answer is an error.
@@ -953,45 +894,11 @@ fn refused_write(doc: &str, cause: &str, verdict: Option<Value>) -> Answer {
     }
 }
 
-/// Returns the two spans a two-write edit leaves where it is not whole.
+/// Returns the answer of a call a line of which stays held, an error.
 ///
-/// They are `new_text`, the new bytes, placed directly after the old ones,
-/// with the I-address and the commit the insert's ack named where it gave
-/// one, and `old_text`, the old bytes — each by its ordinal and width as
-/// the insert left them. Which of the two stands is the answer's to say: in
-/// a `partial` both do; beside a held line the other stands, and the one
-/// its write would place or remove may or may not — `new_text` beside a
-/// held insert or undo, `old_text` beside a held delete.
-fn spans(edit: &Edit<'_>, inserted: Option<&Value>) -> Value {
-    let mut new = json!({"ordinal": edit.after().to_string(), "width": edit.inserted.len().to_string()});
-    if let Some(ack) = inserted {
-        new["addr"] = ack["addr"].clone();
-        new["at"] = ack["at"].clone();
-    }
-    json!({"new_text": new, "old_text": {"ordinal": edit.ordinal.to_string(), "width": edit.removed.to_string()}})
-}
-
-/// Returns the answer of an edit that landed in part, an error.
-///
-/// The new bytes stand and the old ones were not removed ([`spans`]);
-/// `why` says what stopped the removal: a `cause`, and the `refusal` beside
-/// it where there is one.
-fn partial(doc: &str, edit: &Edit<'_>, inserted: Option<&Value>, why: Value) -> Answer {
-    let mut value = json!({"outcome": "partial", "doc": doc});
-    if let Some(members) = value.as_object_mut() {
-        members.extend(spans(edit, inserted).as_object().cloned().unwrap_or_default());
-        members.extend(why.as_object().cloned().unwrap_or_default());
-    }
-    Answer::error(value)
-}
-
-/// Returns the answer of an edit a line of which stays held, an error.
-///
-/// `write` names the write the line is: `insert`, `delete`, `undo`, an
-/// undo's removal of the new bytes, `rearrange`, a move's one write, or
-/// `copy`, a mark's; `stands` is what the call leaves beside it — a
-/// two-write edit's spans ([`spans`]), a mark's document — and null for a
-/// call of one write.
+/// `write` names the burst the line is: `rearrange`, a move's one write, or
+/// `copy`, a mark's; `stands` is what the call leaves beside it — a mark's
+/// document — and null for a move.
 fn held(doc: &str, line: &Line, write: &str, stands: Value) -> Answer {
     let mut value = json!({"outcome": "held", "doc": doc, "held": line.held, "cause": line.cause, "write": write});
     if let (Some(members), Value::Object(stands)) = (value.as_object_mut(), stands) {
@@ -1081,72 +988,99 @@ fn read_draft(calls: &impl Calls, doc: &str) -> Result<Result<Read, Answer>, Ref
     }
 }
 
-/// Makes an edit of one write: an insert alone, or a removal alone.
+/// What became of a call's one `edit` frame.
+#[derive(Debug)]
+enum Landing {
+    /// The board acknowledged it.
+    Acked(Value),
+    /// Its answer was lost, and the draft's first row past the position it
+    /// was typed against is the frame's own: it landed at this position,
+    /// what its acknowledgment named unread.
+    Found(u64),
+    /// The board refused it, nothing written: its verdict.
+    Refused(Value),
+    /// Its answer was lost and no read settled whether it landed: the
+    /// refusal that lost it.
+    Lost(Refusal),
+}
+
+/// Returns the board's verdict where `refusal` is one: a `rejected`
+/// document, a judgment of the frame that wrote nothing.
+fn verdict(refusal: &Refusal) -> Option<&Value> {
+    match refusal {
+        Refusal::Board(refused) if refused.status == 200 => Some(&refused.body),
+        _ => None,
+    }
+}
+
+/// Sends a call's one write: `changes` of the draft `doc` in one `edit`
+/// frame typed against `as_of`, and settles a lost answer.
+///
+/// It is the module doc's *The write* and *A lost answer*: the frame goes
+/// through the `op` row under an `id` drawn fresh for the call; an answer
+/// that leaves the write possibly landed (`may_have_landed`) has the same
+/// frame asked again once; and where that settles nothing — its answer lost
+/// too, the frame refused as typed against an older state, or the shell
+/// refusing to send it — the draft's first row past `as_of` is read off the
+/// change feed, an `edit` under the session's own key being the frame's own
+/// commit.
 ///
 /// # Errors
 ///
-/// The `op` row's refusal of the write, nothing written.
-fn one_write(calls: &impl Calls, doc: &str, edit: &Edit<'_>, as_of: u64) -> Result<Answer, Refusal> {
-    let (frame, name) = if edit.inserted.is_empty() {
-        (frames::delete(doc, edit.ordinal, edit.removed, as_of, None), "delete")
-    } else {
-        (frames::insert_text(doc, edit.ordinal, edit.inserted, as_of, None), "insert")
+/// The `op` row's refusal of the first ask where it is no verdict of the
+/// board's and left nothing landed: the shell's own, or the board's of
+/// another status.
+fn send_edit(calls: &impl Calls, doc: &str, changes: &[Value], as_of: u64) -> Result<Landing, Refusal> {
+    let id = DialId::fresh();
+    let frame = frames::edit(doc, changes, as_of, Some(id.as_str()));
+    let lost = match calls.op(frame.clone()) {
+        Ok(ack) => return Ok(Landing::Acked(ack)),
+        Err(refusal) if may_have_landed(&refusal) => refusal,
+        Err(refusal) => return verdict(&refusal).cloned().map(Landing::Refused).ok_or(refusal),
     };
-    Ok(match write(calls, frame)? {
-        Wrote::Acked(ack) => replaced(doc, edit, ack["at"].as_u64(), ack["addr"].as_str()),
-        Wrote::Held(line) => match settle(calls, line) {
-            Settled::Landed => replaced(doc, edit, None, None),
-            Settled::Dropped { cause, verdict } => refused_write(doc, &cause, verdict),
-            Settled::Standing(line) => held(doc, &line, name, Value::Null),
-        },
+    // Asked again once, the same frame under the same id: the memo's
+    // acknowledgment where the board applied it, a first landing where the
+    // board never met it.
+    let again = match calls.op(frame) {
+        Ok(ack) => return Ok(Landing::Acked(ack)),
+        Err(refusal) => refusal,
+    };
+    // A verdict on the re-ask is the frame's — the first ask landed nothing
+    // the board would not have refused it for — but one: typed against an
+    // older state, the draft moved, perhaps by the frame's own commit.
+    if let Some(verdict) = verdict(&again).filter(|verdict| verdict["code"] != "arrangement_moved") {
+        return Ok(Landing::Refused(verdict.clone()));
+    }
+    Ok(match own_commit(calls, doc, as_of) {
+        Some(at) => Landing::Found(at),
+        None => Landing::Lost(lost),
     })
 }
 
-/// Makes an edit of two writes: the new bytes inserted, then the old removed.
+/// Returns the position the call's own `edit` of `doc`, typed against
+/// `as_of`, landed at, where the change feed says it did.
 ///
-/// The insert is typed against the read (`as_of`) and lands directly after
-/// the old bytes; the removal is typed against the insert's own commit, so
-/// it lands only where nothing changed the draft between the two. A removal
-/// that does not land has the insert undone ([`undo`]), and the edit
-/// answers what stopped it; where the undo does not land either, `partial`,
-/// or `held`, `write` `undo`, where the undo's line stays held.
+/// A frame typed against `as_of` lands only as the first change of the
+/// draft past it, so the draft's first row past `as_of` is read: an `edit`
+/// whose `key` is the session's own is the frame's commit. Any other first
+/// row, no row, a session holding no key, a row naming no position and a
+/// read the row refuses say nothing, and none is answered.
+fn own_commit(calls: &impl Calls, doc: &str, as_of: u64) -> Option<u64> {
+    let own = calls.key()?;
+    let page = calls.changes(doc, as_of).ok()?;
+    let first = page["entries"].as_array()?.first()?;
+    (first["op"] == "edit" && first["key"].as_str() == Some(own.as_str())).then(|| first["at"].as_u64()).flatten()
+}
+
+/// Returns the answer of an edit whose answer was lost and which no read
+/// settled, an error.
 ///
-/// # Errors
-///
-/// The `op` row's refusal of the insert, nothing written; or of the
-/// removal, where the undo then left nothing of the insert standing.
-fn two_writes(calls: &impl Calls, doc: &str, edit: &Edit<'_>, as_of: u64) -> Result<Answer, Refusal> {
-    let inserted = match write(calls, frames::insert_text(doc, edit.after(), edit.inserted, as_of, None))? {
-        Wrote::Acked(ack) => ack,
-        Wrote::Held(line) => {
-            return Ok(match settle(calls, line) {
-                Settled::Dropped { cause, verdict } => refused_write(doc, &cause, verdict),
-                Settled::Landed => partial(doc, edit, None, json!({"cause": "answer_lost"})),
-                Settled::Standing(line) => held(doc, &line, "insert", spans(edit, None)),
-            })
-        }
-    };
-    let (Some(addr), Some(at)) = (inserted["addr"].as_str(), inserted["at"].as_u64()) else {
-        return Ok(partial(doc, edit, None, json!({"cause": "unread", "op": "insert"})));
-    };
-    let width = edit.inserted.len() as u64;
-    Ok(match write(calls, frames::delete(doc, edit.ordinal, edit.removed, at, None)) {
-        Ok(Wrote::Acked(ack)) => replaced(doc, edit, ack["at"].as_u64(), Some(addr)),
-        Ok(Wrote::Held(line)) => match settle(calls, line) {
-            Settled::Landed => replaced(doc, edit, None, Some(addr)),
-            Settled::Dropped { cause, verdict } => match undo(calls, doc, addr, width) {
-                Undone::Gone => refused_write(doc, &cause, verdict),
-                Undone::Stands => partial(doc, edit, Some(&inserted), json!({"cause": verdict.as_ref().and_then(|v| v["code"].as_str()).unwrap_or(&cause), "refusal": verdict})),
-                Undone::Held(line) => held(doc, &line, "undo", spans(edit, Some(&inserted))),
-            },
-            Settled::Standing(line) => held(doc, &line, "delete", spans(edit, Some(&inserted))),
-        },
-        Err(refusal) => match undo(calls, doc, addr, width) {
-            Undone::Gone => return Err(refusal),
-            Undone::Stands => partial(doc, edit, Some(&inserted), json!({"cause": refusal.name(), "refusal": refusal.to_value()})),
-            Undone::Held(line) => held(doc, &line, "undo", spans(edit, Some(&inserted))),
-        },
-    })
+/// It is no verdict on the edit, which may have landed: `as_of` is the
+/// position its one frame was typed against, the one position a re-send of
+/// that frame cannot land twice at, and `lost` the refusal that lost the
+/// answer.
+fn answer_lost(doc: &str, as_of: u64, lost: &Refusal) -> Answer {
+    Answer::error(json!({"outcome": "answer_lost", "doc": doc, "as_of": as_of, "cause": lost.name(), "refusal": lost.to_value()}))
 }
 
 /// What an edit is asked: the draft, the text to replace and its
@@ -1183,14 +1117,14 @@ impl<'a> Asked<'a> {
 /// In order: the draft's text is read, a published document refused before
 /// any of its text is ([`read_draft`]); `old` is found in it
 /// ([`Text::find`]); the edit is trimmed ([`Edit::of`]); and it is written,
-/// one commit or two (the module doc's *The write*). Nothing is written
-/// before every refusal a read alone decides (SP-8).
+/// one change in one commit ([`send_edit`]; the module doc's *The write*).
+/// Nothing is written before every refusal a read alone decides (SP-8).
 ///
 /// # Errors
 ///
 /// The board's verdict on a read, or the shell's refusal of it; and the
-/// `op` row's refusal of a write that left nothing standing. Every other
-/// outcome is an [`Answer`].
+/// `op` row's refusal of the write, nothing written ([`send_edit`]). Every
+/// other outcome is an [`Answer`].
 fn replace(calls: &impl Calls, asked: Asked<'_>) -> Result<Answer, Refusal> {
     let Asked { doc, old, new } = asked;
     let Read { text, as_of } = match read_draft(calls, doc)? {
@@ -1207,11 +1141,16 @@ fn replace(calls: &impl Calls, asked: Asked<'_>) -> Result<Answer, Refusal> {
     if edit.inserted.len() > MAX_NEW_BYTES {
         return Ok(refused(doc, "too_large", json!({"what": "new", "bytes": edit.inserted.len().to_string(), "cap": MAX_NEW_BYTES.to_string()})));
     }
-    match (edit.removed, edit.inserted.is_empty()) {
-        (0, true) => Ok(Answer::data(json!({"outcome": "unchanged", "doc": doc, "ordinal": found.to_string(), "as_of": as_of}))),
-        (0, false) | (_, true) => one_write(calls, doc, &edit, as_of),
-        (_, false) => two_writes(calls, doc, &edit, as_of),
+    if edit.removed == 0 && edit.inserted.is_empty() {
+        return Ok(Answer::data(json!({"outcome": "unchanged", "doc": doc, "ordinal": found.to_string(), "as_of": as_of})));
     }
+    let change = frames::minted(edit.ordinal, edit.removed, edit.inserted);
+    Ok(match send_edit(calls, doc, &[change], as_of)? {
+        Landing::Acked(ack) => replaced(doc, &edit, ack["at"].as_u64(), ack["addr"].as_str()),
+        Landing::Found(at) => replaced(doc, &edit, Some(at), None),
+        Landing::Refused(verdict) => refused_write(doc, "refused", Some(verdict)),
+        Landing::Lost(lost) => answer_lost(doc, as_of, &lost),
+    })
 }
 
 impl Shell {
@@ -1219,11 +1158,11 @@ impl Shell {
     /// draft.
     ///
     /// The members are read ([`Asked::read`]), and the edit is made as a
-    /// text call makes one ([`Shell::text_call`]). It settles its own held
-    /// lines in the principal's queue, which every caller of the
-    /// principal's at the board shares: a transport that serves calls at
-    /// once may answer `replaced` for a line another caller dropped
-    /// ([`settle`]).
+    /// text call makes one ([`Shell::text_call`]). Its one write is an
+    /// `edit` frame over the draft, which no hold holds: the door judges the
+    /// call by it, so a hold standing at the board refuses the call before
+    /// any read, and so does a held line of the principal's on the draft,
+    /// which the edit would otherwise land ahead of.
     ///
     /// # Errors
     ///
@@ -1233,24 +1172,26 @@ impl Shell {
     /// 2. `malformed_args` naming `session`, then `session_died` or
     ///    `session_ended` ([`Shell::session`]);
     /// 3. the write door's, naming the call: `write_in_bare_session`, then
-    ///    `another_window` (`Shell::write_door`), nothing read or sent;
+    ///    `another_window`, then `stopped`, `poisoned` or `halted`, naming
+    ///    `edit`, then `held_lines` naming the draft (`Shell::write_door`),
+    ///    nothing read or sent;
     /// 4. the board's verdict on a read, or the shell's refusal of it — a
     ///    death the edit could not follow to a re-open among them;
-    /// 5. the `op` row's refusal of a write that left nothing standing.
+    /// 5. the `op` row's refusal of the write, nothing written.
     pub(super) fn text_replace(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = Asked::read(args)?;
-        self.text_call(&Write::unjudged("text.replace"), args, |calls, _| replace(calls, asked))
+        self.text_call(&Write::call("text.replace", "edit").over([asked.doc.to_string()]), args, |calls, _| replace(calls, asked))
     }
 
     /// Answers `text.edit(session, {doc, edits})`: several edits of a draft.
     ///
-    /// They land all of them or none (skep #1079). The members are read
-    /// (`edit::Asked::read`), and the edits are made as
+    /// They land all of them or none, in one commit (skep #1079, #1082).
+    /// The members are read (`edit::Asked::read`), and the edits are made as
     /// a text call makes one ([`Shell::text_call`]), by the child module
-    /// `edit`: every pair checked against one read of the draft before any
-    /// write, each made as its minimal changes, and a write that does not
-    /// land past the first answered by the draft set back as it stood. The
-    /// call settles its own held lines as `text.replace` does ([`settle`]).
+    /// `edit`: every pair checked against one read of the draft before the
+    /// write, each made as its minimal changes, and all of them sent as one
+    /// `edit` frame. The door judges the call by that frame, as it judges
+    /// `text.replace`.
     ///
     /// # Errors
     ///
@@ -1261,14 +1202,15 @@ impl Shell {
     /// 2. `malformed_args` naming `session`, then `session_died` or
     ///    `session_ended` ([`Shell::session`]);
     /// 3. the write door's, naming the call: `write_in_bare_session`, then
-    ///    `another_window` (`Shell::write_door`), nothing read or sent;
+    ///    `another_window`, then `stopped`, `poisoned` or `halted`, naming
+    ///    `edit`, then `held_lines` naming the draft (`Shell::write_door`),
+    ///    nothing read or sent;
     /// 4. the board's verdict on a read, or the shell's refusal of it — a
     ///    death the call could not follow to a re-open among them;
-    /// 5. the `op` row's refusal of a write that left nothing standing: the
-    ///    first write's, or a later one's where the draft was set back.
+    /// 5. the `op` row's refusal of the write, nothing written.
     pub(super) fn text_edit(&self, args: &Value) -> Result<Value, Refusal> {
         let asked = edit::Asked::read(args)?;
-        self.text_call(&Write::unjudged("text.edit"), args, |calls, _| edit::edit(calls, &asked))
+        self.text_call(&Write::call("text.edit", "edit").over([asked.doc().to_string()]), args, |calls, _| edit::edit(calls, &asked))
     }
 
     /// Answers `text.move`: whole lines of a draft moved by identity.
@@ -1409,12 +1351,14 @@ impl Shell {
     /// `write` is the call as the write door reads it, its members read
     /// already, and `make` its edit. The session is looked up, then the
     /// write door is asked once for the edit, before its first read, its
-    /// refusal naming the call (SP-31): [`Write::unjudged`] for an edit
-    /// whose every write is a burst, held by no standing hold's refusal at
-    /// the door, and [`Write::call`] for one whose first write no hold
-    /// holds; each write it sends meets the door again on the `op` row's
-    /// path. The edit is then made through the shell's own rows under the
-    /// session ([`Shell::text_made`]).
+    /// refusal naming the call (SP-31): [`Write::unjudged`] for `text.move`,
+    /// whose one write is a burst, held by no standing hold's refusal at
+    /// the door, and [`Write::call`] for a call whose first write no hold
+    /// holds — over the draft, for `text.replace` and `text.edit`, whose
+    /// one frame lands whatever lines stand held on it; each write a call
+    /// sends meets the door again on the `op` row's path. The edit is then
+    /// made through the shell's own rows under the session
+    /// ([`Shell::text_made`]).
     ///
     /// # Errors
     ///

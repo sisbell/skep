@@ -2,6 +2,8 @@
 //!
 //! The count is `Vec::len`, which calls no M4 function, where a derive would
 //! list one byte length per value, and an insert can carry a value per byte.
+//! An edit's values render as a count a change, by M5's own `Debug` of what
+//! a change places.
 //! Every other field renders by its own `Debug`, in the shape a derive would
 //! print, and no content byte renders anywhere: M4's `Val`, M6's
 //! `DeliveryItem` and M2's `Attestation` redact their payloads the same way.
@@ -83,6 +85,12 @@ impl fmt::Debug for Op {
                 .debug_struct("SetArrangement")
                 .field("doc", doc)
                 .field("arrangement", arrangement)
+                .field("as_of", as_of)
+                .finish(),
+            Op::Edit { doc, edit, as_of } => f
+                .debug_struct("Edit")
+                .field("doc", doc)
+                .field("edit", edit)
                 .field("as_of", as_of)
                 .finish(),
             Op::Version { d_src, published } => f

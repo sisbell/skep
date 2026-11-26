@@ -59,7 +59,9 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Base, Run, SetArrangement, SetMerge, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{
+    trunk_of, Base, Change, Edit, Placed, Run, SetMerge, Shot, ShotRun, VPos, VSpec,
+};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
@@ -158,6 +160,38 @@ const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 /// it, a frame that cannot commit is refused before either. Whether the
 /// number moves is the configuration register's question.
 const MAX_INSERT_VALUES: usize = 1 << 18;
+
+/// The most values one `edit` frame may mint, over all its changes.
+///
+/// It is [`MAX_INSERT_VALUES`]' number, for that card's reasons, summed over
+/// the frame: an edit mints as an insert mints, by the same walk, and what
+/// its changes add to the mint is small beside it.
+///
+/// **The allocation.** Each value is its own [`Val`], whatever change holds
+/// it, so the frame's values command the heap an insert of as many would;
+/// the count is taken off the request, each element's contribution asked
+/// before it is minted ([`room`]), across the changes, so a frame past the
+/// cap is refused at the change that crosses it with nothing of that
+/// element allocated.
+///
+/// **M2's transaction budget.** The values of every change are minted in one
+/// walk in the frame's order, a run of single-byte values running on across
+/// the changes: text of N bytes over any number of changes stages one range
+/// mint and one stretch, about N + 300 bytes, and one record of the
+/// changes, which carries each change's position, its width and the one run
+/// its bytes were minted as — about 130 bytes a change at the shallowest
+/// content address, so at most half a megabyte at the list cap
+/// ([`MAX_WIRE_LIST`] changes). At the cap a frame of text therefore stages
+/// under a megabyte, as an insert's does. A frame of atoms stages a mint and
+/// a write an atom, order three hundred bytes each: 2¹⁸ two-byte atoms pass
+/// [`skep_kernel::MAX_TXN_BYTES`] (64 MiB), and there the refusal is M2's,
+/// after the staging, lifting with a smaller frame — exactly the insert's
+/// case, which this cap leaves where that one leaves it.
+///
+/// So the cap prices the mint, and the list cap prices the changes: neither
+/// multiplies the other past M2's budget, and a frame under both whose
+/// values are text commits.
+const MAX_EDIT_VALUES: usize = MAX_INSERT_VALUES;
 
 /// The most decimal digits one decimal natural may carry on the wire.
 ///
@@ -643,12 +677,12 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },
         "doc_metadata" => Op::DocMetadata { doc: fields.addr("doc")? },
-        // The five in-place edits, and `set_arrangement` below them, each
-        // carry `as_of`, the document state the edit was typed against
-        // (wire.md §Arrangement; skep #442): a REQUIRED position, read as
-        // the response envelope writes one, so a frame without it is
+        // The five in-place edits, and `set_arrangement` and `edit` below
+        // them, each carry `as_of`, the document state the edit was typed
+        // against (wire.md §Arrangement; skep #442): a REQUIRED position,
+        // read as the response envelope writes one, so a frame without it is
         // "missing field" — `malformed` by the envelope's rule — and, taken
-        // here on the six alone, the member on any other op is left for
+        // here on the seven alone, the member on any other op is left for
         // `finish` to refuse as unknown.
         "insert" => Op::Insert {
             doc: fields.addr("doc")?,
@@ -684,15 +718,24 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             cuts: fields.vposes("cuts")?,
             as_of: fields.seq("as_of")?,
         },
-        // A draft's whole arrangement set in one write (wire.md
-        // §Arrangement, `set_arrangement`; the landing lane): the runs in
-        // `reinstate`'s form, the typed state REQUIRED as on the five, and
-        // the three optional members — the head pair, the base pair and
-        // the merge's sides, read against the head. Outside the checked
-        // set: `attest` on it is an unknown field `finish` refuses.
+        // The edit under its two names (wire.md §Arrangement, `edit` and
+        // `set_arrangement`): one frame, a list of positional changes to
+        // one draft, the typed state REQUIRED as on the five, and the three
+        // optional members — the head pair, the base pair and the merge's
+        // sides, read against the head. What the name decides here is what
+        // a change carries: `set_arrangement`'s place runs in `reinstate`'s
+        // form (the landing lane), `edit`'s mint values in `insert`'s; the
+        // other name's member is an unknown field of the change, and so is
+        // the retired top-level `runs` of the frame. Outside the checked
+        // set under both: `attest` is an unknown field `finish` refuses.
         "set_arrangement" => Op::SetArrangement {
             doc: fields.addr("doc")?,
-            arrangement: fields.set_arrangement()?,
+            arrangement: fields.edit(Placing::Runs)?,
+            as_of: fields.seq("as_of")?,
+        },
+        "edit" => Op::Edit {
+            doc: fields.addr("doc")?,
+            edit: fields.edit(Placing::Values)?,
             as_of: fields.seq("as_of")?,
         },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
@@ -1090,24 +1133,84 @@ impl Fields {
         self.field(k, |v| p_list(v, p_shot_run))
     }
 
-    /// Takes a `set_arrangement`'s members beside `doc` and `as_of` (wire.md
-    /// §Arrangement, `set_arrangement`): the runs under the list cap in the
-    /// shot's run form, the optional `head` and `base` pairs
-    /// ([`p_extent_pair`]) and the optional `merge` object, whose member
-    /// `sides` is a list of addresses under the cap and whose optional
-    /// member `at` is the position of a marker put back (skep #870); absent
-    /// and explicit `null` read alike as absent on the three and on `at`. A
-    /// `merge` carried without a `head` is refused, the marker's head being
-    /// the frame's, and a `merge.at` without a `base`, the marker being
-    /// recorded only beside a base.
+    /// Takes an edit's members beside `doc` and `as_of` (wire.md
+    /// §Arrangement, `edit` and `set_arrangement`): `changes`, then the
+    /// optional `head` and `base` pairs ([`p_extent_pair`]) and the optional
+    /// `merge` object, whose member `sides` is a list of addresses under the
+    /// cap and whose optional member `at` is the position of a marker put
+    /// back (skep #870); absent and explicit `null` read alike as absent on
+    /// the three and on `at`. A `merge` carried without a `head` is refused,
+    /// the marker's head being the frame's, and a `merge.at` without a
+    /// `base`, the marker being recorded only beside a base.
+    ///
+    /// `changes` is one wire list under [`MAX_WIRE_LIST`], each element an
+    /// object of `at`, `width` and the one member `placing` names — `values`
+    /// in `insert`'s write forms, or `runs` in the shot's run form — and
+    /// nothing else: `at` a V-position as `insert`'s is, `width` a natural.
+    /// Three things are held here by arithmetic on the request, each ahead
+    /// of the store: the values the frame mints over all its changes, to
+    /// [`MAX_EDIT_VALUES`], each element's share asked before it is minted;
+    /// the runs it places over all its changes, to [`MAX_WIRE_LIST`], the
+    /// lists counted before any run is parsed; and the changes' order —
+    /// each `at.ordinal` at or past `at.ordinal + width` of the change
+    /// before it, so they are ascending and apart in the one state they are
+    /// typed against. Whether a position is arranged is the store's to say.
     ///
     /// # Errors
     ///
-    /// A [`PErr`] where `runs` is missing or refused, where a present
-    /// `head`, `base` or `merge` is refused, where `merge` stands without
-    /// `head`, or where `merge.at` stands without `base`.
-    fn set_arrangement(&mut self) -> PResult<SetArrangement> {
-        let runs = self.shot_runs("runs")?;
+    /// A [`Refusal`] where `changes` is missing, is no array or is past the
+    /// cap; naming the change — its index in `changes` — where one is no
+    /// object of its three members, where a member of it is refused, where
+    /// its values pass the frame's cap, or where it begins below the reach
+    /// of the change before it; naming no entry where the frame's runs pass
+    /// the cap, where a present `head`, `base` or `merge` is refused, where
+    /// `merge` stands without `head`, or where `merge.at` stands without
+    /// `base`.
+    fn edit(&mut self, placing: Placing) -> Result<Edit, Refusal> {
+        let listed = self.take("changes")?;
+        let entries = listed
+            .as_array()
+            .ok_or_else(|| PErr("field 'changes': expected a JSON array".into()))?;
+        if entries.len() > MAX_WIRE_LIST {
+            return Err(PErr(format!(
+                "field 'changes': array has {} elements, past the {MAX_WIRE_LIST}-element wire cap",
+                entries.len()
+            ))
+            .into());
+        }
+        // The runs the frame places, counted off the lists before one is
+        // parsed: each list rides the list cap, and so does their sum.
+        if placing == Placing::Runs {
+            let runs: usize = entries
+                .iter()
+                .filter_map(|change| change.get("runs").and_then(Value::as_array))
+                .map(Vec::len)
+                .fold(0, usize::saturating_add);
+            if runs > MAX_WIRE_LIST {
+                return Err(PErr(format!(
+                    "field 'changes': the changes place {runs} runs, past the {MAX_WIRE_LIST}-run cap on one frame"
+                ))
+                .into());
+            }
+        }
+        let mut changes: Vec<Change> = Vec::with_capacity(entries.len());
+        let (mut minted, mut reach) = (0usize, Nat::from(0u8));
+        for (k, entry) in entries.iter().enumerate() {
+            let at_change = |e: PErr| Refusal(format!("field 'changes': [{k}]: {e}"), Some(k));
+            let change = p_change(entry, placing, minted).map_err(at_change)?;
+            if change.at.ordinal < reach {
+                return Err(at_change(PErr(
+                    "begins below the reach of the change before it; the changes are in one \
+                     state's coordinates, ascending and apart"
+                        .into(),
+                )));
+            }
+            reach = &change.at.ordinal + &change.width;
+            if let Placed::Values(values) = &change.placed {
+                minted += values.len();
+            }
+            changes.push(change);
+        }
         let head = self.extent_pair_opt("head")?;
         let base = self.extent_pair_opt("base")?;
         let merge = match self.take_opt("merge") {
@@ -1115,12 +1218,12 @@ impl Fields {
             Some(v) => Some(p_set_merge(&v).map_err(|e| PErr(format!("field 'merge': {e}")))?),
         };
         if merge.is_some() && head.is_none() {
-            return Err(PErr("field 'merge': carried without 'head', which is the marker's own".into()));
+            return Err(PErr("field 'merge': carried without 'head', which is the marker's own".into()).into());
         }
         if merge.as_ref().is_some_and(|m| m.at.is_some()) && base.is_none() {
-            return Err(PErr("field 'merge': 'at' carried without 'base', beside which alone a marker is recorded".into()));
+            return Err(PErr("field 'merge': 'at' carried without 'base', beside which alone a marker is recorded".into()).into());
         }
-        Ok(SetArrangement { runs, head, base, merge })
+        Ok(Edit { changes, head, base, merge })
     }
 
     /// Takes an optional `{at, extent}` pair — a member and the extent read
@@ -2048,7 +2151,43 @@ fn p_addr(v: &Value) -> PResult<Address> {
     wire_address(s).map_err(PErr)
 }
 
-/// Parses a `set_arrangement`'s `merge` object (skep #870).
+/// What the changes of an edit's frame carry, by the name it came under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placing {
+    /// `edit`: each change mints `values`.
+    Values,
+    /// `set_arrangement`: each change places `runs` by identity.
+    Runs,
+}
+
+/// Parses one change of an edit's frame (wire.md §Arrangement, `edit`).
+///
+/// It is an object of `at`, `width` and the member `placing` names, each
+/// required: `at` a V-position in `insert`'s form, `width` a natural, then
+/// `values` in `insert`'s write forms — held, with the `minted` values of
+/// the changes before it, to [`MAX_EDIT_VALUES`] — or `runs` in the shot's
+/// run form, one wire list. The other name's member is an unknown key here.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of those three members alone, or one
+/// of them is missing or refused.
+fn p_change(v: &Value, placing: Placing, minted: usize) -> PResult<Change> {
+    let member = match placing {
+        Placing::Values => "values",
+        Placing::Runs => "runs",
+    };
+    let m = p_obj(v, &["at", "width", member])?;
+    let at = field(m, "at", p_vpos)?;
+    let width = field(m, "width", p_nat)?;
+    let placed = match placing {
+        Placing::Values => Placed::Values(field(m, "values", |v| p_values_within(v, minted, &EDIT_VALUES))?),
+        Placing::Runs => Placed::Runs(field(m, "runs", |v| p_list(v, p_shot_run))?),
+    };
+    Ok(Change { at, width, placed })
+}
+
+/// Parses an edit's `merge` object (skep #870).
 ///
 /// It holds `sides` and the optional `at`.
 ///
@@ -2347,18 +2486,48 @@ fn region_of(m: &Map<String, Value>) -> PResult<RegionSpec> {
 /// A [`PErr`] where `v` is no array, or where [`p_val_form`] refuses an
 /// element, the fault prefixed with the element's index.
 fn p_values(v: &Value) -> PResult<Vec<Val>> {
+    p_values_within(v, 0, &INSERT_VALUES)
+}
+
+/// A cap on the values one frame mints, and how its refusal names the frame.
+struct ValueCap {
+    /// The most values the frame may mint.
+    most: usize,
+    /// The frame, as the refusal says it: `one insert`.
+    of: &'static str,
+}
+
+/// [`MAX_INSERT_VALUES`], an `insert`'s.
+const INSERT_VALUES: ValueCap = ValueCap { most: MAX_INSERT_VALUES, of: "one insert" };
+
+/// [`MAX_EDIT_VALUES`], an `edit`'s, over all its changes.
+const EDIT_VALUES: ValueCap = ValueCap { most: MAX_EDIT_VALUES, of: "one edit" };
+
+/// Parses a `values` array whose frame has minted `minted` values already.
+///
+/// It is [`p_values`]' body: an `insert`'s array is the frame's whole mint,
+/// and an `edit`'s is one change's, counted with the changes' before it
+/// against the frame's one cap.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no array, or where [`p_val_form`] refuses
+/// an element, the fault prefixed with the element's index.
+fn p_values_within(v: &Value, minted: usize, cap: &ValueCap) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
     for (i, x) in arr.iter().enumerate() {
-        p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {e}")))?;
+        p_val_form(x, &mut out, minted, cap).map_err(|e| PErr(format!("[{i}]: {e}")))?;
     }
     Ok(out)
 }
 
 /// Checks there is room for what an element is *about* to mint.
 ///
-/// It is *the* place [`MAX_INSERT_VALUES`] is enforced, and enforced ahead
-/// of the mint rather than behind it. An element's whole contribution is
+/// It is *the* place [`MAX_INSERT_VALUES`] is enforced, and
+/// [`MAX_EDIT_VALUES`] beside it — `cap` the frame's, `minted` what the
+/// frame has minted so far, the changes before this one's among it — and
+/// enforced ahead of the mint rather than behind it. An element's whole contribution is
 /// added in one call — one `extend`, or one `push` for an atom — so a check
 /// that runs once the element has returned has already paid the peak the
 /// cap exists to prevent: an 8 MiB per-byte string mints 8.4M [`Val`]s, each
@@ -2369,12 +2538,12 @@ fn p_values(v: &Value) -> PResult<Vec<Val>> {
 ///
 /// # Errors
 ///
-/// A [`PErr`] where `out` with `adding` more would pass
-/// [`MAX_INSERT_VALUES`].
-fn room(out: &[Val], adding: usize) -> PResult<()> {
-    if out.len().saturating_add(adding) > MAX_INSERT_VALUES {
+/// A [`PErr`] where `minted` with `adding` more would pass `cap`.
+fn room(minted: usize, adding: usize, cap: &ValueCap) -> PResult<()> {
+    if minted.saturating_add(adding) > cap.most {
         return Err(PErr(format!(
-            "values mint more than the {MAX_INSERT_VALUES}-value cap on one insert"
+            "values mint more than the {}-value cap on {}",
+            cap.most, cap.of
         )));
     }
     Ok(())
@@ -2393,7 +2562,8 @@ fn hex_values(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
     Ok(need(m, k)?.as_str().map_or(0, |s| s.len() / 2))
 }
 
-/// Parses one element of `values` into `out`.
+/// Parses one element of a `values` array into `out` under `cap`, the frame
+/// having minted `minted` values in its arrays before this one.
 ///
 /// The per-byte forms (`"str"`, `{"hex"}`) mint one single-byte value per
 /// byte — the substrate's text discipline, under which every interior byte
@@ -2402,10 +2572,10 @@ fn hex_values(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
 /// coarse granularity must be said, never fallen into; a zero-byte atom is
 /// not expressible.
 ///
-/// Every arm asks [`room`] for what it is about to add before it adds it, so
-/// an over-budget element mints nothing — and on the hex path is never even
-/// decoded. An atom asks for *one* value whatever its byte count, which is
-/// what a composite value is.
+/// Every arm asks [`room`] for what it is about to add before it adds it,
+/// `minted` and what `out` holds counted in, so an over-budget element mints
+/// nothing — and on the hex path is never even decoded. An atom asks for
+/// *one* value whatever its byte count, which is what a composite value is.
 ///
 /// # Errors
 ///
@@ -2413,7 +2583,8 @@ fn hex_values(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
 /// `hex`, `atom` and `atom_hex`, where [`room`] refuses what it would mint,
 /// where the form's text is no string or no even-length hex, or where an
 /// atom has zero bytes.
-fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
+fn p_val_form(v: &Value, out: &mut Vec<Val>, minted: usize, cap: &ValueCap) -> PResult<()> {
+    let room = |out: &[Val], adding: usize| room(minted.saturating_add(out.len()), adding, cap);
     let m = match v {
         Value::String(s) => {
             room(out, s.len())?;

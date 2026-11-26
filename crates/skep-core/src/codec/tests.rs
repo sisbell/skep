@@ -210,24 +210,24 @@ fn insert_value_cap_counts_values_not_elements() {
 fn an_over_cap_element_mints_nothing() {
     let mut out: Vec<Val> = Vec::new();
     let big = Value::String("a".repeat(MAX_INSERT_VALUES + 1));
-    assert!(p_val_form(&big, &mut out).is_err(), "one element past the cap is refused");
+    assert!(p_val_form(&big, &mut out, 0, &INSERT_VALUES).is_err(), "one element past the cap is refused");
     assert!(out.is_empty(), "and mints nothing: the refusal precedes the mint");
     // Hex is measured on its ENCODED length, so neither the decode nor
     // the values are built.
     let mut out: Vec<Val> = Vec::new();
     let hex = obj(vec![("hex", Value::String("ab".repeat(MAX_INSERT_VALUES + 1)))]);
-    assert!(p_val_form(&hex, &mut out).is_err(), "the hex form is capped too");
+    assert!(p_val_form(&hex, &mut out, 0, &INSERT_VALUES).is_err(), "the hex form is capped too");
     assert!(out.is_empty());
     // Both ends against a partly-filled accumulator: the room asked is
     // the element's, measured against what is already there.
     let mut out: Vec<Val> =
         (0..MAX_INSERT_VALUES - 1).map(|_| Val::new(vec![b'a'])).collect();
     assert!(
-        p_val_form(&Value::String("ab".into()), &mut out).is_err(),
+        p_val_form(&Value::String("ab".into()), &mut out, 0, &INSERT_VALUES).is_err(),
         "two more values do not fit with one slot left"
     );
     assert_eq!(out.len(), MAX_INSERT_VALUES - 1, "and the refused element mints nothing");
-    p_val_form(&Value::String("a".into()), &mut out)
+    p_val_form(&Value::String("a".into()), &mut out, 0, &INSERT_VALUES)
         .expect("the element that exactly fills the cap is admitted");
     assert_eq!(out.len(), MAX_INSERT_VALUES);
 }

@@ -650,31 +650,35 @@ pub fn reinstate(doc: &str, at: u64, runs: &[Value], as_of: u64, id: Option<&str
     )
 }
 
-/// Builds `{"op":"set_arrangement","doc":…,"runs":[…],"as_of":…}` with its
-/// three optional members (wire.md §Arrangement, `set_arrangement`).
+/// Builds `{"op":"set_arrangement","doc":…,"changes":[…],"as_of":…}` with
+/// its three optional members (wire.md §Arrangement, `set_arrangement`).
 ///
-/// It sets the draft `doc`'s WHOLE content arrangement by identity in one
-/// commit — `runs` each as [`shot_run`] spells it, placed from content
-/// ordinal 1 — typed against the draft state `as_of`, the one position the
-/// merge read the draft at, which the board refuses `arrangement_moved`
-/// with nothing changed where the draft's arrangement has moved since. The
-/// members: `head`, the version the merge was composed on with its content
-/// count AS READ at the compose, `{"at": …, "extent": "6"}`, the extent a
-/// decimal string; `base`, the base to record in the same pair form — a
-/// landing sends the head's pair, and only where the board records a base
-/// for `doc` (N4: a baseless document and a fork record none, and the
-/// board refuses one named for them `no_base_to_record`); `merge`, the
-/// sides the draft is to carry, `{"sides": [addresses]}`, possibly empty,
-/// recorded as the marker beside the base, with `"at"` beside the sides
-/// where the second member of the pair names the position of a marker put
-/// back (skep #870; the board refuses any position that is no marker it put
-/// on the draft `marker_not_restorable`). Each is left out where `None`.
-/// The merge's one draft landing, its two take-backs and the withdrawal's
-/// undo go through this builder, the undo putting back the marker the draft
-/// carried before the landing (skep #964).
-pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str, u64)>, base: Option<(&str, u64)>, merge: Option<(&[&str], Option<u64>)>, id: Option<&str>) -> Value {
+/// It makes `changes` to the draft `doc`'s content arrangement by identity
+/// in one commit — each change as [`placed`] spells it, in the coordinates
+/// of the draft as it stands at `as_of`, ascending and apart — typed
+/// against the draft state `as_of`, which the board refuses
+/// `arrangement_moved` with nothing changed where the draft's arrangement
+/// has moved since. A frame names what it changes, never the draft's whole
+/// run list: the whole arrangement is one change over every position the
+/// draft holds, and no change at all is admitted beside a `base` or a
+/// `merge`. The members: `head`, the version the merge was composed on
+/// with its content count AS READ at the compose, `{"at": …, "extent":
+/// "6"}`, the extent a decimal string; `base`, the base to record in the
+/// same pair form — a landing sends the head's pair, and only where the
+/// board records a base for `doc` (N4: a baseless document and a fork
+/// record none, and the board refuses one named for them
+/// `no_base_to_record`); `merge`, the sides the draft is to carry,
+/// `{"sides": [addresses]}`, possibly empty, recorded as the marker beside
+/// the base, with `"at"` beside the sides where the second member of the
+/// pair names the position of a marker put back (skep #870; the board
+/// refuses any position that is no marker it put on the draft
+/// `marker_not_restorable`). Each is left out where `None`. The merge's
+/// one draft landing, its two take-backs, the withdrawal's undo and the
+/// restore go through this builder, the undo putting back the marker the
+/// draft carried before the landing (skep #964).
+pub fn set_arrangement(doc: &str, changes: &[Value], as_of: u64, head: Option<(&str, u64)>, base: Option<(&str, u64)>, merge: Option<(&[&str], Option<u64>)>, id: Option<&str>) -> Value {
     let pair = |(at, extent): (&str, u64)| json!({"at": at, "extent": extent.to_string()});
-    let mut frame = with_id(json!({"op": "set_arrangement", "doc": doc, "runs": runs, "as_of": as_of}), id);
+    let mut frame = with_id(json!({"op": "set_arrangement", "doc": doc, "changes": changes, "as_of": as_of}), id);
     if let Some(head) = head {
         frame["head"] = pair(head);
     }
@@ -688,6 +692,41 @@ pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str
         }
     }
     frame
+}
+
+/// Builds one change of a [`set_arrangement`] frame: `{"at", "width",
+/// "runs"}`.
+///
+/// It removes `width` content positions of the draft from ordinal `at` on
+/// and places `runs` there by identity, each as [`shot_run`] spells it: a
+/// removal alone where `runs` is empty, a placement before `at` alone
+/// where `width` is 0.
+pub fn placed(at: u64, width: u64, runs: &[Value]) -> Value {
+    json!({"at": place(at), "width": width.to_string(), "runs": runs})
+}
+
+/// Builds `{"op":"edit","doc":…,"changes":[…],"as_of":…}` (wire.md
+/// §Arrangement, `edit`).
+///
+/// It makes `changes` to the draft `doc`'s content in one commit, each
+/// change as [`minted`] spells it — in the coordinates of the draft as it
+/// stands at `as_of`, ascending and apart — typed against the draft state
+/// `as_of`: every change lands or none does. The ack's address is the
+/// first value's the frame minted, every change's text standing from there
+/// in the frame's order. It is how `text.edit` and `text.replace` write.
+pub fn edit(doc: &str, changes: &[Value], as_of: u64, id: Option<&str>) -> Value {
+    with_id(json!({"op": "edit", "doc": doc, "changes": changes, "as_of": as_of}), id)
+}
+
+/// Builds one change of an [`edit`] frame: `{"at", "width", "values"}`.
+///
+/// It removes `width` content positions of the draft from ordinal `at` on
+/// and mints `text` there, one value a byte as [`insert_text`] writes it: a
+/// removal alone where `text` is empty, a placement before `at` alone
+/// where `width` is 0.
+pub fn minted(at: u64, width: u64, text: &str) -> Value {
+    let values: Vec<&str> = if text.is_empty() { Vec::new() } else { vec![text] };
+    json!({"at": place(at), "width": width.to_string(), "values": values})
 }
 
 /// Builds one run of a `publish`, a `reinstate` or a `set_arrangement`

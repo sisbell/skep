@@ -48,7 +48,7 @@
 //! the line takes the death's reason once the end derives it
 //! ([`Holds::note_death`]). A write the
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
-//! non-burst write that fails … is faced at its act") — and the ten of
+//! non-burst write that fails … is faced at its act") — and the eleven of
 //! them §3c.4 names ([`UNHOLDABLE_WRITES`]; `publication.confirm`'s send,
 //! `history.restore`'s write and the merge rows' writes take the list's
 //! door under their own ops) meeting a hold that stands at the board before
@@ -488,7 +488,7 @@ pub(crate) const WRITER_WAIT: Duration = Duration::from_secs(1);
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
 
-/// The ten non-burst writes §3c.4 names, which a standing hold refuses.
+/// The eleven non-burst writes §3c.4 names, which a standing hold refuses.
 ///
 /// Each arriving while the board is stopped, poisoned or its writes halted
 /// is refused at once with the hold's cause as its token, never held and
@@ -497,12 +497,19 @@ const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearra
 /// carrier, and `merge.land`'s, which rides it, take the door with `publish`
 /// as their op; `stage`, the staging act's mint (B3-S10), takes it as `fork`
 /// does, and a `merge.compose` that stages a fresh draft takes it under
-/// that op; `set_arrangement`, a draft's whole arrangement set in one write
-/// (the landing lane, skep #764), takes it too — no burst, since it is the
+/// that op; `set_arrangement`, a list of changes placing runs by identity
+/// in a draft in one write (the landing lane, skep #764), takes it too — no
+/// burst, since it is the
 /// landing of a merge and no act of the page's hand, and a landing held
 /// would land over whatever the hand wrote meanwhile — and the restore's
 /// write, `history.restore`'s, the undo's and the withdrawal's take it as
-/// `set_arrangement`; `create_new_document`, the mint, takes it since it
+/// `set_arrangement`; `edit`, a list of changes to one draft in one commit
+/// (skep #1082), takes it as `set_arrangement` does, the two being one
+/// operation at the board — no burst: it lands whole or not at all, typed
+/// against the state its sender read, so a line of it held and shifted
+/// would be another write — and `text.replace` and `text.edit`, whose one
+/// write it is, take the door with it as their op;
+/// `create_new_document`, the mint, takes it since it
 /// cannot be held either — the page needs the new document's address before
 /// it can type into it — and dialed under a stopped node it failed
 /// `unreachable`, a network fault's face for a notebook its owner stopped
@@ -515,8 +522,8 @@ const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearra
 /// behind it is, never dialed to fail `unreachable`. Every other write
 /// outside the five
 /// bursts dials as it dials.
-pub const UNHOLDABLE_WRITES: [&str; 10] =
-    ["create_new_document", "fork", "version", "stage", "create_well_known_document", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
+pub const UNHOLDABLE_WRITES: [&str; 11] =
+    ["create_new_document", "fork", "version", "stage", "create_well_known_document", "set_arrangement", "edit", "make_link", "nullify", "edit_link", "publish"];
 
 /// Returns whether `frame` is a burst: one of the five kinds.
 ///
@@ -2374,9 +2381,9 @@ struct PrincipalHold {
     /// document that the shell knows (`merge.undo`; P3).
     ///
     /// It is the greatest of the acks of the writes that change a
-    /// document's arrangement — the five bursts and `set_arrangement`, each
-    /// on its `doc` (wire.md §Arrangement, the typed state), through `op` or
-    /// as a restore ([`Holds::note_restored`]) — and of the
+    /// document's arrangement — the five bursts, `set_arrangement` and
+    /// `edit`, each on its `doc` (wire.md §Arrangement, the typed state),
+    /// through `op` or as a restore ([`Holds::note_restored`]) — and of the
     /// landings the resend's read found, each a burst's, noted by
     /// [`PrincipalHold::note_arranged`] and never lowered: the position the
     /// editor's undo of a merge landed in the document is typed against
@@ -4270,13 +4277,13 @@ impl Holds {
 
     /// Returns the refusal an unholdable write meets at a standing hold (§3c.4).
     ///
-    /// `op` is the write's kind. Where it is one of the ten
+    /// `op` is the write's kind. Where it is one of the eleven
     /// ([`UNHOLDABLE_WRITES`]) and a hold stands at the board — the own node
     /// stopped, the write path poisoned, the writes halted, in that order —
     /// the write is refused at once under the cause's own name
     /// (`Name::STOPPED`, `Name::POISONED`, `Name::HALTED`), its detail the
     /// `op`, never held and never dialed; `None` where no hold stands or the
-    /// kind is not of the ten, the write then dialing as it dials — a board
+    /// kind is not of the eleven, the write then dialing as it dials — a board
     /// that is unreachable is no hold of this kind. It is the third question
     /// of the shell's one write door (`Shell::write_door`), asked for every
     /// write the shell sends before any dial and any read the write makes —
@@ -4951,7 +4958,8 @@ impl Holds {
     /// noted there, which stands otherwise ([`PrincipalHold::note_position`])
     /// — whatever its kind, a burst's, a mint's or a link's, the first dial's
     /// and the resend's alike, each noted where its answer is read. An
-    /// arrangement write's — a burst's or a `set_arrangement`'s — is the
+    /// arrangement write's — a burst's, a `set_arrangement`'s or an `edit`'s
+    /// — is the
     /// position of the principal's latest arrangement write on its `doc`
     /// too, where it is past the one noted there
     /// ([`PrincipalHold::note_arranged`]). An insert's carrying an `id` is
@@ -6666,11 +6674,11 @@ fn line_json(l: &HeldLine, sendable: Option<bool>, face: Option<&HeldSaid>, unwr
 }
 
 /// Returns the document an arrangement write re-arranges: the `doc` of one
-/// of the five bursts or of a `set_arrangement` (wire.md §Arrangement, the
-/// typed state); `None` for any other write.
+/// of the five bursts, of a `set_arrangement` or of an `edit` (wire.md
+/// §Arrangement, the typed state); `None` for any other write.
 fn arranged_doc(frame: &Value) -> Option<&str> {
     let op = frame["op"].as_str()?;
-    (BURST_KINDS.contains(&op) || op == "set_arrangement").then(|| frame["doc"].as_str()).flatten()
+    (BURST_KINDS.contains(&op) || op == "set_arrangement" || op == "edit").then(|| frame["doc"].as_str()).flatten()
 }
 
 /// Returns the first I-address an insert's ack minted its words at.

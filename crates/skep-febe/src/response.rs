@@ -200,10 +200,11 @@ pub enum TimeSource {
 #[must_use]
 #[derive(Debug, PartialEq, Eq)]
 pub enum Response {
-    /// delete/copy/reinstate/rearrange/set_arrangement — committed at `at`
-    /// (A7).
+    /// delete/copy/reinstate/rearrange, and an edit that minted nothing —
+    /// under either of its names, `edit` and `set_arrangement` — committed
+    /// at `at` (A7).
     ///
-    /// `head_moved` is `set_arrangement`'s tell (the landing lane; the
+    /// `head_moved` is the edit's tell (the landing lane; the
     /// owner's ruling R5 and its precision P1): where the request named a
     /// head the merge was composed on and the trunk's current head is no
     /// longer it, the trunk's current head — the write landed all the same,
@@ -223,9 +224,14 @@ pub enum Response {
     /// where it does not (PUB-2.14); the chain member `publish` appended
     /// (PUB-2.37); the account delegated (delegate); the node admitted
     /// (register_node); the I-address of the first value placed (insert, whose
-    /// values M5 places as one run from there); the record (make_link, with or
-    /// without its `replaces` link); the tuple (emit), the retraction
-    /// (nullify) or the claim (assert_sup) deposited. `at` is the coordinate
+    /// values M5 places as one run from there); the first address minted by
+    /// an edit that minted any, under either of its names, the values of
+    /// every change minted in the request's order from there; the record
+    /// (make_link, with or without its `replaces` link); the tuple (emit),
+    /// the retraction (nullify) or the claim (assert_sup) deposited.
+    /// `head_moved` is the edit's tell, as [`Response::Ack`] carries it:
+    /// `None` on every other op's acknowledgment, which the wire then
+    /// renders without the member. `at` is the coordinate
     /// the write committed at, and `committed` is `true` — save that four ops
     /// may instead find their work done and commit nothing: emit, nullify and
     /// assert_sup on a dedup hit, answering the incumbent this principal can
@@ -237,7 +243,7 @@ pub enum Response {
     /// incumbent was found in ([the two
     /// coordinates](crate#the-two-coordinates)): a position some other write
     /// took, which a client never counts as this write's.
-    AckAddr { addr: Address, at: Seq, committed: bool },
+    AckAddr { addr: Address, at: Seq, committed: bool, head_moved: Option<Address> },
     /// editlink: the successor link and its supersession claim.
     AckEdit { successor: Address, claim: Address, at: Seq },
     /// RETRIEVEV delivery.
@@ -503,8 +509,9 @@ pub enum Response {
 /// The three shapes are the three acknowledging `Response` variants, and the
 /// correspondence is stated in one place — [`Response::to_ack`] and the
 /// `From` impl below — so a new acknowledging shape is a compile error at
-/// `to_ack` rather than a memo silently dropped. A `set_arrangement`'s tell
-/// rides its memo as it rode its ack: a retry answered from the memo is told
+/// `to_ack` rather than a memo silently dropped. An edit's tell
+/// rides its memo as it rode its ack, whichever of the two shapes that ack
+/// took: a retry answered from the memo is told
 /// what the original was told, never a head read since. So does an
 /// `AckAddr`'s `committed`: a retry of a write that found its work done is
 /// told it committed nothing, as the original was.
@@ -512,8 +519,9 @@ pub enum Response {
 pub(crate) enum CommittedAck {
     /// [`Response::Ack`].
     At { at: Seq, head_moved: Option<Address> },
-    /// [`Response::AckAddr`], whether it committed carried with it.
-    Addr { addr: Address, at: Seq, committed: bool },
+    /// [`Response::AckAddr`], whether it committed and the tell carried
+    /// with it.
+    Addr { addr: Address, at: Seq, committed: bool, head_moved: Option<Address> },
     /// [`Response::AckEdit`].
     Edit { successor: Address, claim: Address, at: Seq },
 }
@@ -522,7 +530,9 @@ impl From<CommittedAck> for Response {
     fn from(ack: CommittedAck) -> Response {
         match ack {
             CommittedAck::At { at, head_moved } => Response::Ack { at, head_moved },
-            CommittedAck::Addr { addr, at, committed } => Response::AckAddr { addr, at, committed },
+            CommittedAck::Addr { addr, at, committed, head_moved } => {
+                Response::AckAddr { addr, at, committed, head_moved }
+            }
             CommittedAck::Edit { successor, claim, at } => {
                 Response::AckEdit { successor, claim, at }
             }
@@ -656,9 +666,12 @@ impl Response {
             Response::Ack { at, head_moved } => {
                 Some(CommittedAck::At { at: *at, head_moved: head_moved.clone() })
             }
-            Response::AckAddr { addr, at, committed } => {
-                Some(CommittedAck::Addr { addr: addr.clone(), at: *at, committed: *committed })
-            }
+            Response::AckAddr { addr, at, committed, head_moved } => Some(CommittedAck::Addr {
+                addr: addr.clone(),
+                at: *at,
+                committed: *committed,
+                head_moved: head_moved.clone(),
+            }),
             Response::AckEdit { successor, claim, at } => Some(CommittedAck::Edit {
                 successor: successor.clone(),
                 claim: claim.clone(),

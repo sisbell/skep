@@ -502,7 +502,7 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
     let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
     let (committed, committed_at) =
         match febe.execute(s, Request { id: Some(id.clone()), ..Request::from(node()) }) {
-            Response::AckAddr { addr, at, committed: true } => (addr, at),
+            Response::AckAddr { addr, at, committed: true, .. } => (addr, at),
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
 
@@ -522,7 +522,7 @@ fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
 
     // The retry of the committed one is answered from the memo instead.
     match febe.execute(s, Request { id: Some(id), ..Request::from(node()) }) {
-        Response::AckAddr { addr: replayed, at: replayed_at, committed: true } => {
+        Response::AckAddr { addr: replayed, at: replayed_at, committed: true, .. } => {
             assert_eq!(replayed, committed, "the replayed ack is the committed one");
             assert_eq!(replayed_at, committed_at, "…at the coordinate it committed");
         }
@@ -548,12 +548,12 @@ fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
         s,
         id.clone(),
         OpKind::Insert,
-        CommittedAck::Addr { addr: addr(&[1, 0, 1, 0, 1]), at: Seq(3), committed: true },
+        CommittedAck::Addr { addr: addr(&[1, 0, 1, 0, 1]), at: Seq(3), committed: true, head_moved: None },
     );
     let before = febe.log_position();
 
     match febe.execute(s, Request { id: Some(id), ..Request::from(insert_op()) }) {
-        Response::AckAddr { addr: replayed, at, committed: true } => {
+        Response::AckAddr { addr: replayed, at, committed: true, .. } => {
             assert_eq!(replayed, addr(&[1, 0, 1, 0, 1]), "the memo answers ahead of the gate");
             assert_eq!(at, Seq(3), "…at the coordinate it committed");
         }
@@ -670,7 +670,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         assert_eq!(reached, expected, "{kind:?}");
         seen += 1;
     }
-    assert_eq!(seen, 19, "every write, EDITLINK once");
+    assert_eq!(seen, 20, "every write, EDITLINK once");
 }
 
 // ── the store-backed tests of `successor` and `publication` ──

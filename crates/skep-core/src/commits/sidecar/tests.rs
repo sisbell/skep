@@ -475,7 +475,7 @@ fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
         OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 },
         OpTerms::MakeLink { link: "1.0.1.0.1.0.2.1".into() },
         OpTerms::Publish { placed: "1".into(), base_extent: None, base: None },
-        OpTerms::SetArrangement { base: None, merge: None },
+        OpTerms::Edit { base: None, merge: None },
     ];
     let mut rendered: Vec<&str> = Vec::new();
     for terms in &one_of_each {
@@ -483,7 +483,7 @@ fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
             OpTerms::Delegate { .. }
             | OpTerms::MakeLink { .. }
             | OpTerms::Publish { .. }
-            | OpTerms::SetArrangement { .. } => {}
+            | OpTerms::Edit { .. } => {}
         }
         rendered.extend(terms.members().into_iter().map(|(name, _)| name));
     }
@@ -1655,7 +1655,7 @@ fn a_set_arrangement_lines_merge_carries_a_restored_position_and_a_landings_none
         time,
         key: Some("bare".into()),
         signed: None,
-        terms: Some(OpTerms::SetArrangement {
+        terms: Some(OpTerms::Edit {
             base: Some("1.0.1.0.1.2".into()),
             merge: Some(MergeTerms { sides: vec!["1.0.1.0.1.1.1".into()], head: "1.0.1.0.1.2".into(), at }),
         }),

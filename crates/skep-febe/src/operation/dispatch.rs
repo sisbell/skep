@@ -12,7 +12,7 @@
 // `m3()`/`m5()`/`links()`/`content()` methods the read arms call, so no
 // accessor trait is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
-use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, M5Rec};
+use skep_arrangement::{published_target, reading_surface, trunk_of, AsOf, Edited, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
@@ -55,7 +55,7 @@ where
     ///
     /// The coordinate a driver hands back is `committed_at` — the design's own
     /// word for it — in the three arms whose operation carries an `at` of its
-    /// own (a `VPos`), and `at` in every other arm, `set_arrangement`'s
+    /// own (a `VPos`), and `at` in every other arm, the edit's
     /// included, whose ack carries the trunk's head beside it. Those are the
     /// only two spellings; a third would make one concept read as two.
     ///
@@ -127,7 +127,7 @@ where
                     .namespace_attested(attest)
                     .create_new_document(wc.principal, &account, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             Op::Delegate { new_prefix, new_id } => {
                 let (addr, at) = self
@@ -135,7 +135,7 @@ where
                     .namespace()
                     .delegate(wc.principal, new_prefix, new_id)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // No principal: the node addr is supplied by provisioning, and
             // M3's `register_node` takes none. The step-(b) bound-session
@@ -146,7 +146,7 @@ where
             Op::RegisterNode { addr } => {
                 let (addr, at) =
                     self.stores.namespace().register_node(addr).map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // Fork ≠ Version (§3): mints an empty account-tier document,
             // sharing no content; the content-sharing fork is Op::Version.
@@ -159,7 +159,7 @@ where
                     .namespace_attested(attest)
                     .fork(wc.principal, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // The well-known creation (the mailbox design §2, §3;
             // REG-4.131): M3 creates the account's document at the slot the
@@ -184,7 +184,7 @@ where
                     .create_well_known_document(wc.principal, &account, slot)
                     .map_err(|e| lower_txn(kind, e))?;
                 let committed = matches!(document, WellKnown::Minted(_));
-                Ok(Response::AckAddr { addr: document.into_address(), at, committed })
+                Ok(Response::AckAddr { addr: document.into_address(), at, committed, head_moved: None })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
             //    session caller; the version-chain refusals in-store too,
@@ -204,7 +204,7 @@ where
                     .vstream_attested(attest)
                     .insert(wc.caller(), &doc, at, values, deposit, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?; // returns post-commit
-                Ok(Response::AckAddr { addr: start, at: committed_at, committed: true }) // the exact V1 coordinate
+                Ok(Response::AckAddr { addr: start, at: committed_at, committed: true, head_moved: None }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width, as_of } => {
                 let at = self
@@ -244,22 +244,31 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at, head_moved: None })
             }
-            // A draft's whole arrangement set in one commit (the landing
-            // lane; skep #764): DELETE's and REINSTATE's bodies composed in
-            // the store, where the request's head, base and merge are
-            // decided — the chain checks, the fork gate, what moves. Its
-            // origins were consulted at the door above as `reinstate`'s
-            // were (`Op::source_arguments`), so the store takes no predicate;
-            // the handle drops the attestation for a kind outside its three.
-            // The ack carries the trunk's current head where the head named
-            // is no longer it — the tell (R5), which M10 passes through.
-            Op::SetArrangement { doc, arrangement, as_of } => {
-                let (at, head_moved) = self
+            // The edit, under either of its two names: a list of positional
+            // changes to one draft in one commit, each minting values or
+            // placing runs by identity, decided in the store with the
+            // request's head, base and merge (the landing lane; skep #764) —
+            // each change's shape, the chain checks, the fork gate, what
+            // moves. The two arms are one call: the name a frame came under
+            // rides `kind`, which words a refusal and, at the transport,
+            // picks the change feed's row. The origins of the runs it places
+            // were consulted at the door above as `reinstate`'s were
+            // (`Op::source_arguments`), so the store takes no predicate; the
+            // handle drops the attestation for a kind outside its three.
+            // The ack names the first address minted, where the call minted
+            // — every value of the call stands from there in the frame's
+            // order — and carries the trunk's current head where the head
+            // named is no longer it: the tell (R5), which M10 passes through.
+            Op::SetArrangement { doc, arrangement: edit, as_of } | Op::Edit { doc, edit, as_of } => {
+                let Edited { at, minted, head_moved } = self
                     .stores
                     .vstream_attested(attest)
-                    .set_arrangement(wc.caller(), &doc, &arrangement, AsOf::Typed(as_of))
+                    .edit(wc.caller(), &doc, edit, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::Ack { at, head_moved })
+                Ok(match minted {
+                    Some(addr) => Response::AckAddr { addr, at, committed: true, head_moved },
+                    None => Response::Ack { at, head_moved },
+                })
             }
             Op::Version { d_src, published } => {
                 let (addr, at) = self
@@ -270,7 +279,7 @@ where
                     // off its own working state (PUB-8.17/8.18).
                     .version(wc.principal, &d_src, published)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // The staging act (B3-S10): M5 mints the private draft in the
             // caller's own account, shares `from`'s surface into it and
@@ -285,7 +294,7 @@ where
                     .vstream()
                     .stage(wc.principal, &from)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // The shot (PUB-2.33, PUB-8.1), as THE PUBLICATION (the
             // link-sets design §5.7): M7's composite stages M5's shot — which
@@ -311,7 +320,7 @@ where
                     .linkstore_attested(&visibility, attest)
                     .publication(wc.caller(), &target, &shot, &places, &also_places, &deposits)
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // ── link writes (→ M7; ω-gated in-store on each written home;
             //    the value-keyed gates at the session principal's visibility
@@ -331,7 +340,7 @@ where
                     }
                 }
                 .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::AckAddr { addr, at, committed: true })
+                Ok(Response::AckAddr { addr, at, committed: true, head_moved: None })
             }
             // The idempotent zero-step ops (§3): a dedup hit answers the
             // incumbent with the base `Seq` (ASN-0134 §A1) and commits
@@ -882,6 +891,7 @@ where
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::SetArrangement { .. }
+            | Op::Edit { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -903,5 +913,5 @@ where
 /// that incumbent was found in (PUB-6.25; ASN-0134 §A1).
 fn deposit_ack((deposited, at): (Deposited, Seq)) -> Response {
     let committed = matches!(deposited, Deposited::Fresh(_));
-    Response::AckAddr { addr: deposited.into_address(), at, committed }
+    Response::AckAddr { addr: deposited.into_address(), at, committed, head_moved: None }
 }

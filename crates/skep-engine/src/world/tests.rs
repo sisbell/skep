@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use skep_address::validate;
-use skep_arrangement::{AsOf, Base, DraftBase, SetArrangement, SetMerge, Shot, ShotTerms};
+use skep_arrangement::{AsOf, Base, DraftBase, Edit, SetMerge, Shot, ShotTerms};
 use skep_content::Val;
 use skep_links::{Caller, SlotArg};
 
@@ -711,15 +711,17 @@ fn staged_drafts(landed: &[bool], links: u32) -> (World, Vec<Address>) {
         .map(|_| vstream.stage(USER, &version).expect("a staging draft of the version").0)
         .collect();
     let base = Base { member: version, extent: Nat::from(0u32) };
-    let landing = SetArrangement {
-        runs: Vec::new(),
+    // The landing changes no position — the draft and the merge are both
+    // empty — so its list of changes is empty beside the base and the merge.
+    let landing = Edit {
+        changes: Vec::new(),
         head: Some(base.clone()),
         base: Some(base),
         merge: Some(SetMerge { sides: vec![edition], at: None }),
     };
     for (draft, _) in drafts.iter().zip(landed).filter(|(_, land)| **land) {
         vstream
-            .set_arrangement(skep_arrangement::Caller::Principal(USER), draft, &landing, AsOf::Unchecked)
+            .edit(skep_arrangement::Caller::Principal(USER), draft, landing.clone(), AsOf::Unchecked)
             .expect("a merge landed in the owner's staged draft");
     }
     let caller = Caller::Principal(USER);

@@ -1,65 +1,32 @@
 //! The unit suite of `text.edit`.
 //!
 //! It holds the members, the plan made of one read with nothing written,
-//! the writes chained by position against a scripted board (the text
-//! suite's `Script`), the take-back and every answer that names what
-//! stands. The row itself, its order, the identities a real board keeps and
-//! a take-back landed on one run against the daemon in
+//! the one frame the call's changes are sent as against a scripted board
+//! (the text suite's `Script`) — its net changes in the draft's order, the
+//! addresses its acknowledgment names, its two caps — and every answer:
+//! landed, unchanged, refused, and an answer lost, settled from the change
+//! feed or not. The row itself, its order, the identities a real board
+//! keeps and the door it meets run against the daemon in
 //! `shell/tests/text.rs`.
 
-use skep_client::halt::Refused;
-use skep_client::DialError;
-
-use super::super::tests::{died, held_answer, image_frame, lines, moved_verdict, ordinal_of, read_frames, reads_of, settling, text_of, Rowed, Script, CODE, DOC, READ_AT};
+use super::super::tests::{died, edit_frame, feed_page, feed_read, less_id, lost, ordinal_of, own_key, read_frames, reads_of, refused_edit, text_of, Rowed, Script, CODE, DOC, READ_AT};
 use super::super::{Rows, Under};
 use super::*;
-use crate::refusal::Name;
+use skep_client::halt::Refused;
 
 /// The draft's own content I-address at `ordinal`.
 fn own(ordinal: u64) -> String {
     format!("{DOC}.0.1.{ordinal}")
 }
 
-/// The address the scripted insert `k` mints its first byte at.
-fn minted(k: u64) -> String {
-    own(100 * k)
-}
+/// The last component of the address the scripted frame mints its first
+/// byte at.
+const FIRST: u64 = 100;
 
-/// The ack of the scripted insert `k`, committed at `at`.
-fn inserted(k: u64, at: u64) -> Result<Value, Refusal> {
-    Ok(json!({"resp": "ack_addr", "addr": minted(k), "at": at}))
-}
-
-/// The ack of a removal committed at `at`.
-fn removed(at: u64) -> Result<Value, Refusal> {
-    Ok(json!({"resp": "ack", "at": at}))
-}
-
-/// The image the scripted call reads before its first write.
-///
-/// [`CODE`] in two runs: forty bytes of the draft's own, and the rest
-/// windowed from version 2 of another document.
-fn image() -> Result<Value, Refusal> {
-    Ok(json!({"resp": "runs", "as_of": READ_AT + 3, "runs": [{"i_start": own(1), "width": "40"}, {"i_start": "1.0.1.0.9.2.0.1.7", "width": (CODE.len() - 40).to_string()}]}))
-}
-
-/// The take-back of [`image`], typed against `at`.
-///
-/// Each run names its origin by the client's rule, a version's bytes their
-/// document.
-fn take_back(at: u64) -> Value {
-    let runs = [frames::shot_run(DOC, &own(1), 40), frames::shot_run("1.0.1.0.9", "1.0.1.0.9.2.0.1.7", CODE.len() as u64 - 40)];
-    frames::set_arrangement(DOC, &runs, at, None, None, None, None)
-}
-
-/// An image an undo reads.
-///
-/// It holds `width` bytes minted at `addr` standing from `ordinal`, read at
-/// `as_of`.
-fn image_holding(addr: &str, width: u64, ordinal: u64, as_of: u64) -> Result<Value, Refusal> {
-    Ok(
-        json!({"resp": "runs", "as_of": as_of, "runs": [{"i_start": own(1), "width": (ordinal - 1).to_string()}, {"i_start": addr, "width": width.to_string()}, {"i_start": own(ordinal), "width": "9"}]}),
-    )
+/// The ack of a frame that minted, its first byte at [`FIRST`], committed
+/// at `at`.
+fn minted(at: u64) -> Result<Value, Refusal> {
+    Ok(json!({"resp": "ack_addr", "addr": own(FIRST), "at": at, "committed": true}))
 }
 
 /// Returns the call's outcome, and every call made.
@@ -81,83 +48,16 @@ fn edit_of(edits: Value, after: Vec<Result<Value, Refusal>>) -> (Result<Answer, 
     (outcome, sent[3..].to_vec())
 }
 
-/// A change that stands whole, as `stands` names it.
-fn standing(pair: u64, change: u64, ordinal: u64, removed: u64, inserted: u64, addr: Option<String>, at: Option<u64>) -> Value {
-    let mut value = json!({"pair": pair, "change": change, "ordinal": ordinal.to_string(), "removed": removed.to_string(), "inserted": inserted.to_string()});
+/// One change as a pair's list names it.
+fn change(ordinal: u64, removed: u64, inserted: u64, addr: Option<u64>, at: Option<u64>) -> Value {
+    let mut value = json!({"ordinal": ordinal.to_string(), "removed": removed.to_string(), "inserted": inserted.to_string()});
     if let Some(addr) = addr {
-        value["addr"] = Value::from(addr);
+        value["addr"] = Value::from(own(addr));
     }
     if let Some(at) = at {
         value["at"] = Value::from(at);
     }
     value
-}
-
-/// Holds an error answer to its declared shape.
-///
-/// Each change of its `stands` is held to its own, and the answer is
-/// returned as the row answers it.
-fn declared(shape: &str, answer: Answer) -> Value {
-    assert!(answer.is_error, "{}", answer.value);
-    let value = answer.into_value();
-    crate::shapes::assert_declared(shape, &value);
-    for stands in value["stands"].as_array().expect("the changes that stand") {
-        crate::shapes::assert_declared(if stands.get("new_text").is_some() { "TextEditHalf" } else { "TextEditStanding" }, stands);
-    }
-    value
-}
-
-/// The two pairs most cells send: an insert, then a removal before it.
-///
-/// `add(` reads `addition(`, five bytes inserted, and `total = ` goes, eight
-/// bytes removed: one write each, the second after the first landed.
-fn two_writes() -> Value {
-    json!([{"old": "add(", "new": "addition("}, {"old": "total = ", "new": ""}])
-}
-
-/// The two writes of [`two_writes`].
-///
-/// The insert is typed against the read, the removal against the insert's
-/// commit, 41.
-fn two_frames() -> Vec<Value> {
-    vec![frames::insert_text(DOC, ordinal_of(CODE, "add") + 3, "ition", READ_AT, None), frames::delete(DOC, ordinal_of(CODE, "total"), 8, 41, None)]
-}
-
-/// The insert of [`two_writes`] as it stands, landed at 41.
-fn first_stands() -> Value {
-    standing(0, 0, ordinal_of(CODE, "add") + 3, 0, 5, Some(minted(1)), Some(41))
-}
-
-/// The two pairs of the cells on a change in part.
-///
-/// They are an insert, then a replacement after it: `add(` reads
-/// `addition(`, and `left` reads `first`: `lef` gives way to
-/// `firs`, two writes, at an ordinal the first pair moved by five.
-fn in_part() -> Value {
-    json!([{"old": "add(", "new": "addition("}, {"old": "left", "new": "first"}])
-}
-
-/// The ordinal `left` stands at once [`in_part`]'s first pair landed.
-fn left() -> u64 {
-    ordinal_of(CODE, "left") + 5
-}
-
-/// The three writes of [`in_part`], the commits 41 and 42 between them.
-fn in_part_frames() -> Vec<Value> {
-    vec![frames::insert_text(DOC, ordinal_of(CODE, "add") + 3, "ition", READ_AT, None), frames::insert_text(DOC, left() + 3, "firs", 41, None), frames::delete(DOC, left(), 3, 42, None)]
-}
-
-/// The replacement of [`in_part`] standing in part.
-///
-/// Its new bytes are placed, with `acked` the address and the commit its
-/// insert named, and its old ones are not removed.
-fn half_stands(acked: bool) -> Value {
-    let mut new_text = json!({"ordinal": (left() + 3).to_string(), "width": "4"});
-    if acked {
-        new_text["addr"] = Value::from(minted(2));
-        new_text["at"] = Value::from(42);
-    }
-    json!({"pair": 1, "change": 0, "new_text": new_text, "old_text": {"ordinal": left().to_string(), "width": "3"}})
 }
 
 // ── the members ─────────────────────────────────────────────────────────
@@ -195,7 +95,8 @@ fn a_member_of_the_wrong_form_is_refused_before_any_call_by_its_index() {
         assert!(script.sent_past(0).is_empty());
     }
     let most = json!({"doc": DOC, "edits": vec![pair; MAX_WIRE_LIST]});
-    assert_eq!(Asked::read(&most).expect("one wire list of pairs").pairs.len(), MAX_WIRE_LIST);
+    let asked = Asked::read(&most).expect("one wire list of pairs");
+    assert_eq!((asked.pairs.len(), asked.doc()), (MAX_WIRE_LIST, DOC));
     assert_eq!(MAX_WIRE_LIST, 4096);
 }
 
@@ -203,30 +104,26 @@ fn a_member_of_the_wrong_form_is_refused_before_any_call_by_its_index() {
 
 /// A later pair's old text is found in the text the pairs before it leave.
 ///
-/// The second pair names text only the first pair's landing makes — and is
-/// found there, its change placed past the bytes the first put in; the same
+/// The second pair names text only the first pair's change makes — and is
+/// found there, its own change placed past the bytes the first put in, the
+/// two sent as one frame in the coordinates of the draft as read; the same
 /// two pairs the other way round, a later pair whose text an earlier one
 /// took out, and one an earlier pair made stand twice are each refused
-/// naming the pair, the image never read and nothing written (the mutants
-/// that seek every pair in the text as read, or write before every pair is
-/// checked, answer or send otherwise).
+/// naming the pair, nothing written (the mutants that seek every pair in
+/// the text as read, or write before every pair is checked, answer or send
+/// otherwise).
 #[test]
 fn a_later_pairs_old_text_is_found_in_the_text_the_pairs_before_it_leave() {
     let word = ordinal_of(CODE, "add");
     let (first, second) = (json!({"old": "add(", "new": "sum_up("}), json!({"old": "sum_up(left", "new": "sum_up(first"}));
-    let (answer, sent) = edit_of(json!([first, second]), vec![image(), inserted(1, 41), removed(42), inserted(2, 43), removed(44)]);
-    let expected = [
-        image_frame(),
-        frames::insert_text(DOC, word + 3, "sum_up", READ_AT, None),
-        frames::delete(DOC, word, 3, 41, None),
-        frames::insert_text(DOC, word + 7 + 3, "firs", 42, None),
-        frames::delete(DOC, word + 7, 3, 43, None),
-    ];
-    assert_eq!(sent, expected, "`lef` stands seven bytes into the text the first pair wrote");
-    assert_eq!(answer.expect("an answer").value["outcome"], "edited");
+    let (answer, sent) = edit_of(json!([first, second]), vec![minted(41)]);
+    let frame = edit_frame(&[frames::minted(word, 3, "sum_up"), frames::minted(word + 4, 3, "firs")]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [frame], "`lef` stood four bytes past `add` as read, whatever the first pair wrote before it");
+    let pairs = json!([[change(word, 3, 6, Some(FIRST), Some(41))], [change(word + 7, 3, 4, Some(FIRST + 6), Some(41))]]);
+    assert_eq!(answer.expect("an answer").value["pairs"], pairs, "the second pair's change seven bytes into the text the first wrote, its bytes minted past the first's six");
     let refused = |edits: Value, detail: Value| {
         let (answer, sent) = edit_of(edits, Vec::new());
-        assert!(sent.is_empty(), "the reads alone: no image, no write: {sent:?}");
+        assert!(sent.is_empty(), "the reads alone: no write: {sent:?}");
         let mut expected = json!({"outcome": "refused", "doc": DOC, "as_of": READ_AT});
         expected.as_object_mut().expect("an object").extend(detail.as_object().expect("an object").clone());
         let answer = answer.expect("an answer");
@@ -243,10 +140,11 @@ fn a_later_pairs_old_text_is_found_in_the_text_the_pairs_before_it_leave() {
 ///
 /// The first pair takes out the whole text between two atoms; the second
 /// pair's text is then found two positions lower, the atoms still one
-/// position each, and a pair whose text would read across the two atoms now
-/// standing side by side is refused naming the first (the mutants that keep
-/// the emptied stretch, or move no gap, place the second pair elsewhere or
-/// find the text across).
+/// position each, and is written at the position it held as read, the frame
+/// naming the draft as it stands; a pair whose text would read across the
+/// two atoms now standing side by side is refused naming the first (the
+/// mutants that keep the emptied stretch, or move no gap, place the second
+/// pair elsewhere or find the text across).
 #[test]
 fn a_pair_that_empties_a_stretch_between_two_atoms_leaves_later_ordinals_right() {
     let reads = || {
@@ -256,13 +154,9 @@ fn a_pair_that_empties_a_stretch_between_two_atoms_leaves_later_ordinals_right()
             Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": "ab"}, {"atom": "v"}, {"content": "cd"}, {"atom": "w"}, {"content": "efgh"}]})),
         ]
     };
-    let whole = Ok(json!({"resp": "runs", "as_of": READ_AT, "runs": [{"i_start": own(1), "width": "10"}]}));
-    let (answer, sent) = run([reads(), vec![whole, removed(41), inserted(1, 42), removed(43)]].concat(), json!([{"old": "cd", "new": ""}, {"old": "gh", "new": "xy"}]));
-    assert_eq!(sent[4..], [frames::delete(DOC, 4, 2, READ_AT, None), frames::insert_text(DOC, 9, "xy", 41, None), frames::delete(DOC, 7, 2, 42, None)], "`gh` stood at 9, and stands at 7");
-    assert_eq!(
-        answer.expect("an answer").value["pairs"],
-        json!([[{"ordinal": "4", "removed": "2", "inserted": "0", "at": 41}], [{"ordinal": "7", "removed": "2", "inserted": "2", "addr": minted(1), "at": 43}]])
-    );
+    let (answer, sent) = run([reads(), vec![minted(41)]].concat(), json!([{"old": "cd", "new": ""}, {"old": "gh", "new": "xy"}]));
+    assert_eq!(sent[3..].iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(4, 2, ""), frames::minted(9, 2, "xy")])], "`gh` stood at 9 as read: the frame names it there");
+    assert_eq!(answer.expect("an answer").value["pairs"], json!([[change(4, 2, 0, None, Some(41))], [change(7, 2, 2, Some(FIRST), Some(41))]]), "and at 7 in the text the first pair leaves");
     let (answer, sent) = run(reads(), json!([{"old": "cd", "new": ""}, {"old": "bef", "new": "x"}]));
     assert_eq!(sent.len(), 3, "the reads alone");
     assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "crosses_atom", "doc": DOC, "ordinal": "3", "kind": "atom", "as_of": READ_AT, "pair": 1}));
@@ -271,25 +165,28 @@ fn a_pair_that_empties_a_stretch_between_two_atoms_leaves_later_ordinals_right()
 /// Pairs that change nothing are found, and nothing is written.
 ///
 /// Every pair's old text must stand once though its new text is the same,
-/// and the call then answers `unchanged` with no image read; one such pair
-/// beside a pair that changes the text is an empty list in the answer's
-/// pairs, and the rows show the one line the other changed.
+/// and the call then answers `unchanged`; so does a call whose later pair
+/// takes out exactly what an earlier one put in, the text left as it was
+/// read; one unchanging pair beside a pair that changes the text is an empty
+/// list in the answer's pairs, and the rows show the one line the other
+/// changed.
 #[test]
 fn pairs_that_change_nothing_are_found_and_nothing_is_written() {
+    let unchanged = Answer { value: json!({"outcome": "unchanged", "doc": DOC, "as_of": READ_AT}), is_error: false };
     let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "total = ", "new": "total = "}]), Vec::new());
-    assert!(sent.is_empty(), "no image and no write: {sent:?}");
+    assert!(sent.is_empty(), "no write: {sent:?}");
     let answer = answer.expect("an answer");
-    assert_eq!(answer, Answer { value: json!({"outcome": "unchanged", "doc": DOC, "as_of": READ_AT}), is_error: false });
+    assert_eq!(answer, unchanged);
     crate::shapes::assert_declared("TextEditUnchanged", &answer.into_value());
+    let (answer, sent) = edit_of(json!([{"old": "add(", "new": "addition("}, {"old": "addition(", "new": "add("}]), Vec::new());
+    assert_eq!((answer.expect("an answer"), sent.len()), (unchanged, 0), "what the first pair put in, the second took out: nothing to write");
     let (answer, _) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "subtract", "new": "subtract"}]), Vec::new());
     assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "not_found", "doc": DOC, "count": 0, "as_of": READ_AT, "pair": 1}));
-    let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "add(", "new": "addition("}]), vec![image(), inserted(1, 41)]);
-    assert_eq!(sent[1..], two_frames()[..1]);
+    let word = ordinal_of(CODE, "add");
+    let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "add(", "new": "addition("}]), vec![minted(41)]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(word + 3, 0, "ition")])]);
     let shown = [" 1\tfn main() {", "+2\t    let total = addition(left, right);", " 3\t    println!(\"{total}\");", " 4\t}"];
-    let whole = json!({
-        "outcome": "edited", "doc": DOC, "pairs": [[], [{"ordinal": (ordinal_of(CODE, "add") + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}]], "at": 41,
-        "lines": shown,
-    });
+    let whole = json!({"outcome": "edited", "doc": DOC, "pairs": [[], [change(word + 3, 0, 5, Some(FIRST), Some(41))]], "at": 41, "lines": shown});
     assert_eq!(answer.expect("an answer"), Answer { value: whole, is_error: false });
 }
 
@@ -297,7 +194,7 @@ fn pairs_that_change_nothing_are_found_and_nothing_is_written() {
 /// them.
 ///
 /// The draft holds a run its reader may not read on the line before the
-/// one changed: the change lands as one insert typed against the read, and
+/// one changed: the change lands as one frame typed against the read, and
 /// the answer carries the lines it changed — the withheld run drawn as a
 /// value that is no text — and `masked` beside them, declared on `edited`
 /// (the mutant that drops the mark answers no `masked`).
@@ -308,87 +205,108 @@ fn a_call_that_lands_answers_its_rows_masked_where_a_withheld_run_numbers_them()
         Ok(json!({"resp": "span_set", "as_of": READ_AT, "set": [{"start": "1.1", "width": "0.11"}]})),
         Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": "a\n"}, {"withheld": {"origin": "1.0.1.0.9", "width": "5"}}, {"content": "b\nc\n"}]})),
     ];
-    let (answer, sent) = run([reads, vec![image(), inserted(1, 41)]].concat(), json!([{"old": "c", "new": "cc"}]));
-    assert_eq!(sent[4..], [frames::insert_text(DOC, 11, "c", READ_AT, None)], "one insert, after the `c`");
+    let (answer, sent) = run([reads, vec![minted(41)]].concat(), json!([{"old": "c", "new": "cc"}]));
+    assert_eq!(sent[3..].iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(11, 0, "c")])], "one change, after the `c`");
     let answer = answer.expect("an answer");
-    let expected = json!({
-        "outcome": "edited", "doc": DOC, "pairs": [[{"ordinal": "11", "removed": "0", "inserted": "1", "addr": minted(1), "at": 41}]], "at": 41,
-        "lines": [" 1\ta", " 2\t{…}b", "+3\tcc"], "masked": true,
-    });
+    let expected = json!({"outcome": "edited", "doc": DOC, "pairs": [[change(11, 0, 1, Some(FIRST), Some(41))]], "at": 41, "lines": [" 1\ta", " 2\t{…}b", "+3\tcc"], "masked": true});
     assert_eq!(answer, Answer { value: expected, is_error: false });
     crate::shapes::assert_declared("TextEdited", &answer.into_value());
 }
 
-/// Each change's new text is held to one insert's cap, by itself.
+/// A call's new text is held to the frame's cap, all its changes together.
 ///
-/// A pair of two changes whose new texts each fill the cap is planned, the
-/// two together past it; one byte more in the second is refused naming the
-/// pair and that change, the image never read.
+/// A pair of two changes whose new texts together fill the cap is sent, one
+/// frame; one byte more in the second is refused `too_large` naming the
+/// call's new bytes and the cap, nothing written (the mutant that holds each
+/// change to the cap by itself sends a frame the board refuses whole).
 #[test]
-fn each_changes_new_text_is_held_to_one_inserts_cap_by_itself() {
+fn a_calls_new_text_is_held_to_the_frames_cap_all_its_changes_together() {
     let old = "one 12345678 two";
-    let grown = |last: usize| format!("{} 12345678 {}", "X".repeat(MAX_NEW_BYTES), "Y".repeat(last));
-    let planned = |new: &str| {
-        plan(DOC, &mut text_of(json!([{"content": old}])), READ_AT, &[Pair { old, new }])
-            .map(|plan| plan.changes.iter().map(|planned| (planned.change, planned.edit.ordinal, planned.edit.removed, planned.edit.inserted.len())).collect::<Vec<_>>())
+    let grown = |last: usize| format!("{} 12345678 {}", "X".repeat(MAX_NEW_BYTES / 2), "Y".repeat(last));
+    let reads = || {
+        vec![
+            Ok(json!({"resp": "doc_metadata", "doc": DOC, "published": false})),
+            Ok(json!({"resp": "span_set", "as_of": READ_AT, "set": [{"start": "1.1", "width": format!("0.{}", old.len())}]})),
+            Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": old}]})),
+        ]
     };
-    assert_eq!(planned(&grown(MAX_NEW_BYTES)), Ok(vec![(0, 1, 3, MAX_NEW_BYTES), (1, MAX_NEW_BYTES as u64 + 11, 3, MAX_NEW_BYTES)]));
-    let refused = planned(&grown(MAX_NEW_BYTES + 1)).expect_err("the second change is past the cap");
-    assert_eq!(
-        refused.value,
-        json!({"outcome": "refused", "cause": "too_large", "doc": DOC, "what": "new", "bytes": (MAX_NEW_BYTES + 1).to_string(), "cap": MAX_NEW_BYTES.to_string(), "pair": 0, "change": 1})
-    );
-    let (answer, sent) = edit_of(json!([{"old": "add", "new": "add"}, {"old": "fn", "new": format!("fn{}", "x".repeat(MAX_NEW_BYTES + 1))}]), Vec::new());
-    assert!(sent.is_empty(), "refused of the reads alone");
-    assert_eq!((answer.expect("an answer").value["pair"].as_u64(), MAX_NEW_BYTES), (Some(1), 1 << 18));
+    let (answer, sent) = run([reads(), vec![minted(41)]].concat(), json!([{"old": old, "new": grown(MAX_NEW_BYTES / 2)}]));
+    let changes = sent[3]["changes"].as_array().expect("the frame's changes");
+    assert_eq!((sent.len(), changes.len()), (4, 2), "one frame of two changes");
+    assert_eq!(changes.iter().map(|change| change["values"][0].as_str().map_or(0, str::len)).sum::<usize>(), MAX_NEW_BYTES, "the cap's bytes, the two changes together");
+    assert_eq!(answer.expect("an answer").value["outcome"], "edited");
+    let (answer, sent) = run(reads(), json!([{"old": old, "new": grown(MAX_NEW_BYTES / 2 + 1)}]));
+    assert_eq!(sent.len(), 3, "refused of the reads alone");
+    assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "too_large", "doc": DOC, "what": "new", "bytes": (MAX_NEW_BYTES + 1).to_string(), "cap": MAX_NEW_BYTES.to_string()}));
+    assert_eq!(MAX_NEW_BYTES, 1 << 18, "the board's cap on one edit's values");
 }
 
-// ── the writes ──────────────────────────────────────────────────────────
+/// A call of more changes than one frame lists is refused before any write.
+///
+/// Each pair is made as two changes, a kept stretch between them: 2,048
+/// pairs are 4,096 changes, one frame; one pair more is refused `too_large`
+/// naming the changes and the cap, nothing written.
+#[test]
+fn a_call_of_more_changes_than_one_frame_lists_is_refused_before_any_write() {
+    let line = |k: usize, upper: bool| if upper { format!("A{k:05} 12345678 B{k:05}\n") } else { format!("a{k:05} 12345678 b{k:05}\n") };
+    let call = |pairs: usize, after: Vec<Result<Value, Refusal>>| {
+        let text: String = (0..pairs).map(|k| line(k, false)).collect();
+        let reads = vec![
+            Ok(json!({"resp": "doc_metadata", "doc": DOC, "published": false})),
+            Ok(json!({"resp": "span_set", "as_of": READ_AT, "set": [{"start": "1.1", "width": format!("0.{}", text.len())}]})),
+            Ok(json!({"resp": "delivery", "as_of": READ_AT, "items": [{"content": text}]})),
+        ];
+        let edits: Vec<Value> = (0..pairs).map(|k| json!({"old": line(k, false), "new": line(k, true)})).collect();
+        run([reads, after].concat(), Value::Array(edits))
+    };
+    let (answer, sent) = call(MAX_WIRE_LIST / 2, vec![minted(41)]);
+    assert_eq!(sent[3]["changes"].as_array().map(Vec::len), Some(MAX_WIRE_LIST), "the premise: two changes a pair, one frame's list of them");
+    assert_eq!(answer.expect("an answer").value["outcome"], "edited");
+    let (answer, sent) = call(MAX_WIRE_LIST / 2 + 1, Vec::new());
+    assert_eq!(sent.len(), 3, "refused of the reads alone");
+    assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "too_large", "doc": DOC, "what": "changes", "changes": (MAX_WIRE_LIST + 2).to_string(), "cap": MAX_WIRE_LIST.to_string()}));
+}
 
-/// Several changes land, each write typed against the commit before it.
+// ── the one frame ───────────────────────────────────────────────────────
+
+/// Several pairs are one frame, its changes in the draft's order.
 ///
 /// One pair's old text spans a word replaced, a word lengthened and a
-/// stretch taken out: three changes, the text between them in no write; a
-/// pair before them and one after land behind them, each ordinal moved by
-/// the changes already made. The first write carries the read's position
-/// and each later one the commit of the write before it, with no read
-/// between; the answer lists each pair's changes, and its rows the lines
-/// they changed — the words replaced and lengthened, the line a removal
-/// inside it left, the renamed line and the line added — with the one line
-/// between them (the mutants that make a pair as one stretch, type every
-/// write against the read, or leave an ordinal where the read found it send
-/// other frames).
+/// stretch taken out: three changes, the text between them in no change; a
+/// pair that stands before them in the draft and one after are asked after
+/// it. The call sends ONE frame typed against the read, with no read and no
+/// write beside it: five changes ascending in the draft as read, whatever
+/// order the pairs came in. The answer lists each pair's changes in the
+/// pairs' order, each ordinal a place in the text as the changes planned
+/// before it leave it, and every one at the one commit; the rows show the
+/// lines they changed (the mutants that make a pair as one stretch, send a
+/// frame a change, or send the changes in the pairs' order send other
+/// frames).
 #[test]
-fn three_changes_of_one_pair_and_two_more_pairs_land_each_typed_against_the_commit_before_it() {
+fn several_pairs_are_one_frame_its_changes_in_the_drafts_order() {
     let old = "    let total = add(left, right);\n    println!(\"{total}\");\n";
     let new = "    let sum = add(left, right_side);\n    println!(\"\");\n";
     let edits = json!([{"old": old, "new": new}, {"old": "main", "new": "start"}, {"old": "}\n", "new": "}\n// end\n"}]);
-    let acks = vec![image(), inserted(1, 41), removed(42), inserted(2, 43), removed(44), inserted(3, 45), removed(46), inserted(4, 47)];
-    let (answer, sent) = edit_of(edits, acks);
+    let (answer, sent) = edit_of(edits, vec![minted(41)]);
     let (lines, main, end) = (ordinal_of(CODE, old), ordinal_of(CODE, "main"), ordinal_of(CODE, "}\n"));
-    let expected = [
-        image_frame(),
-        frames::insert_text(DOC, lines + 8 + 5, "sum", READ_AT, None),
-        frames::delete(DOC, lines + 8, 5, 41, None),
-        frames::insert_text(DOC, lines + 29, "_side", 42, None),
-        frames::delete(DOC, lines + 51, 7, 43, None),
-        frames::insert_text(DOC, main + 4, "start", 44, None),
-        frames::delete(DOC, main, 4, 45, None),
-        frames::insert_text(DOC, end - 4 + 1 + 2, "// end\n", 46, None),
-    ];
-    assert_eq!(sent, expected);
+    let frame = edit_frame(&[
+        frames::minted(main, 4, "start"),
+        frames::minted(ordinal_of(CODE, "total"), 5, "sum"),
+        frames::minted(ordinal_of(CODE, "right") + 5, 0, "_side"),
+        frames::minted(ordinal_of(CODE, "{total}"), 7, ""),
+        frames::minted(CODE.len() as u64 + 1, 0, "// end\n"),
+    ]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [frame], "one frame, nothing read or written beside it");
+    // The frame mints `start`, `sum`, `_side` and the last line, in that
+    // order, from the first address on.
     let pairs = json!([
-        [
-            {"ordinal": (lines + 8).to_string(), "removed": "5", "inserted": "3", "addr": minted(1), "at": 42},
-            {"ordinal": (lines + 29).to_string(), "removed": "0", "inserted": "5", "addr": minted(2), "at": 43},
-            {"ordinal": (lines + 51).to_string(), "removed": "7", "inserted": "0", "at": 44},
-        ],
-        [{"ordinal": main.to_string(), "removed": "4", "inserted": "5", "addr": minted(3), "at": 46}],
-        [{"ordinal": (end - 1).to_string(), "removed": "0", "inserted": "7", "addr": minted(4), "at": 47}],
+        [change(lines + 8, 5, 3, Some(FIRST + 5), Some(41)), change(lines + 29, 0, 5, Some(FIRST + 8), Some(41)), change(lines + 51, 7, 0, None, Some(41))],
+        [change(main, 4, 5, Some(FIRST), Some(41))],
+        [change(end - 1, 0, 7, Some(FIRST + 13), Some(41))],
     ]);
     let shown = ["+1\tfn start() {", "+2\t    let sum = add(left, right_side);", "+3\t    println!(\"\");", " 4\t}", "+5\t// end"];
     let answer = answer.expect("an answer");
-    assert_eq!(answer, Answer { value: json!({"outcome": "edited", "doc": DOC, "pairs": pairs, "at": 47, "lines": shown}), is_error: false });
+    assert_eq!(answer, Answer { value: json!({"outcome": "edited", "doc": DOC, "pairs": pairs, "at": 41, "lines": shown}), is_error: false });
     let value = answer.into_value();
     crate::shapes::assert_declared("TextEdited", &value);
     for change in value["pairs"].as_array().expect("pairs").iter().flat_map(|pair| pair.as_array().expect("a pair's changes")) {
@@ -396,327 +314,133 @@ fn three_changes_of_one_pair_and_two_more_pairs_land_each_typed_against_the_comm
     }
 }
 
-/// A first write that does not land leaves nothing to take back.
+/// Each change's address is taken in the frame's order, not the pairs'.
 ///
-/// Refused by the row, the refusal is the call's; its line dropped, the
-/// answer is `refused` with the verdict, or with the hold's cause and the
-/// error member where the board gave none, naming the change — and no
-/// `set_arrangement` follows either: the draft is as the call found it.
+/// The first pair changes the draft's last line and the second its first:
+/// the frame carries the second pair's change first, the draft's order, and
+/// the board mints its bytes first, so the second pair's address is the
+/// acknowledgment's and the first pair's stands past the second's bytes
+/// (the mutant that hands the addresses out in the pairs' order names the
+/// first pair's bytes at the address the board gave the second's).
 #[test]
-fn a_first_write_that_does_not_land_leaves_nothing_and_nothing_is_taken_back() {
-    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "insert"}));
-    let (outcome, sent) = edit_of(two_writes(), vec![image(), Err(refusal())]);
-    assert_eq!(sent, [image_frame(), two_frames()[0].clone()], "the image, the insert, and nothing after it");
-    assert_eq!(outcome.expect_err("the row's refusal").to_value(), refusal().to_value());
-    let verdict = moved_verdict("insert", READ_AT, 43);
-    let (answer, sent) = edit_of(two_writes(), vec![image(), held_answer(3, "moved"), lines(3, "moved", verdict.clone()), Ok(json!({}))]);
-    assert_eq!(sent[2..], settling(3)[..], "its line read and dropped: no other write");
-    assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "arrangement_moved", "doc": DOC, "refusal": verdict, "pair": 0, "change": 0}), is_error: false });
-    let (answer, sent) = edit_of(two_writes(), vec![image(), held_answer(3, "halted"), lines(3, "halted", Value::Null), Ok(json!({}))]);
-    assert_eq!(sent.len(), 4);
-    let answer = answer.expect("an answer");
-    assert_eq!(answer, Answer { value: json!({"outcome": "refused", "cause": "halted", "doc": DOC, "pair": 0, "change": 0}), is_error: true });
-    crate::shapes::assert_declared("TextRefused", &answer.into_value());
+fn each_changes_address_is_taken_in_the_frames_order_not_the_pairs() {
+    let (late, early) = (json!({"old": "println", "new": "eprintln"}), json!({"old": "main", "new": "start"}));
+    let (print, main) = (ordinal_of(CODE, "println"), ordinal_of(CODE, "main"));
+    let (answer, sent) = edit_of(json!([late, early]), vec![minted(41)]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(main, 4, "start"), frames::minted(print, 0, "e")])], "the draft's order");
+    let pairs = json!([[change(print, 0, 1, Some(FIRST + 5), Some(41))], [change(main, 4, 5, Some(FIRST), Some(41))]]);
+    assert_eq!(answer.expect("an answer").value["pairs"], pairs, "the second pair's five bytes minted first, the first pair's one after them");
 }
 
-// ── all or nothing ──────────────────────────────────────────────────────
-
-/// A write past the first that does not land has the draft set back.
+/// A pair over an earlier pair's new text mints only what stands.
 ///
-/// The second write's line is dropped with no verdict, or with a verdict
-/// other than a moved draft's, or the row refuses the write outright: each
-/// is answered by exactly one `set_arrangement` of the image read before
-/// the first write — its runs with their origins — typed against the first
-/// write's commit, and the call answers what stopped the write, nothing
-/// standing (the mutants that take nothing back, type the take-back against
-/// the read or a fresh one, or send another write after it send otherwise).
+/// The first pair lengthens a word and the second replaces the lengthened
+/// word whole: the frame is one change, the word as read removed and the
+/// second pair's text minted — never the first pair's bytes minted and then
+/// removed — and its removal names only positions the draft held as read.
+/// The first pair's change is answered with no address, none of its bytes
+/// standing. A later pair that writes between two of an earlier pair's bytes
+/// leaves that change no one address either, and the frame mints the one
+/// stretch that stands (the mutants that send each pair's changes unmerged
+/// remove bytes the frame itself mints, which the board refuses, or mint
+/// them twice).
 #[test]
-fn a_write_past_the_first_that_does_not_land_has_the_draft_set_back_as_it_stood() {
-    let landed = || Ok(json!({"resp": "ack", "at": 43}));
-    let opening = [vec![image_frame()], two_frames()].concat();
-    let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), held_answer(5, "halted"), lines(5, "halted", Value::Null), Ok(json!({})), landed()]);
-    assert_eq!(sent, [opening.clone(), settling(5), vec![take_back(41)]].concat(), "the removal's line settled, then the one take-back");
-    assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "halted", "doc": DOC, "pair": 1, "change": 0}), is_error: true });
-    let verdict = json!({"resp": "rejected", "op": "delete", "code": "not_owner", "disposition": "permanent", "site": {"addr": DOC}});
-    let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), held_answer(5, "not_owner:x"), lines(5, "not_owner:x", verdict.clone()), Ok(json!({})), landed()]);
-    assert_eq!(sent.last(), Some(&take_back(41)));
-    assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "not_owner", "doc": DOC, "refusal": verdict, "pair": 1, "change": 0}), is_error: false });
-    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"}));
-    let (outcome, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), Err(refusal()), landed()]);
-    assert_eq!(sent, [opening, vec![take_back(41)]].concat());
-    assert_eq!(outcome.expect_err("the row's refusal").to_value(), refusal().to_value());
-    assert_eq!(take_back(41)["runs"], json!([{"origin": DOC, "i_start": own(1), "width": "40"}, {"origin": "1.0.1.0.9", "i_start": "1.0.1.0.9.2.0.1.7", "width": "33"}]));
-    assert_eq!((take_back(41)["as_of"].as_u64(), take_back(41).get("head"), take_back(41).get("base"), take_back(41).get("merge")), (Some(41), None, None, None));
-}
-
-/// Another writer's change is never taken back over.
-///
-/// The board refuses the second write as typed against an older state:
-/// another writer's change landed after the first. No `set_arrangement` is
-/// sent, and the answer is `partial`, naming the change that stands by its
-/// address and commit; a moved line whose verdict could not be read is
-/// taken the same way. And where the take-back itself is refused as typed
-/// against an older state it is not sent again, the answer naming what
-/// stands and the take-back's refusal (the mutants that take back over a
-/// moved draft, or type the take-back afresh, send a `set_arrangement`
-/// more).
-#[test]
-fn another_writers_change_is_never_taken_back_over() {
-    let verdict = moved_verdict("delete", 41, 44);
-    let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), held_answer(5, "moved"), lines(5, "moved", verdict.clone()), Ok(json!({}))]);
-    assert_eq!(sent, [vec![image_frame()], two_frames(), settling(5)].concat(), "no take-back");
-    let stands = json!({"outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": [first_stands()], "cause": "arrangement_moved", "refusal": verdict, "error": true});
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), stands);
-    let unlisted = Err(Refusal::shell(Name::STORE_HALTED, json!({"why": "damaged"})));
-    let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), held_answer(5, "moved"), unlisted, Ok(json!({}))]);
-    assert_eq!(sent.len(), 5, "no take-back over a moved draft whose verdict was not read");
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), json!({"outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": [first_stands()], "cause": "moved", "error": true}));
-    let moved = || Refusal::Board(Refused { status: 200, code: "arrangement_moved".into(), detail: None, op: Some("set_arrangement".into()), body: moved_verdict("set_arrangement", 41, 44) });
-    let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), held_answer(5, "halted"), lines(5, "halted", Value::Null), Ok(json!({})), Err(moved())]);
-    assert_eq!(sent.iter().filter(|frame| frame["op"] == "set_arrangement").count(), 1, "sent once, never typed afresh");
-    assert_eq!(sent.last(), Some(&take_back(41)), "and nothing after it");
-    let expected = json!({
-        "outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": [first_stands()], "cause": "halted",
-        "take_back": {"cause": "arrangement_moved", "refusal": moved().to_value()}, "error": true,
-    });
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), expected);
-}
-
-/// A take-back that does not land names what stands, and what may.
-///
-/// Refused by the shell under a standing hold, or by the board, the
-/// take-back's refusal rides the answer beside each change that stands;
-/// where its answer was lost — no answer once the request left, the board's
-/// handler panicked, its write path poisoned — the take-back may have
-/// landed, and the changes are named as ones that may stand.
-#[test]
-fn a_take_back_that_does_not_land_names_what_stands_and_what_may() {
-    let refused_run = || {
-        Refusal::Board(Refused {
-            status: 200,
-            code: "withheld".into(),
-            detail: None,
-            op: Some("set_arrangement".into()),
-            body: json!({"resp": "rejected", "code": "withheld", "disposition": "permanent"}),
-        })
-    };
-    let poisoned = || {
-        Refusal::Board(Refused { status: 200, code: "poisoned".into(), detail: None, op: Some("set_arrangement".into()), body: json!({"resp": "rejected", "code": "poisoned", "disposition": "halt"}) })
-    };
-    let cases: Vec<(Refusal, bool)> = vec![
-        (Refusal::shell(Name::STOPPED, json!({"op": "set_arrangement"})), false),
-        (Refusal::shell(Name::POISONED, json!({"op": "set_arrangement"})), false),
-        (Refusal::shell(Name::HALTED, json!({"op": "set_arrangement"})), false),
-        (refused_run(), false),
-        (Refusal::Unreachable(DialError::Connect("refused".into())), false),
-        (Refusal::Unreachable(DialError::Timeout("no answer".into())), true),
-        (Refusal::board(500, json!({"error": "internal_panic"})), true),
-        (poisoned(), true),
-    ];
-    for (refusal, lost) in cases {
-        let refusal_of_the_write = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"}));
-        let (answer, sent) = edit_of(two_writes(), vec![image(), inserted(1, 41), Err(refusal_of_the_write()), Err(refusal.clone())]);
-        assert_eq!(sent, [vec![image_frame()], two_frames(), vec![take_back(41)]].concat(), "{refusal}");
-        let mut expected = json!({
-            "outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": [first_stands()],
-            "cause": "another_window", "refusal": refusal_of_the_write().to_value(),
-            "take_back": {"cause": refusal.name(), "refusal": refusal.to_value()}, "error": true,
-        });
-        if lost {
-            expected["may_stand"] = json!(true);
-        }
-        assert_eq!(declared("TextEditPartial", answer.expect("an answer")), expected, "{refusal}");
-    }
-}
-
-/// A write that landed with no commit read ends the call there.
-///
-/// An insert's ack that names no commit, and a line whose drop finds its
-/// write landed, leave nothing to type the next write against: no write
-/// follows and nothing is taken back, and the answer is `partial`, naming
-/// the write and each change that stands, that one among them. On the
-/// call's last write the same is the call landed whole, that change's
-/// commit unnamed and the answer's own `at` absent, its rows answered all
-/// the same (the mutants that go on from the read's position, or take back
-/// with no commit to type against, send a write more).
-#[test]
-fn a_write_that_landed_with_no_commit_read_ends_the_call_there() {
+fn a_pair_over_an_earlier_pairs_new_text_mints_only_what_stands() {
     let word = ordinal_of(CODE, "add");
-    let (answer, sent) = edit_of(two_writes(), vec![image(), Ok(json!({"resp": "ack_addr", "addr": minted(1)}))]);
-    assert_eq!(sent.len(), 2, "the image and the insert: nothing after it");
-    let unread = json!({"outcome": "partial", "doc": DOC, "pair": 0, "change": 0, "stands": [standing(0, 0, word + 3, 0, 5, Some(minted(1)), None)], "cause": "unread", "op": "insert", "error": true});
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), unread);
-    let (answer, sent) = edit_of(two_writes(), vec![image(), held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), Ok(json!({"kept": true}))]);
-    assert_eq!(sent.len(), 4, "the insert and its settling: nothing after it");
-    let lost = json!({"outcome": "partial", "doc": DOC, "pair": 0, "change": 0, "stands": [standing(0, 0, word + 3, 0, 5, None, None)], "cause": "answer_lost", "op": "insert", "error": true});
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), lost);
+    let (answer, sent) = edit_of(json!([{"old": "add(", "new": "addition("}, {"old": "addition(", "new": "plus("}]), vec![minted(41)]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(word, 3, "plus")])], "three positions as read removed, four bytes minted: none of `ition`");
+    let pairs = json!([[change(word + 3, 0, 5, None, Some(41))], [change(word, 8, 4, Some(FIRST), Some(41))]]);
+    assert_eq!(answer.expect("an answer").value["pairs"], pairs, "the first pair's bytes stand nowhere, and are named at no address");
+    let (answer, sent) = edit_of(json!([{"old": "add(", "new": "add_all_of_them("}, {"old": "all_of_them", "new": "all_the_rest_of_them"}]), vec![minted(41)]);
+    let frame = less_id(&sent[0]);
+    assert_eq!((sent.len(), frame["changes"].as_array().map(Vec::len)), (1, Some(1)), "one frame of one change: {frame}");
+    assert_eq!((&frame["changes"][0]["at"], &frame["changes"][0]["width"], &frame["changes"][0]["values"]), (&frames::place(word + 3), &json!("0"), &json!(["_all_the_rest_of_them"])), "the one stretch that stands");
+    let listed = answer.expect("an answer").value["pairs"].clone();
+    assert_eq!(listed[0][0].get("addr"), None, "the first pair's bytes stand in two parts, the second's between them: {listed}");
+    assert!(listed[1][0]["addr"].is_string(), "the second pair's stand whole: {listed}");
+}
+
+/// New bytes that are no text go as hex, a value a byte.
+#[test]
+fn new_bytes_that_are_no_text_go_as_hex() {
+    let text = text_of(json!([{"content": "ab"}, {"hex": "c328"}, {"content": "cd"}]));
+    let cut = Net { at: 3, width: 1, new: 3..5 };
+    assert_eq!(cut.frame(&text), json!({"at": frames::place(3), "width": "1", "values": [{"hex": "c328"}]}));
+    let whole = Net { at: 1, width: 0, new: 5..7 };
+    assert_eq!(whole.frame(&text), frames::minted(1, 0, "cd"));
+    assert_eq!((cut.minted(), whole.minted()), (2, 2));
+}
+
+// ── the answers ─────────────────────────────────────────────────────────
+
+/// A frame the board refuses is the call's refusal, nothing written.
+///
+/// The board refuses the one frame as typed against an older state, another
+/// writer's change having landed since the read, or for any other cause: the
+/// answer is `refused`, data, the board's code its cause and the verdict
+/// under `refusal`; nothing of the call stands, so nothing is read or
+/// written after it. The shell's own refusal of the frame is the call's.
+#[test]
+fn a_frame_the_board_refuses_is_the_calls_refusal_nothing_written() {
+    let edits = || json!([{"old": "add(", "new": "addition("}, {"old": "total = ", "new": ""}]);
+    for code in ["arrangement_moved", "not_owner"] {
+        let refusal = refused_edit(code);
+        let Refusal::Board(Refused { body: verdict, .. }) = refusal.clone() else { unreachable!() };
+        let (answer, sent) = edit_of(edits(), vec![Err(refusal)]);
+        assert_eq!(sent.len(), 1, "{code}: the one frame");
+        let answer = answer.expect("an answer");
+        assert_eq!(answer, Answer { value: json!({"outcome": "refused", "cause": code, "doc": DOC, "refusal": verdict}), is_error: false }, "{code}");
+        crate::shapes::assert_declared("TextRefused", &answer.into_value());
+    }
+    let held_lines = || Refusal::shell(crate::refusal::Name::HELD_LINES, json!({"doc": DOC, "held": 1}));
+    let (outcome, sent) = edit_of(edits(), vec![Err(held_lines())]);
+    assert_eq!((outcome.expect_err("the refusal").to_value(), sent.len()), (held_lines().to_value(), 1));
+}
+
+/// A lost answer is asked again, then read off the change feed.
+///
+/// The frame's answer is lost: the same frame is asked again once, and its
+/// acknowledgment there is the call's, addresses and all. Where the re-ask
+/// is refused as typed against an older state, the draft's first row past
+/// the read is read: the call's own `edit` under the session's key answers
+/// `edited` at that row's position, every change at it and none with an
+/// address, the rows drawn as for any landing; another writer's row leaves
+/// the call `answer_lost`, an error naming the read's position, nothing sent
+/// after it.
+#[test]
+fn a_lost_answer_is_asked_again_then_read_off_the_change_feed() {
+    let edits = || json!([{"old": "add(", "new": "addition("}, {"old": "total = ", "new": ""}]);
+    let (word, total) = (ordinal_of(CODE, "add"), ordinal_of(CODE, "total"));
+    let frame = edit_frame(&[frames::minted(total, 8, ""), frames::minted(word + 3, 0, "ition")]);
+    let (answer, sent) = edit_of(edits(), vec![Err(lost()), minted(44)]);
+    assert_eq!((sent.len(), sent[0] == sent[1], less_id(&sent[0])), (2, true, frame.clone()), "the same frame, asked again once");
+    assert_eq!(answer.expect("an answer").value["pairs"], json!([[change(word + 3, 0, 5, Some(FIRST), Some(44))], [change(total, 8, 0, None, Some(44))]]));
+    let (answer, sent) = edit_of(edits(), vec![Err(lost()), Err(refused_edit("arrangement_moved")), feed_page("edit", &own_key(), 47)]);
+    assert_eq!((sent.len(), &sent[2]), (3, &feed_read(DOC, READ_AT)));
     let shown = [" 1\tfn main() {", "+2\t    let addition(left, right);", " 3\t    println!(\"{total}\");", " 4\t}"];
-    let whole = |second: Value| json!({"outcome": "edited", "doc": DOC, "pairs": [[{"ordinal": (word + 3).to_string(), "removed": "0", "inserted": "5", "addr": minted(1), "at": 41}], [second]], "lines": shown});
-    let unnamed = json!({"ordinal": ordinal_of(CODE, "total").to_string(), "removed": "8", "inserted": "0"});
-    for last in [vec![Ok(json!({"resp": "ack"}))], vec![held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), Ok(json!({"kept": true}))]] {
-        let (answer, sent) = edit_of(two_writes(), [vec![image(), inserted(1, 41)], last].concat());
-        assert!(sent.iter().all(|frame| frame["op"] != "set_arrangement"), "nothing taken back");
-        assert_eq!(answer.expect("an answer"), Answer { value: whole(unnamed.clone()), is_error: false }, "the last write: landed whole, no commit named");
-    }
-    // The insert of a change of two writes: its bytes stand beside the old
-    // ones, which no removal can be typed for.
-    let (answer, sent) = edit_of(in_part(), vec![image(), inserted(1, 41), Ok(json!({"resp": "ack", "at": 42}))]);
-    assert_eq!(sent.len(), 3, "an ack naming no address: the removal is not sent");
-    let stands = json!({"outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": [first_stands(), half_stands(false)], "cause": "unread", "op": "insert", "error": true});
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), stands);
+    let landed = json!({"outcome": "edited", "doc": DOC, "pairs": [[change(word + 3, 0, 5, None, Some(47))], [change(total, 8, 0, None, Some(47))]], "at": 47, "lines": shown});
+    let answer = answer.expect("an answer");
+    assert_eq!(answer, Answer { value: landed, is_error: false }, "landed at its own row's position, no address named");
+    crate::shapes::assert_declared("TextEdited", &answer.into_value());
+    let (answer, sent) = edit_of(edits(), vec![Err(lost()), Err(refused_edit("arrangement_moved")), feed_page("edit", &"cd".repeat(32), 47)]);
+    assert_eq!(sent.len(), 3, "nothing sent after the read");
+    let answer = answer.expect("an answer");
+    assert_eq!(answer, Answer { value: json!({"outcome": "answer_lost", "doc": DOC, "as_of": READ_AT, "cause": "unreachable", "refusal": lost().to_value()}), is_error: true });
+    crate::shapes::assert_declared("TextAnswerLost", &answer.into_value());
 }
 
-/// A change in part is taken back by identity, or named with both spans.
+/// A frame that meets the session's death is made again under the re-open.
 ///
-/// A replacement's new bytes landed and the board refused the removal of
-/// its old ones over another writer's change: nothing is taken back whole,
-/// and the new bytes are removed by identity where the image shows them —
-/// the answer then names the changes before it alone. Where that removal
-/// cannot be made, the change is named with both its spans; and where the
-/// replacement is the call's only write and its undo lands, nothing stands
-/// and the answer is the removal's verdict.
+/// The frame's dial meets the death, which executed nothing: it is made once
+/// more under the session the restart arm re-opened, the same frame, and
+/// lands there as one no death met.
 #[test]
-fn a_change_in_part_is_taken_back_by_identity_or_named_with_both_spans() {
-    let verdict = moved_verdict("delete", 42, 44);
-    let moved = || vec![held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({}))];
-    let opening = || [vec![image(), inserted(1, 41), inserted(2, 42)], moved()].concat();
-    let undone = vec![image_holding(&minted(2), 4, left() + 9, 50), removed(51)];
-    let (answer, sent) = edit_of(in_part(), [opening(), undone].concat());
-    let expected = [vec![image_frame()], in_part_frames(), settling(4), vec![image_frame(), frames::delete(DOC, left() + 9, 4, 50, None)]].concat();
-    assert_eq!(sent, expected, "the new bytes removed where the other writer's change moved them, typed against that read");
-    let partial = |stands: Value| json!({"outcome": "partial", "doc": DOC, "pair": 1, "change": 0, "stands": stands, "cause": "arrangement_moved", "refusal": verdict, "error": true});
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), partial(json!([first_stands()])));
-    let too_large = Err(Refusal::Board(Refused { status: 200, code: "image_too_large".into(), detail: None, op: Some("image".into()), body: json!({"resp": "rejected", "code": "image_too_large"}) }));
-    let (answer, _) = edit_of(in_part(), [opening(), vec![too_large]].concat());
-    assert_eq!(declared("TextEditPartial", answer.expect("an answer")), partial(json!([first_stands(), half_stands(true)])), "the undo not made: both spans");
-    // The replacement alone: its insert the one landed write.
-    let word = ordinal_of(CODE, "add");
-    let alone = json!([{"old": "add", "new": "subtract"}]);
-    let verdict = moved_verdict("delete", 41, 44);
-    let (answer, sent) =
-        edit_of(alone.clone(), vec![image(), inserted(1, 41), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({})), image_holding(&minted(1), 8, word + 3, 50), removed(51)]);
-    assert_eq!(sent.last(), Some(&frames::delete(DOC, word + 3, 8, 50, None)));
-    assert_eq!(
-        answer.expect("an answer"),
-        Answer { value: json!({"outcome": "refused", "cause": "arrangement_moved", "doc": DOC, "refusal": verdict, "pair": 0, "change": 0}), is_error: false },
-        "nothing stands: the verdict"
-    );
-    // Its removal refused for the board's own cause: the draft set back.
-    let (answer, sent) = edit_of(alone.clone(), vec![image(), inserted(1, 41), held_answer(4, "halted"), lines(4, "halted", Value::Null), Ok(json!({})), removed(43)]);
-    assert_eq!(sent.last(), Some(&take_back(41)), "the insert's commit is the last landed write's");
-    assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "halted", "doc": DOC, "pair": 0, "change": 0}));
-    // The take-back refused, the undo held by the same stop and dropped: the
-    // change stands in part, and the take-back's refusal is told.
-    let stopped = || Refusal::shell(Name::STOPPED, json!({"op": "set_arrangement"}));
-    let after = vec![
-        image(),
-        inserted(1, 41),
-        held_answer(4, "halted"),
-        lines(4, "halted", Value::Null),
-        Ok(json!({})),
-        Err(stopped()),
-        image_holding(&minted(1), 8, word + 3, 50),
-        held_answer(5, "stopped"),
-        lines(5, "stopped", Value::Null),
-        Ok(json!({})),
-    ];
-    let (answer, sent) = edit_of(alone, after);
-    assert_eq!(sent[5..7], [take_back(41), image_frame()], "the take-back once, then the undo by identity");
-    let value = declared("TextEditPartial", answer.expect("an answer"));
-    let both = json!({"pair": 0, "change": 0, "new_text": {"ordinal": (word + 3).to_string(), "width": "8", "addr": minted(1), "at": 41}, "old_text": {"ordinal": word.to_string(), "width": "3"}});
-    assert_eq!((&value["stands"], &value["cause"], &value["take_back"]["cause"], value.get("may_stand")), (&json!([both]), &json!("halted"), &json!("stopped"), None), "{value}");
-}
-
-/// A line the shell will not drop is answered `held`.
-///
-/// The shell refuses a drop where it cannot tell whether the write landed:
-/// the line stands, no write follows it and no `set_arrangement` is sent
-/// while it does, and the answer names the line, the write it is and each
-/// change that stands — the change the line is of by its two spans where it
-/// is of two writes, and an undo's line as `undo` (the mutant that takes
-/// back beside a line that may land sets the draft back under it).
-#[test]
-fn a_line_the_shell_will_not_drop_is_answered_held_and_nothing_is_taken_back() {
-    let unread = |held: u64| Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": held, "why": "unanswered"})));
-    let standing_line = |held: u64| vec![held_answer(held, "unreachable"), lines(held, "unreachable", Value::Null), unread(held)];
-    let held =
-        |write: &str, pair: u64, stands: Value| json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": write, "pair": pair, "change": 0, "stands": stands, "error": true});
-    let (answer, sent) = edit_of(two_writes(), [vec![image()], standing_line(8)].concat());
-    assert_eq!(sent.len(), 4, "the first write's line stands: nothing after it");
-    assert_eq!(declared("TextEditHeld", answer.expect("an answer")), held("insert", 0, json!([])));
-    let (answer, sent) = edit_of(two_writes(), [vec![image(), inserted(1, 41)], standing_line(8)].concat());
-    assert_eq!(sent, [vec![image_frame()], two_frames(), settling(8)].concat(), "no take-back while the removal may land");
-    assert_eq!(declared("TextEditHeld", answer.expect("an answer")), held("delete", 1, json!([first_stands()])));
-    let (answer, sent) = edit_of(in_part(), [vec![image(), inserted(1, 41)], standing_line(8)].concat());
-    assert_eq!(sent.len(), 5, "the removal is not sent behind an insert that may not have landed");
-    assert_eq!(declared("TextEditHeld", answer.expect("an answer")), held("insert", 1, json!([first_stands(), half_stands(false)])));
-    let (answer, sent) = edit_of(in_part(), [vec![image(), inserted(1, 41), inserted(2, 42)], standing_line(8)].concat());
-    assert_eq!(sent, [vec![image_frame()], in_part_frames(), settling(8)].concat(), "no take-back and no undo while the removal may land");
-    assert_eq!(declared("TextEditHeld", answer.expect("an answer")), held("delete", 1, json!([first_stands(), half_stands(true)])));
-    let verdict = moved_verdict("delete", 42, 44);
-    let undo_held =
-        [vec![image(), inserted(1, 41), inserted(2, 42), held_answer(4, "moved"), lines(4, "moved", verdict), Ok(json!({})), image_holding(&minted(2), 4, left() + 3, 50)], standing_line(8)].concat();
-    let (answer, sent) = edit_of(in_part(), undo_held);
-    assert_eq!(sent[sent.len() - 3..], [vec![frames::delete(DOC, left() + 3, 4, 50, None)], settling(8)].concat()[..], "the undo's removal and its line: no write after it");
-    assert_eq!(declared("TextEditHeld", answer.expect("an answer")), held("undo", 1, json!([first_stands(), half_stands(true)])));
-    let write = crate::shapes::shape("TextEditHeld").and_then(|shape| shape.fields.iter().find(|field| field.name == "write")).map(|field| field.ty);
-    assert_eq!(write, Some("'insert' | 'delete' | 'undo'"), "the shapes declare every write a held line of the call's may be");
-}
-
-/// An image the call cannot send back or read is refused first.
-///
-/// A draft in more runs than one `set_arrangement` names could not be set
-/// back: the call is refused `too_large` naming the runs, where the board
-/// says so or the image holds one run past the cap, and an image that lists
-/// no runs, a run that does not read and an address that names no origin
-/// are `unread`, an error — each with the image the last call made (the
-/// mutants that write first, or take an unread image for an empty draft's,
-/// send the insert).
-#[test]
-fn an_image_past_one_write_or_one_the_shell_does_not_read_is_refused_before_any_write() {
-    let runs_of = |count: usize| Ok(json!({"resp": "runs", "as_of": READ_AT, "runs": (0..count).map(|k| json!({"i_start": own(2 * k as u64 + 1), "width": "1"})).collect::<Vec<_>>()}));
-    let refused = |image: Result<Value, Refusal>| {
-        let (answer, sent) = edit_of(two_writes(), vec![image]);
-        assert_eq!(sent, [image_frame()], "the image, and no write");
-        answer.expect("an answer")
-    };
-    let cap = MAX_WIRE_LIST.to_string();
-    assert_eq!(
-        refused(runs_of(MAX_WIRE_LIST + 1)),
-        Answer { value: json!({"outcome": "refused", "cause": "too_large", "doc": DOC, "what": "runs", "runs": (MAX_WIRE_LIST + 1).to_string(), "cap": cap}), is_error: false }
-    );
-    let too_large = Err(Refusal::Board(Refused { status: 200, code: "image_too_large".into(), detail: None, op: Some("image".into()), body: json!({"resp": "rejected", "code": "image_too_large"}) }));
-    assert_eq!(refused(too_large), Answer { value: json!({"outcome": "refused", "cause": "too_large", "doc": DOC, "what": "runs", "cap": cap}), is_error: false });
-    let unread = Answer { value: json!({"outcome": "refused", "cause": "unread", "doc": DOC, "op": "image"}), is_error: true };
-    for image in [
-        json!({"resp": "runs", "as_of": READ_AT}),
-        json!({"resp": "runs", "runs": [{"i_start": own(1)}]}),
-        json!({"resp": "runs", "runs": [{"width": "3"}]}),
-        json!({"resp": "runs", "runs": [{"i_start": "1.0.1.0.64", "width": "3"}]}),
-    ] {
-        assert_eq!(refused(Ok(image.clone())), unread, "{image}");
-    }
-    let (answer, sent) = edit_of(two_writes(), vec![runs_of(MAX_WIRE_LIST), inserted(1, 41), removed(42)]);
-    assert_eq!((answer.expect("an answer").value["outcome"].as_str(), sent.len()), (Some("edited"), 3), "one wire list of runs is written over");
-    let withheld = || Refusal::Board(Refused { status: 200, code: "withheld".into(), detail: None, op: Some("image".into()), body: json!({"resp": "rejected", "code": "withheld"}) });
-    let (outcome, sent) = edit_of(two_writes(), vec![Err(withheld())]);
-    assert_eq!((outcome.expect_err("the read's refusal").to_value(), sent.len()), (withheld().to_value(), 1), "any other refusal of the read is the call's");
-}
-
-// ── the session ─────────────────────────────────────────────────────────
-
-/// A take-back that meets a death is made again under the re-open.
-///
-/// The death executed nothing, so the one take-back is the one the re-open
-/// carries: it lands, and the call answers the refusal that stopped it.
-#[test]
-fn a_take_back_that_meets_a_death_the_restart_arm_re_opened_is_made_under_the_re_open() {
-    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"}));
-    let rows = Rowed::of([reads_of(CODE), vec![image(), inserted(1, 41), Err(refusal()), died(Some("s-2")), removed(43)]].concat(), vec!["s-2"]);
-    let args = json!({"doc": DOC, "edits": two_writes()});
-    let under = Under::new(&rows, "s-1");
-    assert!(rows.stands("s-2"));
-    let outcome = edit(&under, &Asked::read(&args).expect("the members"));
-    assert_eq!(outcome.expect_err("the row's refusal").to_value(), refusal().to_value());
-    assert_eq!(rows.sessions()[6..], ["s-1", "s-2"], "the take-back, then the same take-back under the re-open");
+fn a_frame_that_meets_the_sessions_death_is_made_again_under_the_re_open() {
+    let rows = Rowed::of([reads_of(CODE), vec![died(Some("s-2")), minted(44)]].concat(), vec!["s-2"]);
+    let args = json!({"doc": DOC, "edits": [{"old": "add(", "new": "addition("}]});
+    let asked = Asked::read(&args).expect("the members");
+    let answer = edit(&Under::new(&rows, "s-1"), &asked).expect("an answer");
+    assert_eq!((&answer.value["outcome"], &answer.value["at"]), (&json!("edited"), &json!(44)), "{}", answer.value);
+    assert_eq!(rows.sessions(), ["s-1", "s-1", "s-1", "s-1", "s-2"], "the frame made again under the re-open");
+    assert!(rows.stands("s-2") && !rows.stands("s-1"));
 }

@@ -201,6 +201,14 @@ impl Calls for Board {
     fn drop_held(&self, held: u64) -> Result<Value, Refusal> {
         panic!("a diff drops no line: {held}")
     }
+
+    fn changes(&self, doc: &str, since: u64) -> Result<Value, Refusal> {
+        panic!("a diff reads no feed: {doc} past {since}")
+    }
+
+    fn key(&self) -> Option<String> {
+        panic!("a diff asks no key")
+    }
 }
 
 /// Eight lines, no two equal as text.
@@ -509,6 +517,12 @@ fn the_texts_a_diff_tells_whole_are_held_to_the_cap_and_its_pairs_to_the_plans_b
         fn drop_held(&self, held: u64) -> Result<Value, Refusal> {
             self.0.drop_held(held)
         }
+        fn changes(&self, doc: &str, since: u64) -> Result<Value, Refusal> {
+            self.0.changes(doc, since)
+        }
+        fn key(&self) -> Option<String> {
+            self.0.key()
+        }
     }
     let asked = |args: &Value| Asked::read(args).and_then(|asked| diff(&Wide(&board), &asked, &as_read));
     let answer = asked(&json!({"doc": DOC, "since": SINCE})).expect("an answer");
@@ -593,6 +607,12 @@ fn the_members_are_read_each_in_its_form_and_a_reads_refusal_is_the_calls() {
         }
         fn drop_held(&self, _: u64) -> Result<Value, Refusal> {
             panic!("no line")
+        }
+        fn changes(&self, _: &str, _: u64) -> Result<Value, Refusal> {
+            panic!("no feed read")
+        }
+        fn key(&self) -> Option<String> {
+            panic!("no key asked")
         }
     }
     let refusing = Refusing(RefCell::new(Vec::new()));

@@ -1,10 +1,10 @@
-//! The in-place advance refusal (PUB-2.11) on the four edits, and the
-//! declared deposit that clears it.
+//! The in-place advance refusal (PUB-2.11) on the four edits and on the
+//! edit, and the declared deposit that clears it.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{
-    deposit_class_types, AsOf, Caller, CopyError, DeleteError, Deposit, HasM5, InsertError,
-    RearrangeError, ReinstateError, VPos, VSpec, VersionError, Vstream,
+    deposit_class_types, AsOf, Caller, Change, CopyError, DeleteError, Deposit, Edit, EditError,
+    HasM5, InsertError, Placed, RearrangeError, ReinstateError, VPos, VSpec, VersionError, Vstream,
 };
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::{HasM3, Namespace, PrincipalId, FIRST_ORDINARY_DOCUMENT};
@@ -458,9 +458,9 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
 }
 
 /// The order of the two refusals (skep #442): on a PUBLISHED target the
-/// in-place refusal speaks first, so each of the five edits typed against a
-/// state older than the edition's arrangement is `PublishedTarget` and never
-/// `ArrangementMoved`. The declared deposit, which clears the first refusal,
+/// in-place refusal speaks first, so each of the five edits and the edit,
+/// typed against a state older than the edition's arrangement, is
+/// `PublishedTarget` and never `ArrangementMoved`. The declared deposit, which clears the first refusal,
 /// then meets the second on the arrangement it LANDS IN: once the chain has
 /// a head, a deposit typed before the head's mint is refused against the
 /// head's position, and one typed at it lands there.
@@ -486,6 +486,19 @@ fn the_published_target_refusal_speaks_before_the_stale_edit_refusal() {
         rejected(vs.rearrange(P1, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)], stale)),
         RearrangeError::PublishedTarget
     ));
+    // The edit, under either of its surfaces — values minted, runs placed
+    // by identity — and with no change at all: refused before any record,
+    // ahead of the typed state and of every shape. It has no deposit form.
+    let before = k.current_seq();
+    let minting = Placed::Values(vec![val(b"x")]);
+    let placing = Placed::Runs(vec![shot_run(&pdoc(), &pca(1), 1)]);
+    for placed in [minting, placing] {
+        let request = Edit { changes: vec![Change { at: vp(1, 99), width: n(9), placed }], head: None, base: None, merge: None };
+        assert_eq!(rejected(vs.edit(P1, &pdoc(), request, stale)), EditError::PublishedTarget);
+    }
+    let none = Edit { changes: vec![], head: None, base: None, merge: None };
+    assert_eq!(rejected(vs.edit(P1, &pdoc(), none, stale)), EditError::PublishedTarget);
+    assert_eq!(k.current_seq(), before, "no record staged");
     // The deposit: the chain gains a head, the arrangement the deposit lands
     // in, whose position is the head's mint.
     let typed_before_the_head = k.current_seq();

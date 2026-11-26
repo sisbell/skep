@@ -39,13 +39,35 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   doc-metadata read serves as `base` and `base_copied`). Always
   private, never publish-class, admitted whatever the source's state:
   the sibling draft the version-chain refusals point to.
-- **The landing** — `set_arrangement` sets a draft's WHOLE content
-  arrangement by identity in ONE commit: the draft's content span
-  removed and the request's runs placed at the start — `delete`'s and
-  `reinstate`'s own staging bodies composed under one transaction, so
-  the draft holds the arrangement sent or what it held, never a state
-  between — typed against the draft's state as the in-place edits are
-  (`arrangement_moved`, nothing wiped). It is the board's half of a
+- **The edit** — `Vstream::edit` (`ops/edit.rs`) makes a list of
+  positional changes to ONE draft in ONE commit, staged as ONE record
+  (`M5Rec::ContentEdit`). Each change removes a width of positions at a
+  place and puts content there: fresh values, minted in the changes'
+  order by one range mint a call, through the staging `insert` uses
+  (`ops::allocate_values_for_placement`), or runs placed by identity, as
+  `reinstate` places them. Every place is a position of the SAME state
+  of the draft, the one the call is typed against, so the changes ascend
+  and lie apart and none moves another's positions; the gate, the
+  published check, the typed state and the draft's content count are
+  each read once a call, the changes judged in one walk, and the
+  record's fold splices them all into the run-list in one walk
+  (`RunList::spliced`, which joins every seam its changes make as the
+  one-at-a-time mutators would). The record appends to the provenance
+  relation R every run it places — the values an edit mints and the runs
+  a landing places alike, nothing for what it removes — and moves the
+  draft's arranged-at position to its commit whatever it holds, an empty
+  list beside a base included. A call folds the draft's list twice, at
+  the record's push and at the transaction's seal, however many changes
+  it carries. The wire reaches the one operation under two names: `edit`,
+  whose changes mint, and `set_arrangement`, whose changes place runs —
+  the name a merge's landing, its take-backs and a restore are sent by.
+  A refused change refuses the call, naming its index (`EditError`); a
+  list of no change is admitted only beside a base or a merge.
+- **The landing's terms** (`ops/set_arrangement.rs`) — an edit may carry
+  the three members a merge's landing into a draft rides it with, judged
+  and recorded in the same commit beside the edit's record, so the draft
+  holds what it was sent and the record of it, or what it held. It is
+  the board's half of a
   merge's landing into a draft: the request carries the HEAD the merge
   was composed on at the extent read, which must name a registered
   document and which the store checks against the draft's chain where
@@ -118,7 +140,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   explicit-private member of a published one
   (`PrivateVersionOfPublished`, PUB-2.7). Link seating is outside the
   rule (PUB-2.12).
-- **The stale-edit refusal** — each of the five in-place edits names the
+- **The stale-edit refusal** — each of the five in-place edits, and the
+  edit, names the
   document state it was typed against (`AsOf::Typed`, the position of the
   read its positions came from; `AsOf::Unchecked` for the three in-process
   writers nothing races). The slice keeps, per document, the position its

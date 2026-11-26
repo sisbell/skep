@@ -23,6 +23,7 @@ mod dedup_class;
 mod deposit_class;
 mod doc_one;
 mod edges;
+mod edit;
 mod effective_owner;
 mod embed;
 mod events;

@@ -1,6 +1,7 @@
 //! The retry memo through `execute` (§7): a sequential retry replays the
 //! acknowledgment its write committed — every acknowledging shape, the bare
-//! `Ack` and EDITLINK's two addresses unswapped among them — and commits
+//! `Ack`, EDITLINK's two addresses unswapped and an EDIT's one commit of
+//! several changes among them — and commits
 //! nothing; the key is confined to its session and matched on op-kind, so a
 //! fresh session or another kind executes afresh; since only the kind is
 //! matched, a different write of the same kind under a reused id is answered
@@ -45,7 +46,7 @@ fn recall_answers_the_memoized_ack_ahead_of_execute_and_misses_as_execute_would(
     let before = fx.febe.log_position();
     assert_eq!(
         fx.febe.recall(fx.user, &id, OpKind::Insert),
-        Some(Response::AckAddr { addr, at, committed: true }),
+        Some(Response::AckAddr { addr, at, committed: true, head_moved: None }),
         "the committed write's ack, as the retry would be answered"
     );
     assert_eq!(fx.febe.log_position(), before, "a recall executes nothing");
@@ -263,6 +264,32 @@ fn a_retried_delete_replays_its_bare_ack() {
     );
 }
 
+/// §7: an EDIT of several changes is one commit, and its retry replays it.
+/// The acknowledgment names the first address minted and the one position
+/// every change landed at; the same frame under the same id answers that
+/// acknowledgment again and commits nothing — a retry that re-executed would
+/// place the changes a second time over the draft the first left — and under
+/// a fresh id it is judged afresh and refused as typed against an older
+/// state, the first's own commit having moved the draft.
+#[test]
+fn a_retried_edit_replays_its_one_commit_and_a_fresh_id_meets_the_typed_state() {
+    use skep_arrangement::{Change, Edit, Placed};
+    let fx = setup();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let typed = head(&fx);
+    let change = |ordinal: u32, width: u32, byte: u8| Change { at: vp(1, ordinal), width: nat(width), placed: Placed::Values(vec![skep_content::Val::new(vec![byte])]) };
+    let edit = || Op::Edit { doc: d.clone(), edit: Edit { changes: vec![change(1, 1, b'x'), change(3, 0, b'y')], head: None, base: None, merge: None }, as_of: typed };
+    let (addr, at) = ack_addr(ex_id(&fx.febe, fx.user, b"edit-1", edit()));
+    assert_eq!(at.0, typed.0 + 3, "one commit: the range minted, its stretch stored and the one record of the changes");
+    let before = fx.febe.log_position();
+    assert_eq!(ack_addr(ex_id(&fx.febe, fx.user, b"edit-1", edit())), (addr, at), "the replayed ack names the first address minted and the commit");
+    assert_eq!(fx.febe.log_position(), before, "a replayed ack commits nothing");
+    let refused = rejected(ex_id(&fx.febe, fx.user, b"edit-2", edit()));
+    assert_eq!(refused.code, RejectCode::ArrangementMoved, "judged afresh, typed before its own first commit");
+    assert_eq!(fx.febe.log_position(), before, "and nothing lands twice");
+}
+
 /// §7, THE CAPACITY IS THE CALLER's (the operations design §2.6, op-D5): the
 /// memo is bounded at the figure `OperationSurface::new` was handed and at
 /// nothing else — a front door built at TWO holds two committed acks and
@@ -319,14 +346,14 @@ fn a_retry_of_a_write_that_committed_nothing_is_told_it_committed_nothing() {
     let d = create_doc(&fx);
     let (start, _) = insert3(&fx, &d);
     let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
-    let Response::AckAddr { addr: incumbent, at: minted_at, committed: true } =
+    let Response::AckAddr { addr: incumbent, at: minted_at, committed: true, .. } =
         ex_id(&fx.febe, fx.user, b"emit-mint", emit())
     else {
         panic!("the first emit commits, and says so");
     };
     let hit = ex_id(&fx.febe, fx.user, b"emit-hit", emit());
     let head = fx.febe.log_position();
-    let told = Response::AckAddr { addr: incumbent.clone(), at: head, committed: false };
+    let told = Response::AckAddr { addr: incumbent.clone(), at: head, committed: false, head_moved: None };
     assert_eq!(hit, told, "the hit: the incumbent at the base, committing nothing");
 
     assert_eq!(ex_id(&fx.febe, fx.user, b"emit-hit", emit()), told, "the retry is told what the hit was");
@@ -337,7 +364,7 @@ fn a_retry_of_a_write_that_committed_nothing_is_told_it_committed_nothing() {
     );
     assert_eq!(
         ex_id(&fx.febe, fx.user, b"emit-mint", emit()),
-        Response::AckAddr { addr: incumbent, at: minted_at, committed: true },
+        Response::AckAddr { addr: incumbent, at: minted_at, committed: true, head_moved: None },
         "the minting emit's retry replays its commit"
     );
     assert_eq!(fx.febe.log_position(), head, "no retry committed");

@@ -64,7 +64,7 @@ pub enum Landing<'a> {
         /// [`Refusal::PublishedJournal`]: super::Refusal::PublishedJournal
         journal: Option<Address>,
     },
-    /// M set as the whole arrangement of a draft in one `set_arrangement`.
+    /// A draft made to hold M by one `set_arrangement`.
     ///
     /// The write is typed against the position the merge was composed at (the
     /// `land` module's doc); the record follows, with `landed` the draft — no

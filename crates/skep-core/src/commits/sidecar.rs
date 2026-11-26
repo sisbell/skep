@@ -300,8 +300,8 @@ pub(super) enum OpTerms {
     /// address in the board's local form, as the row's `docs` are, rendered
     /// under `base` as a `set_arrangement`'s is.
     Publish { placed: String, base_extent: Option<String>, base: Option<String> },
-    /// `set_arrangement`: the request's base and merge (the landing lane;
-    /// skep #764).
+    /// An edit, under either of its names, `edit` and `set_arrangement`: the
+    /// request's base and merge (the landing lane; skep #764).
     ///
     /// `base` is the address the draft's recorded base moved to, `None`
     /// where the write moved none; `merge` the sides and head the request
@@ -313,7 +313,7 @@ pub(super) enum OpTerms {
     /// only beside a base (the owner's ruling N3), so the row is where a
     /// landing into a document with no recorded base is found (N4).
     /// Addresses in the board's local form, as the row's `docs` are.
-    SetArrangement { base: Option<String>, merge: Option<MergeTerms> },
+    Edit { base: Option<String>, merge: Option<MergeTerms> },
 }
 
 /// A `set_arrangement` row's merge term: the request's sides and head, as
@@ -386,8 +386,9 @@ impl OpTerms {
     /// They render so on the wire's row and in the file's line alike, one
     /// spelling for both, which [`parse_line`] reads back: a `publish`'s
     /// base extent and base are `null` in the birth shape, the absence being
-    /// the birth bit; a `set_arrangement`'s two are each `null` where the
-    /// request named none, the pair always present on its row.
+    /// the birth bit; an edit's two, under either of its names, are each
+    /// `null` where the request named none, the pair always present on its
+    /// row.
     fn members(&self) -> Vec<(&'static str, Value)> {
         match self {
             OpTerms::Delegate { new_prefix, new_id } => vec![
@@ -400,7 +401,7 @@ impl OpTerms {
                 ("base_extent", base_extent.clone().map(Value::String).unwrap_or(Value::Null)),
                 ("base", base.clone().map(Value::String).unwrap_or(Value::Null)),
             ],
-            OpTerms::SetArrangement { base, merge } => vec![
+            OpTerms::Edit { base, merge } => vec![
                 ("base", base.clone().map(Value::String).unwrap_or(Value::Null)),
                 ("merge", merge.as_ref().map(MergeTerms::to_value).unwrap_or(Value::Null)),
             ],
@@ -3461,8 +3462,9 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
 /// line's op — a `delegate` line's `new_prefix` and `new_id` together (one
 /// without the other is torn), a `make_link` line's `link`, a `publish`
 /// line's `placed` with `base_extent` beside it, `null` there being the
-/// birth shape and not an absence, a `set_arrangement` line's `base` and
-/// `merge`, each read alone and `null` where the request named none — and
+/// birth shape and not an absence, a `set_arrangement` or an `edit` line's
+/// `base` and `merge`, each read alone and `null` where the request named
+/// none — and
 /// absent altogether on a line written before they were recorded, which
 /// reads as an op carrying none. A term on
 /// a line of another op is an unknown key, ignored. A bare line's `journal`
@@ -3524,12 +3526,12 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
                         },
                     }),
                 },
-                // The landing's pair, each member read alone: each `null`
+                // The edit's pair, under either name, each member read alone: each `null`
                 // where the request named none, a `merge` beside a `null`
                 // `base` among them, so a line is read as carrying the pair
                 // whatever each holds; a present member of the wrong shape
                 // is torn.
-                "set_arrangement" => Some(OpTerms::SetArrangement {
+                "set_arrangement" | "edit" => Some(OpTerms::Edit {
                     base: match field("base") {
                         None => None,
                         Some(b) => Some(b.as_str()?.to_string()),

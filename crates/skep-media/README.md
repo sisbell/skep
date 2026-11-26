@@ -23,6 +23,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The door**, `door` — `media_door(world, op, principal, &gate)`, the one
   step between the session layer's admission and the commit; `MediaRefusal`
   with its `token` and `disposition`, one variant per arm of the armed set.
+  An `insert`'s values and an edit's — every change's, under either of the
+  edit's two names — take the same arms.
 - **The gate**, `gate` — `MediaGate`: `open_with`, which opens the blob
   store at `STORE_DIR` (`blobs`) in the data directory — the one spelling
   of the store's directory, which the gate's and the pruner's lines and the
@@ -58,7 +60,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   its own reading of a store key, with `wall_clock_ms`, its reading of the
   clock.
 - **The index**, `index` — `CellIndex`: `new`; the entries at commit,
-  `enter_insert` and `enter_publish`; the reads `base`, `referenced`,
+  `enter_insert`, an insert's and an edit's minted cells alike, and
+  `enter_publish`; the reads `base`, `referenced`,
   `references` (`Reference`), `accounts` and `halts` (`HaltMark`); `walk`
   over a snapshot and `start_walk` on a thread of its own, or at the open
   where the OS refuses the thread, answering a `Rebuild` — or, where the

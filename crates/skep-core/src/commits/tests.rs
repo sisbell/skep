@@ -394,21 +394,27 @@ fn each_write_states_the_terms_its_row_carries() {
 #[test]
 fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named() {
     use skep_address::Nat;
-    use skep_febe::{Base, Run, SetArrangement, SetMerge, ShotRun};
+    use skep_febe::{Base, Change, Edit, Placed, Run, SetMerge, ShotRun, VPos};
 
     let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
     let (draft, origin, head) = (addr("1.0.1.0.67"), addr("1.0.1.0.64"), addr("1.0.1.0.1.2"));
-    let request = |head_: Option<&Address>, base: Option<&Address>, merge: Option<SetMerge>| Op::SetArrangement {
-        doc: draft.clone(),
-        arrangement: SetArrangement {
-            runs: vec![ShotRun {
+    let at = |ordinal: u32| VPos { subspace: Nat::from(1u32), ordinal: Nat::from(ordinal) };
+    let landed = |head_: Option<&Address>, base: Option<&Address>, merge: Option<SetMerge>| Edit {
+        changes: vec![Change {
+            at: at(1),
+            width: Nat::from(2u32),
+            placed: Placed::Runs(vec![ShotRun {
                 origin: origin.clone(),
                 run: Run::new(addr("1.0.1.0.64.0.1.1"), Nat::from(1u32)).expect("a content run"),
-            }],
-            head: head_.map(|h| Base { member: h.clone(), extent: Nat::from(3u32) }),
-            base: base.map(|b| Base { member: b.clone(), extent: Nat::from(3u32) }),
-            merge,
-        },
+            }]),
+        }],
+        head: head_.map(|h| Base { member: h.clone(), extent: Nat::from(3u32) }),
+        base: base.map(|b| Base { member: b.clone(), extent: Nat::from(3u32) }),
+        merge,
+    };
+    let request = |head_: Option<&Address>, base: Option<&Address>, merge: Option<SetMerge>| Op::SetArrangement {
+        doc: draft.clone(),
+        arrangement: landed(head_, base, merge),
         as_of: Seq(7),
     };
     let sides = |sides: Vec<Address>, at: Option<Seq>| Some(SetMerge { sides, at });
@@ -417,24 +423,24 @@ fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named
     assert!(matches!(&landing.docs, AffectedDocs::Named(docs) if docs == &vec![draft.clone()]), "the draft alone: {:?}", landing.docs);
     assert!(matches!(landing.minting, Minting::None), "{:?}", landing.minting);
     assert!(
-        matches!(&landing.terms, RowTerms::SetArrangement { base: Some(b), merge: Some((sides, h, None)) } if b == &head && h == &head && sides == &vec![addr("1.0.1.0.1.1.1")]),
+        matches!(&landing.terms, RowTerms::Edit { base: Some(b), merge: Some((sides, h, None)) } if b == &head && h == &head && sides == &vec![addr("1.0.1.0.1.1.1")]),
         "the base and the merge named: {:?}",
         landing.terms
     );
     // A merge put back (skep #870): the position it restored rides the term.
     let put_back = write_meta(&request(Some(&head), Some(&head), sides(vec![addr("1.0.1.0.1.1.1")], Some(Seq(5))))).expect("a write");
     assert!(
-        matches!(&put_back.terms, RowTerms::SetArrangement { merge: Some((_, _, Some(Seq(5)))), .. }),
+        matches!(&put_back.terms, RowTerms::Edit { merge: Some((_, _, Some(Seq(5)))), .. }),
         "the position put back: {:?}",
         put_back.terms
     );
     let undo = write_meta(&request(None, Some(&head), None)).expect("a write");
-    assert!(matches!(&undo.terms, RowTerms::SetArrangement { base: Some(b), merge: None } if b == &head), "{:?}", undo.terms);
+    assert!(matches!(&undo.terms, RowTerms::Edit { base: Some(b), merge: None } if b == &head), "{:?}", undo.terms);
     let plain = write_meta(&request(None, None, None)).expect("a write");
-    assert!(matches!(&plain.terms, RowTerms::SetArrangement { base: None, merge: None }), "{:?}", plain.terms);
+    assert!(matches!(&plain.terms, RowTerms::Edit { base: None, merge: None }), "{:?}", plain.terms);
     let baseless = write_meta(&request(Some(&head), None, sides(vec![], None))).expect("a write");
     assert!(
-        matches!(&baseless.terms, RowTerms::SetArrangement { base: None, merge: Some((sides, h, None)) } if sides.is_empty() && h == &head),
+        matches!(&baseless.terms, RowTerms::Edit { base: None, merge: Some((sides, h, None)) } if sides.is_empty() && h == &head),
         "a merge named beside no base is the row's term, its head the frame's: {:?}",
         baseless.terms
     );
@@ -444,29 +450,67 @@ fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named
     let completed = landing.terms.complete(None, &world).expect("the terms resolve off the request");
     assert_eq!(
         completed,
-        OpTerms::SetArrangement {
+        OpTerms::Edit {
             base: Some("1.0.1.0.1.2".into()),
             merge: Some(MergeTerms { sides: vec!["1.0.1.0.1.1.1".into()], head: "1.0.1.0.1.2".into(), at: None }),
         }
     );
     assert_eq!(
         put_back.terms.complete(None, &world),
-        Some(OpTerms::SetArrangement {
+        Some(OpTerms::Edit {
             base: Some("1.0.1.0.1.2".into()),
             merge: Some(MergeTerms { sides: vec!["1.0.1.0.1.1.1".into()], head: "1.0.1.0.1.2".into(), at: Some(5) }),
         })
     );
     assert_eq!(
         undo.terms.complete(None, &world),
-        Some(OpTerms::SetArrangement { base: Some("1.0.1.0.1.2".into()), merge: None })
+        Some(OpTerms::Edit { base: Some("1.0.1.0.1.2".into()), merge: None })
     );
     assert_eq!(
         baseless.terms.complete(None, &world),
-        Some(OpTerms::SetArrangement {
+        Some(OpTerms::Edit {
             base: None,
             merge: Some(MergeTerms { sides: vec![], head: "1.0.1.0.1.2".into(), at: None }),
         })
     );
+    // The same operation under its other name: the row is the frame's own
+    // name's, and carries the same two terms from the same request.
+    let renamed = write_meta(&Op::Edit {
+        doc: draft.clone(),
+        edit: landed(Some(&head), Some(&head), sides(vec![addr("1.0.1.0.1.1.1")], None)),
+        as_of: Seq(7),
+    })
+    .expect("a write");
+    assert_eq!(renamed.kind, OpKind::Edit);
+    assert!(matches!(&renamed.docs, AffectedDocs::Named(docs) if docs == &vec![draft.clone()]));
+    assert_eq!(renamed.terms.complete(None, &world), Some(completed));
+    // A text edit names neither term, and its row carries the pair as two
+    // nulls. Its values are counted over the changes, in the changes' order,
+    // for the cell index: the third value of the call, the second change's
+    // first, names the kind by its prefix.
+    let cell = format!(
+        r#"{{"type":"{}","hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","size":5}}"#,
+        skep_media::cell::KIND
+    );
+    let cell = skep_febe::Val::new(cell.as_bytes());
+    let prose = |bytes: &[u8]| bytes.iter().map(|b| skep_febe::Val::new(vec![*b])).collect::<Vec<_>>();
+    let text = write_meta(&Op::Edit {
+        doc: draft.clone(),
+        edit: Edit {
+            changes: vec![
+                Change { at: at(1), width: Nat::from(0u32), placed: Placed::Values(prose(b"ab")) },
+                Change { at: at(4), width: Nat::from(1u32), placed: Placed::Values(vec![cell, skep_febe::Val::new(vec![b'c'])]) },
+            ],
+            head: None,
+            base: None,
+            merge: None,
+        },
+        as_of: Seq(7),
+    })
+    .expect("a write");
+    assert_eq!(text.kind, OpKind::Edit);
+    assert!(matches!(&text.minting, Minting::Insert { naming } if naming == &vec![2]), "{:?}", text.minting);
+    assert_eq!(text.terms.complete(None, &world), Some(OpTerms::Edit { base: None, merge: None }));
 }
 
 /// The commit stream only ever moves forward, and a burst between wakes
@@ -843,7 +887,7 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
                 .namespace()
                 .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
                 .expect("the mint commits");
-            Response::AckAddr { addr, at, committed: true }
+            Response::AckAddr { addr, at, committed: true, head_moved: None }
         });
         assert!(matches!(resp, Response::AckAddr { .. }), "the mint is acked");
     };
@@ -863,7 +907,7 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
     let replayed = {
         let serial = wp.serial_lock();
         let at = engine.kernel().current_seq();
-        wp.commit_under(&serial, mint_meta(), || Response::AckAddr { addr: account.clone(), at, committed: true })
+        wp.commit_under(&serial, mint_meta(), || Response::AckAddr { addr: account.clone(), at, committed: true, head_moved: None })
     };
     assert!(matches!(replayed, Response::AckAddr { .. }), "the replay is answered as it came");
     refuse(io::ErrorKind::StorageFull, "no room");
@@ -1231,7 +1275,7 @@ fn mint_a_draft_attested(
             .namespace_attested(slot)
             .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
             .expect("the mint commits");
-        Response::AckAddr { addr, at, committed: true }
+        Response::AckAddr { addr, at, committed: true, head_moved: None }
     });
     let Response::AckAddr { addr, at, .. } = resp else { panic!("the mint is acked") };
     (addr, at.0)
@@ -1377,9 +1421,9 @@ fn a_mailboxs_mint_is_one_row_however_often_it_is_asked() {
             let serial = wp.serial_lock();
             let resp = wp.commit_under(&serial, meta, || {
                 let (addr, at, committed) = execute();
-                Response::AckAddr { addr, at, committed }
+                Response::AckAddr { addr, at, committed, head_moved: None }
             });
-            let Response::AckAddr { addr, at, committed } = resp else { panic!("the write is acked") };
+            let Response::AckAddr { addr, at, committed, .. } = resp else { panic!("the write is acked") };
             (addr, at.0, committed)
         };
     let prefix = crate::codec::wire_tumbler("1.0.1").expect("a tumbler");
@@ -1549,10 +1593,10 @@ fn an_ack_that_committed_nothing_records_nothing_at_the_position_it_names() {
             .create_well_known_document(owner, &account, mailbox_slot)
             .expect("answered");
         let committed = matches!(answer, WellKnown::Minted(_));
-        Response::AckAddr { addr: answer.into_address(), at, committed }
+        Response::AckAddr { addr: answer.into_address(), at, committed, head_moved: None }
     });
     drop(serial);
-    let Response::AckAddr { addr, at, committed: false } = resp else {
+    let Response::AckAddr { addr, at, committed: false, .. } = resp else {
         panic!("acked as committing nothing")
     };
     assert_eq!(addr, mailbox, "the mailbox standing");
@@ -1598,7 +1642,7 @@ fn a_bare_home_entry_names_the_home_then_the_mailbox() {
         let serial = wp.serial_lock();
         let resp = wp.commit_under(&serial, meta, || {
             let (addr, at) = execute();
-            Response::AckAddr { addr, at, committed: true }
+            Response::AckAddr { addr, at, committed: true, head_moved: None }
         });
         let Response::AckAddr { addr, at, .. } = resp else { panic!("the write is acked") };
         (addr, at.0)
@@ -2079,7 +2123,7 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
                     AsOf::Unchecked,
                 )
                 .expect("the insert commits");
-            Response::AckAddr { addr, at, committed: true }
+            Response::AckAddr { addr, at, committed: true, head_moved: None }
         });
         assert!(matches!(resp, Response::AckAddr { .. }), "the insert is acked");
     }
@@ -2227,7 +2271,7 @@ fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept(
                     AsOf::Unchecked,
                 )
                 .expect("the insert commits");
-            Response::AckAddr { addr, at, committed: true }
+            Response::AckAddr { addr, at, committed: true, head_moved: None }
         });
         let Response::AckAddr { at, .. } = resp else { panic!("the insert is acked") };
         at.0
@@ -2337,7 +2381,7 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
                 .linkstore(&visibility)
                 .makelink(caller, &doc, empty(), empty(), SlotArg::Addrs(vec![ty]))
                 .expect("the link commits");
-            Response::AckAddr { addr, at, committed: true }
+            Response::AckAddr { addr, at, committed: true, head_moved: None }
         });
         let Response::AckAddr { addr, .. } = resp else { panic!("the link is acked") };
         addr
@@ -2352,7 +2396,7 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
             .assert_sup(caller, &doc, &old, &new)
             .expect("the claim commits");
         let committed = matches!(claim, skep_links::Deposited::Fresh(_));
-        Response::AckAddr { addr: claim.into_address(), at, committed }
+        Response::AckAddr { addr: claim.into_address(), at, committed, head_moved: None }
     });
     drop(serial);
     let Response::AckAddr { at, .. } = resp else { panic!("the claim is acked") };
@@ -2392,7 +2436,7 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
 /// suite's own kernel config ([`fsync_engine`]), the window set to four
 /// positions for this board alone: two drafts as the system principal, one
 /// value typed into the second, and the landing that sets the second's
-/// arrangement to that value, one commit of two records, naming the first
+/// arrangement to that value, one commit of one record, naming the first
 /// draft as its head — on a draft with no chain the head is asked its
 /// registration alone — and an empty side list; its row and its line read
 /// at once, the row again after a reopen over the same engine, and again
@@ -2401,7 +2445,7 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
 fn a_baseless_landings_row_reads_alike_after_a_restart_and_below_the_window() {
     use skep_address::Nat;
     use skep_arrangement::Caller;
-    use skep_febe::{Base, Deposit, Run, SetArrangement, SetMerge, ShotRun, VPos};
+    use skep_febe::{Base, Change, Deposit, Edit, Placed, Run, SetMerge, ShotRun, VPos};
     use skep_namespace::SYSTEM_PRINCIPAL;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2429,14 +2473,19 @@ fn a_baseless_landings_row_reads_alike_after_a_restart_and_below_the_window() {
             .vstream()
             .insert(caller, &draft, first, values, Deposit::Undeclared, AsOf::Unchecked)
             .expect("the insert commits");
-        Response::AckAddr { addr, at, committed: true }
+        Response::AckAddr { addr, at, committed: true, head_moved: None }
     });
     let Response::AckAddr { addr: typed, .. } = resp else { panic!("the insert is acked") };
-    // The landing: the head and an empty side list, no base.
-    let arrangement = SetArrangement {
-        runs: vec![ShotRun {
-            origin: draft.clone(),
-            run: Run::new(typed, Nat::from(1u32)).expect("a content run"),
+    // The landing: the head and an empty side list, no base, its one
+    // change the draft's one position replaced by the value it holds.
+    let arrangement = Edit {
+        changes: vec![Change {
+            at: VPos::content(Nat::from(1u32)),
+            width: Nat::from(1u32),
+            placed: Placed::Runs(vec![ShotRun {
+                origin: draft.clone(),
+                run: Run::new(typed, Nat::from(1u32)).expect("a content run"),
+            }]),
         }],
         head: Some(Base { member: head.clone(), extent: Nat::from(0u32) }),
         base: None,
@@ -2447,16 +2496,16 @@ fn a_baseless_landings_row_reads_alike_after_a_restart_and_below_the_window() {
     let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
     let before = engine.kernel().current_seq().0;
     let resp = wp.commit_under(&serial, meta, || {
-        let (at, head_moved) = stores
+        let edited = stores
             .vstream()
-            .set_arrangement(caller, &draft, &arrangement, AsOf::Unchecked)
+            .edit(caller, &draft, arrangement.clone(), AsOf::Unchecked)
             .expect("the landing commits");
-        Response::Ack { at, head_moved }
+        Response::Ack { at: edited.at, head_moved: edited.head_moved }
     });
     drop(serial);
     let Response::Ack { at, .. } = resp else { panic!("the landing is acked") };
     let at = at.0;
-    assert_eq!(at, before + 2, "the premise: one commit of two records, nothing recorded");
+    assert_eq!(at, before + 1, "the premise: one commit of one record, the edit's own, nothing recorded");
     assert_eq!(engine.kernel().current_seq().0, at, "the premise: the landing is the head");
     let landing_row = |wp: &Commits| {
         let snap = engine.kernel().snapshot();

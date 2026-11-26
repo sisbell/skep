@@ -81,7 +81,7 @@ where
     /// moves the draft's base to the member minted, clearing the marker
     /// (BASE★ on [`M5State`](crate::M5State)); and at every landing that
     /// names a base to record
-    /// ([`set_arrangement`](Vstream::set_arrangement)), which sets or clears
+    /// ([`edit`](Vstream::edit)), which sets or clears
     /// the marker with it. Nothing checks a shot's own `base` against the
     /// record: the request's base is the client's statement, as
     /// [`Base`](crate::Base) states it, whether or not the board holds one.

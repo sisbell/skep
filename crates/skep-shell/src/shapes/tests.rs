@@ -179,14 +179,9 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("TextUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "ordinal": "7", "as_of": 40})),
         ("TextRefused", json!({"outcome": "refused", "cause": "unreachable", "doc": "1.0.1.0.64", "error": true})),
         (
-            "TextPartial",
-            json!({"outcome": "partial", "doc": "1.0.1.0.64", "new_text": {"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44}, "old_text": {"ordinal": "7", "width": "3"}, "cause": "unread", "op": "insert", "refusal": null, "error": true}),
+            "TextAnswerLost",
+            json!({"outcome": "answer_lost", "doc": "1.0.1.0.64", "as_of": 40, "cause": "unreachable", "refusal": {"kind": "unreachable", "name": "unreachable"}, "error": true}),
         ),
-        (
-            "TextHeld",
-            json!({"outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "insert", "new_text": {"ordinal": "10", "width": "8"}, "old_text": {"ordinal": "7", "width": "3"}, "error": true}),
-        ),
-        ("TextSpan", json!({"ordinal": "10", "width": "8", "addr": "1.0.1.0.64.0.1.80", "at": 44})),
         ("TextEditPair", json!({"old": "add(", "new": "addition("})),
         (
             "TextEdited",
@@ -197,23 +192,6 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("TextEditChange", json!({"ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
         ("TextEditUnchanged", json!({"outcome": "unchanged", "doc": "1.0.1.0.64", "as_of": 40})),
-        (
-            "TextEditPartial",
-            json!({
-                "outcome": "partial", "doc": "1.0.1.0.64", "cause": "halted", "refusal": {"kind": "shell", "name": "another_window"}, "op": "insert", "pair": 1, "change": 0,
-                "stands": [{"pair": 0, "change": 0, "ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41}],
-                "take_back": {"cause": "stopped", "refusal": {"kind": "shell", "name": "stopped", "op": "set_arrangement"}}, "may_stand": true, "error": true,
-            }),
-        ),
-        (
-            "TextEditHeld",
-            json!({
-                "outcome": "held", "doc": "1.0.1.0.64", "held": 8, "cause": "unreachable", "write": "delete", "pair": 1, "change": 0,
-                "stands": [{"pair": 1, "change": 0, "new_text": {"ordinal": "41", "width": "4", "addr": "1.0.1.0.64.0.1.90", "at": 42}, "old_text": {"ordinal": "38", "width": "3"}}], "error": true,
-            }),
-        ),
-        ("TextEditStanding", json!({"pair": 0, "change": 0, "ordinal": "32", "removed": "0", "inserted": "5", "addr": "1.0.1.0.64.0.1.80", "at": 41})),
-        ("TextEditHalf", json!({"pair": 1, "change": 0, "new_text": {"ordinal": "41", "width": "4", "addr": "1.0.1.0.64.0.1.90", "at": 42}, "old_text": {"ordinal": "38", "width": "3"}})),
         (
             "TextMoved",
             json!({
@@ -317,15 +295,13 @@ fn the_file_names_every_shape_call_and_event() {
         "  marker: MergeMarker | null;\n",
         "  head_copied: string | null;\n",
         "  'held.show'(args: { session: string }): Promise<Outcome<{ shown: boolean }>>;\n",
-        "  'text.replace'(args: { session: string; doc: string; old: string; new: string }): Promise<Outcome<TextReplaced | TextUnchanged | TextRefused | TextPartial | TextHeld>>;\n",
+        "  'text.replace'(args: { session: string; doc: string; old: string; new: string }): Promise<Outcome<TextReplaced | TextUnchanged | TextRefused | TextAnswerLost>>;\n",
         "export interface TextRefused {\n  outcome: 'refused';\n  cause: string;\n  doc: string;\n  error?: true;\n  [member: string]: unknown;\n}\n",
-        "  'text.edit'(args: { session: string; doc: string; edits: TextEditPair[] }): Promise<Outcome<TextEdited | TextEditUnchanged | TextRefused | TextEditPartial | TextEditHeld>>;\n",
+        "  'text.edit'(args: { session: string; doc: string; edits: TextEditPair[] }): Promise<Outcome<TextEdited | TextEditUnchanged | TextRefused | TextAnswerLost>>;\n",
         "export interface TextEditPair {\n  old: string;\n  new: string;\n}\n",
         "export interface TextEdited {\n  outcome: 'edited';\n  doc: string;\n  pairs: TextEditChange[][];\n  at?: number;\n  lines: string[];\n  masked?: true;\n}\n",
-        "  stands: (TextEditStanding | TextEditHalf)[];\n  take_back?: { cause: string; refusal: unknown };\n  may_stand?: true;\n  error: true;\n",
-        "export interface TextEditStanding {\n  pair: number;\n  change: number;\n  ordinal: string;\n  removed: string;\n  inserted: string;\n  addr?: string;\n  at?: number;\n}\n",
-        "export interface TextEditHalf {\n  pair: number;\n  change: number;\n  new_text: TextSpan;\n  old_text: TextSpan;\n}\n",
-        "  new_text: TextSpan;\n  old_text: TextSpan;\n",
+        "export interface TextAnswerLost {\n  outcome: 'answer_lost';\n  doc: string;\n  as_of: number;\n  cause: string;\n  refusal: unknown;\n  error: true;\n}\n",
+        "export interface TextEditChange {\n  ordinal: string;\n  removed: string;\n  inserted: string;\n  addr?: string;\n  at?: number;\n}\n",
         "  'text.move'(args: { session: string; doc: string; first: number; last?: number; before?: number }): Promise<Outcome<TextMoved | TextMoveUnchanged | TextRefused | TextMoveHeld>>;\n",
         "export interface TextMoved {\n  outcome: 'moved';\n  doc: string;\n  first: number;\n  last: number;\n  to_first: number;\n  to_last: number;\n  cuts: string[];\n  at?: number;\n  lines: string[];\n  masked?: true;\n}\n",
         "export interface TextMoveUnchanged {\n  outcome: 'unchanged';\n  doc: string;\n  as_of: number;\n}\n",

@@ -2047,9 +2047,9 @@ fn the_take_backs_write_a_members_own_words_back_as_themselves() {
     let s_s = s.to_string();
     let staged = rig.metadata(&token, &s);
     // The landing by hand: the stage's runs, each origin the document that
-    // minted it.
+    // minted it, in one change over the four positions the stage holds.
     let runs = [frames::shot_run(&e_s, &theirs[0].0, 3), frames::shot_run(&e1_s, &theirs[1].0, 1)];
-    let landing = frames::set_arrangement(&s_s, &runs, typed_at(&rig.board, &token, &s_s), Some((&e1_s, 4)), Some((&e1_s, 4)), Some((&[], None)), None);
+    let landing = frames::set_arrangement(&s_s, &[frames::placed(1, 4, &runs)], typed_at(&rig.board, &token, &s_s), Some((&e1_s, 4)), Some((&e1_s, 4)), Some((&[], None)), None);
     let at = acked_at(&acked(rig.board.op(Some(&rig.bare), &landing))).expect("the landing's position");
     let marker = rig.metadata(&token, &s)["merge"].clone();
     assert_eq!(marker["at"].as_u64(), Some(at), "the premise: the landing's marker: {marker}");
@@ -2332,7 +2332,8 @@ fn an_undo_brings_back_words_published_since_the_landing_as_the_published_words_
 /// The draft (skep #775's note; N4; skep #784) is a plain mint holding
 /// "hello", merged into — the head `D.2` against the daughter `D.1.1` — and
 /// admitted: the draft holds M, `doc_metadata`'s `base` and `merge` are
-/// null, and the landing is one commit of two records, `at − 1` inside it.
+/// null, and the landing is one commit of one record, `at − 1` the position
+/// before it, where the draft stands as it stood.
 /// Its feed row carries the request's merge beside a null base — the one
 /// place the board keeps the landing's position — so the undo finds the
 /// landing by it: one write typed against the row's `at`, C read before the
@@ -2369,10 +2370,11 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     assert_eq!(image(&rig.board, &token, &plain, 11), as_image(&m), "the draft holds M");
     let meta = rig.metadata(&token, &plain);
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing recorded: {meta}");
-    let AtAnswer::NotAPosition { nearest } = rig.board.op_at(Some(&token), at - 1, &frames::doc_metadata(&plain.to_string())).expect("the read at a position") else {
-        panic!("at − 1 answered a document or another refusal")
+    assert_eq!(at - 1, before, "one commit of one record: the number below it is the position before");
+    let AtAnswer::Document(then) = rig.board.op_at(Some(&token), at - 1, &frames::image(&plain.to_string(), 1, 5)).expect("the read at a position") else {
+        panic!("at − 1 answered no document")
     };
-    assert_eq!(nearest, Some(before), "one commit of two records: at − 1 inside it, nearest the position before");
+    assert_eq!(then["runs"].as_array().map(Vec::len), Some(c.len()), "the draft as it stood before the landing: {then}");
     // The landing's row: the request's merge beside no base.
     let rows = rig.rows_under(&token, &plain);
     let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the landing's row");

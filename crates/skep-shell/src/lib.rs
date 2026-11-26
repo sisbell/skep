@@ -99,7 +99,7 @@
 //!   reissue's bound and of which answers leave a write possibly landed,
 //!   and each ack noted for the base — and among it a
 //!   burst's door, admitted where some send of it the board can take and
-//!   held where the board cannot take it, and the ten non-burst writes a
+//!   held where the board cannot take it, and the eleven non-burst writes a
 //!   standing hold refuses at once with its cause; the per-(board,
 //!   principal) queue over `held`'s file, each board's under its own lock,
 //!   one shell per data directory and one writer per board — a board whose
@@ -160,8 +160,9 @@
 //!   typed against the page's own state of it, `history.restore`, in its child
 //!   `history`, and the text edit of a draft that keeps every unchanged
 //!   byte's identity, `text.replace`, and several such edits in one call,
-//!   each made as its minimal changes and all of them landed or none,
-//!   `text.edit` (skep #1079), its landed answer showing the lines it
+//!   each made as its minimal changes and all of them landed or none, in
+//!   one commit, `text.edit` (skep #1079, #1082), its landed answer showing
+//!   the lines it
 //!   changed (skep #1080), whole lines of a draft moved by identity,
 //!   `text.move` (skep #1085), its landed answer showing them where they
 //!   now stand, a private copy of a draft's content by identity to diff

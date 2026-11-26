@@ -259,6 +259,7 @@ mod tests {
             written,
             records: Vec::new(),
             marker: None,
+            held: Some(3),
         };
         let r = Restored { draft: a("1.0.1.0.66"), at: 12, position: 21 };
         let runs = json!([{"origin": e, "i_start": format!("{e}.0.1.1"), "width": "2"}, {"origin": m, "i_start": format!("{m}.0.1.3"), "width": "1"}]);

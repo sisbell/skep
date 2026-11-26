@@ -8,14 +8,14 @@
 //! transaction that is M2's guarantee rather than an ordering these ops keep:
 //! `transact` returns `TxnError::Rejected(E)` straight out of the closure
 //! phase, discarding the staging, drawing no `Seq` and appending nothing.
-//! Six of the nine ops do reject before staging anything; INSERT and the
-//! publish shot cannot, since each stages a mint and a content record per
-//! fresh atom or maximal run of single-byte values as it goes
+//! Six of the nine ops do reject before staging anything; INSERT, the
+//! publish shot and the edit cannot, since each stages a mint and a content
+//! record per fresh atom or maximal run of single-byte values as it goes
 //! ([`allocate_for_placement`] and [`allocate_stretch_for_placement`], J0's
 //! two steps) and may reject after them — on a later value, and for the shot
-//! on its run budget or its own version mint as well; and SET_ARRANGEMENT
-//! stages the draft's whole-span removal ahead of the placement whose runs
-//! it judges, so a defective run is refused past that one record. VERSION's
+//! on its run budget or its own version mint as well; the edit judges
+//! everything else of its request ahead of its first record, so past it only
+//! its mints' own two verdicts remain. VERSION's
 //! and STAGE's three pre-transaction refusals (`SourceNotRegistered`,
 //! `NotAPrincipal`, `NodeTierCrossOwner`) are answered off an M2 snapshot
 //! before any transaction opens, and so reach M2 not at all. M10 surfaces
@@ -24,7 +24,7 @@
 //! **Ownership.** Seven ops take a [`Caller`](crate::Caller) and open with
 //! [`gate_write`](crate::ownership::gate_write) — the in-txn ownership gate,
 //! registration then the ω gate — on the address the caller names: the five
-//! edits, SET_ARRANGEMENT and the shot (COPY, REINSTATE and SET_ARRANGEMENT:
+//! edits, EDIT and the shot (COPY, REINSTATE and EDIT:
 //! their destination only; VERSION and STAGE are ungated, non-owner
 //! versioning being denial-as-fork, O10, and a staging draft landing in the
 //! caller's own account). The address named is not always the arrangement
@@ -49,24 +49,26 @@
 //!
 //! **Layout.** This file is the handle and what its operations share — the
 //! three budgets, J0's two allocation steps ([`allocate_for_placement`] for an
-//! atom, [`allocate_stretch_for_placement`] for a run of single-byte values),
-//! the head key ([`head_lock_key`]), and the state an edit was typed against
-//! ([`AsOf`]) with the one check the five in-place edits and
-//! SET_ARRANGEMENT key on it ([`arrangement_moved`]). Each operation is a
-//! child module holding one `impl` block — `ops/insert.rs`,
+//! atom, [`allocate_stretch_for_placement`] for a run of single-byte values)
+//! and the coalescing walk over them that INSERT and the edit share
+//! ([`allocate_values_for_placement`]), the head key ([`head_lock_key`]),
+//! and the state an edit was typed against ([`AsOf`]) with the one check the
+//! five in-place edits and the edit key on it ([`arrangement_moved`]). Each
+//! operation is a child module holding one `impl` block — `ops/insert.rs`,
 //! `ops/publish.rs`, `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`,
-//! `ops/rearrange.rs`, `ops/version.rs`, `ops/stage.rs`,
-//! `ops/set_arrangement.rs` — and sees this file's private items and none
-//! of its siblings'. `ops/publish.rs` holds as well the shot's admission, the checks
+//! `ops/rearrange.rs`, `ops/version.rs`, `ops/stage.rs`, `ops/edit.rs` —
+//! and sees this file's private items and none of its siblings', the edit
+//! excepted: it asks a landing's three terms of `ops/set_arrangement.rs`,
+//! which holds their judgment and their record and no operation.
+//! `ops/publish.rs` holds as well the shot's admission, the checks
 //! `publish` opens with, offered as a pure query ([`shot_admission`]); and
 //! three of the modules hold their op's body as a function over a
 //! caller-opened staging — [`stage_publish`], [`stage_reinstate_at`],
 //! [`stage_delete_at`] — the public op a wrapper that opens the transaction,
 //! so a caller can stage the three under one commit; `ops/publish.rs` names
 //! the shot's bound as one trait ([`PublishWorld`]) and the pairing its
-//! staging returns ([`MintedRun`], [`Pairing`]), for such a caller, and
-//! `ops/set_arrangement.rs` is the one in-crate caller that composes two of
-//! them. Each block's trait bounds name the slices its op reads and the
+//! staging returns ([`MintedRun`], [`Pairing`]), for such a caller. Each
+//! block's trait bounds name the slices its op reads and the
 //! records it stages — `version`'s names `HasM5` as well, which its op does
 //! not read — so a minimal test world can drive `delete`/`rearrange` with
 //! `HasM5 + HasM3` and `From<M5Rec>` alone, and answer the shot's admission
@@ -76,10 +78,11 @@
 //! handle, J0's atom step, the placement and re-insert budgets against M2's
 //! own accounting — and the bound claim above on `delete`, `rearrange` and the
 //! shot's admission; `ops/copy/tests.rs`, `ops/reinstate/tests.rs`,
-//! `ops/publish/tests.rs` and `ops/set_arrangement/tests.rs` hold the four
-//! ops' own claims — COPY's walk budget, REINSTATE's every-address probe and
-//! SET_ARRANGEMENT's refusal order among them — which need a world no engine
-//! reaches.
+//! `ops/publish/tests.rs`, `ops/edit/tests.rs` and
+//! `ops/set_arrangement/tests.rs` hold the four ops' own claims — COPY's
+//! walk budget, REINSTATE's every-address probe, the edit's lock hold by a
+//! count and the refusal order of the landing's terms among them — which
+//! need a world no engine reaches.
 
 use std::fmt;
 use std::sync::Arc;
@@ -101,6 +104,9 @@ use crate::state::M5State;
 mod copy;
 // DELETE (ASN-0117): a content range removed and the gap closed.
 mod delete;
+// EDIT: a list of positional changes to one draft in one commit, staged as
+// one record — values minted or runs placed by identity.
+mod edit;
 // INSERT (ASN-0116): fresh content placed, and the declared deposit.
 mod insert;
 // PUBLISH, the shot (PUB-2.33), and its admission.
@@ -110,8 +116,8 @@ mod rearrange;
 // REINSTATE (the replacement act): the write by identity — client-named
 // I-runs placed at a position, allocating nothing.
 mod reinstate;
-// SET_ARRANGEMENT (the landing lane; skep #764): a draft's whole arrangement
-// set by identity in one commit, its base moved and its merge marked.
+// The landing's terms (the landing lane; skep #764): the head, the base and
+// the merge an edit carries where it lands a merge, judged and recorded.
 mod set_arrangement;
 // STAGE (B3-S10): the staging act — a private draft of a source, its base
 // recorded.
@@ -120,14 +126,15 @@ mod stage;
 mod version;
 
 pub use delete::stage_delete_at;
+pub use edit::{Change, Edit, Edited, Placed};
 pub use publish::{
     mint_admission, shot_admission, stage_publish, MintedRun, Pairing, PublishWorld,
 };
 pub use reinstate::stage_reinstate_at;
-pub use set_arrangement::{SetArrangement, SetMerge};
+pub use set_arrangement::SetMerge;
 
-/// The most runs one COPY, one REINSTATE, one SET_ARRANGEMENT — REINSTATE's
-/// body placing its runs — or one publish shot may place.
+/// The most runs one COPY, one REINSTATE, one EDIT or one publish shot may
+/// place.
 ///
 /// It is the ceiling on what one request can make M5 hold live while it
 /// decides whether to place anything at all.
@@ -153,11 +160,13 @@ pub use set_arrangement::{SetArrangement, SetMerge};
 /// checked against the real encoding rather than restated here
 /// (`the_placement_budget_stays_inside_the_transaction_budget`).
 ///
-/// **It binds what one COPY, one REINSTATE or one shot places and holds
-/// live**, and that is the whole of what it binds. Each accumulator is
+/// **It binds what one COPY, one REINSTATE, one EDIT or one shot places and
+/// holds live**, and that is the whole of what it binds. Each accumulator is
 /// measured as each run is accumulated, and what feeds them is pulled a run
-/// at a time — COPY's lazy resolution of each spec, REINSTATE's walk of the
-/// client's list, the shot's walk of its base's carried tail — so the cap
+/// at a time — COPY's lazy resolution of each spec, REINSTATE's and the
+/// edit's walks of the client's list, an edit's count taken over all its
+/// changes with each change's minted values one run, the shot's walk of its
+/// base's carried tail — so the cap
 /// also stops the walk: an over-budget request is refused at the cap rather
 /// than built in full and measured afterwards. For a shot, what it places is
 /// its whole placement — the client's runs and the base's carried tail
@@ -280,7 +289,7 @@ pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 /// [`insert`](Vstream::insert), [`delete`](Vstream::delete),
 /// [`copy`](Vstream::copy), [`reinstate`](Vstream::reinstate),
 /// [`rearrange`](Vstream::rearrange) — and
-/// [`set_arrangement`](Vstream::set_arrangement) beside its runs, and the
+/// [`edit`](Vstream::edit) beside its changes, and the
 /// one question the write path asks of [`M5State::arranged_at`]: whether the
 /// document's arrangement has changed since the state the edit's positions
 /// are true of. A frame's positions are true of one state of the document;
@@ -324,7 +333,7 @@ pub enum AsOf {
 /// an attestation. The pure reads live on [`M5State`]
 /// (reached through [`HasM5`](crate::HasM5)); this type owns only the nine
 /// editing/versioning operations — INSERT, DELETE, COPY, REINSTATE,
-/// REARRANGE, SET_ARRANGEMENT, VERSION, STAGE and the publish shot — that
+/// REARRANGE, EDIT, VERSION, STAGE and the publish shot — that
 /// M10 (and, for `insert`, M9) dispatches.
 ///
 /// **The edition is append-only** (PUB-2.43) — the invariant the shot's
@@ -339,7 +348,7 @@ pub enum AsOf {
 /// the document's own while it has no member — and no position of any is
 /// removed, moved, or inserted before. Its gates: `insert`'s published-target
 /// refusal, cleared at that one position alone; the same refusal on `copy`,
-/// `reinstate`, `delete` and `rearrange`; `publish` and `version` writing
+/// `reinstate`, `delete`, `rearrange` and `edit`; `publish` and `version` writing
 /// only the arrangement of the document or member they mint; and the
 /// `LinkSeat` fold touching the link run-list alone. An operation that writes
 /// a content arrangement joins this list or breaks the shot.
@@ -361,7 +370,7 @@ pub struct Vstream<'k, W: WorldState> {
     /// outlive the caller that owns it; how many commits it signs is the
     /// producer's to hold, as [`Vstream::attested`] states. The handle's six
     /// other writes — `delete`, `copy`, `reinstate`, `rearrange`,
-    /// `set_arrangement`, `stage` — lie outside the checked set and take the
+    /// `edit`, `stage` — lie outside the checked set and take the
     /// plain arm whatever this field holds: the store refuses each of the
     /// five edits into a published document (`PublishedTarget`), and a stage
     /// mints private, so no entry of their kind exists for a frame to cover.
@@ -566,6 +575,65 @@ where
     Ok(())
 }
 
+/// Mints, writes and stages `values` in order, accumulating them into `runs`.
+///
+/// It is the coalescing walk INSERT and the edit share, J0's two steps
+/// driven over a list of values: every one-byte value joins a pending
+/// byte-run, and the run is flushed as one stretch
+/// ([`allocate_stretch_for_placement`]) at the next atom and at the end; an
+/// atom — a value of two bytes or more, or an empty one — stages its own
+/// pair ([`allocate_for_placement`]). Every one-byte value the codec hands
+/// in is a per-byte value (the wire canonicalizes a one-byte atom to its
+/// per-byte form), so one code path stores every per-byte value one way, a
+/// run of one included.
+///
+/// The values are minted one after another under the content key the caller
+/// holds for `home`, so they take consecutive addresses of `home`'s content
+/// chain in the order given — the k-th value at the first address plus `k`
+/// — and `runs` gains one run for them, whose start is the first address
+/// minted. That rests on M3's frontier, as [`allocate_for_placement`]
+/// states: the accumulator is asked, never assumed, so a frontier that
+/// handed back a non-adjacent address would leave several runs and a
+/// correct placement.
+///
+/// What it stages is `2 × (maximal single-byte runs + atoms)` records — a
+/// mint and a content record a run or an atom — so text of any length is two
+/// records, whatever the caller then splits the minted run among.
+///
+/// # Errors
+///
+/// Per maximal run of single-byte values or atom in the order given, `E`
+/// from the `MintError` then from the `ContentError`, the first to fail
+/// deciding (the two steps' own order).
+fn allocate_values_for_placement<W, E>(
+    stg: &mut Staging<W>,
+    home: &Address,
+    values: impl IntoIterator<Item = Val>,
+    runs: &mut Vec<Run>,
+) -> Result<(), E>
+where
+    W: WorldState + HasM3 + HasContent,
+    W::Record: From<M3Rec> + From<ContentWrite> + From<ContentStretch>,
+    E: From<MintError> + From<ContentError>,
+{
+    let mut pending: Vec<u8> = Vec::new();
+    for value in values {
+        if let [byte] = value.as_bytes() {
+            pending.push(*byte);
+            continue;
+        }
+        if !pending.is_empty() {
+            let run = Arc::from(std::mem::take(&mut pending));
+            allocate_stretch_for_placement::<_, E>(stg, home, run, runs)?;
+        }
+        allocate_for_placement::<_, E>(stg, home, value, runs)?;
+    }
+    if !pending.is_empty() {
+        allocate_stretch_for_placement::<_, E>(stg, home, Arc::from(pending), runs)?;
+    }
+    Ok(())
+}
+
 /// Returns the key a published chain's head serializes under.
 ///
 /// It guards two things: which member heads the chain (the frontier
@@ -589,7 +657,7 @@ where
 /// COPY is not on it: its source spans are read at the address named, so it
 /// never asks the frontier where the head is; nor is REINSTATE, which reads
 /// no origin's arrangement and of its own only the content count its bounds
-/// check asks; nor is SET_ARRANGEMENT, which reads the frontier to tell a
+/// check asks; nor is EDIT, which reads the frontier to tell a
 /// head that moved and writes nothing of the chain.
 ///
 /// Public for the caller that opens a transaction of its own over
@@ -605,7 +673,7 @@ pub fn head_lock_key(doc: &Address) -> LockKey {
 /// Returns a stale edit's two positions — the state it was typed against
 /// and the document's current one — or `None` where it may land.
 ///
-/// It is the one check the five in-place edits and SET_ARRANGEMENT share
+/// It is the one check the five in-place edits and the edit share
 /// (skep #442), asked of the transaction's working state after the
 /// published-target refusal and before the first shape check: one lookup of
 /// [`M5State::arranged_at`] for

@@ -1712,11 +1712,13 @@ fn a_fork_its_owner_staged_is_merged_from_the_base_the_board_records() {
     let staged = Rig::acked(rig.board.op(Some(&forker), &frames::stage(&base.to_string(), None)));
     let s = addr(acked_addr(&staged).expect("the staged fork's address"));
     let (d_s, s_s, head_s) = (d.to_string(), s.to_string(), head.to_string());
-    // The forker's landing: `D.2`'s words by identity, `D.2` its head and
-    // the base to record.
+    // The forker's landing: `D.2`'s words by identity, in one change over
+    // every position the staged fork holds, `D.2` its head and the base to
+    // record.
     let runs: Vec<Value> = rig.image(&token, &head, 15).iter().map(|(i, w)| frames::shot_run(&d_s, i, w.parse().unwrap())).collect();
+    let held: u64 = rig.read(&token, &frames::doc_metadata(&s_s))["own_count"].as_str().and_then(|count| count.parse().ok()).expect("the staged fork's count");
     let as_of = rig.board.health().unwrap().log_position();
-    Rig::acked(rig.board.op(Some(&forker), &frames::set_arrangement(&s_s, &runs, as_of, Some((&head_s, 15)), Some((&head_s, 15)), None, None)));
+    Rig::acked(rig.board.op(Some(&forker), &frames::set_arrangement(&s_s, &[frames::placed(1, held, &runs)], as_of, Some((&head_s, 15)), Some((&head_s, 15)), None, None)));
     let meta = rig.read(&token, &frames::doc_metadata(&s_s));
     assert_eq!(
         (meta["base"].as_str(), meta["source"].as_str()),

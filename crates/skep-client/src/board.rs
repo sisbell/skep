@@ -748,15 +748,16 @@ pub fn acked_addr(v: &Value) -> Option<&str> {
     (v["resp"].as_str() == Some("ack_addr")).then(|| v["addr"].as_str()).flatten()
 }
 
-/// Returns an `ack`'s `head_moved`, where the document is an ack carrying one.
+/// Returns an ack's `head_moved`, where the document is an ack carrying one.
 ///
-/// wire.md §The response envelope: a `set_arrangement` that named a `head`
-/// the trunk has since moved past lands all the same, and its ack carries
-/// the trunk's current head as `head_moved` — the tell that a newer version
+/// wire.md §The response envelope: a `set_arrangement` or an `edit` that
+/// named a `head` the trunk has since moved past lands all the same, and
+/// its ack — `ack`, or `ack_addr` where the write minted — carries the
+/// trunk's current head as `head_moved`, the tell that a newer version
 /// stands; the member is absent where the head named is the trunk's, and on
 /// every other op's ack, so `None` is the common answer.
 pub fn acked_head_moved(v: &Value) -> Option<&str> {
-    (v["resp"].as_str() == Some("ack")).then(|| v["head_moved"].as_str()).flatten()
+    matches!(v["resp"].as_str(), Some("ack" | "ack_addr")).then(|| v["head_moved"].as_str()).flatten()
 }
 
 /// Returns whether the document is an `ack_addr` that committed nothing.

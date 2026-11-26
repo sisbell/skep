@@ -934,7 +934,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             // doc_b's whole arrangement; the frame names neither term, so
             // the row's two are null.
             "set_arrangement",
-            set_arrangement_frame(&doc_b, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], None, None, None, None),
+            set_arrangement_frame(&doc_b, 0, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], None, None, None, None),
             serde_json::json!([doc_b]),
         ),
         (
@@ -943,7 +943,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             // empty side list, no base; the board records nothing, and the
             // row carries the request's merge beside a null base (N4).
             "set_arrangement (a landing)",
-            set_arrangement_frame(&doc_b, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], Some((&doc_a, 0)), None, Some(&[]), None),
+            set_arrangement_frame(&doc_b, 0, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], Some((&doc_a, 0)), None, Some(&[]), None),
             serde_json::json!([doc_b]),
         ),
         (

@@ -54,32 +54,39 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the shell's `text.replace`, one call made of several of the shell's own:
   it reads a draft's content as text, finds `old`, which must stand exactly
   once, leaves standing what `old` and `new` share at either end, and
-  replaces only the bytes that differ, through `insert` and `delete` — so
-  every other byte keeps its identity and a link on it still follows. An
-  edit that only inserts or only removes is one commit; one that does both
-  is two, the new bytes inserted, then the old removed, and where the second
-  does not land the first is taken back by its identity within the call. It
-  drops every line of its own the shell holds: a stale edit, a refused one
-  and one the board could not take answer `refused` with nothing of the edit
-  standing and nothing queued. The two answers that say something stands or
-  may are `isError` and name it: `partial`, the new bytes standing beside
-  the old where the take-back did not land either, and `held`, a line the
-  shell would not drop because it cannot tell whether its write landed. A
-  published document is refused before any write; the raw `insert`, `delete`
-  and `set_arrangement` stay offered.
+  replaces only the bytes that differ, by one `edit` — so every other byte
+  keeps its identity and a link on it still follows. The edit is ONE
+  commit: the old bytes removed and the new minted in their place land
+  together or not at all, no layout of the draft is read for it and nothing
+  is taken back. A stale edit and a refused one answer `refused`, nothing
+  written; the call holds no line, and behind a held line of the agent's on
+  the draft it is refused `held_lines`. The one answer that is no verdict
+  is `answer_lost`, `isError`: the board's answer was lost, the same write
+  asked again did not settle it and the change feed did not either, so the
+  edit landed whole or not at all, and the agent reads the draft before
+  editing it again. A published document is refused before any write; the
+  raw `insert`, `delete` and `edit` stay offered.
+- **Several positional changes in one commit.** `edit {doc, changes:
+  [{at, width, values}, …], as_of}` is the wire's `edit`, passed through:
+  each change removes `width` positions from `at` and mints `values` there,
+  every position counted in the draft as it stands at `as_of`, and the board
+  lands all of them or none. It is no burst and is never held. The wire's
+  `set_arrangement`, the same operation under the name a merge's landing
+  and its take-backs send, is no tool: `merge_compose`, `merge_undo`,
+  `merge_withdraw` and `restore_text` send it.
 - **Several edits in one call, answered with the lines changed.**
   `edit_text {doc, edits: [{old, new}, …]}` is the shell's `text.edit`:
   every pair's `old` must stand exactly once in the draft as the pairs
-  before it leave it, every pair is checked against one read before any
+  before it leave it, every pair is checked against one read before the
   write, each is made as its minimal changes, and all of them land or none
-  — a write past the first that does not land has the draft set back as it
-  stood. Its result is the shell's answer on one line, then, where the call
+  — they are sent as one `edit`, one commit. Its result is the shell's
+  answer on one line, then, where the call
   landed, the lines it changed, one row a line as the shell spells it: `+N`,
   a tab and the line for a line holding a changed byte, a space, the number
   and the line for the lines around it, `-` and a tab and `(N bytes removed
   here)` where whole lines went, `--` between rows whose lines do not
-  touch. `partial` and `held` are `isError`, as `replace_text`'s are; a
-  member of a pair other than `old` and `new` is refused before any call.
+  touch. `answer_lost` is `isError`, as `replace_text`'s is; a member of a
+  pair other than `old` and `new` is refused before any call.
 - **Whole lines moved by identity.** `move_lines {doc, first, last?,
   before?}` is the shell's `text.move`: the lines `first` to `last`, both
   included, move to stand before the line `before`, or at the end of the

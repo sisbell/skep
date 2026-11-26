@@ -1101,7 +1101,11 @@ fn over_the_cap_refuses_with_the_count_before_any_frame() {
 /// THE DRAFT LANDING IS ONE WRITE (the landing lane's rulings R1, R4,
 /// R5; skep #764): the merger's newest record for the key read first,
 /// then the draft's base as it stands, at the head, then one
-/// `set_arrangement` of M into the draft — its runs, `as_of` the ONE
+/// `set_arrangement` of M into the draft — the one stretch by which M
+/// differs from the draft as the composition read it, the draft a side
+/// (the head's four words placed before position 5, nothing removed and no
+/// run of the words either side named; the mutant that sends M whole names
+/// four runs from position 1), `as_of` the ONE
 /// position the merge was composed at, `head` the head and its extent as
 /// read, `base` the same pair since the board records a base for the
 /// draft, `merge` the sides but the draft itself (none: the draft was
@@ -1133,7 +1137,8 @@ fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_
     let frame = &frames[0];
     assert_eq!(frame["doc"], S);
     assert_eq!(frame["as_of"].as_u64(), Some(p), "typed against the composition's position: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_m()));
+    assert_eq!(frame["changes"], json!([frames::placed(5, 0, &shot_runs(&[run(D, 12, 4)]))]), "the one stretch M changes in the draft as composed: {frame}");
+    assert!(frame.get("runs").is_none(), "no whole list beside the changes: {frame}");
     assert_eq!(frame["head"], json!({"at": format!("{D}.2"), "extent": "15"}), "the head and its extent as read");
     assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the base to record: the head's pair");
     assert_eq!(frame["merge"], json!({"sides": []}), "every side but the draft itself");
@@ -2252,7 +2257,7 @@ fn the_scripted_board_judges_set_arrangement_as_the_store_does() {
     for (doc, head, base, code) in cells {
         let cell = format!("{doc}, head {head:?}, base {base:?}");
         let before = (w.rows.len(), w.docs[doc].runs.clone(), w.standing(doc));
-        let frame = frames::set_arrangement(doc, &dangling, w.position, head, base, None, None);
+        let frame = frames::set_arrangement(doc, &[frames::placed(1, w.held(doc), &dangling)], w.position, head, base, None, None);
         let answer = w.set_arrangement(&frame);
         assert_eq!(answer["code"].as_str(), Some(code), "{cell}: {answer}");
         assert_eq!(
@@ -2269,8 +2274,7 @@ fn the_scripted_board_judges_set_arrangement_as_the_store_does() {
     {
         let cell = format!("{doc}, head {head:?}");
         let rows = w.rows.len();
-        let frame =
-            frames::set_arrangement(doc, &whole, w.position, Some(head), None, None, None);
+        let frame = frames::set_arrangement(doc, &[frames::placed(1, w.held(doc), &whole)], w.position, Some(head), None, None, None);
         let answer = w.set_arrangement(&frame);
         assert_eq!(
             (answer["resp"].as_str(), answer["head_moved"].as_str()),
@@ -2484,7 +2488,7 @@ fn a_landing_whose_drafts_mark_cannot_be_read_is_never_made_a_second_time() {
     let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(p)))).expect("in P");
     let (at, record) = landing_of(&landed);
     let typed = dialer.world().position;
-    let plain = frames::set_arrangement(p, &shot_runs(&[run(D, 1, 5)]), typed, None, None, None, None);
+    let plain = frames::set_arrangement(p, &whole_of(&dialer, p, &[run(D, 1, 5)]), typed, None, None, None, None);
     let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
         panic!("closed")
     };

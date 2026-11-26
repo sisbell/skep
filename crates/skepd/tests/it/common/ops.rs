@@ -58,7 +58,8 @@ pub const BURST_OPS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rear
 ///
 /// A burst frame — one of [`BURST_OPS`] — or a `set_arrangement`, which
 /// carries the typed state too and is no burst (the landing lane, skep
-/// #764), that names no `as_of` gains one: [`head_position`], the position
+/// #764), or an `edit`, the same operation under its own name, that names
+/// no `as_of` gains one: [`head_position`], the position
 /// a read made now answers, which is the state a cell that composed its
 /// positions against the live board holds. A frame that names its own
 /// state keeps it, so a cell about the check spells the state it means;
@@ -73,7 +74,7 @@ pub fn typed_at_head(port: u16, frame: &str) -> String {
     let typed = obj
         .get("op")
         .and_then(Value::as_str)
-        .is_some_and(|op| BURST_OPS.contains(&op) || op == "set_arrangement");
+        .is_some_and(|op| BURST_OPS.contains(&op) || op == "set_arrangement" || op == "edit");
     if !typed || obj.contains_key("as_of") {
         return frame.to_string();
     }
@@ -350,19 +351,47 @@ pub fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)], as_of: im
 }
 
 /// `set_arrangement` of `doc` (wire.md §Arrangement; the landing lane, skep
-/// #764): the whole arrangement `runs` — each `(origin, i_start, width)` —
-/// the optional `head` and `base` pairs `(member, extent)`, the optional
-/// `merge` sides, typed against the draft state `as_of`.
+/// #764) as ONE change: the `width` content positions from ordinal 1
+/// replaced by `runs` — each `(origin, i_start, width)` — so with `width`
+/// the draft's whole count ([`own_count`]) the frame sets its whole
+/// arrangement, and with 0 it places `runs` at the start; no change at all
+/// where `width` is 0 and `runs` is empty. Beside it the optional `head`
+/// and `base` pairs `(member, extent)` and the optional `merge` sides,
+/// typed against the draft state `as_of`.
 pub fn set_arrangement_frame(
     doc: &str,
+    width: u64,
     runs: &[(&str, &str, u64)],
     head: Option<(&str, u64)>,
     base: Option<(&str, u64)>,
     merge: Option<&[&str]>,
     as_of: impl Into<Option<u64>>,
 ) -> String {
-    let runs: Vec<String> =
-        runs.iter().map(|(origin, i_start, width)| run(origin, i_start, *width)).collect();
+    let changes: Vec<(u64, u64, &[(&str, &str, u64)])> =
+        if width == 0 && runs.is_empty() { Vec::new() } else { vec![(1, width, runs)] };
+    changes_frame("set_arrangement", doc, &changes, head, base, merge, as_of)
+}
+
+/// A `set_arrangement` of `doc` in its changes form: each change `(at,
+/// width, runs)` removes `width` content positions from ordinal `at` and
+/// places `runs` there; the optional members as
+/// [`set_arrangement_frame`]'s.
+pub fn changes_frame(
+    op: &str,
+    doc: &str,
+    changes: &[(u64, u64, &[(&str, &str, u64)])],
+    head: Option<(&str, u64)>,
+    base: Option<(&str, u64)>,
+    merge: Option<&[&str]>,
+    as_of: impl Into<Option<u64>>,
+) -> String {
+    let changes: Vec<String> = changes
+        .iter()
+        .map(|(at, width, runs)| {
+            let runs: Vec<String> = runs.iter().map(|(origin, i_start, width)| run(origin, i_start, *width)).collect();
+            format!(r#"{{"at":{{"subspace":"1","ordinal":"{at}"}},"width":"{width}","runs":[{}]}}"#, runs.join(","))
+        })
+        .collect();
     let pair = |name: &str, pair: Option<(&str, u64)>| {
         pair.map(|(at, extent)| format!(r#","{name}":{{"at":"{at}","extent":"{extent}"}}"#)).unwrap_or_default()
     };
@@ -373,12 +402,36 @@ pub fn set_arrangement_frame(
         })
         .unwrap_or_default();
     format!(
-        r#"{{"op":"set_arrangement","doc":"{doc}","runs":[{}]{}{}{merge}{}}}"#,
-        runs.join(","),
+        r#"{{"op":"{op}","doc":"{doc}","changes":[{}]{}{}{merge}{}}}"#,
+        changes.join(","),
         pair("head", head),
         pair("base", base),
         typed_member(as_of)
     )
+}
+
+/// An `edit` of `doc` (wire.md §Arrangement, `edit`): each change `(at,
+/// width, text)` removes `width` content positions from ordinal `at` and
+/// mints `text` there, one value a byte, typed against the draft state
+/// `as_of`.
+pub fn edit_frame(doc: &str, changes: &[(u64, u64, &str)], as_of: impl Into<Option<u64>>) -> String {
+    let changes: Vec<String> = changes
+        .iter()
+        .map(|(at, width, text)| {
+            format!(
+                r#"{{"at":{{"subspace":"1","ordinal":"{at}"}},"width":"{width}","values":[{}]}}"#,
+                serde_json::Value::String((*text).to_string())
+            )
+        })
+        .collect();
+    format!(r#"{{"op":"edit","doc":"{doc}","changes":[{}]{}}}"#, changes.join(","), typed_member(as_of))
+}
+
+/// The content count of `doc`'s own arrangement as `token` reads it
+/// (`doc_metadata`'s `own_count`); 0 where the read is refused, the write
+/// that follows then answering for the document.
+pub fn own_count(port: u16, token: &str, doc: &str) -> u64 {
+    doc_metadata(port, Some(token), doc)["own_count"].as_str().and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
 /// A three-cut `rearrange` of `doc`, typed against the document state

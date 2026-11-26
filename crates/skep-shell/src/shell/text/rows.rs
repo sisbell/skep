@@ -319,8 +319,10 @@ impl<'a> Pieces<'a> {
     ///
     /// A stretch is a run of inserted bytes, the removal touching it, or a
     /// removal alone: positions the draft held as read that no piece keeps,
-    /// between two that pieces do.
-    fn changed(&self) -> Vec<Changed> {
+    /// between two that pieces do. They ascend in the draft as read and lie
+    /// apart, a kept position between any two, and are the changes an edit's
+    /// one frame makes (`edit::net`).
+    pub(super) fn changed(&self) -> Vec<Changed> {
         let (mut all, mut open, mut kept_to, mut at) = (Vec::new(), None::<Changed>, 1, 1);
         for piece in &self.pieces {
             match *piece {
@@ -348,15 +350,15 @@ impl<'a> Pieces<'a> {
 
 /// One stretch of the call's changes in the text it leaves.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Changed {
+pub(super) struct Changed {
     /// The positions of the bytes it inserted.
     ///
     /// Where it inserted none, it is empty at the place its removal left.
-    new: Range<u64>,
+    pub(super) new: Range<u64>,
     /// The positions it removed, as the draft held them when read.
     ///
-    /// Empty where it removed none.
-    gone: Range<u64>,
+    /// Empty where it removed none, at the position its bytes stand before.
+    pub(super) gone: Range<u64>,
 }
 
 /// The runs of bytes the call removed, ascending by position as read.

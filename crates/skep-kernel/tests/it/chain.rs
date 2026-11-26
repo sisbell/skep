@@ -45,10 +45,10 @@
 //!   asserted as such, and named in `Kernel::open`'s damage model.
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
-//! base is genesis and every one of the nineteen links is verified, which is
+//! base is genesis and every one of the twenty links is verified, which is
 //! where the mid-history cases live; with it STANDING (`checkpoint.35`) the
-//! open checks the base for a mismatch — the marker closing 37 is in the one
-//! segment — and the two transactions above it, and a `world_at` below it
+//! open checks the base for a mismatch — the marker closing 40 is in the one
+//! segment — and the three transactions above it, and a `world_at` below it
 //! verifies from genesis — which is what cases 9, 12 and 14 turn on.
 //!
 //! A case the code does not meet at the outcome the ruling requires is a
@@ -113,7 +113,7 @@ fn golden_segment() -> PathBuf {
 }
 
 /// The matrix's fixture: the golden's ops in a temporary directory, its
-/// segment byte-equal to the committed golden's, its nineteen transactions
+/// segment byte-equal to the committed golden's, its twenty transactions
 /// mapped as the frames lay them down.
 struct Golden {
     tmp: TempDir,
@@ -194,7 +194,7 @@ impl Golden {
     }
 
     /// A case directory with the checkpoint REMOVED: the open's base is
-    /// genesis, and every link of the nineteen is verified.
+    /// genesis, and every link of the twenty is verified.
     fn case_from_genesis(&self, name: &str) -> PathBuf {
         let dir = self.case(name);
         fs::remove_file(ckpt_file(&dir, self.checkpoint_seq())).expect("remove the checkpoint");
@@ -894,7 +894,7 @@ fn c05_two_transactions_swapped_break_at_the_first_swapped_position() {
     open_halts_with_chain_break(
         &case,
         golden.seq(19),
-        "case 5: the two transactions above the base swapped",
+        "case 5: two transactions above the base swapped",
     );
 }
 
@@ -1247,7 +1247,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
         CheckpointAfterForgery::HeadRewritten,
     );
     // The forger's salts are on disk — none of them the seeded stream's —
-    // and every one of the nineteen links verifies over them.
+    // and every one of the twenty links verifies over them.
     for txn in transactions(&fs::read(seg_file(&case, 1)).expect("segment")) {
         assert_eq!(txn.salt, forger_salt(txn.last_seq), "the forger's own salt at {}", txn.last_seq);
         assert_ne!(txn.salt, seeded_salt(GOLDEN_SALT_SEED, txn.txn));
@@ -1823,7 +1823,7 @@ fn chain_at_is_reclaimed_below_the_floor_and_answers_from_the_floor_up() {
 }
 
 /// `Kernel::chain_at(N)` — the chain AS OF a boundary, off the same scan as
-/// `world_at` and under its refusals: every one of the golden's nineteen
+/// `world_at` and under its refusals: every one of the golden's twenty
 /// boundaries answers its marker's chain, from genesis and over the
 /// standing base alike; `0` is the chain's genesis value; the base's own seq
 /// is the header's value; the head equals `chain_head()`, before and after a

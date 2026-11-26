@@ -21,8 +21,8 @@
 //! shape M6's `DocNotRegistered(Address)` takes.
 
 use skep_arrangement::{
-    CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    SetArrangementError, StageError, VersionError,
+    CopyError, DeleteError, EditError, InsertError, PublishError, RearrangeError, ReinstateError,
+    SeatError, StageError, VersionError,
 };
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
@@ -239,7 +239,7 @@ impl Lower for ContentError {
 // ──────────────────────────── M5 (arrangement) ─────────────────────────────
 
 /// The stale-edit refusal's lowering (skep #442), one for the five edits
-/// and the landing.
+/// and the edit.
 ///
 /// The two positions ride as the rejection's own `site` members: `as_of`,
 /// the typed state echoed, and `current`, the document's last arrangement
@@ -340,37 +340,71 @@ impl Lower for DeleteError {
     }
 }
 
-impl Lower for SetArrangementError {
-    /// Lowers the landing's verdicts (skep #764) to the codes the in-place
-    /// edits and the shot use, and to its two of its own.
+/// Returns the site that names one change of an edit's request.
+///
+/// It is `site.index`, the change's index in the request's own `changes`
+/// list, the innermost container an edit's refusal names.
+fn change_site(change: usize) -> Option<FaultSite> {
+    Some(FaultSite { index: Some(change), ..FaultSite::default() })
+}
+
+impl Lower for EditError {
+    /// Lowers the edit's verdicts to the codes the in-place edits and the
+    /// shot use, and to the landing's three.
     ///
-    /// The destination's four are COPY's; the head's three are the shot's
-    /// base checks (`source_not_registered`, `base_not_in_chain`,
-    /// `base_extent_too_large`), the base to record answering all three
-    /// too; the per-run four are the shot's and REINSTATE's,
-    /// `source_not_registered` among them. Its own three: `fork_base_moved`,
-    /// the fork's source riding `site.addr` as a withheld document does,
-    /// `no_base_to_record` and `marker_not_restorable` (skep #870).
+    /// One impl serves both of the edit's wire names, the kind a rejection
+    /// is classified under being the frame's own (`edit`,
+    /// `set_arrangement`). The destination's four are COPY's; the head's
+    /// three are the shot's base checks (`source_not_registered`,
+    /// `base_not_in_chain`, `base_extent_too_large`), the base to record
+    /// answering all three too; the landing's own three are
+    /// `fork_base_moved`, the fork's source riding `site.addr` as a
+    /// withheld document does, `no_base_to_record` and
+    /// `marker_not_restorable` (skep #870). A change's shape answers the
+    /// code the in-place edit of the same fault answers — `delete`'s
+    /// `not_arranged` and `out_of_bounds` for a removal, `insert`'s
+    /// `out_of_bounds` and `not_content_subspace` for a placement — with
+    /// `not_ascending`, `rearrange`'s for cuts out of order, where a change
+    /// begins below the reach of the one before it, and `empty_result`,
+    /// `copy`'s and `reinstate`'s for a write of nothing, for a change — or
+    /// a whole request — that would write nothing. The runs placed by
+    /// identity answer the shot's and REINSTATE's four. Every verdict about
+    /// one change names it in `site.index`, the change's index in the
+    /// request's `changes`; a request-level one names no site. The two
+    /// wrappers recurse, as INSERT's do.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
-            SetArrangementError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
-            SetArrangementError::NotOwner(a) => not_owner(a),
-            SetArrangementError::PublishedTarget => (RejectCode::PublishedTarget, None),
-            SetArrangementError::ArrangementMoved { as_of, current } => {
-                arrangement_moved(as_of, current)
-            }
-            SetArrangementError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
-            SetArrangementError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
-            SetArrangementError::ForkBaseMoved(source) => (
+            EditError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            EditError::NotOwner(a) => not_owner(a),
+            EditError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            EditError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
+            EditError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
+            EditError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
+            EditError::ForkBaseMoved(source) => (
                 RejectCode::ForkBaseMoved,
                 Some(FaultSite { addr: Some(source), ..FaultSite::default() }),
             ),
-            SetArrangementError::NoBaseToRecord => (RejectCode::NoBaseToRecord, None),
-            SetArrangementError::MarkerNotRestorable => (RejectCode::MarkerNotRestorable, None),
-            SetArrangementError::BadRun => (RejectCode::BadRun, None),
-            SetArrangementError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
-            SetArrangementError::DanglingSource => (RejectCode::DanglingSource, None),
-            SetArrangementError::TooManyRuns => (RejectCode::TooManyRuns, None),
+            EditError::NoBaseToRecord => (RejectCode::NoBaseToRecord, None),
+            EditError::MarkerNotRestorable => (RejectCode::MarkerNotRestorable, None),
+            EditError::SourceNotRegistered { change } => {
+                (RejectCode::SourceNotRegistered, change.and_then(change_site))
+            }
+            EditError::EmptyResult { change } => {
+                (RejectCode::EmptyResult, change.and_then(change_site))
+            }
+            EditError::NotContentSubspace { change } => {
+                (RejectCode::NotContentSubspace, change_site(change))
+            }
+            EditError::NotAscending { change } => (RejectCode::NotAscending, change_site(change)),
+            EditError::NotArranged { change } => (RejectCode::NotArranged, change_site(change)),
+            EditError::OutOfBounds { change } => (RejectCode::OutOfBounds, change_site(change)),
+            EditError::BadRun { change } => (RejectCode::BadRun, change_site(change)),
+            EditError::DanglingSource { change } => {
+                (RejectCode::DanglingSource, change_site(change))
+            }
+            EditError::TooManyRuns => (RejectCode::TooManyRuns, None),
+            EditError::Mint(m) => m.lower(),
+            EditError::Content(c) => c.lower(),
         }
     }
 }

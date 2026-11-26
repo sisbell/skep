@@ -792,7 +792,9 @@ each ceremony:
   records read and written in `merge/land/records.rs`, the draft landing
   in `merge/land/draft.rs` and the faults it faces in
   `merge/land/faults.rs`; `merge/undo.rs` the take-backs, the undo, the
-  withdrawal and its undo, with the spelling of their one write;
+  withdrawal and its undo, with the changes their one write names — the
+  stretch by which one image differs from another, or every position a
+  draft holds — and its spelling;
   `merge/landings.rs` the landing standing in a draft with no recorded
   base, read off its rows for the landing, the take-backs and `record.rs`
   alike, with the reads of a draft's past states;
@@ -809,7 +811,8 @@ each ceremony:
   `history.rs` THE RESTORE — a draft's past state made current over the
   merge's reader, the state mapped through the publication's
   correspondence records by the merge's mapping of images, and the
-  take-backs' one `set_arrangement` in their spelling — with the records'
+  take-backs' one `set_arrangement`, its change and its spelling theirs —
+  with the records'
   read, and that mapping and that spelling re-exported, which skep-shell's
   `text.diff` and skep-cli's `skep restore` name there, its unit suite in
   `history/tests.rs` over the fake board, its daemon walk in
@@ -995,15 +998,16 @@ root re-exports counted as the module it is brought from (held by
   `shell/merge.rs`'s mapping and the restore's write noted in `hold.rs`'s
   holds.
 - `shell/text.rs` the `text` family's five rows, `pub(super)` to `call`,
-  each made of the `op`, `held` and `resolve` rows' calls under the
-  session it stands under: `text.replace`, a text edit of a draft that
+  each made of the `op`, `held`, `resolve` and `changes` rows' calls under
+  the session it stands under: `text.replace`, a text edit of a draft that
   replaces the bytes that differ alone, with the draft's text as an edit
-  reads it, the writes and the lines an edit settles, and the two caps
-  it keeps, re-exported at the root.
+  reads it, the one `edit` frame the two edits write by and what settles
+  its lost answer, the burst and the line a move and a mark settle, and
+  the two caps it keeps, re-exported at the root.
 - `shell/text/edit.rs` `text.edit`, several such edits in one call over
   `skep_client::text`'s minimal changes: the plan made of one read, the
-  writes chained by position, and the take-back that sets the draft back
-  where a write past the first does not land.
+  call's net changes cut from it and the addresses its one frame mints
+  them at.
 - `shell/text/moving.rs` `text.move`, whole lines of a draft moved by
   identity: the cuts of one `rearrange`, found from the lines' starts in
   one read.
@@ -1032,8 +1036,8 @@ Rules that hold across its files:
   `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs`,
   `shell/merge.rs`, `shell/history.rs` and `shell/text.rs` — so a
   transport cannot serve a call the log never saw. A row made of other
-  rows' calls — `close`'s frames, the reads, writes and drops of
-  `text.replace`, `text.edit`, `text.move`, `text.mark` and `text.diff`
+  rows' calls — `close`'s frames, the reads, writes, feed reads and drops
+  of `text.replace`, `text.edit`, `text.move`, `text.mark` and `text.diff`
   — makes them within its own call, and the log keeps that one.
   `Shell::fetch` is the one public row, because it streams, and logs its
   own call.
@@ -1385,8 +1389,12 @@ tumbler order, and `run_list.rs` the run-list, in V-order — two modules
 that share no private item. `ops.rs` is the `Vstream` handle and what its
 operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
 `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
-`ops/set_arrangement.rs`, `ops/version.rs` and `ops/stage.rs` each hold
-one operation's `impl` block.
+`ops/edit.rs`, `ops/version.rs` and `ops/stage.rs` each hold
+one operation's `impl` block — `ops/edit.rs` the edit, a list of
+positional changes to one draft staged as one record, which the wire
+reaches under two names — and `ops/set_arrangement.rs` holds the three
+terms a merge's landing rides it with, the head, the base to record and
+the merge, judged and recorded for the edit that names them.
 Its `test-hooks`
 feature (default off) compiles in `seat_link`, the test-only twin of the
 link seat; `scripts/gate-full.sh` checks the library and its docs without

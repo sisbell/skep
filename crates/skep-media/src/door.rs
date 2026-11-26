@@ -89,7 +89,9 @@
 //!
 //! **Every value is judged** (M-I1 (a): the binding is per cell, at every
 //! mint). A write carrying several values naming the kind is answered by
-//! the first refusal any of them earns — in V-order at an `insert`, in
+//! the first refusal any of them earns — in V-order at an `insert`, in the
+//! order its changes mint them at an edit, whose values take the insert's
+//! arms under either of its two names, in
 //! placement order at a shot — the target's arm and the owner's asked once,
 //! ahead of every value's own verdict. A cell admitted beside one refused
 //! admits nothing for it, and the write lands whole or not at all.
@@ -294,12 +296,13 @@ fn value_arm(
 /// Exhaustive with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
 /// whether it can carry or re-insert a value naming the kind. `copy`,
-/// `reinstate`, `set_arrangement`, `version` and `stage` share identity and
+/// `reinstate`, `version` and `stage` share identity and
 /// mint no cell (`media.md` §The publication seam, consequence (b): "a
 /// `copy` of a cell shares identity and mints no baptism" — and a
-/// re-placement by I-address is the same sharing, a draft's whole
-/// arrangement set by identity and a staged draft's whole surface too), so
-/// they take no arm; every other op carries no content value.
+/// re-placement by I-address is the same sharing, a staged draft's whole
+/// surface too), so they take no arm; an edit takes the insert's over the
+/// values its changes mint, which is none where they place runs by
+/// identity; every other op carries no content value.
 pub fn media_door<W: FebeWorld>(
     world: &W,
     op: &Op,
@@ -308,6 +311,14 @@ pub fn media_door<W: FebeWorld>(
 ) -> Option<MediaRefusal> {
     match op {
         Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, media_gate),
+        // The edit, under either of its names: the values its changes mint
+        // take the insert's arms, over every change in the order they are
+        // minted. A frame whose changes place runs by identity — what
+        // `set_arrangement` carries off the wire — mints none and is judged
+        // by none.
+        Op::Edit { doc, edit, .. } | Op::SetArrangement { doc, arrangement: edit, .. } => {
+            insert_arm(world, doc, edit.values(), principal, media_gate)
+        }
         Op::Publish { target, shot, .. } => publish_arm(world, target, shot, principal, media_gate),
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
@@ -322,7 +333,6 @@ pub fn media_door<W: FebeWorld>(
         | Op::Copy { .. }
         | Op::Reinstate { .. }
         | Op::Rearrange { .. }
-        | Op::SetArrangement { .. }
         | Op::Version { .. }
         | Op::Stage { .. }
         | Op::MakeLink { .. }
@@ -362,7 +372,8 @@ pub fn media_door<W: FebeWorld>(
     }
 }
 
-/// Answers the `insert` arms, 1 and 3 to 6.
+/// Answers the `insert` arms, 1 and 3 to 6, for an insert's values or an
+/// edit's.
 ///
 /// They are read only where `doc` is registered and the caller owns it —
 /// the store's ownership-gate question, asked of M5
@@ -375,10 +386,10 @@ pub fn media_door<W: FebeWorld>(
 /// it), in V-order, the first refusal answering; a value that names it not
 /// is passed over at the cost of the classification — one byte compare for
 /// a value that opens no JSON object.
-fn insert_arm<W: FebeWorld>(
+fn insert_arm<'v, W: FebeWorld>(
     world: &W,
     doc: &Address,
-    values: &[Val],
+    values: impl IntoIterator<Item = &'v Val>,
     principal: PrincipalId,
     media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
@@ -386,7 +397,7 @@ fn insert_arm<W: FebeWorld>(
     if !Caller::Principal(principal).passes_ownership_gate(m3, doc) {
         return None;
     }
-    let mut named = values.iter().filter_map(|v| names_the_kind(v.as_bytes())).peekable();
+    let mut named = values.into_iter().filter_map(|v| names_the_kind(v.as_bytes())).peekable();
     named.peek()?;
     // Arm 1 — the target's refusal first, whatever the value's form and
     // whatever the declaration: M5's own publication read, projected to the

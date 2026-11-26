@@ -7,12 +7,13 @@
 //! inherited by an alternative at the stage's own position and cleared by
 //! the shot that moves the base.
 
-use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, HasM5, InsertError, Marker, SetArrangement, SetArrangementError, SetMerge, Shot, StageError, Vstream};
+use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, EditError, HasM5, InsertError, Marker, SetMerge, Shot, StageError, Vstream};
 use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
 
 use crate::common::*;
+use crate::edit::{set_whole, Whole};
 
 /// The `k`-th document of principal 1's account, for the fourth and on —
 /// what a stage mints there, the first three being the seeded fixtures, so
@@ -459,13 +460,13 @@ fn an_alternative_inherits_the_marker_at_its_own_mint_and_the_shot_clears_it() {
     let vs = deposit_abc(&k);
     let (e1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("version 1");
     let (d, _) = vs.stage(PrincipalId(1), &e1).expect("the staging draft");
-    let landing = SetArrangement {
+    let landing = Whole {
         runs: vec![shot_run(&pdoc(), &pca(2), 2)],
         head: Some(base(&e1, 3)),
         base: Some(base(&e1, 3)),
         merge: Some(SetMerge { sides: vec![vca(1)], at: None }),
     };
-    let (landed_at, head_moved) = vs.set_arrangement(P1, &d, &landing, now(&k)).expect("the landing");
+    let (landed_at, head_moved) = set_whole(&k, P1, &d, &landing, now(&k)).expect("the landing");
     assert_eq!(head_moved, None);
     let marker = Marker { sides: vec![vca(1)], head: e1.clone(), head_copied: n(3), at: landed_at };
     assert_eq!(
@@ -532,7 +533,7 @@ fn a_publication_of_the_draft_ends_its_stamps_and_a_shot_keeping_its_base_keeps_
     let vs = deposit_abc(&k);
     let (e1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("version 1");
     let runs = vec![shot_run(&pdoc(), &pca(2), 2)];
-    let set = |merge: Option<SetMerge>| SetArrangement {
+    let set = |merge: Option<SetMerge>| Whole {
         runs: runs.clone(),
         head: merge.as_ref().map(|_| base(&e1, 3)),
         base: Some(base(&e1, 3)),
@@ -543,8 +544,8 @@ fn a_publication_of_the_draft_ends_its_stamps_and_a_shot_keeping_its_base_keeps_
     let mut landed = Vec::new();
     for _ in 0..2 {
         let (d, _) = vs.stage(PrincipalId(1), &e1).expect("the staging draft");
-        let (at, _) = vs.set_arrangement(P1, &d, &landing(), now(&k)).expect("the landing");
-        vs.set_arrangement(P1, &d, &set(None), now(&k)).expect("the merge taken out");
+        let (at, _) = set_whole(&k, P1, &d, &landing(), now(&k)).expect("the landing");
+        set_whole(&k, P1, &d, &set(None), now(&k)).expect("the merge taken out");
         landed.push((d, at));
     }
     let [(kept, kept_at), (moved, moved_at)] = <[_; 2]>::try_from(landed).expect("two drafts");
@@ -566,7 +567,7 @@ fn a_publication_of_the_draft_ends_its_stamps_and_a_shot_keeping_its_base_keeps_
     );
     let unmoved = k.snapshot().world().m5().draft_base(&moved).cloned();
     assert_eq!(unmoved.as_ref().map(|b| b.stamped.is_empty()), Some(true), "the draft's own publication ends them");
-    vs.set_arrangement(P1, &kept, &restore(kept_at), now(&k)).expect("the merge put back");
+    set_whole(&k, P1, &kept, &restore(kept_at), now(&k)).expect("the merge put back");
     assert_eq!(
         k.snapshot().world().m5().draft_base(&kept).and_then(|b| b.merge.clone()),
         Some(marker(kept_at)),
@@ -574,8 +575,8 @@ fn a_publication_of_the_draft_ends_its_stamps_and_a_shot_keeping_its_base_keeps_
     );
     let before = k.current_seq();
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &moved, &restore(moved_at), now(&k))),
-        SetArrangementError::MarkerNotRestorable,
+        rejected(set_whole(&k, P1, &moved, &restore(moved_at), now(&k))),
+        EditError::MarkerNotRestorable,
         "the merge is the member's: nothing to put back"
     );
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
@@ -598,13 +599,13 @@ fn a_shot_keeping_its_drafts_base_re_inserts_its_words_and_moves_no_record() {
     let vs = deposit_abc(&k);
     let (e1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("version 1");
     let (d, _) = vs.stage(PrincipalId(1), &e1).expect("the staging draft");
-    let landing = SetArrangement {
+    let landing = Whole {
         runs: vec![shot_run(&pdoc(), &pca(1), 3)],
         head: Some(base(&e1, 3)),
         base: Some(base(&e1, 3)),
         merge: Some(SetMerge { sides: vec![vca(1)], at: None }),
     };
-    vs.set_arrangement(P1, &d, &landing, now(&k)).expect("the landing marks the draft");
+    set_whole(&k, P1, &d, &landing, now(&k)).expect("the landing marks the draft");
     let (z, _) = vs
         .insert(P1, &d, vp(1, 4), vec![val(b"z")], Deposit::Undeclared, now(&k))
         .expect("the draft's own word");

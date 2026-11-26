@@ -269,7 +269,7 @@ fn an_alternative_inherits_the_marker_at_the_stages_position_and_the_shot_clears
     let runs = image_runs(port, Some(&owner), &edition, 2, 2);
     let runs: Vec<(String, String, u64)> = runs.iter().map(|(i_start, w)| (origin_of(i_start), i_start.clone(), *w)).collect();
     let runs_ref: Vec<(&str, &str, u64)> = runs.iter().map(|(o, s, w)| (o.as_str(), s.as_str(), *w)).collect();
-    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &runs_ref, Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None));
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &runs_ref, Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None));
     let landed_at = acked_at(&ack);
     assert!(expect_resp(&ack, "ack").get("head_moved").is_none(), "the head is the trunk's: {ack}");
     let marker = |at: u64| serde_json::json!({"at": at, "head": v1, "head_copied": "3", "sides": [side]});

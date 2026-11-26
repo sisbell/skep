@@ -6,7 +6,14 @@ command layer, where wire requests become store transactions.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **`Op` / `Response`** — the typed enumeration of every operation a
-  client can request and every answer it can receive. The two reads that
+  client can request and every answer it can receive. The edit — a list
+  of positional changes to one draft in one commit — is one operation the
+  enumeration names twice, `Op::Edit` and `Op::SetArrangement`, the name
+  a request came under being its kind and its row on the change feed; its
+  acknowledgment names the first address minted where it minted
+  (`Response::AckAddr`), else `Response::Ack`, either carrying the head
+  tell (`head_moved`), and a refusal about one change names it in
+  `FaultSite::index`. The two reads that
   answer an address's age, `read_link` and `doc_metadata`, carry the
   position of the commit that minted it off the name space's position
   map, and a slot for the transport's testimony of when it committed

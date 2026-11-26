@@ -1,4 +1,6 @@
 use super::*;
+use skep_address::{validate, Tumbler};
+
 use crate::testutil::{a, ca, n, run, vca};
 
 /// A list through the coalesce every `RunList` passes, so a fixture holds the
@@ -581,4 +583,252 @@ fn the_suffix_walk_yields_what_the_range_walk_yields_past_the_end() {
     assert_eq!(frag.iter_resolve_from(&n(6)).collect::<Vec<_>>(), vec![run(&vca(5), 1)]);
     assert!(frag.iter_resolve_from(&n(7)).next().is_none());
     assert!(RunList::default().iter_resolve_from(&n(1)).next().is_none());
+}
+
+/// A content address of the account's document `doc` at `ordinal`.
+fn at_doc(doc: u32, ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, doc, 0, 1, ordinal])
+}
+
+/// One change, built as the fold's record holds one.
+fn change(at: u32, width: u32, runs: Vec<Run>) -> Splice {
+    Splice { at: n(at), width: n(width), runs }
+}
+
+/// What today's two mutators leave when each change is made by them in
+/// turn from the last change down, the order in which no change moves the
+/// positions of one still to make: the removal, then the placement.
+fn made_one_at_a_time(l: &RunList, changes: &[Splice]) -> RunList {
+    changes.iter().rev().fold(l.clone(), |l, c| {
+        let removed = if c.width.is_zero() { l } else { l.remove_range(&c.at, &c.width) };
+        if c.runs.is_empty() {
+            removed
+        } else {
+            removed.splice_in(&c.at, c.runs.iter().cloned())
+        }
+    })
+}
+
+/// The one-walk splice of `changes`, held to the two mutators' answer and
+/// to its count: one step a run read, a change made and a run placed.
+fn spliced_as_the_mutators(l: &RunList, changes: &[Splice], label: &str) -> RunList {
+    let mut count = 0u64;
+    let got = l.spliced(changes, &mut |steps| count += steps);
+    assert_eq!(got, made_one_at_a_time(l, changes), "{label}: equal to the mutators' list");
+    let placed: usize = changes.iter().map(|c| c.runs.len()).sum();
+    assert_eq!(
+        count,
+        (l.run_count() + changes.len() + placed) as u64,
+        "{label}: each run read, each change made and each run placed, once"
+    );
+    got
+}
+
+/// A small generator, so a generated case is the same case at every run.
+struct Gen(u64);
+
+impl Gen {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// A number in `[0, below)`; 0 where `below` is 0.
+    fn below(&mut self, below: u64) -> u64 {
+        if below == 0 {
+            0
+        } else {
+            self.next() % below
+        }
+    }
+}
+
+/// A list of `runs` runs over four documents' I-space, each of width 1 to
+/// 4: a document's runs taken in address order, most of them cut off from
+/// the one before by a gap or by another document's run, so a removal
+/// between two of them brings I-adjacent neighbours together.
+fn generated_list(gen: &mut Gen, runs: usize) -> RunList {
+    let mut next = [1u32; 4];
+    let mut out = Vec::with_capacity(runs);
+    for _ in 0..runs {
+        let doc = gen.below(4) as usize;
+        let width = 1 + gen.below(4) as u32;
+        // A gap in the document's I-space one time in three.
+        next[doc] += if gen.below(3) == 0 { 1 + gen.below(3) as u32 } else { 0 };
+        out.push(run(&at_doc(10 + doc as u32, next[doc]), width));
+        next[doc] += width;
+    }
+    list(out)
+}
+
+/// `changes` changes to a list whose positions are `held`, ascending and
+/// apart: sites at run boundaries and inside runs, removals alone,
+/// placements alone and both, placed runs that continue the address before
+/// the site or lead into the one after it, the first change at position 1
+/// and the last at the end where `ends` asks.
+fn generated_changes(gen: &mut Gen, held: &[Address], changes: usize, ends: bool) -> Vec<Splice> {
+    let total = held.len() as u64;
+    // An address continuing `a`, for a run I-adjacent to it.
+    let after = |a: &Address, by: u32| -> Address {
+        let comps: Vec<&Nat> = a.tumbler().iter().collect();
+        let (last, lead) = comps.split_last().expect("an address has components");
+        let mut next: Vec<Nat> = lead.iter().map(|c| (*c).clone()).collect();
+        next.push(*last + n(by));
+        validate(Tumbler::new(next).expect("nonempty")).expect("a content address shifted is one")
+    };
+    let mut out = Vec::with_capacity(changes);
+    let mut reach = 1u64;
+    for k in 0..changes {
+        let left = (changes - k) as u64;
+        // Room kept for the changes still to come, so every one has a site.
+        let slack = (total + 1).saturating_sub(reach) / left;
+        let at = if ends && k == 0 {
+            1
+        } else if ends && k + 1 == changes {
+            total + 1
+        } else {
+            reach + gen.below(slack + 1)
+        };
+        let width = if at > total { 0 } else { gen.below(4).min(total + 1 - at) };
+        let mut runs = Vec::new();
+        let placed = if width == 0 { 1 + gen.below(2) } else { gen.below(3) };
+        for j in 0..placed {
+            let fresh = run(&at_doc(20 + gen.below(3) as u32, 1 + gen.below(1000) as u32), 1 + gen.below(3) as u32);
+            let chosen = match gen.below(4) {
+                // Continuing the address standing before the site.
+                0 if j == 0 && at >= 2 => run(&after(&held[at as usize - 2], 1), 1 + gen.below(2) as u32),
+                // Leading into the address standing after the removal.
+                1 if j + 1 == placed && at + width <= total => {
+                    let next = &held[(at + width) as usize - 1];
+                    let last = next.tumbler().iter().next_back().expect("an address has components").clone();
+                    if last > n(1) {
+                        let comps: Vec<Nat> = next.tumbler().iter().cloned().collect();
+                        let mut before = comps[..comps.len() - 1].to_vec();
+                        before.push(last - n(1));
+                        run(&validate(Tumbler::new(before).expect("nonempty")).expect("a content address"), 1)
+                    } else {
+                        fresh
+                    }
+                }
+                _ => fresh,
+            };
+            runs.push(chosen);
+        }
+        out.push(change(at as u32, width as u32, runs));
+        reach = at + width;
+    }
+    out
+}
+
+/// Every address `l` arranges, in V-order.
+fn positions(l: &RunList) -> Vec<Address> {
+    l.iter().flat_map(|run| run.addrs().collect::<Vec<_>>()).collect()
+}
+
+#[test]
+fn the_one_walk_splice_joins_every_seam_its_changes_make() {
+    // A removal between two runs of one document brings them together.
+    let l = list(vec![run(&ca(1), 3), run(&vca(1), 2), run(&ca(4), 3)]);
+    let joined = spliced_as_the_mutators(&l, &[change(4, 2, vec![])], "a removal between two I-adjacent runs");
+    assert_eq!(joined.runs(), vec![run(&ca(1), 6)]);
+    // A run placed at a boundary joins the run before it, and the one after.
+    let l = list(vec![run(&ca(1), 3), run(&vca(1), 1), run(&ca(9), 2)]);
+    let widened = spliced_as_the_mutators(
+        &l,
+        &[change(4, 0, vec![run(&ca(4), 2)]), change(5, 0, vec![run(&ca(7), 2)])],
+        "runs placed beside their neighbours",
+    );
+    assert_eq!(widened.runs(), vec![run(&ca(1), 5), run(&vca(1), 1), run(&ca(7), 4)]);
+    // A site inside a run cuts it, and a placement of nothing leaves it one.
+    let l = list(vec![run(&ca(1), 6)]);
+    let cut = spliced_as_the_mutators(&l, &[change(3, 0, vec![run(&vca(1), 1)])], "a site inside a run");
+    assert_eq!(cut.runs(), vec![run(&ca(1), 2), run(&vca(1), 1), run(&ca(3), 4)]);
+    let removed = spliced_as_the_mutators(&l, &[change(2, 2, vec![]), change(5, 1, vec![])], "two removals inside one run");
+    assert_eq!(removed.runs(), vec![run(&ca(1), 1), run(&ca(4), 1), run(&ca(6), 1)]);
+    // The addresses a change removes, placed back by it: the list as it was.
+    let same = spliced_as_the_mutators(&l, &[change(3, 2, vec![run(&ca(3), 2)])], "a stretch replaced by itself");
+    assert_eq!(same, l);
+    // Position 1 and the end; two placements at one ordinal, in order; two
+    // changes that touch.
+    let ends = spliced_as_the_mutators(
+        &l,
+        &[change(1, 0, vec![run(&vca(1), 1)]), change(7, 0, vec![run(&vca(9), 1)])],
+        "position 1 and the append boundary",
+    );
+    assert_eq!(ends.runs(), vec![run(&vca(1), 1), run(&ca(1), 6), run(&vca(9), 1)]);
+    let ordered = spliced_as_the_mutators(
+        &l,
+        &[change(4, 0, vec![run(&vca(1), 1)]), change(4, 0, vec![run(&vca(5), 1)])],
+        "two placements at one ordinal",
+    );
+    assert_eq!(ordered.runs(), vec![run(&ca(1), 3), run(&vca(1), 1), run(&vca(5), 1), run(&ca(4), 3)]);
+    let touching = spliced_as_the_mutators(
+        &l,
+        &[change(2, 2, vec![run(&vca(1), 1)]), change(4, 1, vec![run(&vca(5), 1)])],
+        "two changes that touch",
+    );
+    assert_eq!(touching.runs(), vec![run(&ca(1), 1), run(&vca(1), 1), run(&vca(5), 1), run(&ca(5), 2)]);
+    // The empty list takes placements at its one boundary, and no change at
+    // all leaves a list as it stands.
+    let filled = spliced_as_the_mutators(&RunList::default(), &[change(1, 0, vec![run(&ca(1), 2)])], "into the empty list");
+    assert_eq!(filled.runs(), vec![run(&ca(1), 2)]);
+    assert_eq!(spliced_as_the_mutators(&l, &[], "no change"), l);
+}
+
+#[test]
+fn the_one_walk_splice_equals_todays_mutators_on_generated_lists() {
+    let mut gen = Gen(0x9e37_79b9_7f4a_7c15);
+    for (runs, changes) in [(0, 1), (1, 1), (1, 3), (7, 1), (7, 5), (40, 16), (64, 64), (300, 16), (300, 256), (1_500, 256)] {
+        for ends in [false, true] {
+            let l = generated_list(&mut gen, runs);
+            let set = generated_changes(&mut gen, &positions(&l), changes, ends);
+            let label = format!("{runs} runs, {changes} changes, ends {ends}");
+            let got = spliced_as_the_mutators(&l, &set, &label);
+            // Maximally merged, by a count the list's own merge takes no
+            // part in.
+            assert_eq!(got.runs().len(), canonical_run_count(&positions(&got)), "{label}");
+        }
+    }
+}
+
+#[test]
+fn the_one_walk_splice_equals_todays_mutators_at_the_wires_most_changes() {
+    // 4,096 changes, the most one frame names, into a list of 1,024 runs:
+    // the mutators rebuild the list twice a change, which is what bounds
+    // the list this cell can hold them to.
+    let mut gen = Gen(0x2545_f491_4f6c_dd1d);
+    let l = generated_list(&mut gen, 1_024);
+    let set = generated_changes(&mut gen, &positions(&l), 4_096, true);
+    assert_eq!(set.len(), 4_096);
+    let got = spliced_as_the_mutators(&l, &set, "1,024 runs, 4,096 changes");
+    assert_eq!(got.runs().len(), canonical_run_count(&positions(&got)));
+}
+
+#[test]
+fn a_change_outside_the_folds_input_class_is_made_without_a_panic() {
+    // The fold is total: a site the walk has passed is made where the walk
+    // stands, a site past the list at its end, and a removal running past
+    // the end removes what is there.
+    let l = list(vec![run(&ca(1), 4), run(&vca(1), 2)]);
+    let mut count = 0u64;
+    let behind = l.spliced(
+        &[change(3, 2, vec![]), change(2, 0, vec![run(&vca(7), 1)])],
+        &mut |steps| count += steps,
+    );
+    assert_eq!(behind.runs(), vec![run(&ca(1), 2), run(&vca(7), 1), run(&vca(1), 2)]);
+    let past = l.spliced(&[change(0, 0, vec![run(&vca(7), 1)]), change(99, 5, vec![run(&vca(9), 1)])], &mut |_| {});
+    assert_eq!(past.runs(), vec![run(&vca(7), 1), run(&ca(1), 4), run(&vca(1), 2), run(&vca(9), 1)]);
+    let over = l.spliced(&[change(5, 99, vec![])], &mut |_| {});
+    assert_eq!(over.runs(), vec![run(&ca(1), 4)]);
+}
+
+#[test]
+fn the_counted_width_reads_each_run_once() {
+    let l = list(vec![run(&ca(1), 3), run(&vca(1), 2), run(&ca(9), 4)]);
+    let mut count = 0u64;
+    assert_eq!(l.total_width_stepped(&mut |steps| count += steps), n(9));
+    assert_eq!(count, 3);
+    assert_eq!(l.total_width(), n(9));
 }

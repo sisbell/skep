@@ -39,8 +39,8 @@
 //!   `changes`, a pull), `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped),
 //!   `replace_text` (the shell's `text.replace`, a text edit of a draft
-//!   composed of the reads and the bursts above, which replaces the bytes that
-//!   differ alone and drops each line of its own the shell holds),
+//!   composed of the reads above and one `edit`, which replaces the bytes
+//!   that differ alone in one commit and holds no line of its own),
 //!   `edit_text` (the shell's `text.edit`, several such edits in one call, all
 //!   landing or none, whose landed answer is followed by the lines it changed,
 //!   one row a line, as the shell spells each — the door refusing a member of

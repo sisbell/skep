@@ -1441,7 +1441,7 @@ impl Commits {
         let (at, minted) = match resp {
             Response::Ack { at, .. } => (*at, None),
             Response::AckAddr { committed: false, .. } => return None,
-            Response::AckAddr { addr, at, committed: true } => (*at, Some(addr)),
+            Response::AckAddr { addr, at, committed: true, .. } => (*at, Some(addr)),
             Response::AckEdit { at, .. } => (*at, None),
             Response::Delivery { .. }
             | Response::IDelivery { .. }
@@ -2104,11 +2104,13 @@ impl FrameMeta {
 enum Minting {
     /// No content value is minted.
     None,
-    /// An `insert`: its values are minted I-adjacent from the ack's address.
+    /// An `insert` or an edit: its values are minted I-adjacent from the
+    /// ack's address, an edit's over all its changes in the changes' order.
     ///
     /// `naming` holds the indices of those whose bytes pass the index's
     /// prefix test — read ahead of the commit, so a prose insert enters
-    /// nothing and reads nothing after it.
+    /// nothing and reads nothing after it. An edit that mints nothing names
+    /// none and answers no address.
     Insert { naming: Vec<usize> },
     /// A `publish`: the shot re-inserts `reinserted` values of the draft.
     ///
@@ -2274,7 +2276,8 @@ enum RowTerms {
     /// `ShotPlace`, folded per member), so the row and the member read
     /// cannot disagree.
     Publish,
-    /// `set_arrangement`'s base and merge (the landing lane; skep #764).
+    /// An edit's base and merge, under either of its names, `edit` and
+    /// `set_arrangement` (the landing lane; skep #764).
     ///
     /// Both come from the request: `base` the base the frame named, which
     /// the store recorded or refused the whole write; `merge` the sides the
@@ -2290,7 +2293,7 @@ enum RowTerms {
     /// draft with a recorded base (`merge` null, `base` present) from a
     /// plain re-arrangement (both null); an undo on a document with no
     /// recorded base names neither, as a plain re-arrangement does.
-    SetArrangement { base: Option<Address>, merge: Option<(Vec<Address>, Address, Option<Seq>)> },
+    Edit { base: Option<Address>, merge: Option<(Vec<Address>, Address, Option<Seq>)> },
 }
 
 impl RowTerms {
@@ -2324,7 +2327,7 @@ impl RowTerms {
             }
             // The landing's terms are the request's own, resolved at the
             // table: nothing of the ack or the world completes them.
-            RowTerms::SetArrangement { base, merge } => Some(OpTerms::SetArrangement {
+            RowTerms::Edit { base, merge } => Some(OpTerms::Edit {
                 base: base.as_ref().map(ToString::to_string),
                 merge: merge.as_ref().map(|(sides, head, at)| MergeTerms {
                     sides: sides.iter().map(ToString::to_string).collect(),
@@ -2475,29 +2478,43 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // never a run's origin.
         Op::Reinstate { doc, .. } => meta(OpKind::Reinstate, one(doc), absent, no_cell),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent, no_cell),
-        // A draft's whole arrangement set in one write (the landing lane;
-        // skep #764): REINSTATE's runs placed by identity, so no cell is
-        // minted; its row names the draft and never a run's origin, as
-        // `reinstate`'s does, and carries the request's base and merge as
-        // its terms. The merge is the request's beside its head, with the
-        // position of a marker put back where the frame names one (skep
-        // #870), whether or not a base rides it: the store records the
-        // marker only beside a
-        // base (the owner's ruling N3), and the row is what a landing into a
-        // document with no recorded base leaves of its position, which the
-        // undo of that landing finds it by (N4).
-        Op::SetArrangement { doc, arrangement, .. } => meta(
-            OpKind::SetArrangement,
+        // The edit under its two names (the landing lane, skep #764; the
+        // one-commit edit): one row a call, named as the frame was — `edit`
+        // or `set_arrangement` — naming the draft and never a run's origin,
+        // as `reinstate`'s does, and carrying the request's base and merge
+        // as its terms under both names. The merge is the request's beside
+        // its head, with the position of a marker put back where the frame
+        // names one (skep #870), whether or not a base rides it: the store
+        // records the marker only beside a base (the owner's ruling N3),
+        // and the row is what a landing into a document with no recorded
+        // base leaves of its position, which the undo of that landing finds
+        // it by (N4). The cell index is entered for the values the call
+        // mints, by index into them in the order they are minted, which is
+        // the changes' order — the prefix test ahead of the commit, as an
+        // insert's: a frame whose changes place runs by identity mints
+        // none, and its ack names no address.
+        Op::SetArrangement { doc, arrangement: edit, .. } | Op::Edit { doc, edit, .. } => meta(
+            op.kind(),
             one(doc),
-            RowTerms::SetArrangement {
-                base: arrangement.base.as_ref().map(|b| b.member.clone()),
-                merge: arrangement
+            RowTerms::Edit {
+                base: edit.base.as_ref().map(|b| b.member.clone()),
+                merge: edit
                     .head
                     .as_ref()
-                    .zip(arrangement.merge.as_ref())
+                    .zip(edit.merge.as_ref())
                     .map(|(head, merge)| (merge.sides.clone(), head.member.clone(), merge.at)),
             },
-            no_cell,
+            match edit.values().next() {
+                None => Minting::None,
+                Some(_) => Minting::Insert {
+                    naming: edit
+                        .values()
+                        .enumerate()
+                        .filter(|(_, v)| names_kind_by_prefix(v.as_bytes()))
+                        .map(|(i, _)| i)
+                        .collect(),
+                },
+            },
         ),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The staging act (B3-S10) shares identity as a `version` does and

@@ -516,7 +516,7 @@ fn the_landing_standing_in_a_draft_is_read_by_its_mark_alone() {
     // Plain re-arrangements of P, each naming no merge.
     let rearrange = |runs: &[Run]| {
         let at = dialer.world().position;
-        let plain = frames::set_arrangement(p, &shot_runs(runs), at, None, None, None, None);
+        let plain = frames::set_arrangement(p, &whole_of(&dialer, p, runs), at, None, None, None, None);
         let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write")
         else {
             panic!("closed")
@@ -534,6 +534,51 @@ fn the_landing_standing_in_a_draft_is_read_by_its_mark_alone() {
     assert_eq!(standing(p), Err(Refusal::Unreadable(a(p))), "P withheld");
     let unregistered = "1.0.1.0.99";
     assert_eq!(standing(unregistered), Err(Refusal::NoSuchDocument(a(unregistered))));
+}
+
+/// An edit's row is none of the rows the landings' walk reads.
+///
+/// The merge landed in `P`, a draft the board records no base for, and `P`
+/// then edited as text: one `edit` row under the draft, naming no merge,
+/// `P` holding the merge's words and one more. The landing stands, and the
+/// walk reads no past state: it keeps the draft's `set_arrangement` rows
+/// alone, so the edit's row is no re-arrangement to compare with the state
+/// before the landing (the mutant that keeps an `edit` row as a plain one
+/// reads `P` before the landing and at the edit). An edit that leaves `P`
+/// exactly as it stood before the landing is no take-back either, where a
+/// `set_arrangement` row leaving it so is one: the landing stands still.
+#[test]
+fn an_edits_row_after_a_baseless_landing_is_no_row_the_landings_walk_reads() {
+    let p = "1.0.1.0.67";
+    let c = vec![run(D, 1, 11)];
+    let mut w = draft_landing_world();
+    w.text(p, 1, "!");
+    w.doc(p, false, ACCOUNT, c.clone());
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+    let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(p)))).expect("in P");
+    let (at, own) = landing_of(&landed);
+    let standing = || baseless_landing(&board, Some(session.token()), &a(p)).map(|mark| mark.and_then(|mark| mark.at));
+    let record = || standing_landing(&board, Some(session.token()), &a(K), &a(p), ACCOUNT).map(|r| r.and_then(|r| r.link));
+    // The edit: the merge's words and one of the draft's own after them.
+    let mut edited = draft_m();
+    edited.push(run(p, 1, 1));
+    let edit = dialer.world().text_edit(p, edited);
+    assert!(edit > at, "the premise: the edit's row follows the landing's");
+    let rows = dialer.world().rows.clone();
+    assert_eq!(rows.last().map(|row| (row.op, row.docs.clone())), Some(("edit", vec![p.to_string()])), "the premise: an `edit` row under the draft");
+    dialer.clear();
+    assert_eq!(standing(), Ok(Some(at)), "the landing stands behind the edit's row");
+    assert_eq!(record(), Ok(Some(own.clone())), "and its record with it");
+    assert!(dialer.positions("image").is_empty() && dialer.positions("doc_metadata").is_empty(), "nothing read at a past position: {:?}", dialer.ops());
+    // An edit back to the state before the landing: no take-back.
+    let back = dialer.world().text_edit(p, c);
+    assert!(back > edit);
+    dialer.clear();
+    assert_eq!(standing(), Ok(Some(at)), "an edit's row takes no landing back");
+    assert_eq!(record(), Ok(Some(own)), "its record standing");
+    assert!(dialer.positions("image").is_empty() && dialer.positions("doc_metadata").is_empty(), "nothing read at a past position: {:?}", dialer.ops());
 }
 
 /// A baseless landing whose past state is reclaimed is read as none.
@@ -568,7 +613,7 @@ fn a_baseless_landing_whose_past_state_is_reclaimed_is_read_as_none() {
     assert_eq!(standing(), Ok(Some(own)), "no row after the landing: the floor never met");
     assert!(dialer.positions("doc_metadata").is_empty(), "nothing read at a past position");
     let typed = dialer.world().position;
-    let plain = frames::set_arrangement(p, &shot_runs(&[run(D, 1, 5)]), typed, None, None, None, None);
+    let plain = frames::set_arrangement(p, &whole_of(&dialer, p, &[run(D, 1, 5)]), typed, None, None, None, None);
     let Answer::Document(ack) = board.op(Some(session.token()), &plain).expect("the write") else {
         panic!("closed")
     };

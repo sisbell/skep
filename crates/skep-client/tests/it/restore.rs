@@ -384,7 +384,7 @@ fn another_accounts_words_published_since_come_back_as_its_published_words() {
     let s = a.minted(&rig, &sa, false);
     let s_s = s.to_string();
     let typed = typed_at(&rig.board, sa.token(), &s_s);
-    let window = frames::set_arrangement(&s_s, &[frames::shot_run(&z.to_string(), &format!("{z}.0.1.1"), 5)], typed, None, None, None, None);
+    let window = frames::set_arrangement(&s_s, &[frames::placed(1, 0, &[frames::shot_run(&z.to_string(), &format!("{z}.0.1.1"), 5)])], typed, None, None, None, None);
     let p1 = acked_at(&acked(sa.op(&window))).expect("the window's position");
     insert_text(&rig.board, sa.token(), &s_s, 6, "!");
     // `b` publishes `z` with its kept place.

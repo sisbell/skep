@@ -7,21 +7,25 @@
 //! its members read before the session, a bare session refused naming the
 //! call before any read (the door's other questions are `door`'s) — and,
 //! against the real daemon, `text.replace` end to end: one word changed by
-//! the bytes that differ alone, the answer as the shapes declare it with no
-//! error member, every byte outside the change at the I-address it had, and
-//! one `text.replace` entry in the call log, the rows it is made of logged
-//! by none; a write the shell holds and cannot get to the board — its own
-//! node stopped — answered `refused` with the error member, nothing written
-//! and nothing held; and a session whose token the board closed under the
-//! edit, the edit made under the restart arm's re-open and answered as one
-//! no death met. Of `text.edit`, against the daemon: two pairs landed in
-//! one call, the text an old text spans between two changes at the
+//! the bytes that differ alone, in one commit and one feed row, the answer
+//! as the shapes declare it with no error member, every byte outside the
+//! change at the I-address it had, and one `text.replace` entry in the call
+//! log, the rows it is made of logged by none; the call refused at the door
+//! under the shell's own node stopped, nothing read or written; and a
+//! session whose token the board closed under the edit, the edit made under
+//! the restart arm's re-open and answered as one no death met. Of
+//! `text.edit`, against the daemon: two pairs landed in one call and one
+//! commit, the text an old text spans between two changes at the
 //! I-addresses it had and the answer's rows on the lines the board's
-//! `line_numbers` numbers; a write of the call's refused past the first, at
-//! each place one can be, the draft then exactly as it stood, every byte at
-//! its own address; and another writer's change landed between two of the
-//! call's writes, nothing taken back over it and each change that stands
-//! named (the shell's rows with one write meddled with, `Meddled`). Of
+//! `line_numbers` numbers; a draft in more runs than an image answers
+//! edited all the same, no image asked; the call's one frame refused, the
+//! draft then exactly as it stood; another writer's change landed between
+//! the call's read and its write, the call refused whole; both calls and a
+//! raw `edit` frame refused behind a held line of the draft's, and landing
+//! on another draft; and an answer lost — to a session the board ended
+//! after the commit, with the board's memo standing, and behind another
+//! write — settled from the change feed or answered `answer_lost` (the
+//! shell's rows with one write meddled with, `Meddled`). Of
 //! `text.move`, against the daemon: lines moved up by one `rearrange`, every
 //! byte at the I-address it had and the answer's rows on the lines the
 //! board's `line_numbers` numbers; the last line of a text that ends in no
@@ -133,32 +137,47 @@ fn the_row_reads_its_members_first_and_asks_the_door_before_any_read() {
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("text.replace")), "{keyless}");
 }
 
-/// Checks an edit end to end: the bytes that differ replaced alone, and the
-/// rest of the draft at the I-addresses it had.
+/// Returns the rows of the change feed under `draft` past `since`, read
+/// under `session`: each row's op.
+fn rows_since(shell: &Shell, session: &str, draft: &str, since: u64) -> Vec<String> {
+    let page = shell.call("changes", &json!({"session": session, "since": since, "class": "drafts", "under": draft})).unwrap_or_else(|r| panic!("{r}"));
+    page["entries"].as_array().expect("the entries").iter().map(|entry| entry["op"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+/// Returns the board's position as a read under `session` answers it.
+fn position(shell: &Shell, session: &str, draft: &str) -> u64 {
+    shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::doc_metadata(draft)})).unwrap_or_else(|r| panic!("{r}"))["as_of"].as_u64().expect("the read's position")
+}
+
+/// Checks an edit end to end: the bytes that differ replaced alone, in one
+/// commit, and the rest of the draft at the I-addresses it had.
 ///
 /// `brave` → `grave` in `hello brave world` shares its last four bytes, so
-/// one byte is inserted after the old and the old one removed, two commits;
-/// the answer is `TextReplaced` exactly — the ordinal, the widths, the new
-/// byte's I-address and the commit — with no error member; the draft reads
-/// the new text, every byte outside the change at the I-address it had and
-/// the new one at the answer's; and the call log holds one `text.replace`
-/// entry, the rows it is made of logged by none (the mutants that trim
-/// nothing, take the edit's I-address from a read, or log the rows).
-/// Under the shell's own node stopped, the insert is held `stopped`: the
-/// edit drops its line and answers `refused` with that cause and the error
-/// member, nothing written and nothing held (the mutant that leaves the
-/// member off tells a transport the board refused the edit).
+/// one byte is removed and one minted in its place, by ONE frame: the feed
+/// shows one row of the draft past the call's read, an `edit`, no state
+/// standing between a removal and an insert (the mutant that sends the
+/// insert and then the removal leaves two rows). The answer is
+/// `TextReplaced` exactly — the ordinal, the widths, the new byte's
+/// I-address and the commit — with no error member; the draft reads the new
+/// text, every byte outside the change at the I-address it had and the new
+/// one at the answer's; and the call log holds one `text.replace` entry, the
+/// rows it is made of logged by none (the mutants that trim nothing, take
+/// the edit's I-address from a read, or log the rows). Under the shell's own
+/// node stopped, the call is refused `stopped` at the door, naming the
+/// `edit` it would send: nothing read, nothing written and nothing held.
 #[test]
-fn an_edit_replaces_the_bytes_that_differ_and_a_write_the_shell_holds_is_an_error() {
+fn an_edit_replaces_the_bytes_that_differ_in_one_commit_and_a_stopped_node_refuses_it_at_the_door() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let draft = draft_holding(&g.shell, &g.session, "hello brave world");
     let before = addresses(&g.shell, &g.session, &draft);
     assert_eq!(before.len(), 17, "premise: one byte a position");
+    let read_at = position(&g.shell, &g.session, &draft);
     let logged = calls_logged(&g.shell).len();
     let answer = g.shell.call("text.replace", &json!({"session": g.session, "doc": draft, "old": "brave", "new": "grave"})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(calls_logged(&g.shell)[logged..], ["text.replace"], "one entry, the rows the edit is made of logged by none");
+    assert_eq!(rows_since(&g.shell, &g.session, &draft, read_at), ["edit"], "one commit: one row of the draft past the read, the frame's own");
     crate::shapes::assert_declared("TextReplaced", &answer);
     let (addr, at) = (answer["addr"].as_str().expect("the new byte's I-address").to_string(), answer["at"].as_u64().expect("the commit"));
     assert_eq!(answer, json!({"outcome": "replaced", "doc": draft, "ordinal": "7", "removed": "1", "inserted": "1", "addr": addr, "at": at}), "no error member");
@@ -166,11 +185,10 @@ fn an_edit_replaces_the_bytes_that_differ_and_a_write_the_shell_holds_is_an_erro
     let after = addresses(&g.shell, &g.session, &draft);
     assert_eq!(after, [&before[..6], &[addr][..], &before[7..]].concat(), "every byte outside the change at the I-address it had");
     g.shell.set_node_state(NodeState::Stopped);
-    let answer = g.shell.call("text.replace", &json!({"session": g.session, "doc": draft, "old": "grave", "new": "brave"})).unwrap_or_else(|r| panic!("{r}"));
-    crate::shapes::assert_declared("TextRefused", &answer);
-    assert_eq!(answer, json!({"outcome": "refused", "cause": "stopped", "doc": draft, "error": true}));
+    let refused = g.shell.call("text.replace", &json!({"session": g.session, "doc": draft, "old": "grave", "new": "brave"})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["op"].as_str()), ("stopped", Some("edit")), "the door, before any read: {refused}");
     g.shell.set_node_state(NodeState::Running);
-    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the edit's line dropped, nothing held");
+    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "nothing held");
     assert_eq!(text_of(&g.shell, &g.session, &draft), "hello grave world", "nothing written");
     g.shell.shutdown();
     sd.shutdown();
@@ -229,10 +247,9 @@ const LINES: &str = "alpha = 1\nkeep this line as it is\nbeta = 2\ntail stays\n"
 
 /// The two pairs the `text.edit` cells send over [`LINES`].
 ///
-/// The first spans three lines and two changes — `alph` gives way to `gamm`,
-/// two writes, and a `0` goes in after the `2`, one — with the line between
-/// them unchanged; the second replaces `tail` by `end`, two writes: five
-/// writes, in this order.
+/// The first spans three lines and two changes — `alph` gives way to `gamm`
+/// and a `0` goes in after the `2` — with the line between them unchanged;
+/// the second replaces `tail` by `end`: three changes, one frame.
 fn edits() -> Value {
     json!([
         {"old": "alpha = 1\nkeep this line as it is\nbeta = 2\n", "new": "gamma = 1\nkeep this line as it is\nbeta = 20\n"},
@@ -253,9 +270,10 @@ fn minted(addr: &Value, width: u64) -> Vec<String> {
 /// The shell's own rows, with one write of an edit's meddled with.
 ///
 /// Every call goes to the shell as the row sends it, but the `nth` write
-/// frame (from 1) the edit sends through `op` — an `insert`, a `delete` or a
-/// `rearrange`: `act` is handed that frame and the session first, and the
-/// write is refused with what it answers, or sent on where it answers none.
+/// frame (from 1) the edit sends through `op` — an `edit`, an `insert`, a
+/// `delete` or a `rearrange`: `act` is handed that frame and the session
+/// first, and the write is refused with what it answers, or sent on where it
+/// answers none.
 struct Meddled<'s, F> {
     shell: &'s Shell,
     nth: usize,
@@ -273,7 +291,7 @@ impl<'s, F: Fn(&Value, &str) -> Option<Refusal>> Meddled<'s, F> {
 impl<F: Fn(&Value, &str) -> Option<Refusal>> Rows for Meddled<'_, F> {
     fn answer(&self, row: Row, args: &Value) -> Result<Value, Refusal> {
         let frame = &args["frame"];
-        if row == Row::Op && ["insert", "delete", "rearrange"].contains(&frame["op"].as_str().unwrap_or_default()) {
+        if row == Row::Op && ["edit", "insert", "delete", "rearrange"].contains(&frame["op"].as_str().unwrap_or_default()) {
             self.writes.set(self.writes.get() + 1);
             if self.writes.get() == self.nth {
                 if let Some(refusal) = (self.act)(frame, args["session"].as_str().unwrap()) {
@@ -286,6 +304,10 @@ impl<F: Fn(&Value, &str) -> Option<Refusal>> Rows for Meddled<'_, F> {
 
     fn stands(&self, session: &str) -> bool {
         Rows::stands(self.shell, session)
+    }
+
+    fn key(&self, session: &str) -> Option<String> {
+        Rows::key(self.shell, session)
     }
 }
 
@@ -321,30 +343,32 @@ fn text_edit_reads_its_members_first_and_asks_the_door_before_any_read() {
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("text.edit")), "{keyless}");
 }
 
-/// Checks that several edits land in one call, identity kept between.
+/// Checks that several edits land in one call and one commit, identity kept
+/// between.
 ///
 /// The first pair's old text spans three lines of which two change: the
 /// call makes the two changes and writes nothing of the line between them,
-/// and a second pair lands behind it in the same call. The answer is
+/// and a second pair lands with it in the same commit — the feed shows one
+/// row of the draft past the call's read, an `edit`. The answer is
 /// `TextEdited` exactly, each change with the address its new bytes were
-/// minted at, and its rows the three lines changed with the one between,
-/// each `+` row on the line the board's own `line_numbers` puts that
-/// change's first new byte on at the call's commit; the draft reads the
-/// new text; every byte no change removed stands at the I-address it had,
-/// the new ones at the answer's; and the call log holds one `text.edit`
-/// entry (the mutant that makes a pair as one stretch re-types the line
-/// between, which then stands at new addresses).
-/// Under the shell's own node stopped the first write is held `stopped`:
-/// its line is dropped, and the call answers `refused` naming the change,
-/// with the error member, nothing written and nothing held.
+/// minted at and the one commit, and its rows the three lines changed with
+/// the one between, each `+` row on the line the board's own `line_numbers`
+/// puts that change's first new byte on at the call's commit; the draft
+/// reads the new text; every byte no change removed stands at the I-address
+/// it had, the new ones at the answer's; and the call log holds one
+/// `text.edit` entry (the mutant that makes a pair as one stretch re-types
+/// the line between, which then stands at new addresses). Under the shell's
+/// own node stopped the call is refused `stopped` at the door, nothing read,
+/// written or held.
 #[test]
-fn several_edits_land_in_one_call_and_the_text_between_two_changes_keeps_its_identity() {
+fn several_edits_land_in_one_call_and_one_commit_and_the_text_between_two_changes_keeps_its_identity() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let draft = draft_holding(&g.shell, &g.session, LINES);
     let before = addresses(&g.shell, &g.session, &draft);
     assert_eq!(before.len(), LINES.len(), "premise: one byte a position");
+    let read_at = position(&g.shell, &g.session, &draft);
     let logged = calls_logged(&g.shell).len();
     let answer = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(calls_logged(&g.shell)[logged..], ["text.edit"], "one entry, the rows the call is made of logged by none");
@@ -355,9 +379,10 @@ fn several_edits_land_in_one_call_and_the_text_between_two_changes_keeps_its_ide
     let spelled = |ordinal: &str, removed: &str, inserted: &str| (Some(ordinal.to_string()), Some(removed.to_string()), Some(inserted.to_string()));
     assert_eq!((pairs.len(), pairs[0].as_array().map(Vec::len), pairs[1].as_array().map(Vec::len)), (2, Some(2), Some(1)), "{answer}");
     assert_eq!((shape(change(0, 0)), shape(change(0, 1)), shape(change(1, 0))), (spelled("1", "4", "4"), spelled("43", "0", "1"), spelled("45", "4", "3")), "{answer}");
-    assert_eq!(answer["at"], change(1, 0)["at"], "the call is whole at its last change's commit");
+    assert!([change(0, 0), change(0, 1), change(1, 0)].iter().all(|change| change["at"] == answer["at"]), "every change at the call's one commit: {answer}");
     assert_eq!(answer["lines"], json!(["+1\tgamma = 1", " 2\tkeep this line as it is", "+3\tbeta = 20", "+4\tend stays"]), "the lines the call changed, and the one between: {answer}");
     let at = answer["at"].as_u64().expect("the call's commit");
+    assert_eq!(rows_since(&g.shell, &g.session, &draft, read_at), ["edit"], "one commit: one row of the draft past the read");
     let numbered = g.shell.call("op", &json!({"session": g.session, "at": at, "frame": skep_client::board::frames::line_numbers(&draft, &[1, 43, 45], &[])})).unwrap_or_else(|r| panic!("{r}"));
     let lines: Vec<&str> = numbered["positions"].as_array().expect("the positions' lines").iter().map(|position| position["line"].as_str().expect("a line")).collect();
     assert_eq!(lines, ["1", "3", "4"], "the board numbers each change's first new byte, at the call's commit, on its `+` row's line: {numbered}");
@@ -366,45 +391,136 @@ fn several_edits_land_in_one_call_and_the_text_between_two_changes_keeps_its_ide
     let expected = [&minted(&change(0, 0)["addr"], 4)[..], &before[4..42], &minted(&change(0, 1)["addr"], 1)[..], &before[42..43], &minted(&change(1, 0)["addr"], 3)[..], &before[47..]].concat();
     assert_eq!(after, expected, "every byte no change removed at the I-address it had, the line between the two changes among them");
     g.shell.set_node_state(NodeState::Stopped);
-    let answer = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "gamma", "new": "delta"}, {"old": "end", "new": "tail"}]})).unwrap_or_else(|r| panic!("{r}"));
-    crate::shapes::assert_declared("TextRefused", &answer);
-    assert_eq!(answer, json!({"outcome": "refused", "cause": "stopped", "doc": draft, "pair": 0, "change": 0, "error": true}));
+    let refused = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "gamma", "new": "delta"}, {"old": "end", "new": "tail"}]})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["op"].as_str()), ("stopped", Some("edit")), "the door, before any read: {refused}");
     g.shell.set_node_state(NodeState::Running);
-    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the call's line dropped, nothing held");
+    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "nothing held");
     assert_eq!(text_of(&g.shell, &g.session, &draft), EDITED, "nothing written");
     g.shell.shutdown();
     sd.shutdown();
 }
 
-/// Checks that a write refused past the first leaves the draft as it was.
+/// Returns the next ordinal of `draft`'s content chain, as the board's
+/// frontier read answers it under `session`.
+fn frontier(shell: &Shell, session: &str, draft: &str) -> u64 {
+    let read = shell.call("op", &json!({"session": session, "frame": {"op": "content_frontier", "doc": draft}})).unwrap_or_else(|r| panic!("{r}"));
+    read["next"].as_str().and_then(|next| next.parse().ok()).unwrap_or_else(|| panic!("the draft's next content ordinal: {read}"))
+}
+
+/// Checks, at the board, the order a call's bytes are minted in.
 ///
-/// The call's five writes go to the real board through the shell's own
-/// rows, but one, which the rows refuse outright: the second, the removal
-/// of a change whose new bytes just landed, the third and fourth, each the
-/// first write of a later change, and the fifth, the call's last. Each
-/// time the call answers that refusal, and the draft reads its old text
-/// with every byte at the I-address it had — the take-back's one
-/// `set_arrangement` landed on the board, the bytes the call minted
-/// arranged nowhere. The same call then lands whole through the row itself
-/// (the mutants that take nothing back, or take back by text, leave the
-/// landed changes or new addresses).
+/// Two pairs, the first later in the draft than the second: the board mints
+/// a frame's values in the frame's order, which is the draft's and not the
+/// pairs', so the second pair's new bytes stand at the call's first address
+/// and the first pair's after them, each change's address the first plus
+/// the bytes minted before it (the mutant that numbers the addresses in the
+/// pairs' order names the two the other way round, and the draft's own
+/// addresses then disagree with the answer).
 #[test]
-fn a_write_refused_past_the_first_leaves_the_draft_exactly_as_it_stood() {
+fn a_calls_bytes_are_minted_in_the_drafts_order_whatever_the_pairs() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let draft = draft_holding(&g.shell, &g.session, "one two three");
+    let before = addresses(&g.shell, &g.session, &draft);
+    let first = frontier(&g.shell, &g.session, &draft);
+    let answer = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "three", "new": "3"}, {"old": "one", "new": "1!"}]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(answer["outcome"], "edited", "{answer}");
+    let (later, earlier) = (minted(&answer["pairs"][0][0]["addr"], 1), minted(&answer["pairs"][1][0]["addr"], 2));
+    let ordinal = |addr: &String| addr.rsplit_once('.').and_then(|(_, last)| last.parse::<u64>().ok()).expect("an I-address");
+    assert_eq!((ordinal(&earlier[0]), ordinal(&later[0])), (first, first + 2), "the earlier change's bytes first, the later's after them: {answer}");
+    assert_eq!(frontier(&g.shell, &g.session, &draft), first + 3, "three bytes minted");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), "1! two 3");
+    let after = addresses(&g.shell, &g.session, &draft);
+    assert_eq!(after, [&earlier[..], &before[3..8], &later[..]].concat(), "each new byte at the address its change was answered with");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks, at the board, that a call mints only the bytes that stand.
+///
+/// A pair lengthens a word and the next replaces the lengthened word whole:
+/// the draft's content frontier moves by the one byte that stands, none of
+/// the first pair's four minted and then removed (the mutant that sends each
+/// pair's change unmerged moves it by five), and the first pair's change is
+/// answered with no address.
+#[test]
+fn a_pair_over_an_earlier_pairs_new_text_is_minted_at_the_board_as_what_stands() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let draft = draft_holding(&g.shell, &g.session, "one two three");
+    let first = frontier(&g.shell, &g.session, &draft);
+    let answer = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "two", "new": "twenty"}, {"old": "twenty", "new": "2"}]})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(frontier(&g.shell, &g.session, &draft), first + 1, "one byte minted, none of the first pair's: {answer}");
+    assert_eq!(answer["outcome"], "edited", "{answer}");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), "one 2 three");
+    assert_eq!(answer["pairs"][0][0].get("addr"), None, "the first pair's bytes stand nowhere: {answer}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a draft in more runs than an image answers is edited all the
+/// same, the board asked no image.
+///
+/// A draft of 5,001 runs — a text with a byte of another stretch placed
+/// after every other byte of its middle — answers `image_too_large` to a
+/// read of its whole image. `text.edit` of two pairs, at its head and at its
+/// tail, lands: `edited`, both words changed, by ONE `edit` frame after the
+/// draft's metadata, its extent and its text — no `image` among the frames
+/// the call sent (the mutant that reads the draft's image before it writes
+/// answers `too_large`, the draft untouched).
+#[test]
+fn a_draft_in_more_runs_than_an_image_answers_is_edited_and_no_image_is_asked() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let pairs = 2_500u64;
+    let draft = draft_holding(&g.shell, &g.session, &format!("HEAD{}TAIL", "xy".repeat(pairs as usize)));
+    // One frame places a byte between each `x` and its `y`: each stands
+    // apart from the bytes minted beside it, a run of its own.
+    let read_at = position(&g.shell, &g.session, &draft);
+    let between: Vec<Value> = (0..pairs).map(|k| skep_client::board::frames::minted(4 + 2 * k + 2, 0, ".")).collect();
+    g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::edit(&draft, &between, read_at, None)})).unwrap_or_else(|r| panic!("{r}"));
+    let image = g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::image(&draft, 1, u64::MAX)})).unwrap_err();
+    assert_eq!(image.name(), "image_too_large", "the premise: more runs than an image answers: {image}");
+    let rows = Watched::over(&g.shell, |_: &Value, _: &str| None);
+    let args = json!({"doc": draft, "edits": [{"old": "HEAD", "new": "head"}, {"old": "TAIL", "new": "tail"}]});
+    let answer = edit_through(&rows, &g.session, &args).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(answer["outcome"], "edited", "{answer}");
+    let ops = rows.ops();
+    assert!(!ops.iter().any(|op| op == "image"), "no image asked: {ops:?}");
+    assert_eq!((ops.iter().filter(|op| *op == "edit").count(), ops.last().map(String::as_str)), (1, Some("edit")), "one frame, the call's last: {ops:?}");
+    let extent = 8 + 3 * pairs;
+    let text = g.shell.call("op", &json!({"session": g.session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, extent)})).unwrap_or_else(|r| panic!("{r}"));
+    let text: String = text["items"].as_array().unwrap().iter().map(|item| item["content"].as_str().unwrap_or("")).collect();
+    assert_eq!(text, format!("head{}tail", "x.y".repeat(pairs as usize)), "both words changed, every byte between as it stood");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a call whose one frame is refused leaves the draft as it was.
+///
+/// The call's frame goes to the shell's own rows, which refuse it outright:
+/// the call answers that refusal, no write follows it, and the draft reads
+/// its old text with every byte at the I-address it had — nothing of a call
+/// lands but the whole of it. The same call then lands whole through the row
+/// itself.
+#[test]
+fn a_call_whose_frame_is_refused_leaves_the_draft_exactly_as_it_stood() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let draft = draft_holding(&g.shell, &g.session, LINES);
     let before = addresses(&g.shell, &g.session, &draft);
     let args = json!({"doc": draft, "edits": edits()});
-    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "insert"}));
-    for nth in 2..=5 {
-        let rows = Meddled::at(&g.shell, nth, |_: &Value, _: &str| Some(refusal()));
-        let refused = edit_through(&rows, &g.session, &args).expect_err("the refusal of the write");
-        assert_eq!(refused.to_value(), refusal().to_value(), "write {nth}");
-        assert_eq!(rows.writes.get(), nth, "write {nth}: no write follows the one refused");
-        assert_eq!(text_of(&g.shell, &g.session, &draft), LINES, "write {nth}: the old text");
-        assert_eq!(addresses(&g.shell, &g.session, &draft), before, "write {nth}: every byte at its own address again");
-    }
+    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "edit"}));
+    let rows = Meddled::at(&g.shell, 1, |_: &Value, _: &str| Some(refusal()));
+    let refused = edit_through(&rows, &g.session, &args).expect_err("the refusal of the write");
+    assert_eq!(refused.to_value(), refusal().to_value());
+    assert_eq!(rows.writes.get(), 1, "no write follows the one refused");
+    assert_eq!(text_of(&g.shell, &g.session, &draft), LINES, "the old text");
+    assert_eq!(addresses(&g.shell, &g.session, &draft), before, "every byte at its own address");
     assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "nothing held");
     let landed = g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((landed["outcome"].as_str(), text_of(&g.shell, &g.session, &draft).as_str()), (Some("edited"), EDITED), "{landed}");
@@ -412,22 +528,18 @@ fn a_write_refused_past_the_first_leaves_the_draft_exactly_as_it_stood() {
     sd.shutdown();
 }
 
-/// Checks that another writer's change is never taken back over.
+/// Checks that another writer's change between the read and the write
+/// refuses the call whole.
 ///
-/// Another write lands on the draft just ahead of the call's third — typed
-/// against the commit the call's own write is — so the board refuses that
-/// write as typed against an older state: the call takes nothing back and
-/// answers `partial`, naming the one change that stands by its address and
-/// commit, and the draft holds the other writer's byte, the change that
-/// landed and nothing else of the call. Ahead of the call's second write —
-/// the removal of a change whose new bytes just landed — the same leaves
-/// that change in part: its new bytes are removed by identity, where the
-/// other writer's byte moved them, and the call answers the board's verdict
-/// with nothing of it standing (the mutants that set the draft back over
-/// the other writer's byte, or leave the new bytes beside the old, read
-/// otherwise).
+/// Another write lands on the draft just ahead of the call's one frame —
+/// typed against the position the frame is — so the board refuses the frame
+/// as typed against an older state: the call answers `refused`, data, the
+/// board's verdict its cause, and the draft holds the other writer's byte
+/// and nothing of the call, every other byte at the I-address it had (the
+/// mutant that sends a commit a change leaves the changes before the
+/// refused one standing).
 #[test]
-fn another_writers_change_between_two_writes_is_never_taken_back_over() {
+fn another_writers_change_between_the_read_and_the_write_refuses_the_call_whole() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -438,27 +550,7 @@ fn another_writers_change_between_two_writes_is_never_taken_back_over() {
     };
     let draft = draft_holding(&g.shell, &g.session, LINES);
     let before = addresses(&g.shell, &g.session, &draft);
-    let answer = edit_through(&Meddled::at(&g.shell, 3, other), &g.session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
-    crate::shapes::assert_declared("TextEditPartial", &answer);
-    let stands = answer["stands"].as_array().expect("the changes that stand");
-    assert_eq!(
-        (answer["outcome"].as_str(), answer["cause"].as_str(), answer["pair"].as_u64(), answer["change"].as_u64(), stands.len(), answer.get("take_back")),
-        (Some("partial"), Some("arrangement_moved"), Some(0), Some(1), 1, None),
-        "{answer}"
-    );
-    crate::shapes::assert_declared("TextEditStanding", &stands[0]);
-    assert_eq!(
-        (stands[0]["pair"].as_u64(), stands[0]["change"].as_u64(), stands[0]["ordinal"].as_str(), stands[0]["removed"].as_str(), stands[0]["inserted"].as_str()),
-        (Some(0), Some(0), Some("1"), Some("4"), Some("4")),
-        "{answer}"
-    );
-    assert_eq!(text_of(&g.shell, &g.session, &draft), format!("X{}", LINES.replacen("alph", "gamm", 1)), "the other writer's byte, the change that landed, and no more");
-    let after = addresses(&g.shell, &g.session, &draft);
-    assert_eq!(after[1..], [&minted(&stands[0]["addr"], 4)[..], &before[4..]].concat()[..], "found by the address the answer names");
-    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "the refused write's line dropped");
-    let draft = draft_holding(&g.shell, &g.session, LINES);
-    let before = addresses(&g.shell, &g.session, &draft);
-    let answer = edit_through(&Meddled::at(&g.shell, 2, other), &g.session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
+    let answer = edit_through(&Meddled::at(&g.shell, 1, other), &g.session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("TextRefused", &answer);
     assert_eq!(
         (answer["outcome"].as_str(), answer["cause"].as_str(), answer["refusal"]["code"].as_str(), answer.get("error")),
@@ -467,7 +559,149 @@ fn another_writers_change_between_two_writes_is_never_taken_back_over() {
     );
     assert_eq!(text_of(&g.shell, &g.session, &draft), format!("X{LINES}"), "the other writer's byte, and nothing of the call");
     assert_eq!(addresses(&g.shell, &g.session, &draft)[1..], before[..], "the old text at its own addresses");
+    assert!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().unwrap().is_empty(), "nothing held");
     g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that an edit is refused behind a held line of its draft's.
+///
+/// A burst typed against an older state of a draft is refused by the board
+/// and held `moved`, the line standing on the draft. `text.replace`,
+/// `text.edit` and an `edit` frame through `op` are each refused
+/// `held_lines` naming the draft and the one line, before any read, nothing
+/// written: an edit is no burst and would land ahead of the line, whose
+/// write was made first. The two calls ask the gate at their own door,
+/// before their first read: one whose text the draft does not hold is
+/// refused for the line all the same, never answered `not_found`. On another
+/// draft, holding no line, each of the three lands (the mutants whose door
+/// asks no draft land the edit ahead of the held write, or read the draft
+/// before they refuse; the one that counts every draft's lines refuses the
+/// draft holding none).
+#[test]
+fn an_edit_is_refused_behind_a_held_line_of_its_drafts_and_lands_on_another_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let op = |frame: Value| g.shell.call("op", &json!({"session": g.session, "frame": frame}));
+    let (held_draft, free) = (draft_holding(&g.shell, &g.session, "hello brave world"), draft_holding(&g.shell, &g.session, "hello brave world"));
+    // A burst typed against the draft before its last write: refused as
+    // typed against an older state, and held.
+    let stale = position(&g.shell, &g.session, &held_draft);
+    op(skep_client::board::frames::insert_text(&held_draft, 18, "!", stale, None)).unwrap_or_else(|r| panic!("{r}"));
+    let held = op(skep_client::board::frames::insert_text(&held_draft, 1, "~", stale, None)).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "the premise: one line held on the draft: {held}");
+    let text = text_of(&g.shell, &g.session, &held_draft);
+    let typed = position(&g.shell, &g.session, &held_draft);
+    let calls = |draft: &str, typed: u64| {
+        [
+            ("text.replace", g.shell.call("text.replace", &json!({"session": g.session, "doc": draft, "old": "brave", "new": "grave"}))),
+            ("text.edit", g.shell.call("text.edit", &json!({"session": g.session, "doc": draft, "edits": [{"old": "hello", "new": "HELLO"}]}))),
+            ("an edit frame", op(skep_client::board::frames::edit(draft, &[skep_client::board::frames::minted(1, 0, ">")], typed, None))),
+        ]
+    };
+    for (call, answered) in calls(&held_draft, typed) {
+        let refused = answered.expect_err("refused behind the held line");
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["doc"].as_str(), v["held"].as_u64()), ("held_lines", Some(held_draft.as_str()), Some(1)), "{call}: {v}");
+    }
+    // The calls' own door, ahead of their reads: a text the draft does not
+    // hold is never looked for.
+    let absent = [
+        ("text.replace", g.shell.call("text.replace", &json!({"session": g.session, "doc": held_draft, "old": "no such text", "new": "x"}))),
+        ("text.edit", g.shell.call("text.edit", &json!({"session": g.session, "doc": held_draft, "edits": [{"old": "no such text", "new": "x"}]}))),
+    ];
+    for (call, answered) in absent {
+        let refused = match answered {
+            Err(refused) => refused,
+            Ok(answer) => panic!("{call}: the draft was read before the door refused: {answer}"),
+        };
+        assert_eq!((refused.name(), refused.to_value()["held"].as_u64()), ("held_lines", Some(1)), "{call}: refused at the door, before any read");
+    }
+    assert_eq!(text_of(&g.shell, &g.session, &held_draft), text, "nothing written");
+    assert_eq!(g.shell.call("held", &json!({"session": g.session})).unwrap().as_array().map(Vec::len), Some(1), "the line stands as it stood");
+    // The same three on a draft holding no line. The frame is typed against
+    // the draft as the two calls before it leave it.
+    let landed = calls(&free, 0);
+    assert_eq!((landed[0].1.as_ref().map(|v| v["outcome"].clone()).ok(), landed[1].1.as_ref().map(|v| v["outcome"].clone()).ok()), (Some(json!("replaced")), Some(json!("edited"))), "{landed:?}");
+    let typed = landed[1].1.as_ref().ok().and_then(|v| v["at"].as_u64()).expect("the second call's commit");
+    op(skep_client::board::frames::edit(&free, &[skep_client::board::frames::minted(1, 0, ">")], typed, None)).unwrap_or_else(|r| panic!("an edit frame on a draft holding no line: {r}"));
+    assert_eq!(text_of(&g.shell, &g.session, &free), ">HELLO grave world");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that an edit whose answer is lost is settled, and lands once.
+///
+/// The call's frame lands at the real board and its answer is dropped, three
+/// ways. (a) The board ends the session before the frame is asked again —
+/// its memo of the frame gone with it, as at a restart: the re-ask, made
+/// under the restart arm's re-open, is refused as typed against an older
+/// state, the draft moved by the frame's own commit, and the call reads its
+/// own row off the change feed and answers `edited` at that row's position,
+/// no address named — never refused for its own effect — the draft holding
+/// the edit ONCE and the feed one `edit` row (the mutant that answers the
+/// re-ask's refusal as the call's says nothing was written; the one that
+/// types the re-ask against the draft as it stands lands the changes a
+/// second time). (b) The session standing, the same frame re-sent under its
+/// `id` is answered the first's own acknowledgment by the board's memo: the
+/// call answers `edited` with every address, and the draft holds the edit
+/// once. (c) The frame never reaches the board and another write lands
+/// first: the re-ask is refused, the draft's first row past the read is no
+/// `edit`, and the call answers `answer_lost` naming the position it was
+/// typed against, nothing sent after it and nothing of it in the draft.
+#[test]
+fn an_edit_whose_answer_is_lost_is_settled_from_the_feed_and_lands_once() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let lost = || Refusal::Unreachable(skep_client::DialError::Timeout("no answer".into()));
+    let sent_on = |frame: &Value, session: &str| shell.call("op", &json!({"session": session, "frame": frame})).unwrap_or_else(|r| panic!("the frame at the board: {r}"));
+    // (b) The memo standing.
+    let draft = draft_holding(&shell, &session, LINES);
+    let read_at = position(&shell, &session, &draft);
+    let rows = Meddled::at(&shell, 1, |frame: &Value, session: &str| {
+        sent_on(frame, session);
+        Some(lost())
+    });
+    let answer = edit_through(&rows, &session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((answer["outcome"].as_str(), rows.writes.get()), (Some("edited"), 2), "(b): the frame and its one re-ask: {answer}");
+    assert!(answer["pairs"][0][0]["addr"].is_string() && answer["pairs"][1][0]["addr"].is_string(), "(b): the memo's acknowledgment, addresses and all: {answer}");
+    assert_eq!((text_of(&shell, &session, &draft).as_str(), rows_since(&shell, &session, &draft, read_at)), (EDITED, vec!["edit".to_string()]), "(b): landed once");
+    // (c) Another write first, the frame never at the board.
+    let draft = draft_holding(&shell, &session, LINES);
+    let read_at = position(&shell, &session, &draft);
+    let rows = Meddled::at(&shell, 1, |frame: &Value, session: &str| {
+        sent_on(&skep_client::board::frames::insert_text(frame["doc"].as_str().unwrap(), 1, "X", frame["as_of"].as_u64().unwrap(), None), session);
+        Some(lost())
+    });
+    let answer = edit_through(&rows, &session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("TextAnswerLost", &answer);
+    assert_eq!((answer["outcome"].as_str(), answer["as_of"].as_u64(), answer["error"].as_bool(), rows.writes.get()), (Some("answer_lost"), Some(read_at), Some(true), 2), "(c): naming the typed position, nothing sent after the re-ask: {answer}");
+    assert_eq!(text_of(&shell, &session, &draft), format!("X{LINES}"), "(c): the other write, and nothing of the call");
+    // (a) The session ended at the board once the frame landed.
+    let draft = draft_holding(&shell, &session, LINES);
+    let read_at = position(&shell, &session, &draft);
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    let rows = Meddled::at(&shell, 1, |frame: &Value, session: &str| {
+        sent_on(frame, session);
+        Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).session_close(&token).unwrap();
+        Some(lost())
+    });
+    let answer = edit_through(&rows, &session, &json!({"doc": draft, "edits": edits()})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    crate::shapes::assert_declared("TextEdited", &answer);
+    let gone = shell.call("held", &json!({"session": session})).unwrap_err().to_value();
+    let reopened = gone["reason"]["session"].as_str().unwrap_or_else(|| panic!("the restart arm re-opened the session: {gone}")).to_string();
+    let landed = rows_since(&shell, &reopened, &draft, read_at);
+    assert_eq!((answer["outcome"].as_str(), landed.as_slice()), (Some("edited"), &["edit".to_string()][..]), "(a): landed, by its own row: {answer}");
+    assert!(answer["at"].as_u64().is_some_and(|at| at > read_at) && answer["pairs"][0][0].get("addr").is_none(), "(a): at its row's position, no address named: {answer}");
+    assert_eq!(text_of(&shell, &reopened, &draft), EDITED, "(a): the draft holds the edit once");
+    shell.shutdown();
     sd.shutdown();
 }
 
@@ -651,6 +885,10 @@ impl<F: Fn(&Value, &str) -> Option<Refusal>> Rows for Watched<'_, F> {
 
     fn stands(&self, session: &str) -> bool {
         Rows::stands(self.shell, session)
+    }
+
+    fn key(&self, session: &str) -> Option<String> {
+        Rows::key(self.shell, session)
     }
 }
 

@@ -317,55 +317,72 @@ pub enum StageError {
     Mint(MintError),
 }
 
-/// SET_ARRANGEMENT rejection (the landing lane; skep #764): the verdicts of
-/// the write that sets a draft's whole arrangement in one commit.
+/// EDIT rejection: the verdicts of the write that makes a list of positional
+/// changes to one draft in one commit.
 ///
+/// One composition answers two wire frames — `edit`, whose changes mint
+/// values, and `set_arrangement`, whose changes place runs by identity (the
+/// landing lane; skep #764) — and these are its verdicts under both.
 /// Which one wins when several apply is stated on
-/// [`Vstream::set_arrangement`](crate::Vstream::set_arrangement) and only
-/// there. The destination's four are the in-place edits' own
-/// (`DocNotRegistered`, `NotOwner` carrying the destination,
-/// `PublishedTarget` — PUB-2.11's refusal, the face of
-/// [`InsertError::PublishedTarget`] — and `ArrangementMoved`, the stale-edit
-/// refusal, [`InsertError::ArrangementMoved`]'s, skep #442: the frame was
-/// typed against a state of the draft older than its arrangement's last
-/// change, and nothing is wiped). Then the head's three, the shot's
+/// [`Vstream::edit`](crate::Vstream::edit) and only there. The destination's
+/// four are the in-place edits' own (`DocNotRegistered`, `NotOwner` carrying
+/// the destination, `PublishedTarget` — PUB-2.11's refusal, the face of
+/// [`InsertError::PublishedTarget`], with no deposit form — and
+/// `ArrangementMoved`, the stale-edit refusal,
+/// [`InsertError::ArrangementMoved`]'s, skep #442: the call was typed
+/// against a state of the draft older than its arrangement's last change,
+/// and nothing is changed). Then the head's three, the shot's
 /// spellings over the head the merge was composed on: `SourceNotRegistered`
-/// — the head names no registered document, asked first as the shot asks
-/// its base's registration (PUB-6.37), and of every head — then, only of a
-/// draft with a chain (the one its recorded base lies in, or its fork's
-/// source's document), `BaseNotInChain` — the head lies off that chain —
-/// and `BaseExtentTooLarge`, the head's extent as read past the head's
-/// current count. Then the fork gate's `ForkBaseMoved`: the
+/// naming no change — the head names no registered document, asked first as
+/// the shot asks its base's registration (PUB-6.37), and of every head —
+/// then, only of a draft with a chain (the one its recorded base lies in, or
+/// its fork's source's document), `BaseNotInChain` — the head lies off that
+/// chain — and `BaseExtentTooLarge`, the head's extent as read past the
+/// head's current count. Then the fork gate's `ForkBaseMoved`: the
 /// destination is a fork (no recorded base, its source a published
-/// surface) whose source is not the frame's head — a landing would make
+/// surface) whose source is not the request's head — a landing would make
 /// the source the board records false (the owner's ruling N4); it carries
 /// the source, the refusal's `site.addr`. Then the base's four:
-/// `NoBaseToRecord` — the frame names a base to record and the board
+/// `NoBaseToRecord` — the request names a base to record and the board
 /// records none for the draft, so there is no record to move — then the
 /// head's three over the base to record, naming no registered document,
 /// off the recorded base's chain or its extent past its member's current
 /// count, so no record the landing writes names a member no mint made or
 /// claims more of its base than the base holds (N4). Then
-/// `MarkerNotRestorable` (skep #870): the frame's merge names a position
+/// `MarkerNotRestorable` (skep #870): the request's merge names a position
 /// and either stands without a `head` or a `base`, or names no marker the
 /// fold stamped on the draft — the same sides, head pair and position —
 /// since its base last moved at a shot, so the board would serve a
-/// landing's position where nothing landed. Then, per run and in
-/// the order given as REINSTATE judges them, `BadRun`,
-/// `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
-/// [`ReinstateError`]'s, the placement being REINSTATE's own body. No
-/// `EmptyResult`: an empty `runs` sets an empty arrangement, which a draft
-/// may hold. No `Withheld`: the origins' readability is the caller's,
-/// discharged at M10's door.
+/// landing's position where nothing landed.
+///
+/// Then the call's own. `EmptyResult` naming no change: the request holds
+/// no change and names neither a base nor a merge, so it would write
+/// nothing. Then each change's shape, in the order given, the first
+/// defective change deciding and every one of these naming it by its index
+/// in the request: `NotContentSubspace` (its `at` is no content position),
+/// `NotAscending` (its `at` is below the reach of the change before it:
+/// the changes are in one state's coordinates, ascending and apart),
+/// `NotArranged` and `OutOfBounds` as DELETE answers a removal — the first
+/// position removed is not arranged, or the range runs past the arranged
+/// content — `OutOfBounds` as INSERT answers a placement where it removes
+/// nothing — `at` outside `[1, n_C + 1]` — and `EmptyResult` naming the
+/// change where it removes nothing and places nothing. Then, per change and
+/// per run it places by identity, as REINSTATE judges them and naming the
+/// change: `BadRun`, `SourceNotRegistered` and `DanglingSource`, with
+/// `TooManyRuns` where the call's placed runs pass
+/// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS). Last, `Mint` and `Content`,
+/// the content mint's and the byte write's refusals, as INSERT wraps them.
+/// No `Withheld`: the origins' readability is the caller's, discharged at
+/// M10's door.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SetArrangementError {
+pub enum EditError {
     /// The destination `doc` is not a registered document.
     DocNotRegistered,
     /// The caller is not the destination's effective owner (ω); carries it.
     NotOwner(Address),
     /// The destination's document is published; the op edits in place.
     PublishedTarget,
-    /// The frame was typed against a state older than the destination's
+    /// The call was typed against a state older than the destination's
     /// last arrangement change: `as_of` the typed state, `current` that
     /// change's position.
     ArrangementMoved { as_of: Seq, current: Seq },
@@ -374,24 +391,50 @@ pub enum SetArrangementError {
     /// The head's extent as read, or the base's to record, exceeds its
     /// member's current content count.
     BaseExtentTooLarge,
-    /// The destination is a fork whose source is not the frame's head;
+    /// The destination is a fork whose source is not the request's head;
     /// carries the source.
     ForkBaseMoved(Address),
-    /// The frame names a base to record and the board records none.
+    /// The request names a base to record and the board records none.
     NoBaseToRecord,
     /// The merge names a position the fold stamped no such marker at.
     ///
     /// Or it names a position beside no head or no base.
     MarkerNotRestorable,
-    /// A supplied run is not a content run of its stated origin.
-    BadRun,
-    /// The head, the base to record, or a run's origin document is not a
-    /// registered document.
-    SourceNotRegistered,
-    /// An address a supplied run names holds no stored value.
-    DanglingSource,
-    /// The placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS).
+    /// A document the request names is not a registered document.
+    ///
+    /// `change` is `None` for the head or the base to record, and the index
+    /// of the change for the origin of a run it places.
+    SourceNotRegistered { change: Option<usize> },
+    /// The request would write nothing.
+    ///
+    /// `change` is `None` where it holds no change and names neither a base
+    /// nor a merge, and the index of a change that removes nothing and
+    /// places nothing.
+    EmptyResult { change: Option<usize> },
+    /// The change `change` names a position outside the content subspace.
+    NotContentSubspace { change: usize },
+    /// The change `change` begins below the reach of the change before it.
+    NotAscending { change: usize },
+    /// The change `change` removes from a position the draft does not
+    /// arrange.
+    NotArranged { change: usize },
+    /// The change `change` reaches past the arranged content.
+    ///
+    /// Its removal runs past `n_C`, or it removes nothing and its `at` is
+    /// outside `[1, n_C + 1]`.
+    OutOfBounds { change: usize },
+    /// A run the change `change` places is no content run of its stated
+    /// origin.
+    BadRun { change: usize },
+    /// An address a run of the change `change` names holds no stored value.
+    DanglingSource { change: usize },
+    /// The call's placed runs exceed
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS).
     TooManyRuns,
+    /// A content mint was refused.
+    Mint(MintError),
+    /// A content write was refused.
+    Content(ContentError),
 }
 
 /// PUBLISH rejection (PUB-2.33, PUB-8.1): the shot's verdicts.
@@ -542,6 +585,18 @@ impl From<MintError> for InsertError {
 impl From<ContentError> for InsertError {
     fn from(e: ContentError) -> Self {
         InsertError::Content(e)
+    }
+}
+
+impl From<MintError> for EditError {
+    fn from(e: MintError) -> EditError {
+        EditError::Mint(e)
+    }
+}
+
+impl From<ContentError> for EditError {
+    fn from(e: ContentError) -> EditError {
+        EditError::Content(e)
     }
 }
 
@@ -739,52 +794,80 @@ impl fmt::Display for ReinstateError {
 }
 impl Error for ReinstateError {}
 
-impl fmt::Display for SetArrangementError {
+impl fmt::Display for EditError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SetArrangementError::DocNotRegistered => {
-                "set_arrangement: doc is not a registered document"
+            EditError::DocNotRegistered => "edit: doc is not a registered document",
+            EditError::NotOwner(_) => {
+                "edit: the caller is not the document's effective owner (ω)"
             }
-            SetArrangementError::NotOwner(_) => {
-                "set_arrangement: the caller is not the document's effective owner (ω)"
+            EditError::PublishedTarget => {
+                "edit: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
             }
-            SetArrangementError::PublishedTarget => {
-                "set_arrangement: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            EditError::ArrangementMoved { .. } => {
+                "edit: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and place the changes against what it holds now — nothing was changed"
             }
-            SetArrangementError::ArrangementMoved { .. } => {
-                "set_arrangement: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and compose the arrangement against what it holds now — nothing was changed"
+            EditError::BaseNotInChain => {
+                "edit: the head, or the base to record, is no member of the draft's chain"
             }
-            SetArrangementError::BaseNotInChain => {
-                "set_arrangement: the head, or the base to record, is no member of the draft's chain"
+            EditError::BaseExtentTooLarge => {
+                "edit: the extent of the head, or of the base to record, exceeds that member's current content count"
             }
-            SetArrangementError::BaseExtentTooLarge => {
-                "set_arrangement: the extent of the head, or of the base to record, exceeds that member's current content count"
+            EditError::ForkBaseMoved(_) => {
+                "edit: the document is a fork whose source is not the head named — fork afresh from the head and land there"
             }
-            SetArrangementError::ForkBaseMoved(_) => {
-                "set_arrangement: the document is a fork whose source is not the head named — fork afresh from the head and land there"
+            EditError::NoBaseToRecord => {
+                "edit: the board records no base for the document, so there is none to move; send no base"
             }
-            SetArrangementError::NoBaseToRecord => {
-                "set_arrangement: the board records no base for the document, so there is none to move; send no base"
+            EditError::MarkerNotRestorable => {
+                "edit: the merge names a position at which no marker of those sides and that head was put on the document since its base last moved, or names it without a head and a base — nothing was changed; send the merge without `at` to land it anew"
             }
-            SetArrangementError::MarkerNotRestorable => {
-                "set_arrangement: the merge names a position at which no marker of those sides and that head was put on the document since its base last moved, or names it without a head and a base — nothing was changed; send the merge without `at` to land it anew"
+            EditError::SourceNotRegistered { change: None } => {
+                "edit: the head, or the base to record, is not a registered document"
             }
-            SetArrangementError::BadRun => {
-                "set_arrangement: a supplied run is not a content run of its stated origin"
+            EditError::SourceNotRegistered { change: Some(_) } => {
+                "edit: a run's origin is not a registered document"
             }
-            SetArrangementError::SourceNotRegistered => {
-                "set_arrangement: the head, the base to record, or a run's origin is not a registered document"
+            EditError::EmptyResult { change: None } => {
+                "edit: the request holds no change and names neither a base nor a merge"
             }
-            SetArrangementError::DanglingSource => {
-                "set_arrangement: a supplied run names an I-address with no stored value (S3★)"
+            EditError::EmptyResult { change: Some(_) } => {
+                "edit: a change removes nothing and places nothing"
             }
-            SetArrangementError::TooManyRuns => {
-                "set_arrangement: the placement exceeds the per-transaction run budget"
+            EditError::NotContentSubspace { .. } => {
+                "edit: a change's at.subspace is not the content subspace s_C"
             }
+            EditError::NotAscending { .. } => {
+                "edit: a change begins below the reach of the change before it; the changes are in one state's coordinates, ascending and apart"
+            }
+            EditError::NotArranged { .. } => {
+                "edit: a change's at.ordinal names no arranged content position to remove from"
+            }
+            EditError::OutOfBounds { .. } => {
+                "edit: a change reaches past the arranged content (at + width − 1 > n_C, or a placement outside [1, n_C + 1])"
+            }
+            EditError::BadRun { .. } => {
+                "edit: a supplied run is not a content run of its stated origin"
+            }
+            EditError::DanglingSource { .. } => {
+                "edit: a supplied run names an I-address with no stored value (S3★)"
+            }
+            EditError::TooManyRuns => "edit: the placement exceeds the per-transaction run budget",
+            // This layer only — the inner message is the `source`.
+            EditError::Mint(_) => "edit: content mint failed",
+            EditError::Content(_) => "edit: content write rejected",
         })
     }
 }
-impl Error for SetArrangementError {}
+impl Error for EditError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            EditError::Mint(e) => Some(e),
+            EditError::Content(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -994,7 +1077,7 @@ mod tests {
             ReinstateError::PublishedTarget.to_string(),
             DeleteError::PublishedTarget.to_string(),
             RearrangeError::PublishedTarget.to_string(),
-            SetArrangementError::PublishedTarget.to_string(),
+            EditError::PublishedTarget.to_string(),
         ] {
             assert!(line.contains("published"), "{line}");
             assert!(line.contains("next version"), "{line}");

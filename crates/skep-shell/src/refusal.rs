@@ -128,7 +128,8 @@ impl Name {
     /// its token, never held and never dialed; the detail names the `op` —
     /// `publish` for the confirm and the landing's shot, `set_arrangement`
     /// for the restore, the undo and the withdrawal, `stage` for a
-    /// composition that stages a fresh draft.
+    /// composition that stages a fresh draft, `edit` for `text.replace` and
+    /// `text.edit`.
     pub const STOPPED: Name = Name("stopped");
     /// A non-burst write while the board's write path stands poisoned (§3c.4).
     ///
@@ -150,7 +151,11 @@ impl Name {
     /// draft the row writes, and for the shot every draft its `also` names
     /// — and such a write landing past the principal's held lines on that
     /// draft would land under words the person typed and the board has not
-    /// kept, the lines then meeting a document that moved. So the write is
+    /// kept, the lines then meeting a document that moved. An `edit` is
+    /// gated as they are — `text.replace`, `text.edit` and an `edit` frame
+    /// through `op`, each over the draft it names: it is no burst, so no
+    /// line of it waits behind the held ones, and it would land ahead of
+    /// them (skep #1082). So the write is
     /// refused at the shell's one write door (`Shell::write_door`) before
     /// any dial, nothing sent, while a line of the principal's stands held
     /// on the draft in ANY state — holding, sending, refused, moved,

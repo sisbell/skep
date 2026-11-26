@@ -1195,16 +1195,18 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
                 m3.is_registered_account(account) && m3.is_effective_owner(principal, account)
             }
         },
-        // The five in-place edits (PUB-2.11), and the landing beside them:
-        // the write by identity among them — a re-placement into an owned
-        // published document lands in the published world exactly as a
-        // `copy` into it would, and so would a whole arrangement set there.
+        // The five in-place edits (PUB-2.11), and the edit beside them under
+        // both of its names: the write by identity among them — a
+        // re-placement into an owned published document lands in the
+        // published world exactly as a `copy` into it would, and so would
+        // an edit's changes there, minted or placed.
         Op::Insert { doc, .. }
         | Op::Delete { doc, .. }
         | Op::Copy { doc, .. }
         | Op::Reinstate { doc, .. }
         | Op::Rearrange { doc, .. }
-        | Op::SetArrangement { doc, .. } => homed(doc),
+        | Op::SetArrangement { doc, .. }
+        | Op::Edit { doc, .. } => homed(doc),
         Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
             homed(home)
         }

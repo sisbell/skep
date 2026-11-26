@@ -793,8 +793,9 @@ fn a_close_the_board_does_not_answer_still_closes() {
 /// Checks that the codec's private budgets are the shell's.
 ///
 /// They are judged by the board's own parse: an array at [`MAX_WIRE_LIST`]
-/// elements, an address at [`MAX_TUMBLER_COMPONENTS`] components and an
-/// insert of [`MAX_INSERT_VALUES`] values each parse — refused past the
+/// elements, an address at [`MAX_TUMBLER_COMPONENTS`] components, an
+/// insert of [`MAX_INSERT_VALUES`] values and an edit whose two changes
+/// mint [`MAX_EDIT_VALUES`] between them each parse — refused past the
 /// parse, if at all, for what they name — and one more of each is refused at
 /// the parse, `malformed` with the frame unparsed (`op: unparseable`) (a
 /// budget the shell keeps past the board's refuses what the board takes; one
@@ -802,7 +803,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
 #[test]
 fn the_codecs_budgets_are_the_shells() {
     use crate::attest::MAX_WIRE_LIST;
-    use crate::wire::{MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
+    use crate::wire::{MAX_EDIT_VALUES, MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
     use skep_client::board::{Opened, Rejection, SessionBody};
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
@@ -817,7 +818,14 @@ fn the_codecs_budgets_are_the_shells() {
     // Typed at genesis: the frame names a document no board holds, and what
     // is under test is the codec's cap, met before any state is asked.
     let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.71", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)], "as_of": 0});
+    // An edit of two changes: its values are counted over the frame, so the
+    // second change's are judged with the first's.
+    let edit = |values: usize| {
+        let change = |ordinal: u64, bytes: usize| skep_client::board::frames::minted(ordinal, 0, &"a".repeat(bytes));
+        skep_client::board::frames::edit("1.0.1.0.71", &[change(1, values / 2), change(2, values - values / 2)], 0, None)
+    };
     let cells = [
+        ("an edit's values, every change's together", edit(MAX_EDIT_VALUES), edit(MAX_EDIT_VALUES + 1)),
         ("a list", json!({"op": "retrieve_v", "specs": vec![spec.clone(); MAX_WIRE_LIST]}), json!({"op": "retrieve_v", "specs": vec![spec; MAX_WIRE_LIST + 1]})),
         ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS + 1)})),
         ("an insert's values", insert(MAX_INSERT_VALUES), insert(MAX_INSERT_VALUES + 1)),

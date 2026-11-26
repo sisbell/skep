@@ -62,7 +62,7 @@ fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
     let d = create_doc(&fx);
     let (start, _) = insert3(&fx, &d);
     let emit = || Op::Emit { home: d.clone(), ty: pred_def_ty(), from: start.clone(), to: vec![] };
-    let Response::AckAddr { addr: incumbent, at: committed_at, committed: true } = ex(&fx.febe, fx.user, emit())
+    let Response::AckAddr { addr: incumbent, at: committed_at, committed: true, .. } = ex(&fx.febe, fx.user, emit())
     else {
         panic!("the first emit commits, and says so");
     };
@@ -71,7 +71,7 @@ fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
     assert!(head > committed_at, "premise: the head has moved past the incumbent");
     assert_eq!(
         ex(&fx.febe, fx.user, emit()),
-        Response::AckAddr { addr: incumbent, at: head, committed: false },
+        Response::AckAddr { addr: incumbent, at: head, committed: false, head_moved: None },
         "the incumbent answers, at the base it was found in, not the incumbent's commit, \
          committing nothing"
     );

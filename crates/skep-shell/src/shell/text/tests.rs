@@ -1,16 +1,19 @@
 //! The text edit's unit suite: the find, the trim, the text a delivery is
 //! read into, spliced and rearranged, the edit against a scripted board
-//! (`Script`, the edit's [`Calls`]), and the edit through the shell's rows
-//! scripted (`Rowed`, its [`Rows`]) — a death followed to its re-open, the
-//! error member, the halts left for the row to say. The scripted boards
-//! serve the child suites of `text.edit` and `text.move` too
-//! (`edit/tests.rs`, `moving/tests.rs`). The rows themselves, their order
-//! and their door, run against the daemon in `shell/tests/text.rs`.
+//! (`Script`, the edit's [`Calls`]) — its one frame, the board's verdict
+//! on it, a lost answer asked again and settled from the change feed — and
+//! the edit through the shell's rows scripted (`Rowed`, its [`Rows`]): a
+//! death followed to its re-open, the error member, the halts left for the
+//! row to say. The scripted boards serve the child suites of `text.edit`,
+//! `text.move` and `text.mark` too (`edit/tests.rs`, `moving/tests.rs`,
+//! `mark/tests.rs`). The rows themselves, their order and their door, run
+//! against the daemon in `shell/tests/text.rs`.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use skep_client::dial::DialError;
 use skep_client::halt::Refused;
 
 use super::*;
@@ -305,33 +308,6 @@ fn a_span_sets_content_extent_is_read_and_anything_else_is_not_one() {
     }
 }
 
-/// An insert's bytes are found wherever the draft now arranges them.
-///
-/// Whole and in order they stand at one ordinal, however the board split the
-/// run that holds them; arranged nowhere, they are nowhere; and cut, moved
-/// apart, placed in part or placed twice they are parted, which no single
-/// removal takes back.
-#[test]
-fn an_inserts_bytes_are_found_wherever_the_draft_now_arranges_them() {
-    let image = |runs: Value| json!({"resp": "runs", "as_of": 9, "runs": runs});
-    let addr = "1.0.1.0.64.0.1.80";
-    let run = |i: &str, width: u64| json!({"i_start": i, "width": width.to_string()});
-    assert_eq!(placed(&image(json!([run("1.0.1.0.64.0.1.1", 20), run(addr, 3), run("1.0.1.0.64.0.1.21", 5)])), addr, 3), Some(Placed::Whole(21)));
-    assert_eq!(placed(&image(json!([run(addr, 3)])), addr, 3), Some(Placed::Whole(1)));
-    assert_eq!(placed(&image(json!([run("1.0.1.0.64.0.1.70", 12), run("1.0.1.0.64.0.1.82", 9)])), addr, 3), Some(Placed::Whole(11)), "one run and the next, I-adjacent: the board split them");
-    assert_eq!(placed(&image(json!([run("1.0.1.0.64.0.1.1", 20)])), addr, 3), Some(Placed::Nowhere));
-    assert_eq!(placed(&image(json!([])), addr, 3), Some(Placed::Nowhere));
-    assert_eq!(placed(&image(json!([run("1.0.1.0.9.0.1.80", 3)])), addr, 3), Some(Placed::Nowhere), "another document's addresses");
-    assert_eq!(placed(&image(json!([run(addr, 2)])), addr, 3), Some(Placed::Parted), "one of the three removed");
-    assert_eq!(placed(&image(json!([run(addr, 1), run("1.0.1.0.64.0.1.1", 4), run("1.0.1.0.64.0.1.81", 2)])), addr, 3), Some(Placed::Parted), "cut by another's text");
-    assert_eq!(placed(&image(json!([run("1.0.1.0.64.0.1.81", 2), run(addr, 1)])), addr, 3), Some(Placed::Parted), "out of order");
-    assert_eq!(placed(&image(json!([run(addr, 3), run(addr, 3)])), addr, 3), Some(Placed::Parted), "placed twice");
-    for unread in [json!({"resp": "rejected"}), image(json!([{"i_start": "1.0.1.0.64.0.1.x", "width": "3"}])), image(json!([{"i_start": addr}]))] {
-        assert_eq!(placed(&unread, addr, 3), None, "{unread}");
-    }
-    assert_eq!(placed(&image(json!([])), "nonsense", 3), None);
-}
-
 // ── the edit, against a scripted board ──────────────────────────────────
 
 /// A board answered from a script: each call's answer in order, each call
@@ -339,12 +315,21 @@ fn an_inserts_bytes_are_found_wherever_the_draft_now_arranges_them() {
 pub(super) struct Script {
     answers: RefCell<VecDeque<Result<Value, Refusal>>>,
     pub(super) sent: RefCell<Vec<Value>>,
+    /// The key the session signs under, as a feed row names it; none for a
+    /// session holding no key.
+    pub(super) key: Option<String>,
+}
+
+/// The fingerprint of the key the scripted session signs under.
+pub(super) fn own_key() -> String {
+    "ab".repeat(32)
 }
 
 impl Script {
-    /// Returns a board that answers its calls with `answers`, in order.
+    /// Returns a board that answers its calls with `answers`, in order,
+    /// under a session signing with [`own_key`].
     pub(super) fn of(answers: Vec<Result<Value, Refusal>>) -> Script {
-        Script { answers: RefCell::new(answers.into()), sent: RefCell::new(Vec::new()) }
+        Script { answers: RefCell::new(answers.into()), sent: RefCell::new(Vec::new()), key: Some(own_key()) }
     }
 
     /// Keeps `call` and answers it with the script's next answer.
@@ -374,6 +359,51 @@ impl Calls for Script {
     fn drop_held(&self, held: u64) -> Result<Value, Refusal> {
         self.next(json!({"call": "drop", "held": held}))
     }
+
+    fn changes(&self, doc: &str, since: u64) -> Result<Value, Refusal> {
+        self.next(feed_read(doc, since))
+    }
+
+    fn key(&self) -> Option<String> {
+        self.key.clone()
+    }
+}
+
+/// The scripted call a read of the change feed under `doc` past `since` is
+/// kept as.
+pub(super) fn feed_read(doc: &str, since: u64) -> Value {
+    json!({"call": "changes", "doc": doc, "since": since})
+}
+
+/// A page of the change feed whose first entry is a row of `op` at `at`
+/// under the key `key`.
+pub(super) fn feed_page(op: &str, key: &str, at: u64) -> Result<Value, Refusal> {
+    Ok(json!({"entries": [{"at": at, "position": at, "op": op, "docs": [DOC], "key": key, "class": "drafts"}], "next": at, "head": at}))
+}
+
+/// An answer lost once the request left: the write may have landed.
+pub(super) fn lost() -> Refusal {
+    Refusal::Unreachable(DialError::Timeout("no answer".into()))
+}
+
+/// The board's verdict `code` on an `edit`, as the `op` row refuses with it.
+pub(super) fn refused_edit(code: &str) -> Refusal {
+    let body = json!({"resp": "rejected", "op": "edit", "code": code, "disposition": "permanent"});
+    Refusal::Board(Refused { status: 200, code: code.into(), detail: None, op: Some("edit".into()), body })
+}
+
+/// Returns a sent `edit` frame less its `id`, the `id` checked: the shell's
+/// own, drawn for the call.
+pub(super) fn less_id(frame: &Value) -> Value {
+    let mut frame = frame.clone();
+    let id = frame.as_object_mut().expect("a frame").remove("id").expect("an `id` on the call's one write");
+    assert!(id.as_str().is_some_and(|id| DialId::parse(id).is_some()), "the shell's own id: {id}");
+    frame
+}
+
+/// The one `edit` frame of `changes` typed against the scripted read.
+pub(super) fn edit_frame(changes: &[Value]) -> Value {
+    frames::edit(DOC, changes, READ_AT, None)
 }
 
 /// The position the scripted draft is read at.
@@ -435,57 +465,39 @@ pub(super) fn settling(held: u64) -> Vec<Value> {
     vec![json!({"call": "held"}), json!({"call": "drop", "held": held})]
 }
 
-/// The image a scripted undo reads: the insert's bytes at `ordinal`.
-fn image_with(ordinal: u64, width: u64, as_of: u64) -> Result<Value, Refusal> {
-    Ok(
-        json!({"resp": "runs", "as_of": as_of, "runs": [{"i_start": "1.0.1.0.64.0.1.1", "width": (ordinal - 1).to_string()}, {"i_start": MINTED, "width": width.to_string()}, {"i_start": format!("1.0.1.0.64.0.1.{ordinal}"), "width": "9"}]}),
-    )
-}
-
-/// The whole-content image frame an undo reads.
-pub(super) fn image_frame() -> Value {
-    frames::image(DOC, 1, u64::MAX)
-}
-
-/// An edit that only inserts or only removes is one write, typed against
-/// the first read.
+/// An edit is one frame of one change, typed against the first read.
 ///
-/// The write carries the `as_of` of the read the extent came from, though a
-/// later read of the same call answered a later position; the answer names
-/// the ordinal, the widths, the address the board minted the new bytes at
-/// and the commit (the mutant that types the write against a read made just
-/// before it sends that read, and its position).
+/// An edit that only inserts, one that only removes and one that does both
+/// each send ONE `edit` frame of one change — the old bytes' positions and
+/// the new bytes in their place — under an `id` of the shell's own, typed
+/// against the `as_of` of the read the extent came from, though a later read
+/// of the same call answered a later position. No image is read and nothing
+/// follows the frame: a replacement is one commit, no state standing
+/// between its removal and its insert (the mutant that sends the insert and
+/// then the removal sends two frames, and the one that types the write
+/// against a read made just before it sends that read's position).
 #[test]
-fn an_edit_that_only_inserts_or_only_removes_is_one_write_typed_against_the_first_read() {
+fn an_edit_is_one_frame_of_one_change_typed_against_the_first_read() {
     let word = ordinal_of(CODE, "add");
-    let (answer, sent) = edit("add(", "addition(", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}))]);
-    assert_eq!(sent, [frames::insert_text(DOC, word + 3, "ition", READ_AT, None)]);
+    let (answer, sent) = edit("add(", "addition(", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44, "committed": true}))]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(word + 3, 0, "ition")])]);
     assert_eq!(
         answer.expect("an answer"),
         Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": (word + 3).to_string(), "removed": "0", "inserted": "5", "addr": MINTED, "at": 44}), is_error: false }
     );
     let (answer, sent) = edit("total = add", "add", vec![Ok(json!({"resp": "ack", "at": 45}))]);
-    assert_eq!(sent, [frames::delete(DOC, ordinal_of(CODE, "total"), 8, READ_AT, None)]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(ordinal_of(CODE, "total"), 8, "")])]);
     assert_eq!(
         answer.expect("an answer"),
         Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": ordinal_of(CODE, "total").to_string(), "removed": "8", "inserted": "0", "at": 45}), is_error: false }
     );
-}
-
-/// A replacement is two writes, the second typed against the first's commit.
-///
-/// The new bytes are inserted directly after the old ones, typed against
-/// the read; the old ones are then removed, typed against the insert's own
-/// commit, so nothing may have changed the draft between the two.
-#[test]
-fn a_replacement_is_two_writes_the_second_typed_against_the_firsts_commit() {
-    let word = ordinal_of(CODE, "add");
-    let (answer, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), Ok(json!({"resp": "ack", "at": 45}))]);
-    assert_eq!(sent, [frames::insert_text(DOC, word + 3, "subtract", READ_AT, None), frames::delete(DOC, word, 3, 44, None)]);
+    let (answer, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 46, "committed": true}))]);
+    assert_eq!(sent.iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(word, 3, "subtract")])], "one frame: the three old bytes removed and the eight new minted in one change");
     assert_eq!(
         answer.expect("an answer"),
-        Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "3", "inserted": "8", "addr": MINTED, "at": 45}), is_error: false }
+        Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "3", "inserted": "8", "addr": MINTED, "at": 46}), is_error: false }
     );
+    assert!(sent.iter().all(|frame| frame["op"] == "edit"), "no image read and no burst: {sent:?}");
 }
 
 /// The same text for old and new is found, and nothing is written.
@@ -560,328 +572,126 @@ fn a_member_of_the_wrong_form_is_refused_before_any_call() {
     }
 }
 
-/// A stale first write is dropped, and nothing of the edit stands.
+/// A write the board refuses is answered with its verdict, nothing written.
 ///
-/// The board refuses the first write as typed against an older state, and
-/// the shell holds it; the edit reads the verdict off its line, drops the
-/// line, and answers the verdict as data — for an edit of one write and for
-/// the insert of two, whose removal is then never sent.
+/// The board refuses the frame as typed against an older state, or for any
+/// other cause: the edit answers the verdict as data, its cause the board's
+/// code and the verdict under `refusal`, and sends nothing more — a verdict
+/// is the board's judgment of the frame, never an answer lost, so the frame
+/// is not asked again and no feed is read.
 #[test]
-fn a_stale_first_write_is_dropped_and_nothing_of_the_edit_stands() {
-    let verdict = moved_verdict("insert", READ_AT, 43);
-    let word = ordinal_of(CODE, "add");
-    for (new, write) in [("addition", frames::insert_text(DOC, word + 3, "ition", READ_AT, None)), ("subtract", frames::insert_text(DOC, word + 3, "subtract", READ_AT, None))] {
-        let (answer, sent) = edit("add", new, vec![held_answer(3, "moved"), lines(3, "moved", verdict.clone()), Ok(json!({}))]);
-        assert_eq!(sent, [vec![write], settling(3)].concat(), "the write, then its line read and dropped: no other write");
-        assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "arrangement_moved", "doc": DOC, "refusal": verdict}), is_error: false });
+fn a_write_the_board_refuses_is_answered_with_its_verdict() {
+    for code in ["arrangement_moved", "not_owner", "withheld"] {
+        let refusal = refused_edit(code);
+        let Refusal::Board(Refused { body: verdict, .. }) = refusal.clone() else { unreachable!() };
+        let (answer, sent) = edit("add", "subtract", vec![Err(refusal)]);
+        assert_eq!(sent.len(), 1, "{code}: the one frame, never asked again");
+        assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": code, "doc": DOC, "refusal": verdict}), is_error: false }, "{code}");
     }
 }
 
-/// A write the board refuses is answered with its verdict, its line dropped.
+/// A lost answer is asked again once, the same frame under the same `id`.
 ///
-/// A refused run's cause is the board's code, whatever detail its held
-/// cause carries beside it, and its verdict rides under `refusal`.
+/// The frame's answer is lost once the request left, so it may have landed:
+/// the same frame is sent again, byte for byte, its `id` and the position it
+/// is typed against unchanged, and the board's answer to it — its memo's
+/// acknowledgment where it applied the first, a first landing where it never
+/// met it — is the edit's, addresses and all. An answer that left nothing
+/// sent is no lost answer, and is the call's refusal with nothing asked
+/// again (the mutants that never ask again, that ask again under a fresh
+/// `id`, and that type the re-ask against a later state, which lands a
+/// second time what the first landed).
 #[test]
-fn a_write_the_board_refuses_is_answered_with_its_verdict_and_its_line_dropped() {
-    let verdict = json!({"resp": "rejected", "op": "insert", "code": "not_owner", "disposition": "permanent", "site": {"addr": DOC}});
-    let (answer, sent) = edit(
-        "add",
-        "subtract",
-        vec![held_answer(2, "not_owner:the session does not own the document"), lines(2, "not_owner:the session does not own the document", verdict.clone()), Ok(json!({"may_have_landed": []}))],
-    );
-    assert_eq!(sent[1..], settling(2)[..]);
+fn a_lost_answer_is_asked_again_once_under_the_same_id() {
+    let word = ordinal_of(CODE, "add");
+    let (answer, sent) = edit("add", "subtract", vec![Err(lost()), Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44, "committed": true}))]);
+    assert_eq!(sent.len(), 2, "the frame and its one re-ask");
+    assert_eq!(sent[0], sent[1], "the same frame: its id and its typed position unchanged");
+    assert_eq!(less_id(&sent[0]), edit_frame(&[frames::minted(word, 3, "subtract")]));
+    assert_eq!(answer.expect("an answer").value, json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "3", "inserted": "8", "addr": MINTED, "at": 44}));
+    let unsent = || Refusal::Unreachable(DialError::Connect("refused".into()));
+    let (outcome, sent) = edit("add", "subtract", vec![Err(unsent())]);
+    assert_eq!((outcome.expect_err("the refusal").to_value(), sent.len()), (unsent().to_value(), 1), "a request that never left landed nothing");
+}
+
+/// A lost answer its re-ask does not settle is settled from the change feed.
+///
+/// The frame's answer is lost, and the re-ask's too — or the re-ask is
+/// refused as typed against an older state, the board's memo gone at a
+/// restart and the draft moved by the frame's own commit, or the shell
+/// refuses to send it. The draft's first row past the typed position is
+/// read: an `edit` under the session's own key is the frame's own commit,
+/// and the edit answers landed at that row's position, the address its
+/// acknowledgment named unread — never refused for its own effect (the
+/// mutant that answers the re-ask's `arrangement_moved` as the edit's
+/// refusal says nothing was written of an edit that stands).
+#[test]
+fn a_lost_answer_the_re_ask_does_not_settle_is_read_off_the_change_feed() {
+    let word = ordinal_of(CODE, "add");
+    let stopped = || Refusal::shell(Name::STOPPED, json!({"op": "edit"}));
+    for again in [refused_edit("arrangement_moved"), lost(), stopped()] {
+        let (answer, sent) = edit("add", "subtract", vec![Err(lost()), Err(again.clone()), feed_page("edit", &own_key(), 47)]);
+        assert_eq!(sent.len(), 3, "{again}: the frame, its re-ask, the feed's read");
+        assert_eq!((sent[0] == sent[1], &sent[2]), (true, &feed_read(DOC, READ_AT)), "{again}: the feed read under the draft past the typed position");
+        assert_eq!(
+            answer.expect("an answer"),
+            Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "3", "inserted": "8", "at": 47}), is_error: false },
+            "{again}: landed at its own row's position, no address named"
+        );
+    }
+}
+
+/// A lost answer no row settles is `answer_lost`, naming the typed position.
+///
+/// The draft's first row past the typed position is another writer's, or the
+/// session's own of another kind; the feed names no row, or names one with
+/// no position; its read is refused; or the session holds no key, so no row
+/// is its own. Each leaves the edit unsettled: the answer is `answer_lost`,
+/// an error naming `as_of`, the position the frame was typed against, and
+/// what lost the answer — no verdict on the edit — and nothing is sent after
+/// the read (the mutants that read any row of the session's key, or any
+/// `edit` row, as the frame's own answer an edit that never landed as
+/// landed).
+#[test]
+fn a_lost_answer_no_row_settles_is_answer_lost_naming_the_typed_position() {
+    let unsettled = |feed: Option<Result<Value, Refusal>>, key: Option<String>, what: &str| {
+        let after = [Err(lost()), Err(refused_edit("arrangement_moved"))].into_iter().chain(feed.clone());
+        let mut script = Script::of(reads_of(CODE).into_iter().chain(after).collect());
+        script.key = key;
+        let answer = replace_text(&script, &json!({"doc": DOC, "old": "add", "new": "subtract"})).expect("an answer");
+        let sent = script.sent_past(3);
+        assert_eq!(sent.len(), 2 + usize::from(feed.is_some()), "{what}: nothing sent after the read");
+        let value = json!({"outcome": "answer_lost", "doc": DOC, "as_of": READ_AT, "cause": "unreachable", "refusal": lost().to_value()});
+        assert_eq!(answer, Answer { value, is_error: true }, "{what}");
+        crate::shapes::assert_declared("TextAnswerLost", &answer.into_value());
+    };
+    let other = "cd".repeat(32);
+    unsettled(Some(feed_page("edit", &other, 47)), Some(own_key()), "another writer's edit");
+    unsettled(Some(feed_page("edit", "bare", 47)), Some(own_key()), "a bare session's edit");
+    unsettled(Some(feed_page("insert", &own_key(), 47)), Some(own_key()), "the session's own write of another kind");
+    unsettled(Some(Ok(json!({"entries": [], "next": READ_AT, "head": READ_AT}))), Some(own_key()), "no row past the typed position");
+    unsettled(Some(Ok(json!({"entries": [{"op": "edit", "key": own_key()}], "next": READ_AT, "head": READ_AT}))), Some(own_key()), "a row naming no position");
+    unsettled(Some(Err(lost())), Some(own_key()), "a feed read the board does not answer");
+    unsettled(None, None, "a session holding no key, no row its own: the feed is not read");
+}
+
+/// A re-ask refused for another cause is the edit's refusal.
+///
+/// The frame's answer is lost and its re-ask is judged afresh and refused
+/// for a cause that is not the draft having moved: the verdict is the
+/// frame's, and the edit answers it as data, no feed read.
+#[test]
+fn a_re_ask_refused_for_another_cause_is_the_edits_refusal() {
+    let refusal = refused_edit("not_owner");
+    let Refusal::Board(Refused { body: verdict, .. }) = refusal.clone() else { unreachable!() };
+    let (answer, sent) = edit("add", "subtract", vec![Err(lost()), Err(refusal)]);
+    assert_eq!(sent.len(), 2, "the frame and its re-ask: no feed read");
     assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "not_owner", "doc": DOC, "refusal": verdict}), is_error: false });
 }
 
-/// A write the shell could not get to the board is dropped, and is an error.
-///
-/// Held for the board — halted, unreachable, behind an earlier line — the
-/// write carries no verdict: its line is dropped, so nothing lands later
-/// with no one to finish the edit, and the answer is `isError`, the hold's
-/// cause its cause. A line the list no longer names is dropped all the same,
-/// and a refusal of the list read is no verdict.
+/// A refusal of a read is the call's refusal, and the shell's of the write.
 #[test]
-fn a_write_the_shell_could_not_get_to_the_board_is_dropped_and_is_an_error() {
-    for cause in ["halted", "unreachable", "behind", "session_died"] {
-        let (answer, sent) = edit("add", "subtract", vec![held_answer(5, cause), lines(5, cause, Value::Null), Ok(json!({}))]);
-        assert_eq!(sent[1..], settling(5)[..], "{cause}");
-        assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": cause, "doc": DOC}), is_error: true }, "{cause}");
-    }
-    let shells_own = json!({"kind": "shell", "name": "session_died", "reason": {"arm": "restart"}});
-    let (answer, _) = edit("add", "addition", vec![held_answer(5, "session_died"), lines(5, "session_died", shells_own), Ok(json!({}))]);
-    assert_eq!(
-        answer.expect("an answer"),
-        Answer { value: json!({"outcome": "refused", "cause": "session_died", "doc": DOC}), is_error: true },
-        "the shell's own refusal beside a line is no verdict of the board's"
-    );
-    let (answer, _) = edit("add", "addition", vec![held_answer(5, "halted"), Err(Refusal::shell(Name::STORE_HALTED, json!({"why": "damaged"}))), Ok(json!({}))]);
-    assert_eq!(answer.expect("an answer").value, json!({"outcome": "refused", "cause": "halted", "doc": DOC}));
-}
-
-/// A drop that finds the write landed is a write that landed.
-///
-/// A line whose write's answer was lost is read for its landing by the drop:
-/// `kept`, or a line the shell's own resend settled first, is a landing with
-/// no ack. An edit of one write then landed whole, its commit and address
-/// unnamed; a removal that landed completes its replacement; and an insert
-/// that landed with no ack leaves the two spans standing, which the answer
-/// says, since the removal cannot be typed against a commit no answer named.
-#[test]
-fn a_drop_that_finds_the_write_landed_is_a_write_that_landed() {
-    let word = ordinal_of(CODE, "add");
-    let gone = || Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": 6})));
-    for landed in [Ok(json!({"kept": true})), gone()] {
-        let (answer, _) = edit("add", "addition", vec![held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), landed]);
-        assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": (word + 3).to_string(), "removed": "0", "inserted": "5"}), is_error: false });
-    }
-    let (answer, sent) =
-        edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), Ok(json!({"kept": true}))]);
-    assert_eq!(sent.len(), 4, "the two writes and the settling: no undo");
-    assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "3", "inserted": "8", "addr": MINTED}), is_error: false });
-    let (answer, sent) = edit("add", "subtract", vec![held_answer(6, "unreachable"), lines(6, "unreachable", Value::Null), Ok(json!({"kept": true}))]);
-    assert_eq!(sent.len(), 3, "the insert and its settling: the removal is not sent");
-    let stands =
-        json!({"outcome": "partial", "doc": DOC, "new_text": {"ordinal": (word + 3).to_string(), "width": "8"}, "old_text": {"ordinal": word.to_string(), "width": "3"}, "cause": "answer_lost"});
-    assert_eq!(answer.expect("an answer"), Answer { value: stands, is_error: true });
-}
-
-/// A line the shell will not drop stays held, and the answer names it.
-///
-/// The shell refuses a drop where it cannot tell whether the write landed,
-/// or a send has the line out: the line stands, and the answer is `held`,
-/// `isError`, with the line's ordinal, its cause and the write it is — and,
-/// for an edit of two writes, the two spans as they stand or may.
-#[test]
-fn a_line_the_shell_will_not_drop_stays_held_and_the_answer_names_it() {
-    let word = ordinal_of(CODE, "add");
-    let unread = || Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 8, "why": "unanswered"})));
-    let out = || Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": 8})));
-    for refused in [unread(), out()] {
-        let (answer, _) = edit("add", "addition", vec![held_answer(8, "unreachable"), lines(8, "unreachable", Value::Null), refused]);
-        assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": "insert"}), is_error: true });
-    }
-    let (answer, _) = edit("total = add", "add", vec![held_answer(8, "poisoned"), lines(8, "poisoned", Value::Null), unread()]);
-    assert_eq!(answer.expect("an answer").value, json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "poisoned", "write": "delete"}));
-    let spans = |new_text: Value| json!({"new_text": new_text, "old_text": {"ordinal": word.to_string(), "width": "3"}});
-    let (answer, sent) = edit("add", "subtract", vec![held_answer(8, "unreachable"), lines(8, "unreachable", Value::Null), unread()]);
-    assert_eq!(sent.len(), 3, "the removal is not sent behind an insert that may not have landed");
-    let mut expected = json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": "insert"});
-    expected.as_object_mut().expect("an object").extend(spans(json!({"ordinal": (word + 3).to_string(), "width": "8"})).as_object().expect("an object").clone());
-    assert_eq!(answer.expect("an answer"), Answer { value: expected, is_error: true });
-    let (answer, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(8, "unreachable"), lines(8, "unreachable", Value::Null), unread()]);
-    assert_eq!(sent.len(), 4, "no undo while the removal may have landed");
-    let mut expected = json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": "delete"});
-    expected.as_object_mut().expect("an object").extend(spans(json!({"ordinal": (word + 3).to_string(), "width": "8", "addr": MINTED, "at": 44})).as_object().expect("an object").clone());
-    assert_eq!(answer.expect("an answer"), Answer { value: expected, is_error: true });
-}
-
-/// A refused second write has the insert taken back by identity.
-///
-/// The removal is refused as typed against an older state: another writer's
-/// change landed between the two commits. The edit drops its line, reads
-/// the draft's whole image, finds the bytes its insert minted where that
-/// change moved them, and removes them, typed against that read; the answer
-/// is the removal's verdict, as data, nothing standing.
-#[test]
-fn a_refused_second_write_has_the_insert_taken_back_by_identity() {
-    let word = ordinal_of(CODE, "add");
-    let verdict = moved_verdict("delete", 44, 46);
-    let (answer, sent) = edit(
-        "add",
-        "subtract",
-        vec![
-            Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})),
-            held_answer(4, "moved"),
-            lines(4, "moved", verdict.clone()),
-            Ok(json!({})),
-            image_with(word + 3 + 9, 8, 50),
-            Ok(json!({"resp": "ack", "at": 51})),
-        ],
-    );
-    let expected =
-        [vec![frames::insert_text(DOC, word + 3, "subtract", READ_AT, None), frames::delete(DOC, word, 3, 44, None)], settling(4), vec![image_frame(), frames::delete(DOC, word + 3 + 9, 8, 50, None)]]
-            .concat();
-    assert_eq!(sent, expected, "the insert, the removal, its line settled, the image, and the insert's bytes removed where they stand");
-    assert_eq!(answer.expect("an answer"), Answer { value: json!({"outcome": "refused", "cause": "arrangement_moved", "doc": DOC, "refusal": verdict}), is_error: false });
-    // The insert's bytes arranged nowhere already: nothing to take back.
-    let gone = Ok(json!({"resp": "runs", "as_of": 50, "runs": [{"i_start": "1.0.1.0.64.0.1.1", "width": "9"}]}));
-    let (answer, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({})), gone]);
-    assert_eq!(sent.len(), 5, "the image read alone");
-    assert_eq!(answer.expect("an answer").value["cause"], "arrangement_moved");
-    // An undo whose answer was lost and whose landing the drop finds.
-    let (answer, _) = edit(
-        "add",
-        "subtract",
-        vec![
-            Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})),
-            held_answer(4, "moved"),
-            lines(4, "moved", verdict.clone()),
-            Ok(json!({})),
-            image_with(word + 3, 8, 50),
-            held_answer(5, "unreachable"),
-            lines(5, "unreachable", Value::Null),
-            Ok(json!({"kept": true})),
-        ],
-    );
-    assert_eq!(answer.expect("an answer").value["outcome"], "refused");
-}
-
-/// An undo refused as stale is made again from a fresh read, three times.
-///
-/// The draft keeps moving: each removal of the insert's bytes is refused as
-/// typed against an older state, its line dropped, and the image read
-/// again. After the third the edit stops, and the answer is `partial`,
-/// `isError`: the new bytes standing — their ordinal and width, the address
-/// and the commit the insert's ack named — the old ones not removed, and
-/// the removal's verdict.
-#[test]
-fn an_undo_refused_as_stale_is_made_again_from_a_fresh_read_three_times() {
-    let word = ordinal_of(CODE, "add");
-    let verdict = moved_verdict("delete", 44, 46);
-    let mut script = vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({}))];
-    let mut expected = [vec![frames::insert_text(DOC, word + 3, "subtract", READ_AT, None), frames::delete(DOC, word, 3, 44, None)], settling(4)].concat();
-    for attempt in 0..UNDO_TRIES as u64 {
-        let (ordinal, as_of, line) = (word + 3 + attempt + 1, 50 + attempt, 5 + attempt);
-        script.extend([image_with(ordinal, 8, as_of), held_answer(line, "moved"), lines(line, "moved", moved_verdict("delete", as_of, as_of + 1)), Ok(json!({}))]);
-        expected.extend([vec![image_frame(), frames::delete(DOC, ordinal, 8, as_of, None)], settling(line)].concat());
-    }
-    let (answer, sent) = edit("add", "subtract", script);
-    assert_eq!(sent, expected, "three undos, each typed against its own read");
-    let stands = json!({
-        "outcome": "partial", "doc": DOC,
-        "new_text": {"ordinal": (word + 3).to_string(), "width": "8", "addr": MINTED, "at": 44},
-        "old_text": {"ordinal": word.to_string(), "width": "3"},
-        "cause": "arrangement_moved", "refusal": verdict,
-    });
-    assert_eq!(answer.expect("an answer"), Answer { value: stands, is_error: true });
-}
-
-/// An undo that cannot be made leaves the answer partial.
-///
-/// The image refused, the insert's bytes parted by another's change, or the
-/// undo's write refused for any cause but a moved draft — its line dropped,
-/// or none held: each stops the undo at once, and the answer says what
-/// stands, no line of the edit's held. Where the removal was held for the
-/// board, the partial's cause is the hold's and it carries no verdict.
-#[test]
-fn an_undo_that_cannot_be_made_leaves_the_answer_partial() {
-    let word = ordinal_of(CODE, "add");
-    let verdict = moved_verdict("delete", 44, 46);
-    let opening = || vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({}))];
-    let too_large =
-        || Err(Refusal::Board(Refused { status: 200, code: "image_too_large".into(), detail: None, op: Some("image".into()), body: json!({"resp": "rejected", "code": "image_too_large"}) }));
-    let parted = Ok(json!({"resp": "runs", "as_of": 50, "runs": [{"i_start": MINTED, "width": "4"}, {"i_start": "1.0.1.0.64.0.1.1", "width": "2"}, {"i_start": "1.0.1.0.64.0.1.84", "width": "4"}]}));
-    let refused_run = json!({"resp": "rejected", "op": "delete", "code": "not_arranged", "disposition": "permanent"});
-    for undo in [
-        vec![too_large()],
-        vec![parted],
-        vec![image_with(word + 4, 8, 50), held_answer(5, "not_arranged"), lines(5, "not_arranged", refused_run), Ok(json!({}))],
-        vec![image_with(word + 4, 8, 50), Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"})))],
-    ] {
-        let (answer, _) = edit("add", "subtract", opening().into_iter().chain(undo).collect());
-        let answer = answer.expect("an answer");
-        assert!(answer.is_error, "{}", answer.value);
-        assert_eq!(
-            (&answer.value["outcome"], &answer.value["cause"], &answer.value["refusal"], &answer.value["new_text"]["addr"]),
-            (&json!("partial"), &json!("arrangement_moved"), &verdict, &json!(MINTED)),
-            "{}",
-            answer.value
-        );
-    }
-    let (answer, _) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "halted"), lines(4, "halted", Value::Null), Ok(json!({})), too_large()]);
-    let answer = answer.expect("an answer");
-    assert_eq!((answer.is_error, &answer.value["outcome"], &answer.value["cause"], &answer.value["refusal"]), (true, &json!("partial"), &json!("halted"), &Value::Null), "{}", answer.value);
-}
-
-/// A second write the shell refuses outright is undone, or told as partial.
-///
-/// The removal is refused with no line held — another shell took the
-/// board's held store between the two writes. Where the undo lands, the
-/// refusal is the call's own, nothing standing; where it does not, the
-/// answer is `partial`, the refusal's name its cause and its value beside
-/// it.
-#[test]
-fn a_second_write_the_shell_refuses_outright_is_undone_or_told_as_partial() {
-    let word = ordinal_of(CODE, "add");
-    let refusal = || Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"}));
-    let (outcome, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), Err(refusal()), image_with(word + 3, 8, 50), Ok(json!({"resp": "ack", "at": 51}))]);
-    assert_eq!(sent[2..], [image_frame(), frames::delete(DOC, word + 3, 8, 50, None)]);
-    assert_eq!(outcome.expect_err("the refusal").to_value(), refusal().to_value());
-    let (outcome, _) = edit("add", "subtract", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), Err(refusal()), Err(refusal())]);
-    let answer = outcome.expect("an answer");
-    assert_eq!(
-        (answer.is_error, &answer.value["outcome"], &answer.value["cause"], &answer.value["refusal"]),
-        (true, &json!("partial"), &json!("another_window"), &refusal().to_value()),
-        "{}",
-        answer.value
-    );
-    // An insert's ack that names no address and no commit cannot be undone
-    // by identity, nor its removal typed: the two spans stand, and are told.
-    let (outcome, sent) = edit("add", "subtract", vec![Ok(json!({"resp": "ack"}))]);
-    assert_eq!(sent.len(), 1);
-    assert_eq!(
-        outcome.expect("an answer").value,
-        json!({"outcome": "partial", "doc": DOC, "new_text": {"ordinal": (word + 3).to_string(), "width": "8"}, "old_text": {"ordinal": word.to_string(), "width": "3"}, "cause": "unread", "op": "insert"})
-    );
-}
-
-/// An undo whose line the shell will not drop is answered `held`, naming it.
-///
-/// The removal does not land — its line dropped with the board's verdict,
-/// or refused outright with none held — and the undo's own removal of the
-/// new bytes is held: where the shell refuses its drop — it cannot tell
-/// whether the removal landed, or a send has the line out — the line stands
-/// and may yet remove the new bytes while the old ones stand. The answer is
-/// `held`, an error, naming that line, `write` `undo`, both spans beside
-/// it (SP-8), and no write follows the line. A death at the undo's dial
-/// that no re-open follows refuses the line's drop too, and is answered so;
-/// where the restart arm re-opened a session that stands, the line is
-/// dropped under it and the answer is `partial`, no line held (the mutants
-/// that fold a standing line into `partial`, and that try the undo again
-/// behind it).
-#[test]
-fn an_undo_whose_line_the_shell_will_not_drop_is_answered_held_naming_it() {
-    let word = ordinal_of(CODE, "add");
-    let ack = || Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}));
-    let verdict = moved_verdict("delete", 44, 46);
-    let dropped = || vec![ack(), held_answer(4, "moved"), lines(4, "moved", verdict.clone()), Ok(json!({}))];
-    let outright = || vec![ack(), Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "delete"})))];
-    let undo = |cause: &str, refused: Result<Value, Refusal>| vec![image_with(word + 4, 8, 50), held_answer(5, cause), lines(5, cause, Value::Null), refused];
-    let named = |cause: &str| Answer {
-        value: json!({
-            "outcome": "held", "doc": DOC, "held": 5, "cause": cause, "write": "undo",
-            "new_text": {"ordinal": (word + 3).to_string(), "width": "8", "addr": MINTED, "at": 44},
-            "old_text": {"ordinal": word.to_string(), "width": "3"},
-        }),
-        is_error: true,
-    };
-    let unread = || Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 5, "why": "unanswered"})));
-    let out = || Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": 5})));
-    for (opening, before) in [(dropped(), 4), (outright(), 2)] {
-        for refused in [unread(), out()] {
-            let (answer, sent) = edit("add", "subtract", [opening.clone(), undo("unreachable", refused)].concat());
-            let answer = answer.expect("an answer");
-            assert_eq!(answer, named("unreachable"), "the undo's line, named");
-            crate::shapes::assert_declared("TextHeld", &answer.into_value());
-            assert_eq!(sent[before..], [vec![image_frame(), frames::delete(DOC, word + 4, 8, 50, None)], settling(5)].concat()[..], "the undo's removal and its line settled: no write after it");
-        }
-    }
-    let asked = Asked { doc: DOC, old: "add", new: "subtract" };
-    let rows = Rowed::of([reads_of(CODE), dropped(), vec![image_with(word + 4, 8, 50), held_answer(5, "session_died"), died(None), died(None)]].concat(), vec![]);
-    assert_eq!(replace(&Under::new(&rows, "s-1"), asked), Ok(named("session_died")));
-    assert_eq!(rows.sessions().len(), 11, "the reads, the two writes, the removal's list and drop, the image, the undo, its list and its drop, each once");
-    let reopened = vec![image_with(word + 4, 8, 50), held_answer(5, "session_died"), died(Some("s-2")), lines(5, "session_died", Value::Null), Ok(json!({}))];
-    let rows = Rowed::of([reads_of(CODE), dropped(), reopened].concat(), vec!["s-2"]);
-    let answer = replace(&Under::new(&rows, "s-1"), asked).expect("an answer");
-    assert_eq!((answer.is_error, &answer.value["outcome"], &answer.value["cause"], &answer.value["refusal"]), (true, &json!("partial"), &json!("arrangement_moved"), &verdict), "{}", answer.value);
-    assert_eq!(rows.sessions()[9..], ["s-1", "s-2", "s-2"], "the undo's list made again under the re-open, its drop under it");
-    let write = crate::shapes::shape("TextHeld").and_then(|shape| shape.fields.iter().find(|field| field.name == "write")).map(|field| field.ty);
-    assert_eq!(write, Some("'insert' | 'delete' | 'undo'"), "the shapes declare every write a held line of the edit's may be");
-}
-
-/// A refusal of a read is the call's refusal, and a refused first write's.
-#[test]
-fn a_refusal_of_a_read_or_of_the_first_write_is_the_calls_refusal() {
+fn a_refusal_of_a_read_or_the_shells_of_the_write_is_the_calls_refusal() {
     let withheld = || Refusal::Board(Refused { status: 200, code: "withheld".into(), detail: None, op: Some("doc_metadata".into()), body: json!({"resp": "rejected", "code": "withheld"}) });
     let script = Script::of(vec![Err(withheld())]);
     let refusal = replace_text(&script, &json!({"doc": DOC, "old": "a", "new": "b"})).expect_err("the read's refusal");
@@ -894,8 +704,10 @@ fn a_refusal_of_a_read_or_of_the_first_write_is_the_calls_refusal() {
         let refusal = replace_text(&script, &json!({"doc": DOC, "old": "add", "new": "sub"})).expect_err("the read's refusal");
         assert_eq!(refusal.name(), "session_ended", "read {at}");
     }
-    let (outcome, sent) = edit("add", "subtract", vec![Err(Refusal::shell(Name::ANOTHER_WINDOW, json!({"op": "insert"})))]);
-    assert_eq!((outcome.expect_err("the write's refusal").name(), sent.len()), ("another_window", 1), "nothing written, nothing to undo");
+    for name in [Name::ANOTHER_WINDOW, Name::STOPPED, Name::HELD_LINES] {
+        let (outcome, sent) = edit("add", "subtract", vec![Err(Refusal::shell(name, json!({"op": "edit"})))]);
+        assert_eq!((outcome.expect_err("the write's refusal").name(), sent.len()), (name.as_str(), 1), "the shell's refusal of the write: nothing written, nothing asked again");
+    }
 }
 
 /// An answer the adapter does not read is never taken for a draft's.
@@ -910,7 +722,7 @@ fn an_answer_the_adapter_does_not_read_is_never_taken_for_a_drafts() {
     let run = |answers: Vec<Result<Value, Refusal>>| {
         let script = Script::of(answers);
         let answer = replace_text(&script, &json!({"doc": DOC, "old": "add", "new": "sub"})).expect("an answer");
-        assert!(script.sent_past(0).iter().all(|call| !["insert", "delete"].contains(&call["op"].as_str().unwrap_or_default())), "no write");
+        assert!(script.sent_past(0).iter().all(|call| !["insert", "delete", "edit"].contains(&call["op"].as_str().unwrap_or_default())), "no write");
         answer
     };
     let unread = |op: &str| Answer { value: json!({"outcome": "refused", "cause": "unread", "doc": DOC, "op": op}), is_error: true };
@@ -948,20 +760,14 @@ fn a_draft_past_one_delivery_is_read_in_parts_typed_against_the_first_read() {
             Ok(json!({"resp": "delivery", "as_of": READ_AT + 2, "items": [{"hex": hex(&text.as_bytes()[budget..])}]})),
         ]
     };
-    let script = Script::of([vec![draft(), extent(text.len() as u64)], parts(), vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 60})), Ok(json!({"resp": "ack", "at": 61}))]].concat());
+    let script = Script::of([vec![draft(), extent(text.len() as u64)], parts(), vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 60, "committed": true}))]].concat());
     let answer = replace_text(&script, &json!({"doc": DOC, "old": "let word", "new": "let name"})).expect("an answer");
     let word = ordinal_of(&text, "word");
-    assert_eq!(answer.value, json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "4", "inserted": "4", "addr": MINTED, "at": 61}));
+    assert_eq!(answer.value, json!({"outcome": "replaced", "doc": DOC, "ordinal": word.to_string(), "removed": "4", "inserted": "4", "addr": MINTED, "at": 60}));
     let rest = text.len() as u64 - READ_POSITIONS;
-    assert_eq!(
-        script.sent_past(2),
-        [
-            frames::retrieve_v(DOC, 1, READ_POSITIONS),
-            frames::retrieve_v(DOC, READ_POSITIONS + 1, rest),
-            frames::insert_text(DOC, word + 4, "name", READ_AT, None),
-            frames::delete(DOC, word, 4, 60, None)
-        ]
-    );
+    let sent = script.sent_past(2);
+    assert_eq!(sent[..2], [frames::retrieve_v(DOC, 1, READ_POSITIONS), frames::retrieve_v(DOC, READ_POSITIONS + 1, rest)]);
+    assert_eq!(sent[2..].iter().map(less_id).collect::<Vec<_>>(), [edit_frame(&[frames::minted(word, 4, "name")])]);
     let script = Script::of([vec![draft(), extent(text.len() as u64 + 1)], parts()].concat());
     let answer = replace_text(&script, &json!({"doc": DOC, "old": "let word", "new": "let name"})).expect("an answer");
     assert_eq!(
@@ -1015,6 +821,10 @@ impl Rows for Rowed {
     fn stands(&self, session: &str) -> bool {
         self.standing.contains(&session)
     }
+
+    fn key(&self, _: &str) -> Option<String> {
+        Some(own_key())
+    }
 }
 
 /// The death of `s-1`, the restart arm having re-opened `reopened` where it
@@ -1044,7 +854,7 @@ fn through(rows: &Rowed) -> Result<Answer, Refusal> {
 /// dead session, or follow without end).
 #[test]
 fn a_call_that_meets_a_death_the_restart_arm_re_opened_is_made_again_under_the_re_open() {
-    let ack = || Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}));
+    let ack = || Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44, "committed": true}));
     let rows = Rowed::of([vec![died(Some("s-2"))], reads_of(CODE), vec![ack()]].concat(), vec!["s-2"]);
     let answer = through(&rows).expect("an answer");
     assert_eq!(answer.value["outcome"], "replaced", "{}", answer.value);
@@ -1060,67 +870,63 @@ fn a_call_that_meets_a_death_the_restart_arm_re_opened_is_made_again_under_the_r
     assert_eq!(rows.sessions(), ["s-1", "s-2"]);
 }
 
-/// A line held at its session's death is dropped under the re-open, or
-/// named where no re-open stands.
+/// A lost answer's re-ask that meets the session's death is made under the
+/// re-open, and the feed is read under it.
 ///
-/// The insert's dial met the death, and the shell held it `session_died`:
-/// where the restart arm re-opened a session that stands, the line's list
-/// and its drop are made again under it, the line dropped, and the edit
-/// answers `refused` with nothing standing and nothing held — an error, the
-/// write never having reached the board; where none stands, the drop is
-/// refused too, the line stands, and the edit answers `held` naming it (the
-/// mutant that follows no death leaves the line of a restart held, and the
-/// burst lands after an edit that answered nothing of it).
+/// The board restarted between the frame and its re-ask: the re-ask meets
+/// the death, is made once more under the session the restart arm re-opened,
+/// and is refused there as typed against an older state, the board's memo
+/// gone with its session; the feed's read then names the re-open, and the
+/// frame's own row — the key the same under both sessions — is the edit's
+/// landing.
 #[test]
-fn a_line_held_at_its_sessions_death_is_dropped_under_the_re_open_or_named_where_none_stands() {
-    let rows = Rowed::of([reads_of(CODE), vec![held_answer(5, "session_died"), died(Some("s-2")), lines(5, "session_died", Value::Null), Ok(json!({}))]].concat(), vec!["s-2"]);
-    assert_eq!(through(&rows), Ok(Answer { value: json!({"outcome": "refused", "cause": "session_died", "doc": DOC}), is_error: true }));
-    assert_eq!(rows.named.borrow().iter().skip(3).map(|(row, _)| *row).collect::<Vec<_>>(), [Row::Op, Row::Held, Row::Held, Row::Resolve]);
-    assert_eq!(rows.sessions(), ["s-1", "s-1", "s-1", "s-1", "s-1", "s-2", "s-2"], "the list made again under the re-open, the drop under it");
-    let rows = Rowed::of([reads_of(CODE), vec![held_answer(5, "session_died"), died(None), died(None)]].concat(), vec![]);
-    assert_eq!(through(&rows), Ok(Answer { value: json!({"outcome": "held", "doc": DOC, "held": 5, "cause": "session_died", "write": "insert"}), is_error: true }));
-    assert_eq!(rows.sessions().len(), 6, "the reads, the insert, the list and the drop, each once");
+fn a_re_ask_that_meets_the_sessions_death_is_made_and_settled_under_the_re_open() {
+    let after = vec![Err(lost()), died(Some("s-2")), Err(refused_edit("arrangement_moved")), feed_page("edit", &own_key(), 47)];
+    let rows = Rowed::of([reads_of(CODE), after].concat(), vec!["s-2"]);
+    let answer = through(&rows).expect("an answer");
+    assert_eq!((&answer.value["outcome"], &answer.value["at"], answer.value.get("addr")), (&json!("replaced"), &json!(47), None), "{}", answer.value);
+    assert_eq!(rows.named.borrow().iter().skip(3).map(|(row, _)| *row).collect::<Vec<_>>(), [Row::Op, Row::Op, Row::Op, Row::Changes]);
+    assert_eq!(rows.sessions()[3..], ["s-1", "s-1", "s-2", "s-2"], "the re-ask made again under the re-open, the feed read under it");
 }
 
 /// An error answer carries the error member, and a data answer none.
 ///
 /// The row's answer is the edit's object, `error: true` set in it exactly
-/// where the edit's answer is an error — a write the shell could not get to
-/// the board, a read it does not read, a held line, a partial landing — and
-/// nothing beside it in every other (the mutants that set the member on
-/// every answer, on none, or as another value).
+/// where the edit's answer is an error — a read it does not read, an answer
+/// lost that no read settled — and nothing beside it in every other (the
+/// mutants that set the member on every answer, on none, or as another
+/// value).
 #[test]
 fn an_error_answer_carries_the_error_member_and_a_data_answer_none() {
     let data = json!({"outcome": "refused", "cause": "not_found", "doc": DOC, "count": 0, "as_of": READ_AT});
     assert_eq!(Answer::data(data.clone()).into_value(), data, "data stands as the edit built it");
-    let (answer, _) = edit("add", "addition", vec![held_answer(5, "unreachable"), lines(5, "unreachable", Value::Null), Ok(json!({}))]);
-    assert_eq!(answer.expect("an answer").into_value(), json!({"outcome": "refused", "cause": "unreachable", "doc": DOC, "error": true}));
-    let (answer, _) = edit("add", "addition", vec![held_answer(8, "unreachable"), lines(8, "unreachable", Value::Null), Err(Refusal::shell(Name::LANDING_UNREAD, json!({"held": 8})))]);
-    assert_eq!(answer.expect("an answer").into_value(), json!({"outcome": "held", "doc": DOC, "held": 8, "cause": "unreachable", "write": "insert", "error": true}));
-    let (answer, _) = edit("add", "addition", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44}))]);
+    let (answer, _) = edit("add", "addition", vec![Err(lost()), Err(lost()), Ok(json!({"entries": []}))]);
+    assert_eq!(answer.expect("an answer").into_value(), json!({"outcome": "answer_lost", "doc": DOC, "as_of": READ_AT, "cause": "unreachable", "refusal": lost().to_value(), "error": true}));
+    let (answer, _) = edit("add", "addition", vec![Err(refused_edit("arrangement_moved"))]);
+    assert_eq!(answer.expect("an answer").into_value().get(ERROR), None, "the board's verdict is data");
+    let (answer, _) = edit("add", "addition", vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44, "committed": true}))]);
     assert_eq!(answer.expect("an answer").into_value().get(ERROR), None, "a landing is data");
 }
 
 /// A halt naming a file the edit met and is not answered with is the row's
 /// to say.
 ///
-/// The undo's read of the image meets a halt about a file: the edit answers
-/// `partial`, and the halt is left for the row to say on `Talk`, once,
-/// however often the edit met it; a halt the edit is answered with is
-/// `Shell::call`'s to say, and the row leaves it; and a halt naming no file
-/// is no one's to say (the mutants that keep no halt, keep the one the call
-/// answers too, or keep one twice).
+/// The read of the feed that settles a lost answer meets a halt about a
+/// file: the edit answers `answer_lost`, and the halt is left for the row to
+/// say on `Talk`, once, however often the edit met it; a halt the edit is
+/// answered with is `Shell::call`'s to say, and the row leaves it; and a
+/// halt naming no file is no one's to say (the mutants that keep no halt,
+/// keep the one the call answers too, or keep one twice).
 #[test]
 fn a_halt_naming_a_file_the_edit_met_and_is_not_answered_with_is_the_rows_to_say() {
     let face = |path: Option<&str>| skep_client::halt::Face { state: "the key file does not read".into(), cause: "c".into(), act: "a".into(), path: path.map(Into::into) };
     let about_a_file = || Err(Refusal::named(Name::STORE_UNREADABLE, face(Some("/store/keys/k"))));
-    let verdict = moved_verdict("delete", 44, 46);
-    let undone = vec![Ok(json!({"resp": "ack_addr", "addr": MINTED, "at": 44})), held_answer(4, "moved"), lines(4, "moved", verdict), Ok(json!({})), about_a_file()];
-    let rows = Rowed::of([reads_of(CODE), undone].concat(), vec![]);
+    let unsettled = vec![Err(lost()), Err(lost()), about_a_file()];
+    let rows = Rowed::of([reads_of(CODE), unsettled].concat(), vec![]);
     let under = Under::new(&rows, "s-1");
     let answered = replace(&under, Asked { doc: DOC, old: "add", new: "subtract" });
-    assert_eq!(answered.as_ref().map(|answer| answer.value["outcome"].clone()), Ok(json!("partial")));
-    assert_eq!(under.unsaid(&answered), [about_a_file().unwrap_err()], "the halt the undo met");
+    assert_eq!(answered.as_ref().map(|answer| answer.value["outcome"].clone()), Ok(json!("answer_lost")));
+    assert_eq!(under.unsaid(&answered), [about_a_file().unwrap_err()], "the halt the feed's read met");
     let rows = Rowed::of(vec![about_a_file()], vec![]);
     let under = Under::new(&rows, "s-1");
     let answered = replace(&under, Asked { doc: DOC, old: "add", new: "subtract" });

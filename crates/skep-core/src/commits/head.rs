@@ -1120,7 +1120,7 @@ impl HeadWriter {
                 // Each driver the door runs — the record's insert, the
                 // shot's publication, the seed's make_link — commits or is
                 // refused.
-                Ok((addr, at)) => Response::AckAddr { addr, at, committed: true },
+                Ok((addr, at)) => Response::AckAddr { addr, at, committed: true, head_moved: None },
                 Err(refusal) => {
                     refused(op_name(kind), &refusal);
                     // A no-op answer `record` returns None for: nothing

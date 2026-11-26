@@ -31,10 +31,11 @@ use super::*;
 /// landing into `S`, `undo` reads the draft's `doc_metadata` live — a
 /// base and a marker — then the state before the landing at ONE
 /// position, `/op-at`'s `nearest` for the marker's `at − 1`: a landing
-/// is one commit of three records, so `at − 1` lies inside it and the
-/// board answers `not_a_position`; `doc_metadata` there for the old
-/// base, address and extent, and `image` for C. ONE `set_arrangement`
-/// follows — C as the runs, `as_of` the landing's position (P3), `base`
+/// with a base is one commit of two records, the changes' and the base's,
+/// so `at − 1` lies inside it and the board answers `not_a_position`;
+/// `doc_metadata` there for the old base, address and extent, and `image`
+/// for C. ONE `set_arrangement` follows — one change, C over every
+/// position the draft holds, `as_of` the landing's position (P3), `base`
 /// the old pair (P1), no `head`, no `merge`, the id naming the draft and
 /// the position — so the draft holds C again, its base is `D.1` at
 /// eleven and the marker is cleared; the replacing record, `landed`
@@ -47,7 +48,7 @@ fn undo_after_a_landing_restores_c_and_the_old_base_and_clears_the_marker_in_one
     let before = dialer.world().position;
     let (_, landed) = landed_in_s(&board, &session, &signer);
     let (at, link) = landing_of(&landed);
-    assert_eq!(at, before + 3, "the premise: one commit of three records");
+    assert_eq!(at, before + 2, "the premise: one commit of two records, the changes' and the base's");
     assert_eq!(dialer.world().standing(S).1.map(|m| m.at), Some(at), "the premise: the marker at the landing");
     dialer.clear();
     let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
@@ -66,7 +67,7 @@ fn undo_after_a_landing_restores_c_and_the_old_base_and_clears_the_marker_in_one
     let frame = &frames[0];
     assert_eq!(frame["doc"], S);
     assert_eq!(frame["as_of"].as_u64(), Some(at), "typed against the landing's position: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_c()), "C, read before the landing");
+    assert_eq!(frame["changes"], whole_changes(width_of(&draft_m()), &draft_c()), "C, read before the landing, over every position the draft holds");
     assert_eq!(frame["base"], json!({"at": format!("{D}.1"), "extent": "11"}), "the old base, address and extent");
     assert!(frame.get("head").is_none() && frame.get("merge").is_none(), "no head, no merge: {frame}");
     assert_eq!(frame["id"].as_str(), Some(format!("undo:{S}:{at}.arrangement").as_str()));
@@ -161,7 +162,7 @@ fn undo_typed_at_the_editors_own_last_ack_lands_after_its_later_edit_was_taken_b
     assert_eq!(frames.len(), 1, "one write: {:?}", dialer.ops());
     let frame = &frames[0];
     assert_eq!(frame["as_of"].as_u64(), Some(r), "typed against the editor's own last ack: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_c()), "C, read before the landing");
+    assert_eq!(frame["changes"], whole_changes(width_of(&draft_m()), &draft_c()), "C, read before the landing, over every position the draft holds");
     assert_eq!(frame["base"], json!({"at": format!("{D}.1"), "extent": "11"}), "the old base, address and extent");
     assert!(frame.get("head").is_none() && frame.get("merge").is_none(), "no head, no merge: {frame}");
     assert_eq!(frame["id"].as_str(), Some(format!("undo:{S}:{r}.arrangement").as_str()), "the id names the draft and the typed position");
@@ -312,7 +313,7 @@ fn the_undo_sends_c_mapped_through_the_records_of_the_mergers_own_origins() {
     assert_eq!(dialer.frames("read_link").iter().filter(|f| f["a"] == record).count(), 1, "the record read once");
     let sent = vec![run(D, 1, 11), run(D, 19, 3)];
     let frame = &dialer.frames("set_arrangement")[0];
-    assert_eq!(frame["runs"], frame_runs(&sent), "C mapped: the base's text as read, the trunk's words where S's stood");
+    assert_eq!(frame["changes"], whole_changes(width_of(&draft_m()), &sent), "C mapped: the base's text as read, the trunk's words where S's stood");
     assert_eq!((frame["as_of"].as_u64(), frame["base"].clone()), (Some(at), json!({"at": format!("{D}.1"), "extent": "11"})), "{frame}");
     let w = dialer.world();
     assert_eq!(w.docs.get(S).unwrap().runs, sent, "the draft holds C mapped");
@@ -346,7 +347,7 @@ fn the_undo_sends_another_accounts_words_in_c_as_the_words_its_owner_published()
     assert_eq!(dialer.frames("read_link").iter().filter(|f| f["a"] == record).count(), 1, "the draft's record read once");
     let sent = vec![run(D, 1, 11), run(THEIR_EDITION, 1, 3)];
     let frame = &dialer.frames("set_arrangement")[0];
-    assert_eq!(frame["runs"], frame_runs(&sent), "C mapped: the edition's words where the draft's stood");
+    assert_eq!(frame["changes"], whole_changes(width_of(&draft_m()), &sent), "C mapped: the edition's words where the draft's stood");
     assert_eq!(frame["as_of"].as_u64(), Some(at), "typed against the landing's position: {frame}");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, sent, "the draft holds C mapped");
 }
@@ -409,7 +410,7 @@ fn an_undo_whose_c_maps_past_the_cap_is_refused_over_cap_with_nothing_sent() {
     // The landing by hand, over C.
     let head = format!("{D}.2");
     let typed = dialer.world().position;
-    let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+    let frame = frames::set_arrangement(S, &whole_of(&dialer, S, &draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
     let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
     assert_eq!(ack["resp"], "ack", "{ack}");
     let rows = dialer.world().rows.len();
@@ -473,7 +474,7 @@ fn the_undo_sends_a_members_own_word_under_the_members_chain() {
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
     assert_eq!(sent[0]["as_of"].as_u64(), Some(at), "typed against the landing's position: {}", sent[0]);
     let runs = [frames::shot_run(D, &format!("{D}.0.1.1"), 11), frames::shot_run(&member(), &format!("{}.0.1.12", member()), 1)];
-    assert_eq!(sent[0]["runs"], json!(runs), "each run on the chain that minted it, the member its word's origin");
+    assert_eq!(sent[0]["changes"], json!([frames::placed(1, width_of(&draft_m()), &runs)]), "each run on the chain that minted it, the member its word's origin");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, c, "C again, the member's word its own");
 }
 
@@ -500,10 +501,10 @@ fn a_baseless_landing_is_not_taken_back_where_the_trunks_word_stands_for_a_membe
     // carries the request's merge.
     let head = format!("{D}.2");
     let typed = dialer.world().position;
-    let landing = frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
+    let landing = frames::set_arrangement(plain, &whole_of(&dialer, plain, &draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
     let at = dialer.world().apply(&landing)["at"].as_u64().expect("the landing's ack");
     // The re-arrangement: the trunk's twelfth word where the member's stood.
-    let rearranged = frames::set_arrangement(plain, &shot_runs(&[run(D, 1, 12)]), at, None, None, None, None);
+    let rearranged = frames::set_arrangement(plain, &whole_of(&dialer, plain, &[run(D, 1, 12)]), at, None, None, None, None);
     let r = dialer.world().apply(&rearranged)["at"].as_u64().expect("the re-arrangement's ack");
     dialer.clear();
     let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), Some(r), None).expect("the landing taken back");
@@ -512,7 +513,7 @@ fn a_baseless_landing_is_not_taken_back_where_the_trunks_word_stands_for_a_membe
     let sent = dialer.frames("set_arrangement");
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
     assert_eq!(sent[0]["as_of"].as_u64(), Some(r), "typed against the caller's own last ack: {}", sent[0]);
-    assert_eq!(sent[0]["runs"], frame_runs(&c), "C, the member's word under its own chain");
+    assert_eq!(sent[0]["changes"], whole_changes(12, &c), "C, the member's word under its own chain, over the twelve the draft holds");
     assert_eq!(dialer.world().docs.get(plain).unwrap().runs, c, "C again");
 }
 
@@ -695,7 +696,7 @@ fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
     let before = dialer.world().position;
     let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("landed");
     let (at, link) = landing_of(&landed);
-    assert_eq!(at, before + 2, "the premise: a baseless landing is one commit of two records, the removal and the placement");
+    assert_eq!(at, before + 1, "the premise: a baseless landing is one commit of one record, so the number below it is the commit before");
     let feed_row = |w: &World| w.rows.iter().rev().find(|r| r.op == "set_arrangement").map(|r| (r.at, r.terms.clone())).expect("the row");
     assert_eq!(
         feed_row(&dialer.world()),
@@ -703,16 +704,21 @@ fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
         "the premise: the landing's row, the request's merge beside no base"
     );
     assert_eq!(dialer.world().standing(plain), (None, None), "the premise: nothing recorded");
+    assert_eq!(
+        dialer.frames("set_arrangement").last().map(|f| f["changes"].clone()),
+        Some(whole_changes(11, &m_runs(&merged))),
+        "the landing into a draft the merge never read: one change over the eleven positions it held"
+    );
     dialer.clear();
     let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None).expect("undone");
     let ops = dialer.ops();
     assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={plain}")) && o.contains("drafts=true")), "the lookup walks the draft's own rows on the supplement: {ops:?}");
     assert_eq!(undone.restored, None, "no base to restore");
     assert!(undone.record.is_some(), "the landing's record stood, so one replaces it");
-    assert_eq!(dialer.positions("doc_metadata"), [at - 1, before], "the pre-landing read at nearest");
+    assert_eq!(dialer.positions("doc_metadata"), [before], "the pre-landing read at `at − 1`, the position before the landing's one record");
     let frame = &dialer.frames("set_arrangement")[0];
     assert_eq!(frame["as_of"].as_u64(), Some(at), "the row's at");
-    assert_eq!(frame["runs"], frame_runs(&[run(D, 1, 11)]), "C");
+    assert_eq!(frame["changes"], whole_changes(width_of(&m_runs(&merged)), &[run(D, 1, 11)]), "C, over every position the draft holds");
     assert!(frame.get("base").is_none() && frame.get("head").is_none() && frame.get("merge").is_none(), "a baseless document is never sent a base: {frame}");
     assert_eq!(frame["id"].as_str(), Some(format!("undo:{plain}:{at}.arrangement").as_str()));
     let w = dialer.world();
@@ -799,10 +805,11 @@ fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
         err.unwrap_err().to_string(),
         format!("nothing to undo: the merge in {plain} was already taken back")
     );
+    assert_eq!(at - 1, before, "(a): the premise: the landing is one record, the number below it the commit before");
     assert_eq!(
         dialer.positions("doc_metadata"),
-        [at - 1, before],
-        "(a): the pre-landing read at nearest: {:?}",
+        [before],
+        "(a): the pre-landing read at the position before the landing: {:?}",
         dialer.ops()
     );
     assert_eq!(
@@ -899,7 +906,7 @@ fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
     let restored = m_runs(&merged);
     let typed = dialer.world().position;
     let frame =
-        frames::set_arrangement(plain, &shot_runs(&restored), typed, None, None, None, None);
+        frames::set_arrangement(plain, &whole_of(&dialer, plain, &restored), typed, None, None, None, None);
     let r = dialer.world().apply(&frame)["at"].as_u64().expect("(e): the restore's ack");
     assert_eq!(dialer.world().docs.get(plain).unwrap().runs, restored, "(e): the premise, M");
     // A fresh session, as the command's run is: no memo of the undo's
@@ -982,7 +989,7 @@ fn a_baseless_undo_run_again_after_it_landed_is_nothing_to_undo() {
 fn baseless_landing(dialer: &Scripted, plain: &str) -> u64 {
     let head = format!("{D}.2");
     let typed = dialer.world().position;
-    let landing = frames::set_arrangement(plain, &shot_runs(&draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
+    let landing = frames::set_arrangement(plain, &whole_of(dialer, plain, &draft_m()), typed, Some((&head, 15)), None, Some((&[S], None)), None);
     dialer.world().apply(&landing)["at"].as_u64().expect("the landing's ack")
 }
 
@@ -1040,7 +1047,8 @@ fn a_baseless_landing_is_taken_back_where_its_re_arrangement_holds_words_a_recor
     let before = dialer.world().position;
     let at = baseless_landing(&dialer, plain);
     let stray = vec![run(D, 1, 11), run(S, 1, 3)];
-    let r = dialer.world().apply(&frames::set_arrangement(plain, &shot_runs(&stray), at, None, None, None, None))["at"].as_u64().expect("the re-arrangement's ack");
+    let rearranged = frames::set_arrangement(plain, &whole_of(&dialer, plain, &stray), at, None, None, None, None);
+    let r = dialer.world().apply(&rearranged)["at"].as_u64().expect("the re-arrangement's ack");
     let rows = dialer.world().rows.len();
     dialer.clear();
     assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None, None), Err(Refusal::NothingToUndo { draft: a(plain), why: NoUndo::TakenBack }));
@@ -1157,7 +1165,7 @@ fn an_undo_of_a_baseless_landing_with_no_record_replaces_no_other_merges() {
     // record is written. Answers the landing's position.
     let landed_over = |dialer: &Scripted| {
         let typed = dialer.world().position;
-        let over = frames::set_arrangement(p, &shot_runs(&theirs), typed, Some((&head, 15)), None, Some((&[Z], None)), None);
+        let over = frames::set_arrangement(p, &whole_of(dialer, p, &theirs), typed, Some((&head, 15)), None, Some((&[Z], None)), None);
         dialer.world().apply(&over)["at"].as_u64().expect("the landing by hand")
     };
     let mut w = draft_landing_world();
@@ -1273,14 +1281,15 @@ fn the_pre_landing_read_goes_to_nearest_never_to_at_minus_one_itself() {
     let (at, _) = landing_of(&landed);
     {
         let w = dialer.world();
-        assert!(w.inside_commits.contains(&(at - 1)) && w.inside_commits.contains(&(at - 2)), "the premise: the numbers inside the landing's commit");
+        assert!(w.inside_commits.contains(&(at - 1)), "the premise: the number inside the landing's commit of two records");
+        assert_eq!(at - 2, before, "the premise: the commit before lies just below it");
         assert!(!w.inside_commits.contains(&before));
     }
     dialer.clear();
     undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
     let asked: Vec<u64> = dialer.served.lock().unwrap().iter().filter(|(line, _)| line.starts_with("at:")).map(|(_, f)| f["at"].as_u64().unwrap()).collect();
     assert_eq!(asked, [at - 1, before, before, before], "doc_metadata at at − 1, then doc_metadata, the span set and the image at nearest: {:?}", dialer.ops());
-    assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_c()), "C as it stood at nearest, never M");
+    assert_eq!(dialer.frames("set_arrangement")[0]["changes"], whole_changes(width_of(&draft_m()), &draft_c()), "C as it stood at nearest, never M");
 }
 
 /// Files `record` in a sub-account's journal, answering its link.
@@ -1349,5 +1358,91 @@ fn an_undo_is_not_stopped_by_another_accounts_take_back_of_the_mergers_record() 
         };
         assert!(record.is_some(), "{act}: the merger's record stands, so one replaces it");
         assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(own.to_string().as_str()), "{act}: the merger's own landing record replaced");
+    }
+}
+
+/// The changed stretch of two images makes the one the other.
+///
+/// Each cell names two images and the stretch between them — its first
+/// position, the positions removed and the positions placed — and the
+/// stretch made by hand on the first leaves the second, position for
+/// position: the same image and one cut into other runs differ nowhere; a
+/// member's word is never the trunk's of its ordinal; a word the two hold
+/// once and twice is shared once, the lead and the tail never overlapping
+/// (the mutant that lets them answers a stretch of fewer than no
+/// positions). Then generated pairs over two chains and few ordinals, so
+/// words recur: the stretch made leaves the image wanted, and it is the
+/// least one — its first position and its last differ between the two.
+#[test]
+fn the_changed_stretch_of_two_images_makes_one_the_other() {
+    use crate::board::Image;
+    use crate::merge::undo::{changed_stretch, Stretch};
+    let image = |runs: &[(&str, u64, u64)]| Image::tiled(runs.iter().map(|(prefix, first, width)| (prefix.to_string(), *first, *width))).expect("an image");
+    let positions = |image: &Image| -> Vec<(String, u64)> { image.runs().iter().flat_map(|r| (0..r.width).map(move |k| (r.prefix.clone(), r.first + k))).collect() };
+    let made = |standing: &Image, stretch: &Option<Stretch>| {
+        let mut all = positions(standing);
+        if let Some(Stretch { at, removed, placed }) = stretch {
+            let from = (*at - 1) as usize;
+            all.splice(from..from + *removed as usize, positions(placed));
+        }
+        all
+    };
+    let (d, m, s) = ("1.0.1.0.64.0.1", "1.0.1.0.64.2.0.1", "1.0.1.0.66.0.1");
+    let c = [(d, 1, 11), (s, 1, 3)];
+    let big = [(d, 1, 4), (d, 12, 4), (d, 5, 7), (s, 1, 3)];
+    // A cell: its name, the image standing, the image wanted, and the
+    // stretch between them — its first position, the positions removed and
+    // the positions placed — where they differ.
+    type Cell = (&'static str, Image, Image, Option<(u64, u64, u64)>);
+    let cells: Vec<Cell> = vec![
+        ("the same image", image(&c), image(&c), None),
+        ("one run cut in two", image(&[(d, 1, 11)]), image(&[(d, 1, 4), (d, 5, 7)]), None),
+        ("words placed in the middle", image(&c), image(&big), Some((5, 0, 4))),
+        ("words removed from the middle", image(&big), image(&c), Some((5, 4, 0))),
+        ("a member's word for the trunk's of its ordinal", image(&[(d, 1, 12)]), image(&[(d, 1, 11), (m, 12, 1)]), Some((12, 1, 1))),
+        ("the first word", image(&[(s, 1, 1), (d, 2, 9)]), image(&[(d, 1, 10)]), Some((1, 1, 1))),
+        ("the last word", image(&[(d, 1, 9), (s, 3, 1)]), image(&[(d, 1, 10)]), Some((10, 1, 1))),
+        ("the first word and the last, all between", image(&[(s, 1, 1), (d, 2, 8), (s, 3, 1)]), image(&[(d, 1, 10)]), Some((1, 10, 10))),
+        ("nothing shared", image(&[(d, 1, 3)]), image(&[(s, 1, 2)]), Some((1, 3, 2))),
+        ("from an empty image", Image::default(), image(&[(d, 1, 3)]), Some((1, 0, 3))),
+        ("to an empty image", image(&[(d, 1, 3)]), Image::default(), Some((1, 3, 0))),
+        ("a word held once and twice", image(&[(d, 1, 1)]), image(&[(d, 1, 1), (d, 1, 1)]), Some((2, 0, 1))),
+    ];
+    for (cell, standing, wanted, expect) in &cells {
+        let stretch = changed_stretch(standing, wanted);
+        assert_eq!(stretch.as_ref().map(|s| (s.at, s.removed, s.placed.extent())), *expect, "{cell}");
+        assert_eq!(made(standing, &stretch), positions(wanted), "{cell}: the stretch made leaves the image wanted");
+    }
+    // Generated pairs: a xorshift walk over two chains and eight ordinals.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |below: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % below
+    };
+    for round in 0..2_000 {
+        let generated = |next: &mut dyn FnMut(u64) -> u64| {
+            let runs = next(6);
+            let pieces: Vec<(String, u64, u64)> = (0..runs).map(|_| ((if next(2) == 0 { d } else { m }).to_string(), 1 + next(8), 1 + next(3))).collect();
+            Image::tiled(pieces).expect("an image")
+        };
+        let (standing, wanted) = (generated(&mut next), generated(&mut next));
+        let stretch = changed_stretch(&standing, &wanted);
+        let (held, meant) = (positions(&standing), positions(&wanted));
+        assert_eq!(made(&standing, &stretch), meant, "round {round}: {standing:?} to {wanted:?} by {stretch:?}");
+        match &stretch {
+            None => assert_eq!(held, meant, "round {round}: no stretch between two images that differ"),
+            Some(Stretch { at, removed, placed }) => {
+                let (from, gone, put) = ((*at - 1) as usize, *removed as usize, placed.extent() as usize);
+                assert!(gone + put > 0, "round {round}: a stretch of nothing");
+                // The least stretch: where it both removes and places, its
+                // first positions differ, and its last.
+                if gone > 0 && put > 0 {
+                    assert_ne!(held[from], meant[from], "round {round}: a shared first position inside the stretch");
+                    assert_ne!(held[from + gone - 1], meant[from + put - 1], "round {round}: a shared last position inside the stretch");
+                }
+            }
+        }
     }
 }

@@ -156,8 +156,12 @@
 //! bound, it leaves the landing standing with its record unwritten, as a
 //! journal that cannot take the record does.
 //!
-//! **The draft landing is one write.** M is sent whole as one
-//! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
+//! **The draft landing is one write.** M is landed by one
+//! `set_arrangement` of the draft (wire.md §Arrangement) — naming the one
+//! stretch by which M differs from the draft as the composition read it,
+//! where the draft is a side of the merge, and every position the draft
+//! holds where it is none (the `undo` module's doc, **The changes**) — TYPED
+//! against the
 //! one position the merge was composed at — `Merged::as_of`, P, where every
 //! side the composition fenced held the state it read (skep #762) — so an
 //! edit made to the draft after the merge was composed is refused

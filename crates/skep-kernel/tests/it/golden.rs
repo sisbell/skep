@@ -1,7 +1,7 @@
 //! The GOLDEN BYTE FIXTURE (the encoding report's §7; `SKJ4`/`SKC4`, the
 //! chain's salt): one journal segment, one checkpoint and one world dump per
 //! boundary, produced BY THE OPS of [`Fixture::build_golden`] — the hazard
-//! suite's eleven extended by the eight that reach every journal variant and
+//! suite's eleven extended by the nine that reach every journal variant and
 //! leaf form — under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's
 //! salt is a pure function of the seed and the transaction, so the bytes
 //! reproduce), and committed under `tests/golden/` as `seg-1.wal`,
@@ -79,7 +79,14 @@
 //!   the account's first document: the fixture's first create, op 3,
 //!   commits a second record, so the segment, the checkpoint's coordinate
 //!   and body and every boundary and dump from op 3 on move; the fixture's
-//!   ops do not.
+//!   ops do not;
+//! - M5's records gain `ContentEdit`, a list of changes to one draft spliced
+//!   in one fold (the edit in one commit), appended as the enum's last
+//!   variant, so no record the journal already holds moves a tag: the
+//!   fixture's ops gain one, the edit at 20, which reaches it past the
+//!   checkpoint, so the segment grows by that commit's frames and one dump
+//!   is added at its boundary; the checkpoint and every dump before it do
+//!   not move.
 
 use std::collections::BTreeMap;
 use std::fs;

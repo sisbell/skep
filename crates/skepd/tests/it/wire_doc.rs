@@ -67,7 +67,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 52] = [
+const OP_NAMES: [&str; 53] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -83,6 +83,7 @@ const OP_NAMES: [&str; 52] = [
     "reinstate",
     "rearrange",
     "set_arrangement",
+    "edit",
     "version",
     "stage",
     "publish",
@@ -192,12 +193,20 @@ fn fixture(name: &str) -> Response {
         // `1.0.1.0.1.2` after `1.0.1.0.1.3` was published lands and names
         // the trunk's current head.
         "ack_head_moved" => Response::Ack { at: Seq(14), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) },
-        "ack_addr" => Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true },
+        "ack_addr" => Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true, head_moved: None },
         // A write that found its work done (skep #1043): the mailbox standing
         // at `1.0.1.0.2`, answered at the head the call was judged at.
         "ack_addr_committed_nothing" => {
-            Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false }
+            Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false, head_moved: None }
         }
+        // The tell beside the address: an `edit` that minted in the draft
+        // `1.0.1.0.64` and named a head the trunk has moved past.
+        "ack_addr_head_moved" => Response::AckAddr {
+            addr: a(&[1, 0, 1, 0, 64, 0, 1, 3]),
+            at: Seq(14),
+            committed: true,
+            head_moved: Some(a(&[1, 0, 1, 0, 1, 3])),
+        },
         "ack_edit" => Response::AckEdit {
             successor: a(&[1, 0, 1, 0, 1, 0, 2, 2]),
             claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
@@ -1357,7 +1366,7 @@ fn doc_states_the_marker_put_back() {
     for fact in [
         "`at`, optional, PUTS A MARKER BACK",
         "`at` without a `base` is `malformed`, and any other `at` is `marker_not_restorable`, nothing written",
-        "the merge's position (`marker_not_restorable`), then per run",
+        "the merge's position (`marker_not_restorable`), then `empty_result` and each change's shape",
     ] {
         assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
     }

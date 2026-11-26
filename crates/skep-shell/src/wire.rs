@@ -48,6 +48,15 @@ pub const MAX_TUMBLER_COMPONENTS: usize = 256;
 /// Pinned by the board's behaviour, as [`MAX_TUMBLER_COMPONENTS`] is.
 pub const MAX_INSERT_VALUES: usize = 1 << 18;
 
+/// The most values one `edit` may mint, every change's counted together.
+///
+/// It is `skep-core`'s codec's `MAX_EDIT_VALUES`, refused at the board's
+/// parse, `malformed`, counted off the frame before a value is allocated;
+/// the text edits count a call's new bytes against it before they send
+/// (`shell/text.rs`'s `MAX_NEW_BYTES`). Pinned by the board's behaviour, as
+/// [`MAX_INSERT_VALUES`] is.
+pub const MAX_EDIT_VALUES: usize = 1 << 18;
+
 /// The write kinds of the wire (`docs/wire.md` §Operations).
 ///
 /// A frame of one of these in the guest form, under a bare session, or at a
@@ -56,7 +65,7 @@ pub const MAX_INSERT_VALUES: usize = 1 << 18;
 /// out at its board from before its first dial until its answer is noted
 /// (`hold`'s `Holds::write_out`), so a drafts read waits for the writer of a
 /// row it meets first (skep #1000).
-pub const WRITE_KINDS: [&str; 19] = [
+pub const WRITE_KINDS: [&str; 20] = [
     "delegate",
     "register_node",
     "create_new_document",
@@ -70,6 +79,7 @@ pub const WRITE_KINDS: [&str; 19] = [
     "reinstate",
     "rearrange",
     "set_arrangement",
+    "edit",
     "publish",
     "make_link",
     "emit",

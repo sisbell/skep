@@ -8,7 +8,9 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Base, Marker, Run, RunError, SetArrangement, SetMerge, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{
+    Base, Change, Edit, Marker, Placed, Run, RunError, SetMerge, Shot, ShotRun, VPos, VSpec,
+};
 use skep_content::Val;
 use skep_discovery::{FourSet, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -90,6 +92,18 @@ fn shot_run(origin: Address, i_start: Address, width: u64) -> ShotRun {
 
 fn q_all() -> FourSet {
     FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: SlotSpec::Any, ty: SlotSpec::Any }
+}
+
+/// One change of an edit that places `runs` by identity at content ordinal
+/// `at`, removing `width` positions there.
+fn placing(at: u64, width: u64, runs: Vec<ShotRun>) -> Change {
+    Change { at: vp(1, at), width: n(width), placed: Placed::Runs(runs) }
+}
+
+/// One change of an edit that mints `values` at content ordinal `at`,
+/// removing `width` positions there.
+fn minting(at: u64, width: u64, values: Vec<Val>) -> Change {
+    Change { at: vp(1, at), width: n(width), placed: Placed::Values(values) }
 }
 
 fn rq(id: Option<&str>, op: Op) -> Request {
@@ -178,19 +192,20 @@ fn all_requests() -> Vec<Request> {
             },
         ),
         rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)], as_of: Seq(7) }),
-        // The landing (the landing lane; skep #764): every optional member
-        // present — the head pair, the base pair and the merge's sides — on
-        // one request; none on the plain re-arrangement; the head alone,
-        // with its merge, on a landing into a free-standing draft; and an
-        // empty `runs`, which sets an empty arrangement.
+        // The edit under its landing name (the landing lane; skep #764):
+        // every optional member present — the head pair, the base pair and
+        // the merge's sides — on one request of two changes placing runs;
+        // none on the plain re-arrangement; the head alone, with its merge,
+        // on a landing into a free-standing draft; and no change at all,
+        // beside a head and a merge.
         rq(
             None,
             Op::SetArrangement {
                 doc: d3(),
-                arrangement: SetArrangement {
-                    runs: vec![
-                        shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4),
-                        shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1),
+                arrangement: Edit {
+                    changes: vec![
+                        placing(1, 2, vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)]),
+                        placing(7, 0, vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1)]),
                     ],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
@@ -204,8 +219,8 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::SetArrangement {
                 doc: d3(),
-                arrangement: SetArrangement {
-                    runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)],
+                arrangement: Edit {
+                    changes: vec![placing(1, 9, vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)])],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     merge: Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: Some(Seq(5)) }),
@@ -217,8 +232,8 @@ fn all_requests() -> Vec<Request> {
             Some("land-2"),
             Op::SetArrangement {
                 doc: d3(),
-                arrangement: SetArrangement {
-                    runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)],
+                arrangement: Edit {
+                    changes: vec![placing(1, 0, vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)])],
                     head: None,
                     base: None,
                     merge: None,
@@ -230,11 +245,44 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::SetArrangement {
                 doc: d3(),
-                arrangement: SetArrangement {
-                    runs: vec![],
+                arrangement: Edit {
+                    changes: vec![],
                     head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
                     base: None,
                     merge: Some(SetMerge { sides: vec![], at: None }),
+                },
+                as_of: Seq(9),
+            },
+        ),
+        // The edit under its own name: changes that mint — a placement, a
+        // replacement by text and an atom, a removal alone, touching the
+        // one before it — with no optional member, and with all three.
+        rq(
+            Some("edit-1"),
+            Op::Edit {
+                doc: d3(),
+                edit: Edit {
+                    changes: vec![
+                        minting(1, 0, vec![Val::new(vec![b'h']), Val::new(vec![b'i'])]),
+                        minting(4, 2, vec![Val::new(vec![b'x']), Val::new(b"an atom".to_vec())]),
+                        minting(6, 3, vec![]),
+                    ],
+                    head: None,
+                    base: None,
+                    merge: None,
+                },
+                as_of: Seq(9),
+            },
+        ),
+        rq(
+            None,
+            Op::Edit {
+                doc: d3(),
+                edit: Edit {
+                    changes: vec![minting(2, 1, vec![Val::new(vec![0xff])])],
+                    head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    merge: Some(SetMerge { sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])], at: None }),
                 },
                 as_of: Seq(9),
             },
@@ -669,6 +717,7 @@ const OP_NAMES: &[&str] = &[
     "reinstate",
     "rearrange",
     "set_arrangement",
+    "edit",
     "version",
     "stage",
     "publish",
@@ -730,44 +779,45 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::Reinstate => 11,
         OpKind::Rearrange => 12,
         OpKind::SetArrangement => 13,
-        OpKind::Version => 14,
-        OpKind::Stage => 15,
-        OpKind::Publish => 16,
-        OpKind::MakeLink => 17,
-        OpKind::Emit => 18,
-        OpKind::Nullify => 19,
-        OpKind::AssertSup => 20,
-        OpKind::EditLink => 21,
-        OpKind::ReadLink => 22,
-        OpKind::FollowLink => 23,
-        OpKind::RetrieveV => 24,
-        OpKind::RetrieveI => 25,
-        OpKind::ContentFrontier => 26,
-        OpKind::RetrieveDocVSpan => 27,
-        OpKind::RetrieveDocVSpanSet => 28,
-        OpKind::LineNumbers => 29,
-        OpKind::ShowOrigin => 30,
-        OpKind::ShowDeletions => 31,
-        OpKind::Compare => 32,
-        OpKind::FindDocsContaining => 33,
-        OpKind::Image => 34,
-        OpKind::FindLinksV => 35,
-        OpKind::FindLinksFtt => 36,
-        OpKind::CountV => 37,
-        OpKind::CountFtt => 38,
-        OpKind::WindowV => 39,
-        OpKind::WindowFtt => 40,
-        OpKind::CountVByHome => 41,
-        OpKind::FindLinksVHistory => 42,
-        OpKind::RetrieveEndsets => 43,
-        OpKind::Project => 44,
-        OpKind::DiscoverableFrom => 45,
-        OpKind::DeleteOrphans => 46,
-        OpKind::InClaims => 47,
-        OpKind::OutClaims => 48,
-        OpKind::DocMetadata => 49,
-        OpKind::EditionClaims => 50,
-        OpKind::UniversalGrants => 51,
+        OpKind::Edit => 14,
+        OpKind::Version => 15,
+        OpKind::Stage => 16,
+        OpKind::Publish => 17,
+        OpKind::MakeLink => 18,
+        OpKind::Emit => 19,
+        OpKind::Nullify => 20,
+        OpKind::AssertSup => 21,
+        OpKind::EditLink => 22,
+        OpKind::ReadLink => 23,
+        OpKind::FollowLink => 24,
+        OpKind::RetrieveV => 25,
+        OpKind::RetrieveI => 26,
+        OpKind::ContentFrontier => 27,
+        OpKind::RetrieveDocVSpan => 28,
+        OpKind::RetrieveDocVSpanSet => 29,
+        OpKind::LineNumbers => 30,
+        OpKind::ShowOrigin => 31,
+        OpKind::ShowDeletions => 32,
+        OpKind::Compare => 33,
+        OpKind::FindDocsContaining => 34,
+        OpKind::Image => 35,
+        OpKind::FindLinksV => 36,
+        OpKind::FindLinksFtt => 37,
+        OpKind::CountV => 38,
+        OpKind::CountFtt => 39,
+        OpKind::WindowV => 40,
+        OpKind::WindowFtt => 41,
+        OpKind::CountVByHome => 42,
+        OpKind::FindLinksVHistory => 43,
+        OpKind::RetrieveEndsets => 44,
+        OpKind::Project => 45,
+        OpKind::DiscoverableFrom => 46,
+        OpKind::DeleteOrphans => 47,
+        OpKind::InClaims => 48,
+        OpKind::OutClaims => 49,
+        OpKind::DocMetadata => 50,
+        OpKind::EditionClaims => 51,
+        OpKind::UniversalGrants => 52,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1774,10 +1824,10 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         // The landing's tell (skep #764): the trunk's current head beside the
         // position, on the one ack that carries it.
         ("ack", Response::Ack { at: Seq(9), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) }),
-        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true }),
+        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7), committed: true, head_moved: None }),
         // A write that found its work done (skep #1043): the address standing,
         // the base it was read at, and `committed: false` beside them.
-        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false }),
+        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 2]), at: Seq(9), committed: false, head_moved: None }),
         (
             "ack_edit",
             Response::AckEdit {
@@ -2235,7 +2285,7 @@ fn an_ack_addr_says_committed_false_only_where_nothing_committed() {
 }
 
 /// The landing's frame (wire.md §Arrangement, `set_arrangement`; skep #764):
-/// `runs` and `as_of` required, the head pair, the base pair and the
+/// `changes` and `as_of` required, the head pair, the base pair and the
 /// merge's sides each optional and each read as an object of its own
 /// members alone, `null` reading as absent; a merge's position optional
 /// beside its sides (skep #870); a `merge` without a `head` is refused, the
@@ -2247,16 +2297,17 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
     let codec = JsonCodec;
     let frame = |fields: &str| {
         format!(
-            r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}],"as_of":7{fields}}}"#
+            r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","changes":[{{"at":{{"subspace":"1","ordinal":"1"}},"width":"5","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}]}}],"as_of":7{fields}}}"#
         )
         .into_bytes()
     };
     let plain = parse_ok(&codec, &frame(""));
     let Op::SetArrangement { arrangement, .. } = &plain.op else { panic!("{plain:?}") };
     assert!(arrangement.head.is_none() && arrangement.base.is_none() && arrangement.merge.is_none());
+    assert_eq!(arrangement.changes, vec![placing(1, 5, vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3)])]);
     assert_eq!(
         String::from_utf8(codec.marshal_request(&plain)).expect("utf-8"),
-        r#"{"as_of":7,"doc":"1.0.1.0.65","op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"}]}"#,
+        r#"{"as_of":7,"changes":[{"at":{"ordinal":"1","subspace":"1"},"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"}],"width":"5"}],"doc":"1.0.1.0.65","op":"set_arrangement"}"#,
         "the canonical form carries no absent member"
     );
     let landing = parse_ok(
@@ -2309,10 +2360,109 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
         let got = e.detail.expect("a parse failure names what failed");
         assert!(got.contains(detail), "{bad}: {got}");
     }
-    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[]}"#).expect_err("as_of is required");
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","changes":[]}"#).expect_err("as_of is required");
     assert!(e.detail.expect("named").contains("missing field 'as_of'"));
-    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","as_of":7}"#).expect_err("runs is required");
-    assert!(e.detail.expect("named").contains("missing field 'runs'"));
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.65","as_of":7}"#).expect_err("changes is required");
+    assert!(e.detail.expect("named").contains("missing field 'changes'"));
+    // The whole form is no frame: a top-level `runs` beside no `changes` is
+    // a frame missing its list, and beside one an unknown field.
+    let run = r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}"#;
+    let whole = format!(r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[{run}],"as_of":7}}"#);
+    assert!(codec.parse(whole.as_bytes()).expect_err("the whole form").detail.expect("named").contains("missing field 'changes'"));
+    let both = format!(r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","runs":[{run}],"changes":[],"as_of":7}}"#);
+    assert!(codec.parse(both.as_bytes()).expect_err("a list beside the changes").detail.expect("named").contains("unknown field 'runs'"));
+}
+
+/// The edit's frame, under either of its names (wire.md §Arrangement,
+/// `edit`): `changes` a list under the wire's cap, each an object of `at`,
+/// `width` and the one member its frame's name carries — `values` on
+/// `edit`, `runs` on `set_arrangement` — the other name's member an unknown
+/// field of the change; the changes ascending and apart, two that touch
+/// admitted; the values of an `edit` held over all its changes to the
+/// frame's cap and the runs of a `set_arrangement` over all its changes to
+/// the list cap, each ahead of the store; `attest` an unknown field on
+/// both; and each refusal about one change naming it in `site.index`.
+#[test]
+fn an_edits_changes_are_capped_ordered_and_of_their_frames_one_form() {
+    let codec = JsonCodec;
+    let refused = |frame: &str| {
+        let e = codec.parse(frame.as_bytes()).err().unwrap_or_else(|| panic!("frame must not parse: {}", &frame[..frame.len().min(200)]));
+        (e.detail.expect("a parse failure names what failed"), e.site.and_then(|s| s.index))
+    };
+    let change = |at: usize, width: usize, member: &str| format!(r#"{{"at":{{"subspace":"1","ordinal":"{at}"}},"width":"{width}",{member}}}"#);
+    let edit = |changes: &[String]| format!(r#"{{"op":"edit","doc":"1.0.1.0.65","changes":[{}],"as_of":7}}"#, changes.join(","));
+    let set = |changes: &[String]| format!(r#"{{"op":"set_arrangement","doc":"1.0.1.0.65","changes":[{}],"as_of":7}}"#, changes.join(","));
+    let run = r#""runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]"#;
+    // The canonical form, and the fixpoint.
+    let text = parse_ok(&codec, edit(&[change(1, 0, r#""values":["hi"]"#), change(4, 2, r#""values":[{"atom":"an atom"},"x"]"#), change(6, 1, r#""values":[]"#)]).as_bytes());
+    let Op::Edit { edit: parsed, .. } = &text.op else { panic!("{text:?}") };
+    assert_eq!(
+        parsed.changes,
+        vec![
+            minting(1, 0, vec![Val::new(vec![b'h']), Val::new(vec![b'i'])]),
+            minting(4, 2, vec![Val::new(b"an atom".to_vec()), Val::new(vec![b'x'])]),
+            minting(6, 1, vec![]),
+        ],
+        "two changes that touch are apart: the third begins where the second ends"
+    );
+    assert_eq!(
+        String::from_utf8(codec.marshal_request(&text)).expect("utf-8"),
+        r#"{"as_of":7,"changes":[{"at":{"ordinal":"1","subspace":"1"},"values":["hi"],"width":"0"},{"at":{"ordinal":"4","subspace":"1"},"values":[{"atom":"an atom"},"x"],"width":"2"},{"at":{"ordinal":"6","subspace":"1"},"values":[],"width":"1"}],"doc":"1.0.1.0.65","op":"edit"}"#
+    );
+    assert_eq!(parse_ok(&codec, &codec.marshal_request(&text)), text, "parse ∘ marshal is a fixpoint");
+    // (a) Out of order, and overlapping: refused, naming the change.
+    for (changes, why) in [
+        (vec![change(5, 0, r#""values":["a"]"#), change(4, 0, r#""values":["b"]"#)], "out of order"),
+        (vec![change(2, 3, r#""values":["a"]"#), change(4, 1, r#""values":["b"]"#)], "overlapping"),
+    ] {
+        let (detail, index) = refused(&edit(&changes));
+        assert!(detail.contains("ascending and apart"), "{why}: {detail}");
+        assert_eq!(index, Some(1), "{why}: the change named");
+    }
+    let (detail, index) = refused(&set(&[change(2, 3, run), change(4, 1, run)]));
+    assert!(detail.contains("ascending and apart") && index == Some(1), "{detail}");
+    // (b) One change past the list cap.
+    let many = |count: usize| (0..count).map(|k| change(k + 1, 0, r#""values":["a"]"#)).collect::<Vec<_>>();
+    assert!(codec.parse(edit(&many(MAX_SLOT_SPANS)).as_bytes()).is_ok(), "the cap's changes parse");
+    let (detail, index) = refused(&edit(&many(MAX_SLOT_SPANS + 1)));
+    assert!(detail.contains("past the 4096-element wire cap"), "{detail}");
+    assert_eq!(index, None);
+    // (c) The values of the frame, over its changes, one past their cap.
+    const VALUES: usize = 1 << 18;
+    let half = "a".repeat(VALUES / 2);
+    let two = |second: &str| edit(&[change(1, 0, &format!(r#""values":["{half}"]"#)), change(2, 0, &format!(r#""values":["{second}"]"#))]);
+    assert!(codec.parse(two(&half).as_bytes()).is_ok(), "the cap's values parse");
+    let (detail, index) = refused(&two(&format!("{half}a")));
+    assert!(detail.contains("more than the 262144-value cap on one edit"), "{detail}");
+    assert_eq!(index, Some(1), "the change that crosses the cap");
+    // (d) The runs of the frame, over its changes, one past the list cap.
+    let runs = |count: usize| format!(r#""runs":[{}]"#, vec![r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}"#; count].join(","));
+    assert!(codec.parse(set(&[change(1, 0, &runs(MAX_SLOT_SPANS / 2)), change(2, 0, &runs(MAX_SLOT_SPANS / 2))]).as_bytes()).is_ok(), "the cap's runs parse");
+    let (detail, index) = refused(&set(&[change(1, 0, &runs(MAX_SLOT_SPANS / 2)), change(2, 0, &runs(MAX_SLOT_SPANS / 2 + 1))]));
+    assert!(detail.contains("past the 4096-run cap on one frame"), "{detail}");
+    assert_eq!(index, None);
+    // (e) `attest` is an unknown field on both.
+    for frame in [edit(&[change(1, 0, r#""values":["a"]"#)]), set(&[change(1, 0, run)])] {
+        let attested = format!(r#"{},"attest":{{"alg":"x","sig":"00"}}}}"#, &frame[..frame.len() - 1]);
+        assert!(refused(&attested).0.contains("unknown field 'attest'"), "{attested}");
+    }
+    // Each name's changes carry its own member alone, and all three of a
+    // change's members are required.
+    let (detail, index) = refused(&edit(&[change(1, 0, r#""values":["a"]"#), change(2, 0, run)]));
+    assert!(detail.contains("unknown field 'runs'") && index == Some(1), "{detail}");
+    let (detail, index) = refused(&set(&[change(1, 0, r#""values":["a"]"#)]));
+    assert!(detail.contains("unknown field 'values'") && index == Some(0), "{detail}");
+    let (detail, _) = refused(&edit(&[r#"{"at":{"subspace":"1","ordinal":"1"},"values":["a"]}"#.to_string()]));
+    assert!(detail.contains("missing field 'width'"), "{detail}");
+    let (detail, _) = refused(&edit(&[r#"{"at":{"subspace":"1","ordinal":"1"},"width":"1"}"#.to_string()]));
+    assert!(detail.contains("missing field 'values'"), "{detail}");
+    let (detail, _) = refused(r#"{"op":"edit","doc":"1.0.1.0.65","as_of":7}"#);
+    assert!(detail.contains("missing field 'changes'"), "{detail}");
+    let (detail, _) = refused(r#"{"op":"edit","doc":"1.0.1.0.65","changes":[]}"#);
+    assert!(detail.contains("missing field 'as_of'"), "{detail}");
+    // An empty list parses under both names: whether it stands beside a
+    // base or a merge is the store's to say.
+    assert!(codec.parse(br#"{"op":"edit","doc":"1.0.1.0.65","changes":[],"as_of":7}"#).is_ok());
 }
 
 /// Returns the line read's answer to wire.md's own example request.
@@ -3189,8 +3339,8 @@ fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
 }
 
 /// The typed state's grammar (wire.md §Arrangement, the typed state; skep
-/// #442): each of the five in-place edits, and the landing beside them,
-/// REQUIRES `as_of` — a frame without it is "missing field", `malformed` by
+/// #442): each of the five in-place edits, and the edit under both of its
+/// names beside them, REQUIRES `as_of` — a frame without it is "missing field", `malformed` by
 /// the envelope's rule, and one whose member is no position is refused on
 /// the field — and no other op admits it: present on a mint, a read or a
 /// link write it is "unknown field", as any member an op does not take.
@@ -3209,7 +3359,8 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
         r#"{"op":"copy","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"specs":[{"source":"1.0.1.0.64","span":{"start":"1.1","width":"0.1"}}]}"#,
         r#"{"op":"reinstate","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
         r#"{"op":"rearrange","doc":"1.0.1.0.1","cuts":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"2"},{"subspace":"1","ordinal":"3"}]}"#,
-        r#"{"op":"set_arrangement","doc":"1.0.1.0.1","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
+        r#"{"op":"set_arrangement","doc":"1.0.1.0.1","changes":[{"at":{"subspace":"1","ordinal":"1"},"width":"0","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}]}"#,
+        r#"{"op":"edit","doc":"1.0.1.0.1","changes":[{"at":{"subspace":"1","ordinal":"1"},"width":"0","values":["a"]}]}"#,
     ];
     for frame in six {
         let detail = refused(frame);
@@ -3223,7 +3374,8 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
             | Op::Copy { as_of, .. }
             | Op::Reinstate { as_of, .. }
             | Op::Rearrange { as_of, .. }
-            | Op::SetArrangement { as_of, .. } => *as_of,
+            | Op::SetArrangement { as_of, .. }
+            | Op::Edit { as_of, .. } => *as_of,
             other => panic!("{frame}: {other:?}"),
         };
         assert_eq!(typed, Seq(7), "{frame}");

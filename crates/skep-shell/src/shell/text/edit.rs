@@ -3,10 +3,11 @@
 //! A caller changes a draft as a list of exact edits — "replace this text
 //! with that, and that with this" — and hands the list over in one call,
 //! `text.edit(session, {doc, edits: [{old, new}, …]})`, the `text` family's
-//! second, which lands all of them or none. The module makes each pair as
-//! `text.replace` makes its one, out of the parent's own pieces — its read,
-//! its text, its writes and the lines it settles, under the session the
-//! call stands under — and adds three things to them.
+//! second, which lands all of them or none, in one commit (skep #1082). The
+//! module makes each pair as `text.replace` makes its one, out of the
+//! parent's own pieces — its read, its text, its one write and what settles
+//! a lost answer, under the session the call stands under — and adds three
+//! things to them.
 //!
 //! **Checked first** ([`plan`]). The draft's text is read once. Each pair's
 //! `old` is then found in the text as the pairs before it leave it — the
@@ -18,77 +19,60 @@
 //! **Minimal changes.** A pair is made as the changes between its `old` and
 //! its `new` (`skep_client::text::minimal_changes`), never as one stretch:
 //! an `old` that spans two changes leaves the text between them standing at
-//! the identity it had, and a link on it still follows. Each change is
-//! written by position from the one read, with no find and no read between
-//! two writes: its ordinal is its pair's place and its own place in the
-//! pair's new text, the changes before it in the pair made by then. A
-//! change that only inserts or only removes is one write, and one that does
-//! both is two — the new bytes inserted after the old, the old then removed
-//! — as `text.replace` writes one. The first write is typed against the
-//! read's position and each later one against the commit of the write
-//! before it, so a write of the call lands only on the draft as the call's
-//! own writes left it.
+//! the identity it had, and a link on it still follows.
 //!
-//! **All or nothing** ([`Writing`]). The draft's whole image is read before
-//! the first write ([`image_runs`]); the first write, typed against the
-//! text's read, lands only where the image is still the draft's. A write
-//! past the first that does not land, for any cause but another writer's,
-//! is answered by one `set_arrangement` of that image, the take-back, typed
-//! against the commit of the call's last landed write: every byte stands at
-//! its own address again, and the call answers the refusal that stopped it,
-//! nothing standing. The take-back goes through the `op` row as every write
-//! of the call does, once, and is never typed afresh, so it lands over no
-//! other writer's change: where the board refused the write as typed
-//! against an older state — another writer's change landed between two of
-//! the call's — none is sent, and where the take-back does not land itself,
-//! it is not sent again. The call then answers `partial`, an error naming
-//! each change that stands (`stands`), and what stopped the take-back
-//! (`take_back`), the changes named as ones that may stand (`may_stand`)
-//! where its answer was lost. A change whose new bytes landed and whose old
-//! ones were not removed is taken back by identity wherever the draft was
-//! not set back, as `text.replace` takes its insert back (`undo`), and
-//! named with both spans where that does not land either. The take-back is
-//! a whole-draft write the shell's held-lines gate does not read, a frame
-//! naming no draft to the door: the call sends it only while no line of its
-//! own stands held, and answers `held` instead where one does. A write that
-//! landed with no commit the shell read — an ack naming none, or a line
-//! whose drop found its write landed — ends the call there, nothing written
-//! after it and nothing taken back, there being no commit to type either
-//! against; where it is the call's last write the call landed whole, that
-//! change's commit unnamed.
+//! **One frame** ([`net`]). The call writes once: the board's `edit`
+//! (wire.md §Arrangement), every change of the call in one commit, typed
+//! against the read's position, so the call lands whole or not at all and
+//! nothing is ever taken back. No image of the draft is read for it. The
+//! frame's changes are the call's NET changes, in the coordinates of the
+//! draft as read, ascending and apart, as the board takes them: each is a
+//! run of positions the draft held as read that the text the call leaves
+//! keeps none of, and the bytes that text holds in their place
+//! (`rows::Pieces`, which the plan splices in step with the text). So a
+//! pair whose `old` covers bytes an earlier pair of the call inserted mints
+//! only what stands in the end, and removes nothing the call itself minted;
+//! pairs that leave the text as it was read write nothing, and the call
+//! answers `unchanged`.
+//!
+//! **The addresses.** The board mints a frame's values in the frame's
+//! order, which is the order of the draft's positions, not the pairs': the
+//! acknowledgment names the first, and every byte the frame mints stands at
+//! that address plus the bytes the frame mints before it. Each change of
+//! the plan is answered with the address of its own new bytes where they
+//! stand in the text the call leaves whole and side by side — where no
+//! later pair of the call removed one of them or wrote between two of them
+//! ([`Standing`]) — and with none where a later pair did.
 //!
 //! **The answer.** One JSON object keyed by `outcome`, as `text.replace`'s
 //! is: `edited`, each pair's changes in the pairs' order; `unchanged`;
-//! `refused`, nothing standing; and the two errors that name what stands,
-//! `partial` and `held` (`shapes`' `TextEdited`, `TextEditUnchanged`,
-//! `TextRefused`, `TextEditPartial`, `TextEditHeld`). A change is named by
-//! its ordinal in the draft as the changes before it left it, the bytes it
-//! removed and inserted, the I-address its new bytes were minted at and its
-//! own commit, so a caller finds what stands by identity whatever was
-//! written after it.
+//! `refused`, nothing written; and `answer_lost`, an error (`shapes`'
+//! `TextEdited`, `TextEditUnchanged`, `TextRefused`, `TextAnswerLost`). A
+//! change is named by its ordinal in the draft as the changes planned
+//! before it leave it, the bytes it removed and inserted, the I-address its
+//! new bytes were minted at and the call's commit, so a caller finds what
+//! stands by identity whatever was written after it. An answer lost and
+//! settled from the change feed is `edited` at its row's position, no
+//! address named (the parent module's *A lost answer*).
 //!
 //! **The rows** (skep #1080; the sibling module `rows`). `edited` carries the
 //! lines the call changed, numbered, as `lines`, and `masked` beside them
 //! where a withheld run stands on or before a line they show. They are drawn
 //! from the plan's own text — the one read with every pair spliced in, which
-//! is the draft exactly as the call's last write left it — and from where
-//! each of its positions came from, which the plan splices in step with the
-//! text; no read is made for them. A write whose answer was lost and which
-//! the shell's read found landed is read as landed, as `text.replace` reads
-//! one, and the rows show the draft as that reading has it.
+//! is the draft exactly as the call's commit left it — and from where each
+//! of its positions came from; no read is made for them.
+
+use std::ops::Range;
 
 use serde_json::{json, Value};
 use skep_client::address::is_address_text;
 use skep_client::board::frames;
-use skep_client::merge::origin_of;
 use skep_client::text::minimal_changes;
 
 use super::rows::{rows, Pieces, Rows};
-use super::{held, read_draft, refused, refused_write, settle, spans, undo, unread, write, Answer, Calls, Edit, Found, Line, Read, Settled, Text, Undone, Wrote, MAX_NEW_BYTES, WHOLE_CONTENT};
+use super::{answer_lost, read_draft, refused, refused_write, send_edit, Answer, Calls, Edit, Found, Landing, Read, Text, MAX_NEW_BYTES};
 use crate::attest::MAX_WIRE_LIST;
-use crate::hold::may_have_landed;
 use crate::refusal::Refusal;
-use crate::wire::natural;
 
 /// One pair of the call's: the text to replace, and its replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +117,11 @@ impl<'a> Asked<'a> {
         }
         Ok(Asked { doc, pairs })
     }
+
+    /// Returns the draft the call edits.
+    pub(super) fn doc(&self) -> &'a str {
+        self.doc
+    }
 }
 
 /// One change of the plan.
@@ -145,36 +134,58 @@ struct Planned<'a> {
     pair: usize,
     /// Its index among its pair's changes, ascending in the text.
     change: usize,
-    /// The edit, its ordinal in the draft as the changes before it leave it.
+    /// The edit, its ordinal in the draft as the changes planned before it
+    /// leave it.
     edit: Edit<'a>,
 }
 
-/// The call's writes as planned, and the text they leave told by origin.
+/// The new bytes of one planned change, where they stand in the text as
+/// planned so far.
+///
+/// One is kept for a change only while its bytes stand whole and side by
+/// side: a later pair that removes one of them, or writes between two of
+/// them, drops it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Standing {
+    /// The index of the change among the plan's.
+    planned: usize,
+    /// The position of its first new byte.
+    at: u64,
+    /// How many new bytes it holds, a position each.
+    len: u64,
+}
+
+/// The call's changes as planned, and the text they leave told by origin.
 #[derive(Debug)]
 pub(super) struct Plan<'a> {
-    /// The changes, in the order they are written.
+    /// The changes, pair by pair in the call's order.
     changes: Vec<Planned<'a>>,
+    /// The changes whose new bytes stand whole in the text the call leaves,
+    /// each with the position of its first new byte there.
+    standing: Vec<Standing>,
     /// Where each position of the text the changes leave came from, which
-    /// the rows of an `edited` answer are drawn by.
+    /// the frame's changes are cut from and the rows of an `edited` answer
+    /// are drawn by.
     pub(super) pieces: Pieces<'a>,
 }
 
-/// Plans the call's writes: every pair checked, and made its changes.
+/// Plans the call: every pair checked, and made its changes.
 ///
 /// Each pair's `old` is found in `text` as the pairs before it leave it,
 /// its minimal changes placed from where it stands, and `text` made to read
-/// as the pair leaves it, its pieces spliced in step (`rows::Pieces`).
-/// `as_of` is the position `text` was read at. Nothing is written.
+/// as the pair leaves it, its pieces spliced in step (`rows::Pieces`) and
+/// the new bytes of the changes before it moved, or dropped where the pair
+/// removes one or writes between two ([`Standing`]). `as_of` is the
+/// position `text` was read at. Nothing is written.
 ///
 /// # Errors
 ///
 /// The call's own answer for the first pair that fails, naming it (`pair`):
 /// `not_found`, `not_unique` with the count and `crosses_atom` with the
 /// value that is no text, each as `text.replace` answers it, the ordinal a
-/// place in the text as the pairs before leave it; and `too_large` naming
-/// the change (`change`) whose new bytes pass [`MAX_NEW_BYTES`].
+/// place in the text as the pairs before leave it.
 pub(super) fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>]) -> Result<Plan<'a>, Answer> {
-    let (mut changes, mut pieces) = (Vec::new(), Pieces::of(text.positions()));
+    let (mut changes, mut standing, mut pieces) = (Vec::new(), Vec::<Standing>::new(), Pieces::of(text.positions()));
     for (k, pair) in pairs.iter().enumerate() {
         let found = match text.find(pair.old.as_bytes()) {
             Found::Once(ordinal) => ordinal,
@@ -183,454 +194,209 @@ pub(super) fn plan<'a>(doc: &str, text: &mut Text, as_of: u64, pairs: &[Pair<'a>
             Found::Across { ordinal, kind } => return Err(refused(doc, "crosses_atom", json!({"ordinal": ordinal.to_string(), "kind": kind, "as_of": as_of, "pair": k}))),
         };
         let minimal = minimal_changes(pair.old, pair.new);
-        for (j, change) in minimal.iter().enumerate() {
-            let inserted = &pair.new[change.new.clone()];
-            if inserted.len() > MAX_NEW_BYTES {
-                return Err(refused(doc, "too_large", json!({"what": "new", "bytes": inserted.len().to_string(), "cap": MAX_NEW_BYTES.to_string(), "pair": k, "change": j})));
+        // The new bytes of the changes before this pair: each run moved by
+        // the pair's changes before it, and dropped where one of them
+        // removes a byte of it or inserts between two.
+        standing.retain_mut(|run| {
+            let (first, past) = (run.at, run.at + run.len);
+            let (mut added, mut removed) = (0u64, 0u64);
+            for change in &minimal {
+                let (from, to) = (found + change.old.start as u64, found + change.old.end as u64);
+                let cut = if to > from { from < past && to > first } else { first < from && from < past };
+                if cut {
+                    return false;
+                }
+                if to <= first {
+                    added += change.new.len() as u64;
+                    removed += change.old.len() as u64;
+                }
             }
+            // The changes counted lie before the run, so they remove no
+            // more positions than stand before it.
+            run.at = first - removed + added;
+            true
+        });
+        for (j, change) in minimal.iter().enumerate() {
             // The changes before this one in the pair are made by its turn:
             // up to its first byte the pair's stretch reads as its new text.
-            let edit = Edit { ordinal: found.saturating_add(change.new.start as u64), removed: change.old.len() as u64, inserted };
-            changes.push(Planned { pair: k, change: j, edit });
+            let ordinal = found.saturating_add(change.new.start as u64);
+            if !change.new.is_empty() {
+                standing.push(Standing { planned: changes.len(), at: ordinal, len: change.new.len() as u64 });
+            }
+            changes.push(Planned { pair: k, change: j, edit: Edit { ordinal, removed: change.old.len() as u64, inserted: &pair.new[change.new.clone()] } });
         }
         pieces.splice(found, pair.old, &minimal);
         text.splice(found, pair.old.len(), pair.new.as_bytes());
     }
-    Ok(Plan { changes, pieces })
+    Ok(Plan { changes, standing, pieces })
 }
 
-/// Reads the draft's whole image as the runs a take-back sets it back to.
+/// One change of the call's frame.
 ///
-/// Each run of the image is a run of the write: its first I-address, its
-/// width, and its origin by the client's own rule
-/// (`skep_client::merge::origin_of`).
-///
-/// # Errors
-///
-/// The inner error is the call's own answer, nothing written: `too_large`
-/// naming `runs` where the board answers `image_too_large` or the image
-/// holds more runs than one write names ([`MAX_WIRE_LIST`]), and `unread`
-/// naming `image` for an answer that lists no runs, a run that does not
-/// read, or one whose address names no origin (SP-14). The outer one is the
-/// board's or the shell's refusal of the read.
-fn image_runs(calls: &impl Calls, doc: &str) -> Result<Result<Vec<Value>, Answer>, Refusal> {
-    let too_large = |runs: Option<usize>| {
-        let mut detail = json!({"what": "runs", "cap": MAX_WIRE_LIST.to_string()});
-        if let Some(runs) = runs {
-            detail["runs"] = Value::from(runs.to_string());
-        }
-        refused(doc, "too_large", detail)
-    };
-    let image = match calls.op(frames::image(doc, 1, WHOLE_CONTENT)) {
-        Ok(image) => image,
-        Err(Refusal::Board(refusal)) if refusal.code == "image_too_large" => return Ok(Err(too_large(None))),
-        Err(refusal) => return Err(refusal),
-    };
-    let Some(listed) = image["runs"].as_array() else { return Ok(Err(unread(doc, "image"))) };
-    if listed.len() > MAX_WIRE_LIST {
-        return Ok(Err(too_large(Some(listed.len()))));
-    }
-    let mut runs = Vec::with_capacity(listed.len());
-    for run in listed {
-        let Some((i_start, width)) = run["i_start"].as_str().zip(natural(&run["width"])) else { return Ok(Err(unread(doc, "image"))) };
-        let Some(origin) = origin_of(i_start) else { return Ok(Err(unread(doc, "image"))) };
-        runs.push(frames::shot_run(&origin.to_string(), i_start, width));
-    }
-    Ok(Ok(runs))
-}
-
-/// A change of the call's that landed whole.
+/// It is a run of the draft's positions as read that the text the call
+/// leaves keeps none of, and the bytes that text holds in their place.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Made {
-    /// The index of its pair in the call's `edits`.
-    pair: usize,
-    /// Its index among its pair's changes.
-    change: usize,
-    /// The ordinal of its first byte.
-    ///
-    /// It is a place in the draft as the changes before it left it.
-    ordinal: u64,
-    /// How many bytes it removed.
-    removed: u64,
-    /// How many bytes it inserted.
-    inserted: usize,
-    /// The first I-address of its new bytes.
-    ///
-    /// It is named where the change inserted any and its insert's ack named
-    /// one.
-    addr: Option<String>,
-    /// The commit it was whole at, where its last write's answer named one.
-    at: Option<u64>,
+struct Net {
+    /// The first position removed as the draft was read, or the one the new
+    /// bytes are placed before where none is.
+    at: u64,
+    /// How many positions of the draft as read are removed.
+    width: u64,
+    /// The positions of the new bytes in the text the call leaves.
+    new: Range<u64>,
 }
 
-impl Made {
-    /// Returns the change `planned` as landed, with what its acks named.
-    fn of(planned: &Planned<'_>, addr: Option<&str>, at: Option<u64>) -> Made {
-        let Planned { pair, change, edit } = planned;
-        Made { pair: *pair, change: *change, ordinal: edit.ordinal, removed: edit.removed, inserted: edit.inserted.len(), addr: addr.map(str::to_string), at }
+impl Net {
+    /// Returns how many bytes the change mints.
+    fn minted(&self) -> u64 {
+        self.new.end - self.new.start
     }
 
-    /// Returns the change as a pair's list names it (`TextEditChange`).
-    fn value(&self) -> Value {
-        let mut value = json!({"ordinal": self.ordinal.to_string(), "removed": self.removed.to_string(), "inserted": self.inserted.to_string()});
-        if let Some(addr) = &self.addr {
-            value["addr"] = Value::from(addr.as_str());
+    /// Returns the change as the frame spells it, its new bytes read off
+    /// `text`, the text the call leaves.
+    ///
+    /// The bytes are text the pairs spelled, sent as text; bytes that are no
+    /// UTF-8 would go as hex, a value a byte all the same.
+    fn frame(&self, text: &Text) -> Value {
+        let bytes = text.bytes_at(self.new.start, self.new.end);
+        match std::str::from_utf8(bytes) {
+            Ok(new) => frames::minted(self.at, self.width, new),
+            Err(_) => json!({"at": frames::place(self.at), "width": self.width.to_string(), "values": [{"hex": bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()}]}),
         }
-        if let Some(at) = self.at {
-            value["at"] = Value::from(at);
-        }
-        value
-    }
-
-    /// Returns the change as `stands` names it (`TextEditStanding`).
-    fn standing(&self) -> Value {
-        let mut value = self.value();
-        value["pair"] = Value::from(self.pair);
-        value["change"] = Value::from(self.change);
-        value
     }
 }
 
-/// Returns a change in part as `stands` names it (`TextEditHalf`).
+/// Returns the call's net changes: the frame's changes, in its order.
 ///
-/// It is the change of two writes `planned`, by its two spans as its insert
-/// left them (`spans`): the new bytes after the old ones, with the address
-/// and the commit of `inserted`, the insert's ack, where it landed with
-/// one.
-fn half(planned: &Planned<'_>, inserted: Option<&Value>) -> Value {
-    let mut value = spans(&planned.edit, inserted);
-    value["pair"] = Value::from(planned.pair);
-    value["change"] = Value::from(planned.change);
-    value
+/// They are `pieces`' stretches of changes, each a change of the draft as
+/// read: ascending in its positions and apart, a kept position standing
+/// between any two.
+fn net(pieces: &Pieces<'_>) -> Vec<Net> {
+    pieces.changed().into_iter().map(|stretch| Net { at: stretch.gone.start, width: stretch.gone.end - stretch.gone.start, new: stretch.new }).collect()
 }
 
-/// A write of the call's that did not land, and nothing of it is queued.
-#[derive(Debug)]
-enum Failed {
-    /// Its line was dropped.
-    ///
-    /// It carries the hold's cause, and the board's verdict where it gave
-    /// one.
-    Dropped {
-        /// The held cause.
-        cause: String,
-        /// The board's verdict on the write.
-        verdict: Option<Value>,
-    },
-    /// The `op` row refused it, nothing held.
-    Refused(Refusal),
-}
-
-impl Failed {
-    /// Returns whether another writer's change stopped the write.
-    ///
-    /// The board refused it as typed against an older state: a change
-    /// landed since the write before.
-    fn moved(&self) -> bool {
-        match self {
-            Failed::Dropped { cause, verdict } => cause == "moved" || verdict.as_ref().is_some_and(|verdict| verdict["code"] == "arrangement_moved"),
-            Failed::Refused(_) => false,
-        }
-    }
-
-    /// Returns what stopped the write, as a `partial` says it.
-    ///
-    /// It is the `cause`, and the `refusal` beside it where there is one.
-    fn why(&self) -> Value {
-        match self {
-            Failed::Dropped { cause, verdict: Some(verdict) } => json!({"cause": verdict["code"].as_str().unwrap_or(cause), "refusal": verdict}),
-            Failed::Dropped { cause, verdict: None } => json!({"cause": cause}),
-            Failed::Refused(refusal) => json!({"cause": refusal.name(), "refusal": refusal.to_value()}),
-        }
-    }
-
-    /// Returns the call's answer where nothing of it stands.
-    ///
-    /// It is the refusal of the write of `planned` that did not land.
-    ///
-    /// # Errors
-    ///
-    /// The `op` row's refusal, where the row refused the write.
-    fn answer(self, doc: &str, planned: &Planned<'_>) -> Result<Answer, Refusal> {
-        match self {
-            Failed::Dropped { cause, verdict } => {
-                let mut answer = refused_write(doc, &cause, verdict);
-                answer.value["pair"] = Value::from(planned.pair);
-                answer.value["change"] = Value::from(planned.change);
-                Ok(answer)
-            }
-            Failed::Refused(refusal) => Err(refusal),
-        }
-    }
-}
-
-/// What became of one write of the call's.
-#[derive(Debug)]
-enum Sent {
-    /// It landed, and its ack names what the call goes on by.
-    Landed {
-        /// The board's ack.
-        ack: Value,
-        /// The ack's commit, which the next write is typed against.
-        at: u64,
-    },
-    /// It landed with no commit the shell read.
-    ///
-    /// Its ack names none, or no address where the call needs one
-    /// (`unread`, the ack beside it), or its line's drop found it landed,
-    /// its own answer lost (`answer_lost`).
-    Unnamed {
-        /// `unread` or `answer_lost`.
-        cause: &'static str,
-        /// The ack, where the board gave one.
-        ack: Option<Value>,
-    },
-    /// It did not land.
-    Failed(Failed),
-    /// Its line stays held: the shell would not drop it, and it may land.
-    Standing(Line),
-}
-
-/// The call's writes as they land.
+/// The addresses a landed frame minted its bytes at.
 ///
-/// It holds the take-back's runs, the position the next write is typed
-/// against, and the changes made whole so far.
-struct Writing<'c, C> {
-    /// The calls the writes go through.
-    calls: &'c C,
-    /// The draft.
-    doc: &'c str,
-    /// The draft's image as read before the first write, a take-back's runs.
-    runs: Vec<Value>,
-    /// The position the next write is typed against.
-    ///
-    /// It is the text's read, then the commit of the last landed write.
-    typed: u64,
-    /// The changes landed whole, in write order.
-    made: Vec<Made>,
+/// The board mints a frame's values in the frame's order under one
+/// frontier, and its acknowledgment names the first.
+struct Minted<'n> {
+    /// The frame's changes.
+    net: &'n [Net],
+    /// The components of the first address before its last.
+    prefix: String,
+    /// The last component of the first address.
+    first: u64,
 }
 
-impl<C: Calls> Writing<'_, C> {
-    /// Writes `plan`, each change in its order, and answers the call.
-    ///
-    /// `pairs` is how many pairs the call was asked: the answer of a call
-    /// that landed whole lists each pair's changes, none for a pair that
-    /// changed nothing, and carries the rows `drawn` draws, which is called
-    /// there alone.
-    ///
-    /// # Errors
-    ///
-    /// The `op` row's refusal of a write that left nothing standing: the
-    /// first, or a later one where the take-back landed.
-    fn all(mut self, plan: &[Planned<'_>], pairs: usize, drawn: impl FnOnce() -> Rows) -> Result<Answer, Refusal> {
-        for (k, planned) in plan.iter().enumerate() {
-            if let Some(ended) = self.change(planned, k + 1 == plan.len()) {
-                return ended;
-            }
-        }
-        let mut lists = vec![Vec::new(); pairs];
-        for made in &self.made {
-            lists[made.pair].push(made.value());
-        }
-        let Rows { lines, masked } = drawn();
-        let mut value = json!({"outcome": "edited", "doc": self.doc, "pairs": lists, "lines": lines});
-        if let Some(at) = self.made.last().and_then(|made| made.at) {
-            value["at"] = Value::from(at);
-        }
-        if masked {
-            value["masked"] = Value::Bool(true);
-        }
-        Ok(Answer::data(value))
+impl<'n> Minted<'n> {
+    /// Returns the addresses of the frame of `net` acknowledged at `addr`,
+    /// its first minted address; none where `addr` is no I-address.
+    fn of(net: &'n [Net], addr: &str) -> Option<Minted<'n>> {
+        let (prefix, last) = addr.rsplit_once('.')?;
+        Some(Minted { net, prefix: prefix.to_string(), first: last.parse().ok()? })
     }
 
-    /// Writes one change, and answers where the call ends at it.
+    /// Returns the address of the byte at `position` of the text the call
+    /// leaves, where the frame minted it.
     ///
-    /// The new bytes are inserted first where the change has any, after the
-    /// old ones, then the old ones removed where it has any, each write
-    /// typed against the commit of the one before. `last` says the change is
-    /// the plan's last: a last write that landed with no commit read is the
-    /// call landed whole, that change's commit unnamed.
-    fn change(&mut self, planned: &Planned<'_>, last: bool) -> Option<Result<Answer, Refusal>> {
-        let edit = &planned.edit;
-        let two = edit.removed > 0 && !edit.inserted.is_empty();
-        let mut inserted = None;
-        if !edit.inserted.is_empty() {
-            match self.send(frames::insert_text(self.doc, edit.after(), edit.inserted, self.typed, None), two) {
-                Sent::Landed { ack, at } => {
-                    self.typed = at;
-                    inserted = Some(ack);
-                }
-                Sent::Unnamed { cause, .. } if two => return Some(Ok(self.partial(planned, json!({"cause": cause, "op": "insert"}), Some(half(planned, None)), None))),
-                Sent::Unnamed { cause, ack } => {
-                    self.made.push(Made::of(planned, ack.as_ref().and_then(|ack| ack["addr"].as_str()), None));
-                    return (!last).then(|| Ok(self.partial(planned, json!({"cause": cause, "op": "insert"}), None, None)));
-                }
-                Sent::Failed(failed) => return Some(self.failed(planned, failed, None)),
-                Sent::Standing(line) => return Some(Ok(self.held_at(planned, &line, "insert", two.then(|| half(planned, None))))),
+    /// It is the first address plus the bytes the changes before the byte's
+    /// own mint, and the bytes of its own before it.
+    fn address(&self, position: u64) -> Option<String> {
+        let mut before = 0u64;
+        for change in self.net {
+            if change.new.contains(&position) {
+                let ordinal = self.first.checked_add(before)?.checked_add(position - change.new.start)?;
+                return Some(format!("{}.{ordinal}", self.prefix));
             }
+            before = before.checked_add(change.minted())?;
         }
-        let addr = inserted.as_ref().and_then(|ack| ack["addr"].as_str());
-        if edit.removed == 0 {
-            self.made.push(Made::of(planned, addr, Some(self.typed)));
-            return None;
-        }
-        match self.send(frames::delete(self.doc, edit.ordinal, edit.removed, self.typed, None), false) {
-            Sent::Landed { at, .. } => {
-                self.typed = at;
-                self.made.push(Made::of(planned, addr, Some(at)));
-                None
-            }
-            Sent::Unnamed { cause, .. } => {
-                self.made.push(Made::of(planned, addr, None));
-                (!last).then(|| Ok(self.partial(planned, json!({"cause": cause, "op": "delete"}), None, None)))
-            }
-            Sent::Failed(failed) => Some(self.failed(planned, failed, inserted.as_ref())),
-            Sent::Standing(line) => Some(Ok(self.held_at(planned, &line, "delete", inserted.as_ref().map(|ack| half(planned, Some(ack)))))),
-        }
+        None
     }
+}
 
-    /// Sends one write of the call's, and reads what became of it.
-    ///
-    /// A held line is settled first (`settle`), so none of the call's is
-    /// left queued but one the shell would not drop. `needs_addr` says the
-    /// write is the insert of a change of two writes, whose ack must name
-    /// the address its bytes were minted at for the change to be taken back
-    /// by identity.
-    fn send(&self, frame: Value, needs_addr: bool) -> Sent {
-        match write(self.calls, frame) {
-            Ok(Wrote::Acked(ack)) => match ack["at"].as_u64().filter(|_| !needs_addr || ack["addr"].is_string()) {
-                Some(at) => Sent::Landed { ack, at },
-                None => Sent::Unnamed { cause: "unread", ack: Some(ack) },
-            },
-            Ok(Wrote::Held(line)) => match settle(self.calls, line) {
-                Settled::Landed => Sent::Unnamed { cause: "answer_lost", ack: None },
-                Settled::Dropped { cause, verdict } => Sent::Failed(Failed::Dropped { cause, verdict }),
-                Settled::Standing(line) => Sent::Standing(line),
-            },
-            Err(refusal) => Sent::Failed(Failed::Refused(refusal)),
+/// Returns the answer of a call that landed.
+///
+/// Each pair's list names its changes of `plan`, none for a pair that
+/// changed nothing, each with the call's commit `at` where one is known and
+/// the address its new bytes were minted at where they stand whole in the
+/// text the call leaves and `minted` names the frame's addresses; `drawn`
+/// is the rows of that text.
+fn edited(doc: &str, plan: &Plan<'_>, pairs: usize, at: Option<u64>, minted: Option<&Minted<'_>>, drawn: Rows) -> Answer {
+    let mut lists = vec![Vec::new(); pairs];
+    for (k, planned) in plan.changes.iter().enumerate() {
+        let Edit { ordinal, removed, inserted } = &planned.edit;
+        let mut change = json!({"ordinal": ordinal.to_string(), "removed": removed.to_string(), "inserted": inserted.len().to_string()});
+        let standing = plan.standing.iter().find(|run| run.planned == k);
+        if let Some(addr) = standing.zip(minted).and_then(|(run, minted)| minted.address(run.at)) {
+            change["addr"] = Value::from(addr);
         }
+        if let Some(at) = at {
+            change["at"] = Value::from(at);
+        }
+        lists[planned.pair].push(change);
     }
-
-    /// Answers a write of `planned` that did not land.
-    ///
-    /// `inserted` is the ack of the change's own insert, where the write is
-    /// the removal after it. The first write of the call leaves nothing, and
-    /// its refusal is the answer. Past it, the draft is set back to the
-    /// image read before the first write by one `set_arrangement` typed
-    /// against the commit of the last landed write — unless the board
-    /// refused the write as typed against an older state, another writer's
-    /// change standing in the draft, which nothing is taken back over. Where
-    /// the draft was not set back, a change in part is taken back by
-    /// identity (`undo`), and the answer names each change that stands:
-    /// `partial`, or `held` naming the undo's line where the shell would not
-    /// drop it.
-    ///
-    /// # Errors
-    ///
-    /// The `op` row's refusal of the write, where nothing of the call
-    /// stands.
-    fn failed(&mut self, planned: &Planned<'_>, failed: Failed, inserted: Option<&Value>) -> Result<Answer, Refusal> {
-        if self.made.is_empty() && inserted.is_none() {
-            return failed.answer(self.doc, planned);
-        }
-        let take_back = if failed.moved() {
-            None
-        } else {
-            match self.calls.op(frames::set_arrangement(self.doc, &self.runs, self.typed, None, None, None, None)) {
-                Ok(_) => return failed.answer(self.doc, planned),
-                Err(refusal) => Some(refusal),
-            }
-        };
-        let mut in_part = None;
-        if let Some(ack) = inserted {
-            match undo(self.calls, self.doc, ack["addr"].as_str().unwrap_or_default(), planned.edit.inserted.len() as u64) {
-                Undone::Gone => {}
-                Undone::Stands => in_part = Some(half(planned, Some(ack))),
-                Undone::Held(line) => return Ok(self.held_at(planned, &line, "undo", Some(half(planned, Some(ack))))),
-            }
-        }
-        if self.made.is_empty() && in_part.is_none() {
-            return failed.answer(self.doc, planned);
-        }
-        Ok(self.partial(planned, failed.why(), in_part, take_back))
+    let Rows { lines, masked } = drawn;
+    let mut value = json!({"outcome": "edited", "doc": doc, "pairs": lists, "lines": lines});
+    if let Some(at) = at {
+        value["at"] = Value::from(at);
     }
-
-    /// Returns the changes that stand, as `stands` lists them.
-    ///
-    /// They are each change landed whole, in write order, then `in_part`,
-    /// the change the call stopped in.
-    fn stands(&self, in_part: Option<Value>) -> Vec<Value> {
-        self.made.iter().map(Made::standing).chain(in_part).collect()
+    if masked {
+        value["masked"] = Value::Bool(true);
     }
-
-    /// Returns the answer of a call that landed in part, an error.
-    ///
-    /// The call stopped at the change `planned`; `why` says what stopped it
-    /// — a `cause`, and the `refusal` beside it or the `op` whose answer the
-    /// shell did not read — and `in_part` is that change where its new bytes
-    /// stand beside its old ones. `take_back` is the refusal of a take-back
-    /// that was sent and did not land; where its answer was lost the
-    /// take-back may have landed, and the changes are named as ones that
-    /// may stand (`may_stand`).
-    fn partial(&self, planned: &Planned<'_>, why: Value, in_part: Option<Value>, take_back: Option<Refusal>) -> Answer {
-        let mut value = json!({"outcome": "partial", "doc": self.doc, "pair": planned.pair, "change": planned.change, "stands": self.stands(in_part)});
-        if let (Some(members), Value::Object(why)) = (value.as_object_mut(), why) {
-            members.extend(why);
-        }
-        if let Some(refusal) = take_back {
-            value["take_back"] = json!({"cause": refusal.name(), "refusal": refusal.to_value()});
-            if may_have_landed(&refusal) {
-                value["may_stand"] = Value::Bool(true);
-            }
-        }
-        Answer::error(value)
-    }
-
-    /// Returns the answer of a call a line of which stays held, an error.
-    ///
-    /// `line` is the line, of the change `planned`, and `write` the write it
-    /// is: `insert`, `delete`, or `undo`, the removal of a change's new
-    /// bytes. `in_part` is that change by its two spans where it is of two
-    /// writes, of which the one the line would place or remove may or may
-    /// not stand.
-    fn held_at(&self, planned: &Planned<'_>, line: &Line, write: &str, in_part: Option<Value>) -> Answer {
-        held(self.doc, line, write, json!({"pair": planned.pair, "change": planned.change, "stands": self.stands(in_part)}))
-    }
+    Answer::data(value)
 }
 
 /// Makes the edits `asked` through `calls`.
 ///
 /// In order: the draft's text is read, a published document refused before
-/// any of its text is (`read_draft`); every pair is checked and the writes
-/// planned ([`plan`]); the draft's image is read ([`image_runs`]); and the
-/// changes are written ([`Writing::all`]), a call that lands whole answered
-/// with the rows of the planned text (`rows::rows`). Nothing is written
-/// before every refusal a read alone decides (SP-8), and a call whose pairs
-/// change nothing reads no image and answers `unchanged`.
+/// any of its text is (`read_draft`); every pair is checked and the changes
+/// planned ([`plan`]); the call's net changes are cut ([`net`]) and held to
+/// the frame's two caps; and they are written, one `edit` frame typed
+/// against the read (`send_edit`), a call that lands answered with the rows
+/// of the planned text (`rows::rows`). Nothing is written before every
+/// refusal a read alone decides (SP-8), and a call whose pairs leave the
+/// text as it was read writes nothing and answers `unchanged`.
 ///
 /// # Errors
 ///
-/// The board's verdict on a read, or the shell's refusal of it; and the
-/// `op` row's refusal of a write that left nothing standing. Every other
-/// outcome is an [`Answer`].
+/// The call's own answer, nothing written: [`plan`]'s; `too_large` naming
+/// `new` where the call's new bytes together pass [`MAX_NEW_BYTES`], and
+/// naming `changes` where its net changes are more than one frame lists
+/// ([`MAX_WIRE_LIST`]). The board's verdict on a read, or the shell's
+/// refusal of it; and the `op` row's refusal of the write, nothing written
+/// (`send_edit`). Every other outcome is an [`Answer`].
 pub(super) fn edit(calls: &impl Calls, asked: &Asked<'_>) -> Result<Answer, Refusal> {
     let doc = asked.doc;
     let Read { mut text, as_of } = match read_draft(calls, doc)? {
         Ok(read) => read,
         Err(answer) => return Ok(answer),
     };
-    let Plan { changes, pieces } = match plan(doc, &mut text, as_of, &asked.pairs) {
+    let plan = match plan(doc, &mut text, as_of, &asked.pairs) {
         Ok(plan) => plan,
         Err(answer) => return Ok(answer),
     };
-    if changes.is_empty() {
+    let net = net(&plan.pieces);
+    if net.is_empty() {
         return Ok(Answer::data(json!({"outcome": "unchanged", "doc": doc, "as_of": as_of})));
     }
-    let runs = match image_runs(calls, doc)? {
-        Ok(runs) => runs,
-        Err(answer) => return Ok(answer),
-    };
-    Writing { calls, doc, runs, typed: as_of, made: Vec::new() }.all(&changes, asked.pairs.len(), || rows(&text, &pieces))
+    if net.len() > MAX_WIRE_LIST {
+        return Ok(refused(doc, "too_large", json!({"what": "changes", "changes": net.len().to_string(), "cap": MAX_WIRE_LIST.to_string()})));
+    }
+    let bytes = net.iter().fold(0u64, |sum, change| sum.saturating_add(change.minted()));
+    if bytes > MAX_NEW_BYTES as u64 {
+        return Ok(refused(doc, "too_large", json!({"what": "new", "bytes": bytes.to_string(), "cap": MAX_NEW_BYTES.to_string()})));
+    }
+    let changes: Vec<Value> = net.iter().map(|change| change.frame(&text)).collect();
+    let pairs = asked.pairs.len();
+    Ok(match send_edit(calls, doc, &changes, as_of)? {
+        Landing::Acked(ack) => {
+            let minted = ack["addr"].as_str().and_then(|addr| Minted::of(&net, addr));
+            edited(doc, &plan, pairs, ack["at"].as_u64(), minted.as_ref(), rows(&text, &plan.pieces))
+        }
+        Landing::Found(at) => edited(doc, &plan, pairs, Some(at), None, rows(&text, &plan.pieces)),
+        Landing::Refused(verdict) => refused_write(doc, "refused", Some(verdict)),
+        Landing::Lost(lost) => answer_lost(doc, as_of, &lost),
+    })
 }
 
 #[cfg(test)]

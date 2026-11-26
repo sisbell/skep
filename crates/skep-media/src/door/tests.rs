@@ -273,3 +273,80 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     assert_eq!(door(shot2(), SYSTEM_PRINCIPAL), Some(MediaRefusal::LeaseLapsed));
     assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
 }
+
+/// An edit's values take the insert's arms, whichever change holds them.
+///
+/// Over the genesis world, the index's walk done: an `edit` whose second
+/// change mints a cell the principal holds no lease on is refused
+/// `unbound_cell`, as an insert of it is, and one under an unknown schema
+/// `unknown_cell_schema`; prose alone meets nothing; into the published head
+/// document a value naming the kind is `published_target`; a caller who does
+/// not own the
+/// draft meets nothing here, the store's `not_owner` standing. The same
+/// operation under its other name, placing runs by identity, mints nothing
+/// and meets no arm for a draft. Under the principal's own live lease the
+/// cell is admitted; and nothing is committed by the door (the mutant that
+/// gives the frame the door's no-arm branch admits the unbound cell).
+#[test]
+fn an_edits_values_take_the_inserts_arms_whichever_change_holds_them() {
+    use skep_arrangement::{Change, Edit, Placed};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), crate::MediaOptions::default()).expect("the store opens");
+    let engine = skep_engine::Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    let (draft, _) = engine
+        .namespace()
+        .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+        .expect("the system principal mints a private draft in its own account");
+    gate.index().complete(crate::index::Rebuild { values: 0, cells: 0, halts: 0, walk: Duration::ZERO, parse: Duration::ZERO });
+    let snap = engine.kernel().snapshot();
+    let world = snap.world();
+    let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
+    // An edit of two changes, each minting: prose first, `cell` second.
+    let request = |cell: Vec<u8>| Edit {
+        changes: vec![
+            Change { at: VPos::content(Nat::from(1u32)), width: Nat::from(0u32), placed: Placed::Values(vec![Val::new(b"p".to_vec())]) },
+            Change { at: VPos::content(Nat::from(1u32)), width: Nat::from(0u32), placed: Placed::Values(vec![Val::new(cell)]) },
+        ],
+        head: None,
+        base: None,
+        merge: None,
+    };
+    let edit = |doc: &Address, cell: Vec<u8>| Op::Edit { doc: doc.clone(), edit: request(cell), as_of: Seq(7) };
+    assert_eq!(door(edit(&draft, canonical()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell), "a cell no lease binds, in the second change");
+    assert_eq!(door(edit(&draft, unknown_schema()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnknownCellSchema));
+    assert_eq!(door(edit(&draft, b"prose".to_vec()), SYSTEM_PRINCIPAL), None, "prose alone");
+    let h = head_document();
+    for cell in [canonical(), unknown_schema()] {
+        assert_eq!(door(edit(&h, cell), SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget), "a value naming the kind, into the published head document");
+    }
+    assert_eq!(door(edit(&h, b"prose".to_vec()), SYSTEM_PRINCIPAL), None, "prose into it: the store's own refusal stands");
+    assert_eq!(door(edit(&draft, canonical()), BOOTSTRAP_PRINCIPAL), None, "not the owner: the store's");
+    // The operation's other name, placing runs: nothing minted, no arm.
+    let run = ShotRun { origin: h.clone(), run: Run::new(skep_engine::types::t_grant().clone(), Nat::from(1u32)).expect("one position") };
+    let placing = Edit {
+        changes: vec![Change { at: VPos::content(Nat::from(1u32)), width: Nat::from(0u32), placed: Placed::Runs(vec![run]) }],
+        head: None,
+        base: None,
+        merge: None,
+    };
+    assert_eq!(door(Op::SetArrangement { doc: draft.clone(), arrangement: placing, as_of: Seq(7) }, SYSTEM_PRINCIPAL), None, "runs placed by identity mint no cell");
+    assert_eq!(door(Op::SetArrangement { doc: draft.clone(), arrangement: request(canonical()), as_of: Seq(7) }, SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell), "the arm reads the values, whichever name carries them");
+    // THE BINDING MADE REAL: five bytes under the principal's own lease.
+    let bytes = b"hello";
+    let hex = blake3::hash(bytes).to_hex();
+    let real = || format!(r#"{{"type":"{}","hash":"{hex}","size":5}}"#, cell::KIND).into_bytes();
+    assert_eq!(door(edit(&draft, real()), SYSTEM_PRINCIPAL), Some(MediaRefusal::UnboundCell));
+    let key = MediaGate::key(SYSTEM_PRINCIPAL);
+    let (now, store, interval) = (gate.now_ms(), gate.store(), Duration::from_millis(1_000_000));
+    let rec = store.create_upload(&key, HashFunction::Blake3, 5, interval, now).unwrap();
+    let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+    stream.append(bytes, now).unwrap();
+    stream.finish(interval, now).unwrap();
+    assert_eq!(door(edit(&draft, real()), SYSTEM_PRINCIPAL), None, "admitted under its own live lease");
+    assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
+}

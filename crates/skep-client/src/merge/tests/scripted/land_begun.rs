@@ -650,7 +650,7 @@ fn a_landing_begun_in_a_baseless_draft_re_arranged_since_is_named() {
     assert_eq!(p, a(P), "the premise: landed in P");
     assert_eq!(dialer.world().standing(P), (None, None), "the premise: no base, no marker");
     let typed = dialer.world().position;
-    let frame = frames::set_arrangement(P, &shot_runs(&draft_m()), typed, None, None, None, None);
+    let frame = frames::set_arrangement(P, &whole_of(&dialer, P, &draft_m()), typed, None, None, None, None);
     dialer.world().apply(&frame)["at"].as_u64().expect("the re-arrangement's ack");
     let session = sign_in(&board, &signer);
     let again =

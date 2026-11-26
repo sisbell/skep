@@ -23,8 +23,8 @@ use crate::common;
 use common::*;
 use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
-    Deposit, Disposition, Endset, Op, OpKind, PrincipalId, PublishDeposits, PublishTarget,
-    RejectCode, Rejection, Run, Seq, SessionId, SetArrangement, Shot, ShotRun, SlotArg,
+    Change, Deposit, Disposition, Edit, Endset, Op, OpKind, Placed, PrincipalId, PublishDeposits,
+    PublishTarget, RejectCode, Rejection, Run, Seq, SessionId, Shot, ShotRun, SlotArg,
     SuccessorSpec, VSpec, Val, MAX_SLOT_SPANS,
 };
 use skep_links::MAX_SLOT_RESOLVE_STEPS;
@@ -1232,7 +1232,14 @@ fn doc_metadata_serves_the_position_an_edit_is_checked_against_and_a_link_moves_
     ));
     assert!(linked_at > inserted_at);
     assert_eq!(arranged_at(&d), Some(inserted_at), "a link write homed in the draft moves nothing");
-    let emptying = SetArrangement { runs: vec![], head: None, base: None, merge: None };
+    // The draft's three positions removed: one change over all of them,
+    // placing nothing.
+    let emptying = Edit {
+        changes: vec![Change { at: vp(1, 1), width: nat(3), placed: Placed::Runs(vec![]) }],
+        head: None,
+        base: None,
+        merge: None,
+    };
     let emptied_at = ack(ex(
         &fx.febe,
         fx.user,

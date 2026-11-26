@@ -22,7 +22,7 @@ const MAX_INSTRUCTIONS_CHARS: usize = 2000;
 const REFERENCED: [&str; 23] = [
     "create_well_known_document",
     "doc_metadata",
-    "set_arrangement",
+    "edit",
     "make_link",
     "line_numbers",
     "held",
@@ -335,7 +335,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
         "universal_grants",
         "count_v_by_home",
         "find_links_v_history",
-        "set_arrangement",
+        "edit",
         "create_well_known_document",
         "line_numbers",
     ] {
@@ -354,6 +354,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     for not_a_tool in ["publish", "publication.open", "merge.compose"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool: the shell runs a publication and a merge as its call families, each tool named with `_` for `.`");
     }
+    assert_eq!(Tool::named("set_arrangement"), None, "the landing's frame is no tool: a merge's landing and its take-backs send it, and an agent's positional changes are `edit`'s");
 }
 
 /// The dispatch's door admits a call or refuses it, naming the culprit.
@@ -791,7 +792,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
             ],
         ),
         ("merge_withdraw", &["KEEPS", "in any session", "merge_undo(draft, withdrawal: position)", "arrangement_moved", "no_merge", "not_owner", "held_lines"]),
-        ("replace_text", &["EXACTLY ONCE", "edit_text", "move_lines", "\"replaced\"", "\"refused\"", "not_unique", "\"partial\"", "\"held\"", "isError"]),
+        ("replace_text", &["EXACTLY ONCE", "ONE commit", "edit_text", "move_lines", "\"replaced\"", "\"refused\"", "not_unique", "\"answer_lost\"", "held_lines", "isError"]),
         (
             "edit_text",
             &[
@@ -802,8 +803,9 @@ fn each_short_card_says_what_an_agent_needs_first() {
                 "edit_text(doc, edits: [{old, new}, …])",
                 "EXACTLY ONCE in the draft as the pairs before it leave it",
                 "ALL OR NOTHING",
+                "ONE commit",
                 &pairs,
-                "partial and held are isError",
+                "answer_lost is isError",
                 "read the draft before you edit it again",
             ],
         ),
@@ -888,7 +890,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
         ("changes_since", &["next", "log_position", "history_reclaimed"]),
         ("make_link", &["from_", "addrs", "spans", "empty_type_resolution"]),
         ("create_well_known_document", &["slot", "already", "mint_home_first", "committed: false"]),
-        ("set_arrangement", &["WHOLE", "head_moved", "fork_base_moved"]),
+        ("edit", &["ONE commit", "ascending and apart", "ack_addr", "arrangement_moved", "site.index", "published_target", "held_lines", "merge_compose"]),
         ("line_numbers", &["masked", "range_not_present"]),
         ("doc_metadata", &["base", "withheld", "arranged_at"]),
         ("fetch", &[&mib, "not_a_cell"]),
@@ -1183,8 +1185,8 @@ fn the_publication_references_state_the_shells_shapes() {
     let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(rejections.contains(&format!("{held_lines} {{doc, held}} — a publication_confirm over a draft holding lines of yours the board has not kept")), "REJECTIONS ARE DATA names the gate's refusal: {rejections}");
     assert!(
-        rejections.contains("the rendering draft or one named also, a restore_text whose draft holds them, or a merge tool over a draft that does"),
-        "REJECTIONS ARE DATA names the restore and the merge tools beside the confirm: {rejections}"
+        rejections.contains("the rendering draft or one named also, a restore_text, an edit, a replace_text or an edit_text whose draft holds them, or a merge tool over a draft that does"),
+        "REJECTIONS ARE DATA names the restore, the edits and the merge tools beside the confirm: {rejections}"
     );
     assert!(
         rejections.contains("merge_compose's into or the draft a merge record of yours names, merge_land's draft or draft side, merge_undo's and merge_withdraw's draft — nothing sent: call held(), resolve each line on that doc, then call again"),
@@ -1249,7 +1251,7 @@ fn the_publication_references_state_the_shells_shapes() {
 /// answers no window part, that the composition lives with the session and
 /// that a merge's undo lands only over no change since, the agent's own
 /// included (R6 with P3, the undo's `as_of` per surface); PUBLISHING, the
-/// OVERVIEW and `set_arrangement`'s card and reference send a merge to the
+/// OVERVIEW and `edit`'s card and reference send a merge to the
 /// four; and REJECTIONS ARE DATA names them among the calls that may have
 /// written before a session's end. A shape the shell changes in one place
 /// alone would tell every agent of an answer the shell no longer gives.
@@ -1335,8 +1337,8 @@ fn the_merge_references_state_the_shells_shapes() {
     );
     let overview = topic(&catalog, "OVERVIEW");
     assert!(overview.contains("merge_compose, merge_land, merge_undo and merge_withdraw") && overview.contains("(MERGING)"), "the overview names the four among the shell's calls: {overview}");
-    for said in [card(&catalog, "set_arrangement"), reference(&catalog, "set_arrangement")] {
-        assert!(said.contains("merge_compose") && !said.contains("nothing here composes a merge"), "set_arrangement sends a merge to merge_compose: {said}");
+    for said in [card(&catalog, "edit"), reference(&catalog, "edit")] {
+        assert!(said.contains("merge_compose") && !said.contains("nothing here composes a merge"), "edit sends a merge to merge_compose: {said}");
     }
     let rejections = topic(&catalog, "REJECTIONS ARE DATA");
     assert!(
@@ -1424,10 +1426,12 @@ fn the_merge_references_state_the_shells_shapes() {
 /// cause of the edit's own is spelled
 /// in `replace_text`'s reference (SP-25). `edit_text`'s card itself says what
 /// an agent needs before it reads the reference — the call's form, the
-/// once-only rule, all or nothing, the cap on its pairs and that `partial`
-/// and `held` are errors after which the draft is read — and its reference
-/// says the rest: every row's form, the take-back's `too_large` and the
-/// one-pair tool beside it.
+/// once-only rule, all or nothing in one commit, the cap on its pairs and
+/// that `answer_lost` is an error after which the draft is read — and its
+/// reference says the rest: every row's form, the frame's two `too_large`
+/// caps and the one-pair tool beside it. The `edit` tool's schema and
+/// reference state the wire's two caps on one frame as the shell holds
+/// them.
 #[test]
 fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
     use skep_client::publication::MAX_WIRE_LIST;
@@ -1436,7 +1440,7 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
     let entry = |name: &str| catalog.tools.iter().find(|tool| tool["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     for name in ["replace_text", "edit_text"] {
         let said = reference(&catalog, name);
-        assert!(said.contains(&format!("one insert's cap of {MAX_NEW_BYTES} bytes")), "{name}: the reference names the new text's cap: {said}");
+        assert!(said.contains(&format!("one edit's cap of {MAX_NEW_BYTES} bytes")), "{name}: the reference names the new text's cap: {said}");
         assert!(said.contains(&format!("a draft past {MAX_DRAFT_POSITIONS} content positions")), "{name}: the reference names the draft's cap: {said}");
     }
     let said = reference(&catalog, "replace_text");
@@ -1444,8 +1448,8 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "\"replaced\"",
         "\"unchanged\"",
         "\"refused\"",
-        "\"partial\"",
-        "\"held\"",
+        "\"answer_lost\"",
+        "held_lines",
         "not_found",
         "not_unique",
         "crosses_atom",
@@ -1454,8 +1458,8 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "unknown_item",
         "arrangement_moved",
         "unread",
-        "new_text: {ordinal, width, addr?, at?}",
-        "old_text: {ordinal, width}",
+        "ONE commit",
+        "MAY HAVE LANDED, whole, or not at all, never in part",
     ] {
         assert!(said.contains(spelled), "the reference spells `{spelled}`: {said}");
     }
@@ -1468,7 +1472,7 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "EXACTLY ONCE in the draft as the pairs before it leave it".to_string(),
         "ALL OR NOTHING".to_string(),
         format!("at most {MAX_WIRE_LIST} pairs"),
-        "partial and held are isError".to_string(),
+        "answer_lost is isError".to_string(),
         "read the draft before you edit it again".to_string(),
     ] {
         assert!(short.contains(&spelled), "edit_text's card says `{spelled}`: {short}");
@@ -1486,11 +1490,20 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
         "a value that is no text as {…}".to_string(),
         format!("past {ROWS_MAX_BYTES} bytes the rows end \"(N more changed lines not shown)\""),
         "masked: true".to_string(),
-        "stands names each change at its own commit, its new bytes found by addr".to_string(),
+        "what the call mints is its NET change".to_string(),
+        "minted in the order of the draft's positions, never the pairs'".to_string(),
     ] {
         assert!(said.contains(&spelled), "edit_text's reference says `{spelled}`: {said}");
     }
-    assert!(said.contains("too_large (what: new") && said.contains("or runs, a draft in more runs than one write sets back"), "the reference names the take-back's too_large: {said}");
+    assert!(said.contains("too_large (what: new") && said.contains("or changes, a call of more changes than one edit lists"), "the reference names the frame's two caps: {said}");
+    let frame = entry("edit");
+    assert_eq!(frame["inputSchema"]["required"], json!(["doc", "changes", "as_of"]));
+    assert_eq!(frame["inputSchema"]["properties"]["changes"]["maxItems"], json!(MAX_WIRE_LIST), "one wire list of changes");
+    assert_eq!(frame["inputSchema"]["properties"]["changes"]["items"]["required"], json!(["at", "width", "values"]));
+    let listed = frame["inputSchema"]["properties"]["changes"]["description"].as_str().expect("the changes' description");
+    assert!(listed.contains(&format!("at most {MAX_WIRE_LIST} entries")) && listed.contains(&format!("at most {MAX_NEW_BYTES} values")), "the schema names the frame's two caps: {listed}");
+    let whole = reference(&catalog, "edit");
+    assert!(whole.contains(&format!("At most {MAX_WIRE_LIST} changes, minting at most {MAX_NEW_BYTES} values together")), "the reference names them too: {whole}");
     assert!(said.contains("replace_text still edits one pair"), "the reference names the one-pair tool: {said}");
     let schema = &entry("edit_text")["inputSchema"];
     assert_eq!(schema["required"], json!(["doc", "edits"]));
@@ -1651,13 +1664,14 @@ fn the_restore_reference_states_the_shells_answer_and_the_way_back_typed_at_posi
 /// of a `text.diff`, which follow the answer as lines of their own
 /// (`EDIT_LINES`, `DIFF_ROWS`); the answers that
 /// carry the error member are the `isError` ones, `refused` beside a
-/// verdict-less cause and `held`, and an edit's `partial`; a span a
-/// reference spells, where its row's answers carry one, is
-/// the shell's `TextSpan`; and the reference's `(write: …)` list names each
+/// verdict-less cause, `held`, a mark's `partial` and an edit's
+/// `answer_lost`; no reference spells a span, no answer carrying one; and
+/// the reference's `(write: …)` list names each
 /// value of its held answer's `write` and no other, a call that holds no
-/// line listing none. `edit_text`'s reference
-/// spells a change as `TextEditChange`, a change that stands as `TextEditStanding`
-/// or `TextEditHalf`, and its schema's pair as `TextEditPair` (SP-24). A
+/// line — the two edits, whose one write is no burst, among them — listing
+/// none. `edit_text`'s reference
+/// spells a change as `TextEditChange` and its schema's pair as
+/// `TextEditPair` (SP-24). A
 /// shape the shell changes in one place alone would tell every agent of an
 /// answer the shell no longer gives, or leave a held line's write unnamed.
 #[test]
@@ -1715,8 +1729,8 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let (edit_error, edit_lines, diff_rows) = (crate::server::EDIT_ERROR, crate::server::EDIT_LINES, crate::server::DIFF_ROWS);
     for (name, row, held, left_out, marked) in [
-        ("replace_text", "text.replace", Some("TextHeld"), &[edit_error][..], &["refused", "partial", "held"][..]),
-        ("edit_text", "text.edit", Some("TextEditHeld"), &[edit_error, edit_lines][..], &["refused", "partial", "held"][..]),
+        ("replace_text", "text.replace", None, &[edit_error][..], &["refused", "answer_lost"][..]),
+        ("edit_text", "text.edit", None, &[edit_error, edit_lines][..], &["refused", "answer_lost"][..]),
         ("move_lines", "text.move", Some("TextMoveHeld"), &[edit_error, edit_lines][..], &["refused", "held"][..]),
         ("mark_text", "text.mark", Some("TextMarkHeld"), &[edit_error][..], &["refused", "held", "partial"][..]),
         ("diff_text", "text.diff", None, &[edit_error, diff_rows][..], &["refused"][..]),
@@ -1728,7 +1742,7 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
         let (mut errors, mut spans) = (BTreeSet::new(), false);
         for answer in answers.split(" | ") {
             let shape = skep_shell::shapes::shape(answer).unwrap_or_else(|| panic!("skep-shell declares {answer}"));
-            spans |= shape.fields.iter().any(|field| field.ty.contains("TextSpan") || field.ty.contains("TextEditHalf"));
+            spans |= shape.fields.iter().any(|field| field.name == "new_text");
             let outcome = shape.fields.iter().find(|field| field.name == "outcome").and_then(|field| field.ty.strip_prefix('\'')?.strip_suffix('\'')).unwrap_or_else(|| panic!("{answer} is keyed by its outcome"));
             let head = format!("{{outcome: \"{outcome}\"");
             let at = card.find(&head).unwrap_or_else(|| panic!("{name}: the card spells the {outcome} answer: {card}"));
@@ -1738,12 +1752,9 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
             }
         }
         assert_eq!(errors, marked.iter().copied().collect::<BTreeSet<&str>>(), "{name}: the answers the shell marks as errors");
-        // A reference spells a span only where an answer of its row carries
-        // one: a move's answers name no span.
-        match card.find("new_text: {").map(|at| members(braced(&card[at..])).0) {
-            Some(span) => assert_eq!((spans, span), (true, declared("TextSpan", &[])), "{name}: a span is the shell's TextSpan"),
-            None => assert!(!spans, "{name}: the card spells new_text's members"),
-        }
+        // No answer of a text row carries a span, and no reference spells
+        // one.
+        assert!(!spans && !card.contains("new_text"), "{name}: no span declared, none spelled");
         // A call that writes nothing holds no line, and its reference lists
         // no write.
         let Some(held) = held else {
@@ -1760,11 +1771,7 @@ fn the_text_edit_references_state_the_shells_answers_bar_what_the_adapter_takes_
     let said = reference(&catalog, "edit_text");
     let change = said.find("a change {").map(|at| members(braced(&said[at..])).0).expect("the card spells a change");
     assert_eq!(change, declared("TextEditChange", &[]), "a change is the shell's TextEditChange");
-    let stands = said.split_once("stands: [").map(|(_, rest)| rest).expect("the card spells what stands");
-    let whole = braced(stands);
-    assert_eq!(members(whole).0, declared("TextEditStanding", &[]), "a change that stands whole is the shell's TextEditStanding");
-    let in_part = stands[stands.find(whole).expect("the whole change") + whole.len()..].strip_prefix(" or ").map(braced).expect("a change in part beside it");
-    assert_eq!(members(in_part).0, declared("TextEditHalf", &[]), "a change in part is the shell's TextEditHalf");
+    assert!(!said.contains("stands: ["), "no change stands apart from the call: {said}");
     let pair = &card["inputSchema"]["properties"]["edits"]["items"];
     let named: BTreeSet<(&str, bool)> = pair["properties"]
         .as_object()

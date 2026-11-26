@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Base, Marker, Run, ShotRun, VPos, VSpec};
+use skep_arrangement::{Base, Change, Marker, Placed, Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, LinkRow, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -297,30 +297,33 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::Rearrange),
             vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts)), ("as_of", j_seq(*as_of))],
         ),
+        // The edit under its two names: one frame, its changes in order.
         // Canonical: the head pair, the base pair, the merge and its
         // position ride only where present, so a frame without them
         // marshals to no member and `parse ∘ marshal` is a fixpoint; the
-        // typed state always rides.
-        Op::SetArrangement { doc, arrangement, as_of } => {
+        // typed state always rides. Each change carries the member its own
+        // content names — `values` or `runs` — which is the one its frame's
+        // name admits wherever the request came off this codec's parse.
+        Op::SetArrangement { doc, arrangement: edit, as_of } | Op::Edit { doc, edit, as_of } => {
             let mut pairs = vec![
                 ("doc", j_addr(doc)),
-                ("runs", j_shot_runs(&arrangement.runs)),
+                ("changes", Value::Array(edit.changes.iter().map(j_change).collect())),
                 ("as_of", j_seq(*as_of)),
             ];
-            if let Some(head) = &arrangement.head {
+            if let Some(head) = &edit.head {
                 pairs.push(("head", j_extent_pair(head)));
             }
-            if let Some(base) = &arrangement.base {
+            if let Some(base) = &edit.base {
                 pairs.push(("base", j_extent_pair(base)));
             }
-            if let Some(merge) = &arrangement.merge {
+            if let Some(merge) = &edit.merge {
                 let mut members = vec![("sides", j_addrs(&merge.sides))];
                 if let Some(at) = merge.at {
                     members.push(("at", j_seq(at)));
                 }
                 pairs.push(("merge", obj(members)));
             }
-            (op_name(OpKind::SetArrangement), pairs)
+            (op_name(op.kind()), pairs)
         }
         Op::Version { d_src, published } => {
             let mut pairs = vec![("d_src", j_addr(d_src))];
@@ -564,9 +567,9 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
 
 pub(super) fn j_response(r: &Response) -> Value {
     let (name, mut pairs): (&'static str, Vec<(&'static str, Value)>) = match r {
-        // The tell rides only where a `set_arrangement` named a head the
-        // trunk moved past; absent on every other ack, whose bytes are as
-        // they were.
+        // The tell rides only where an edit, under either of its names,
+        // named a head the trunk moved past; absent on every other ack,
+        // whose bytes are as they were.
         Response::Ack { at, head_moved } => {
             let mut pairs = vec![("at", j_seq(*at))];
             if let Some(head) = head_moved {
@@ -578,10 +581,15 @@ pub(super) fn j_response(r: &Response) -> Value {
         // and committed nothing — a dedup hit, a mailbox standing — its `at`
         // then the base it was read at; absent on every ack that committed,
         // whose bytes are as they were.
-        Response::AckAddr { addr, at, committed } => {
+        // The tell beside it, as on `ack`: an edit that minted and named a
+        // head the trunk moved past.
+        Response::AckAddr { addr, at, committed, head_moved } => {
             let mut pairs = vec![("addr", j_addr(addr)), ("at", j_seq(*at))];
             if !committed {
                 pairs.push(("committed", Value::Bool(false)));
+            }
+            if let Some(head) = head_moved {
+                pairs.push(("head_moved", j_addr(head)));
             }
             ("ack_addr", pairs)
         }
@@ -985,8 +993,18 @@ fn j_shot_run(r: &ShotRun) -> Value {
     ])
 }
 
-/// Renders a member with the extent read of it: `set_arrangement`'s `head`
-/// and `base` pairs, `{"at": <address>, "extent": <nat>}`.
+/// Renders one change of an edit's frame: `at`, `width`, and `values` or
+/// `runs` by what it places (wire.md §Arrangement, `edit`).
+fn j_change(change: &Change) -> Value {
+    let placed = match &change.placed {
+        Placed::Values(values) => ("values", j_values(values)),
+        Placed::Runs(runs) => ("runs", j_shot_runs(runs)),
+    };
+    obj(vec![("at", j_vpos(&change.at)), ("width", j_nat(&change.width)), placed])
+}
+
+/// Renders a member with the extent read of it: an edit's `head` and `base`
+/// pairs, under either of its names, `{"at": <address>, "extent": <nat>}`.
 fn j_extent_pair(b: &Base) -> Value {
     obj(vec![("at", j_addr(&b.member)), ("extent", j_nat(&b.extent))])
 }
@@ -1556,6 +1574,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::Reinstate => "reinstate",
         OpKind::Rearrange => "rearrange",
         OpKind::SetArrangement => "set_arrangement",
+        OpKind::Edit => "edit",
         OpKind::Version => "version",
         OpKind::Stage => "stage",
         OpKind::Publish => "publish",
@@ -1763,7 +1782,7 @@ fn code_name(c: RejectCode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{p_hex, p_slotspec, p_val_form, p_view};
+    use crate::codec::{p_hex, p_slotspec, p_val_form, p_view, INSERT_VALUES};
 
     /// Checks value granularity at the leaf.
     ///
@@ -1773,10 +1792,10 @@ mod tests {
     #[test]
     fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
         let mut vs: Vec<Val> = Vec::new();
-        p_val_form(&Value::String("hé".into()), &mut vs).expect("a string value form parses");
+        p_val_form(&Value::String("hé".into()), &mut vs, 0, &INSERT_VALUES).expect("a string value form parses");
         assert_eq!(vs.len(), 3, "'h' plus the two bytes of 'é'");
         assert!(vs.iter().all(|v| v.len() == 1));
-        p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs)
+        p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs, 0, &INSERT_VALUES)
             .expect("an atom value form parses");
         assert_eq!(vs.len(), 4);
         assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
@@ -1787,8 +1806,8 @@ mod tests {
         // Empty per-byte forms are vacuous; empty atoms are inexpressible;
         // multi-key objects and non-string/object elements are malformed.
         let mut none: Vec<Val> = Vec::new();
-        p_val_form(&Value::String(String::new()), &mut none).expect("\"\" is vacuous");
-        p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none)
+        p_val_form(&Value::String(String::new()), &mut none, 0, &INSERT_VALUES).expect("\"\" is vacuous");
+        p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none, 0, &INSERT_VALUES)
             .expect("an empty hex string is vacuous");
         assert!(none.is_empty());
         for bad in [
@@ -1797,7 +1816,7 @@ mod tests {
             obj(vec![("atom", Value::String("a".into())), ("hex", Value::String("00".into()))]),
             Value::Bool(true),
         ] {
-            assert!(p_val_form(&bad, &mut none).is_err(), "{bad} must not parse");
+            assert!(p_val_form(&bad, &mut none, 0, &INSERT_VALUES).is_err(), "{bad} must not parse");
         }
         assert!(p_hex("abc").is_err()); // odd length
         assert!(p_hex("zz").is_err());

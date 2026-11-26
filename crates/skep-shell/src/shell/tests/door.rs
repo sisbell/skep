@@ -881,7 +881,7 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
     assert_eq!(shell.call("resolve", &json!({"session": bare, "held": 1, "act": "drop"})).unwrap_err().name(), "no_such_held", "a drop commits nothing to the board, and stands");
     let read = json!({"op": "doc_metadata", "doc": "1.0.1.0.1"});
     assert_eq!(shell.call("op", &json!({"session": bare, "frame": read})).unwrap_err().name(), "unreachable", "a read is dialed");
-    let set = json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "runs": [], "as_of": 0});
+    let set = json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "changes": [], "as_of": 0});
     let unanswered = shell.call("op", &json!({"session": signed, "frame": set})).unwrap_err();
     assert_eq!(unanswered.name(), "unreachable", "the signed session's write is dialed, its answer lost: {unanswered}");
     let recorded = frames.lock().unwrap().clone();
@@ -1067,7 +1067,7 @@ fn the_write_door_asks_its_four_questions_in_one_order() {
 
 /// Checks that the guest form refuses every write kind without a dial.
 ///
-/// `WRITE_KINDS` is the wire's nineteen write kinds (`docs/wire.md`
+/// `WRITE_KINDS` is the wire's twenty write kinds (`docs/wire.md`
 /// §Operations; `skep-core`'s `parse_op`), each refused `write_in_guest_form`
 /// naming its op while a listener at the named origin counts no connection —
 /// the target the form names read first, so a write at a board this shell
@@ -1089,6 +1089,7 @@ fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
         "reinstate",
         "rearrange",
         "set_arrangement",
+        "edit",
         "version",
         "stage",
         "create_well_known_document",

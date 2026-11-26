@@ -42,6 +42,9 @@
 //!   for drawing. A state in more runs than one write may name, counted on
 //!   the runs the write sends, is [`Refusal::OverCap`], nothing sent.
 //! * [`restore`] — THE ONE WRITE: `set_arrangement` of [`Past::written`],
+//!   one change over every position the draft holds as the first read
+//!   counted them ([`Past::held`]) — the restore reads the draft's runs at
+//!   `at` alone, so it holds no stretch that differs to name —
 //!   `as_of` the first read's position, no `head`, no `base`, no `merge`, so
 //!   the board moves nothing of the draft's record — the base and the merge
 //!   marker stand as they are (wire.md §Arrangement, `set_arrangement`:
@@ -121,7 +124,9 @@ use skep_address::Address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Image, Token};
 use crate::halt::Halt;
-use crate::merge::shared::{judge, owners_records, runs_of, session_ended, Act, OnEnd, Reader};
+use crate::merge::shared::{
+    judge, owners_records, runs_of, session_ended, whole_change, Act, OnEnd, Reader,
+};
 use crate::merge::{Refusal, Run, SHOT_RUN_CAP};
 use crate::publication::Record;
 
@@ -160,6 +165,12 @@ pub struct Past {
     /// The draft's merge marker as it stands now; `None` where it carries
     /// none. The restore leaves it as it is.
     pub marker: Option<MergeMarker>,
+    /// How many content positions the draft holds as it stands at `as_of`.
+    ///
+    /// It is the first read's own count of the draft (`doc_metadata`'s
+    /// `own_count`), every one of which the write replaces; `None` where
+    /// the board served none.
+    pub held: Option<u64>,
 }
 
 impl Past {
@@ -240,18 +251,21 @@ pub fn past(board: &Board, token: &Token, draft: &Address, at: u64) -> Result<Pa
         return Err(Refusal::OverCap { runs: written.runs().len(), cap: SHOT_RUN_CAP });
     }
     let sent = runs_of(written.runs())?;
-    Ok(Past { draft: draft.clone(), at, as_of, state, sent, written, records, marker: meta.merge })
+    Ok(Past { draft: draft.clone(), at, as_of, state, sent, written, records, marker: meta.merge, held: meta.own_count })
 }
 
 /// Makes `past`'s state current: the one write under `token`.
 ///
 /// The write sets [`Past::written`], each run as [`written_runs`] spells
-/// it.
+/// it: one change over every position the draft holds
+/// ([`Past::held`]) — the restore reads the draft's runs at `at` alone, so
+/// it names no stretch that differs and replaces the draft's whole content.
 ///
 /// # Errors
 ///
 /// A run of [`Past::written`] that is no content I-address, the board's
-/// fault, faced with nothing sent ([`written_runs`]); then
+/// fault, faced with nothing sent ([`written_runs`]); a board that served
+/// the draft no count of its own, faced with nothing sent; then
 /// `arrangement_moved` as the board's verdict, [`Refusal::Halt`] with
 /// `Refused` saying the draft changed since it was read and nothing was
 /// changed, and asking a read of the draft and a restore typed at that
@@ -269,10 +283,15 @@ pub fn past(board: &Board, token: &Token, draft: &Address, at: u64) -> Result<Pa
 /// this again; a lost acknowledgment as the dialer's halt, with no re-ask —
 /// the embedder reads first on a re-run.
 pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Refusal> {
-    let Past { draft, at, as_of, written, .. } = past;
+    let Past { draft, at, as_of, written, held, .. } = past;
+    // The runs are spelled first, so a run that is no content I-address is
+    // faced as itself; then the one change over every position the draft
+    // holds, the restore holding no read of the draft's runs as they stand.
+    written_runs(written)?;
+    let changes = whole_change(draft, *held, written)?;
     let frame = frames::set_arrangement(
         &draft.to_string(),
-        &written_runs(written)?,
+        &changes,
         *as_of,
         None,
         None,

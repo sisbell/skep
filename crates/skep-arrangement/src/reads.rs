@@ -173,6 +173,18 @@ impl M5State {
         self.content_list(doc).total_width()
     }
 
+    /// Returns [`content_count`](M5State::content_count), its walk counted.
+    ///
+    /// The count is a sum over every run of `doc`'s content list, and
+    /// `steps` is charged one for each run summed. It is the form the edit
+    /// asks, once a call, under M2's applier lock: every change of the call
+    /// is then judged against the one count by arithmetic, where the three
+    /// admission predicates below, asked a change, would each walk the list
+    /// again.
+    pub(crate) fn content_count_stepped(&self, doc: &Address, steps: &mut impl FnMut(u64)) -> Nat {
+        self.content_list(doc).total_width_stepped(steps)
+    }
+
     /// Returns `n_L(d)`, the arranged link width.
     ///
     /// Absent doc ⇒ 0; the D-SEQ★ reading of

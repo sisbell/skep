@@ -145,7 +145,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
         json!({"op": "fork", "published": true}),
         json!({"op": "version", "d_src": "1.0.2.0.1"}),
         json!({"op": "stage", "from": "1.0.2.0.1"}),
-        json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "runs": [{"origin": "1.0.2.0.1", "i_start": "1.0.2.0.1.0.1.1", "width": "1"}], "as_of": 1}),
+        json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "changes": [{"at": {"subspace": "1", "ordinal": "1"}, "width": "1", "runs": [{"origin": "1.0.2.0.1", "i_start": "1.0.2.0.1.0.1.1", "width": "1"}]}], "as_of": 1}),
         json!({"op": "make_link", "home": "1.0.2.0.1", "from": {"addrs": ["1.0.2.0.1"]}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}),
         json!({"op": "nullify", "home": "1.0.2.0.1", "target": "1.0.2.0.1.0.2.1"}),
         json!({"op": "edit_link", "original": "1.0.2.0.1.0.2.1", "d_s": "1.0.2.0.1", "d_a": "1.0.2.0.1", "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}}),
@@ -1666,7 +1666,7 @@ fn a_moved_base_at_an_unmoved_standing_is_restated_and_the_next_confirm_sends_ag
 /// at nineteen).
 #[test]
 fn a_base_moved_by_its_extent_alone_is_re_stated() {
-    use skep_client::board::frames::{image, set_arrangement, shot_run};
+    use skep_client::board::frames::{image, placed, set_arrangement, shot_run};
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
@@ -1683,7 +1683,10 @@ fn a_base_moved_by_its_extent_alone_is_re_stated() {
         let i_start = r["i_start"].as_str().expect("an I-address");
         shot_run(&skep_client::address::document_of(i_start).expect("a document"), i_start, r["width"].as_str().expect("a width").parse().expect("a natural"))
     }).collect();
-    g.op(set_arrangement(&s, &runs, g.position(), None, Some((e1.as_str(), 5)), None, None));
+    // The draft's whole image set again, in one change over the positions it
+    // holds, beside the base.
+    let held: u64 = runs.iter().map(|run| run["width"].as_str().and_then(|width| width.parse::<u64>().ok()).expect("a width")).sum();
+    g.op(set_arrangement(&s, &[placed(1, held, &runs)], g.position(), None, Some((e1.as_str(), 5)), None, None));
     let before = g.position();
     let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Restated", &restated);

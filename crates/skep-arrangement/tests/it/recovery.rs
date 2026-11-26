@@ -3,14 +3,14 @@
 
 use skep_address::Span;
 use skep_arrangement::{
-    reading_surface, seat_link, Deposit, DraftBase, HasM5, Marker, SetArrangement, SetMerge, Shot,
-    Vstream,
+    reading_surface, seat_link, Deposit, DraftBase, HasM5, Marker, SetMerge, Shot, Vstream,
 };
 use skep_kernel::Kernel;
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
 
 use crate::common::*;
+use crate::edit::{set_whole, Whole};
 
 #[test]
 fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
@@ -46,25 +46,25 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         // it: the draft set to the edition's last two positions, its base the
         // edition at three, the marker stamped at the landing's own commit.
         (staged, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the staging draft");
-        let merged = |at| SetArrangement {
+        let merged = |at| Whole {
             runs: vec![shot_run(&pdoc(), &pca(2), 2)],
             head: Some(base(&pdoc(), 3)),
             base: Some(base(&pdoc(), 3)),
             merge: Some(SetMerge { sides: vec![doc2()], at }),
         };
-        (landed_at, _) = vs.set_arrangement(P1, &staged, &merged(None), now(&k)).expect("the landing");
+        (landed_at, _) = set_whole(&k, P1, &staged, &merged(None), now(&k)).expect("the landing");
         k.checkpoint().expect("checkpoint");
         // The merge taken out — the edition's text set back, the marker
         // cleared and its stamp kept — and put back at the landing's
         // position: a base record and a restore record, both replayed.
-        let taken_out = SetArrangement {
+        let taken_out = Whole {
             runs: vec![shot_run(&pdoc(), &pca(1), 3)],
             head: None,
             base: Some(base(&pdoc(), 3)),
             merge: None,
         };
-        vs.set_arrangement(P1, &staged, &taken_out, now(&k)).expect("the merge taken out");
-        vs.set_arrangement(P1, &staged, &merged(Some(landed_at)), now(&k)).expect("the merge put back");
+        set_whole(&k, P1, &staged, &taken_out, now(&k)).expect("the merge taken out");
+        set_whole(&k, P1, &staged, &merged(Some(landed_at)), now(&k)).expect("the merge put back");
         vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
         vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y"), val(b"z")], Deposit::Undeclared, now(&k))
             .expect("the second draft takes three values");

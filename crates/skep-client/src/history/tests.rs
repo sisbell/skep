@@ -62,10 +62,24 @@ fn token() -> Token {
     Token::parse(TOKEN).expect("a token")
 }
 
+/// How many positions `S` holds at position 20, as its `doc_metadata`
+/// answers: a count no state these cells restore has.
+const HELD: u64 = 9;
+
 /// A `doc_metadata` answer for `S` at position 20: a private draft of the
-/// person's, no marker.
+/// person's, holding [`HELD`] positions, no marker.
 fn metadata(published: bool) -> Value {
-    json!({"resp": "doc_metadata", "as_of": 20, "doc": S, "published": published, "owner": ACCOUNT, "merge": null})
+    json!({"resp": "doc_metadata", "as_of": 20, "doc": S, "published": published, "owner": ACCOUNT, "merge": null, "own_count": HELD.to_string()})
+}
+
+/// The runs a restore's write places, read off its frame: the one change it
+/// carries, over every position the draft held at the first read.
+fn placed_whole(write: &Value) -> &Value {
+    let changes = write["changes"].as_array().expect("the write's `changes`");
+    assert_eq!(changes.len(), 1, "one change: {write}");
+    assert_eq!((&changes[0]["at"], &changes[0]["width"]), (&frames::place(1), &json!(HELD.to_string())), "over every position the draft held: {write}");
+    assert!(write.get("runs").is_none(), "no whole list beside the changes: {write}");
+    &changes[0]["runs"]
 }
 
 // ── the mapping ──────────────────────────────────────────────────────────
@@ -354,7 +368,7 @@ fn the_restore_maps_another_accounts_words_through_its_owners_record() {
     assert_eq!(asked(&fake), (vec![frames::unit_span(S), frames::unit_span(Z)], links), "one query per origin in run order, Z's hit read in Z's account");
     restore(&board, &token(), &p).expect("restored");
     let (_, _, write) = served(&fake).pop().expect("the write");
-    assert_eq!(write["runs"], json!([frames::shot_run(E, &format!("{e}.20"), 11), frames::shot_run(F, &format!("{f}.30"), 4)]));
+    assert_eq!(*placed_whole(&write), json!([frames::shot_run(E, &format!("{e}.20"), 11), frames::shot_run(F, &format!("{f}.30"), 4)]));
 }
 
 /// The board's `withheld` at a restore's write, naming `Z`.
@@ -384,7 +398,7 @@ fn another_accounts_words_with_no_record_answered_are_written_as_read() {
         restore(&board, &token(), &p),
         Err(Refusal::WindowWithheld { origin: a(Z), positions: vec![(12, 4)] })
     );
-    assert_eq!(served(&fake).pop().map(|(_, _, f)| f["runs"][1].clone()), Some(frames::shot_run(Z, &format!("{z}.1"), 4)), "the write sent Z's run as read");
+    assert_eq!(served(&fake).pop().map(|(_, _, f)| placed_whole(&f)[1].clone()), Some(frames::shot_run(Z, &format!("{z}.1"), 4)), "the write sent Z's run as read");
 }
 
 /// The words a restore's `withheld` names are the stretches of the state
@@ -550,7 +564,8 @@ fn the_reads_run_in_order_and_the_one_write_sends_the_mapped_state() {
     let (path, at, write) = served(&fake).pop().expect("the write");
     assert_eq!((path.as_str(), at), ("/op", None));
     let runs = [frames::shot_run(E, &format!("{E}.0.1.20"), 11), frames::shot_run(S, &format!("{S}.0.1.20"), 3)];
-    assert_eq!(write, json!({"op": "set_arrangement", "doc": S, "as_of": 20, "runs": runs, "id": format!("restore:{S}:12:20.arrangement")}), "no head, no base, no merge");
+    let whole = frames::placed(1, HELD, &runs);
+    assert_eq!(write, json!({"op": "set_arrangement", "doc": S, "as_of": 20, "changes": [whole], "id": format!("restore:{S}:12:20.arrangement")}), "one change over every position the draft held; no head, no base, no merge");
 }
 
 /// A member's own words are written under the member's chain.
@@ -572,7 +587,7 @@ fn a_members_own_words_are_written_under_the_members_chain() {
     assert_eq!(p.written, image(&[(&e, 1, 2), (&m, 3, 1)]), "each run on the chain that minted it");
     restore(&board, &token(), &p).expect("restored");
     let (_, _, write) = served(&fake).pop().expect("the write");
-    assert_eq!(write["runs"], json!([frames::shot_run(E, &format!("{e}.1"), 2), frames::shot_run(M, &format!("{m}.3"), 1)]));
+    assert_eq!(*placed_whole(&write), json!([frames::shot_run(E, &format!("{e}.1"), 2), frames::shot_run(M, &format!("{m}.3"), 1)]));
 }
 
 /// A state is refused at the cap counted on the runs its write would send.
@@ -668,4 +683,31 @@ fn a_death_at_any_read_or_at_the_write_is_the_typed_session_end() {
     let answer = restore(&board, &token(), &p).map(drop);
     assert!(ended(&answer), "the death at the write: {answer:?}");
     assert_eq!(fake.log().last().map(String::as_str), Some("POST /op set_arrangement"));
+}
+
+/// A restore on a board that serves no content count is faced, nothing
+/// written.
+///
+/// The write replaces every position the draft holds by one change, and
+/// the count of them is the metadata read's own: where the answer names
+/// none the restore says so and sends no frame (the mutant that takes an
+/// absent count for an empty draft sends a change of no width, which a
+/// draft holding anything keeps its words beside).
+#[test]
+fn a_restore_on_a_board_serving_no_count_is_faced_with_nothing_written() {
+    let fake = Fake::new(|req: &Request| {
+        let mut answered = answer(req);
+        if fake::frame(req)["op"] == "doc_metadata" {
+            let mut meta = metadata(false);
+            meta.as_object_mut().expect("an object").remove("own_count");
+            answered = fake::json(200, meta);
+        }
+        answered
+    });
+    let board = fake::board(&fake);
+    let p = past(&board, &token(), &a(S), 12).expect("the past read");
+    assert_eq!(p.held, None, "the premise: no count served");
+    let Err(Refusal::Halt(Halt::Halt(face))) = restore(&board, &token(), &p) else { panic!("a board serving no count was written to") };
+    assert!(face.state.contains("own_count") && face.act.contains("nothing was written"), "{face:?}");
+    assert!(!fake.log().iter().any(|line| line.ends_with("set_arrangement")), "no write sent: {:?}", fake.log());
 }

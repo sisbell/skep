@@ -1,5 +1,5 @@
 //! The engine fixture the hazard, golden and chain suites share: the mixed-op
-//! fixture — the hazard suite's eleven ops, extended to the golden's nineteen
+//! fixture — the hazard suite's eleven ops, extended to the golden's twenty
 //! — with its capture-and-compare oracle, the seeded salt every fixture
 //! kernel runs under, the address and configuration constructors, and
 //! wedge-bounded opens.
@@ -29,7 +29,7 @@ use std::time::Duration;
 use crate::mutilate::seg_file;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::AsOf;
-use skep_arrangement::{Caller, Deposit, VPos, VSpec};
+use skep_arrangement::{Caller, Change, Deposit, Edit, Placed, Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, World};
@@ -166,7 +166,7 @@ pub struct Fixture {
 }
 
 /// How far a fixture's op sequence runs: the hazard suite's eleven, or those
-/// eleven EXTENDED by the golden fixture's eight (the encoding report's §7).
+/// eleven EXTENDED by the golden fixture's nine (the encoding report's §7).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Extent {
     /// The eleven ops the H3 ruling names — the dirty-crash suite's fixture,
@@ -180,15 +180,16 @@ enum Extent {
     /// `Stretch` entry of the checkpoint's content map — a multi-byte ATOM
     /// (`Allocate` + `ContentWrite`, the `Value` entry, which the per-byte
     /// inserts no longer reach), a multi-run `ContentPlace` (a copy from a
-    /// range the pivot fragmented), and `ContentReorder` in both its shapes
-    /// (three and four ordinals).
+    /// range the pivot fragmented), `ContentReorder` in both its shapes
+    /// (three and four ordinals), and `ContentEdit` (an edit of two changes,
+    /// one minting and one placing a run by identity).
     Golden,
 }
 
 /// The op index of a golden fixture's commits — eleven hazard ops and the
-/// eight golden ones; the hazard fixture stops at the first figure.
+/// nine golden ones; the hazard fixture stops at the first figure.
 pub const HAZARD_OPS: usize = 11;
-pub const GOLDEN_OPS: usize = 19;
+pub const GOLDEN_OPS: usize = 20;
 
 /// A node component above 2³²: two base-`u32` digits, the `Nat` form the
 /// hazard ops never reach.
@@ -206,8 +207,8 @@ impl Fixture {
         Self::build_with(dir, ckpt_after, Extent::Hazard)
     }
 
-    /// [`Fixture::build`] EXTENDED by the golden fixture's eight ops
-    /// ([`Extent::Golden`]): the nineteen commits the byte fixture under
+    /// [`Fixture::build`] EXTENDED by the golden fixture's nine ops
+    /// ([`Extent::Golden`]): the twenty commits the byte fixture under
     /// `tests/golden/` is produced from — by these ops and never by literals,
     /// since M5's record variants cannot be built outside their crate. The
     /// same capture discipline: one oracle dump per boundary, bounded replay
@@ -377,7 +378,7 @@ impl Fixture {
 
             // 15: its content — three per-byte values, one run: one range
             //     mint and one stretch.
-            engine
+            let (xyz, _) = engine
                 .vstream()
                 .insert(
                     OWNER,
@@ -425,6 +426,24 @@ impl Fixture {
                 .vstream()
                 .rearrange(OWNER, &doc, &[vp(1, 1), vp(1, 2), vp(1, 4), vp(1, 6)], AsOf::Typed(engine.kernel().current_seq()))
                 .expect("swap in doc");
+            capture(&engine, &mut boundaries);
+
+            // 20: an EDIT of the first document — two changes in one commit,
+            //     the one `ContentEdit` the golden holds: its first position
+            //     gives way to a minted byte, the range mint and the stretch
+            //     journaled beside the record, and the second document's
+            //     first byte is placed by identity before its fourth, so the
+            //     record's changes carry a run the commit minted and one it
+            //     did not.
+            let placed = ShotRun { origin: doc2.clone(), run: Run::new(xyz, n(1)).expect("one position") };
+            let changes = vec![
+                Change { at: vp(1, 1), width: n(1), placed: Placed::Values(vec![Val::new(vec![b'q'])]) },
+                Change { at: vp(1, 4), width: n(0), placed: Placed::Runs(vec![placed]) },
+            ];
+            engine
+                .vstream()
+                .edit(OWNER, &doc, Edit { changes, head: None, base: None, merge: None }, AsOf::Typed(engine.kernel().current_seq()))
+                .expect("edit doc");
             capture(&engine, &mut boundaries);
         }
 

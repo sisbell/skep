@@ -1,6 +1,6 @@
 use super::*;
 use skep_address::{validate, Nat, Span, Tumbler};
-use skep_arrangement::{Base, Run, SetMerge};
+use skep_arrangement::{Base, Change, Placed, Run, SetMerge};
 use skep_discovery::SlotSpec;
 
 fn tum(comps: &[u32]) -> Tumbler {
@@ -83,11 +83,38 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::SetArrangement {
                 doc: doc(),
-                arrangement: SetArrangement {
-                    runs: vec![run_of(&addr(&[1, 0, 1, 0, 64]), &[1, 0, 1, 0, 64, 0, 1, 1])],
+                arrangement: Edit {
+                    changes: vec![Change {
+                        at: vpos(),
+                        width: Nat::from(1u32),
+                        placed: Placed::Runs(vec![run_of(&addr(&[1, 0, 1, 0, 64]), &[1, 0, 1, 0, 64, 0, 1, 1])]),
+                    }],
                     head: Some(Base { member: addr(&[1, 0, 1, 0, 64, 1]), extent: Nat::from(1u32) }),
                     base: Some(Base { member: addr(&[1, 0, 1, 0, 64, 1]), extent: Nat::from(1u32) }),
                     merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 64, 1, 1])], at: None }),
+                },
+                as_of: Seq(7),
+            },
+            false,
+        ),
+        (
+            // One change that mints and one that places a run by identity:
+            // the operation takes either in any change, whatever a frame of
+            // its name carries off the wire.
+            Op::Edit {
+                doc: doc(),
+                edit: Edit {
+                    changes: vec![
+                        Change { at: vpos(), width: Nat::from(1u32), placed: Placed::Values(vec![Val::new(vec![b'x'])]) },
+                        Change {
+                            at: VPos { subspace: Nat::from(1u32), ordinal: Nat::from(2u32) },
+                            width: Nat::from(0u32),
+                            placed: Placed::Runs(vec![run_of(&addr(&[1, 0, 1, 0, 64]), &[1, 0, 1, 0, 64, 0, 1, 1])]),
+                        },
+                    ],
+                    head: None,
+                    base: None,
+                    merge: None,
                 },
                 as_of: Seq(7),
             },
@@ -181,13 +208,14 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 33 reads and 19 writes (the publish
+/// (`is_write == !is_read`), with 33 reads and 20 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
 /// the staging act, `stage`, the seventeenth — B3-S10; the landing,
 /// `set_arrangement`, the eighteenth — the landing lane, skep #764;
 /// the well-known creation, `create_well_known_document`, the nineteenth —
-/// the mailbox design §3;
+/// the mailbox design §3; the edit under its own name, `edit`, the
+/// twentieth, one operation with `set_arrangement`;
 /// the doc-metadata read and the edition-claim lookup joining the
 /// twenty-four reads, lane 3.4; the owner-of-address read the
 /// twenty-seventh, AUTH-6.37; the any-principal discovery read the
@@ -199,7 +227,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 52);
+    assert_eq!(ops.len(), 53);
     let reads = ops.iter().filter(|(_, r)| *r).count();
     assert_eq!(reads, 33);
     for (op, expect_read) in &ops {
@@ -223,7 +251,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 52);
+    assert_eq!(seen.len(), 53);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -463,28 +491,31 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         as_of: Seq(7),
     };
     assert!(own_only.source_arguments().is_empty(), "a document's own I-space needs no consult");
-    // `set_arrangement`: REINSTATE's rule over its runs, and the head, the
-    // base and the sides — names, not sources — contribute nothing.
-    let whole = Op::SetArrangement {
-        doc: d1.clone(),
-        arrangement: SetArrangement {
-            runs: vec![
-                run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 1]),
-                run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1]),
-                run_of(&d2, &[1, 0, 1, 0, 64, 0, 1, 4]),
-                run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 7]),
-            ],
-            head: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
-            base: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
-            merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 70]), addr(&[1, 0, 1, 0, 69])], at: None }),
-        },
-        as_of: Seq(7),
+    // The edit, under either of its names: REINSTATE's rule over the runs
+    // its changes place, in the changes' order, a change that mints naming
+    // no source; and the head, the base and the sides — names, not sources
+    // — contribute nothing.
+    let placing = |runs: Vec<ShotRun>| Change { at: vpos(), width: Nat::from(0u32), placed: Placed::Runs(runs) };
+    let landing = Edit {
+        changes: vec![
+            placing(vec![run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 1]), run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1])]),
+            Change { at: vpos(), width: Nat::from(0u32), placed: Placed::Values(vec![Val::new(vec![b'x'])]) },
+            placing(vec![run_of(&d2, &[1, 0, 1, 0, 64, 0, 1, 4]), run_of(&d3, &[1, 0, 1, 0, 65, 0, 1, 7])]),
+        ],
+        head: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
+        base: Some(Base { member: addr(&[1, 0, 1, 0, 71, 1]), extent: Nat::from(1u32) }),
+        merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 70]), addr(&[1, 0, 1, 0, 69])], at: None }),
     };
-    assert_eq!(
-        whole.source_arguments(),
-        vec![&d3, &d2],
-        "set_arrangement: each distinct origin once, in run order, the destination's own excepted; the names consulted for nothing"
-    );
+    for op in [
+        Op::SetArrangement { doc: d1.clone(), arrangement: landing.clone(), as_of: Seq(7) },
+        Op::Edit { doc: d1.clone(), edit: landing.clone(), as_of: Seq(7) },
+    ] {
+        assert_eq!(
+            op.source_arguments(),
+            vec![&d3, &d2],
+            "{op:?}: each distinct origin once, in the changes' order, the destination's own excepted; the names consulted for nothing"
+        );
+    }
     let op = Op::Version { d_src: d2.clone(), published: None };
     assert_eq!(op.source_arguments(), vec![&d2]);
     let op = Op::MakeLink {
@@ -547,6 +578,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
                 Op::Copy { .. }
                     | Op::Reinstate { .. }
                     | Op::SetArrangement { .. }
+                    | Op::Edit { .. }
                     | Op::Version { .. }
                     | Op::Stage { .. }
                     | Op::MakeLink { .. }

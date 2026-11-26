@@ -1,9 +1,13 @@
-//! The draft landing: M set as a draft's whole arrangement in one write.
+//! The draft landing: a draft made to hold M in one write.
 //!
 //! A fresh draft is staged from the head where none is named, every document
 //! M windows read first so the one write's source gate cannot refuse past
-//! the stage; M is sent in one `set_arrangement` typed against the position
-//! the merge was composed at, and a landing is found by the board's mark —
+//! the stage; M is landed by one `set_arrangement` typed against the
+//! position the merge was composed at — the stretch by which M differs from
+//! the draft as the composition read it where the draft is a side of the
+//! merge, else one change of M over every position the draft holds (the
+//! `undo` module's doc, **The changes**) — and a landing is found by the
+//! board's mark —
 //! the draft's marker, or where the draft records no base the landing
 //! standing by its rows (the `landings` module's doc) — never by its words,
 //! the list the landing placed read as of the mark's position (the `land`
@@ -13,11 +17,12 @@ use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::parse_address;
-use crate::board::{acked_addr, acked_at, acked_head_moved, answers, frames, Rejection};
+use crate::board::{acked_addr, acked_at, acked_head_moved, answers, frames, Image, Rejection};
 use crate::halt::{Halt, Refused};
 use crate::merge::compose::Run;
 use crate::merge::landings::Landings;
-use crate::merge::reads::{first_difference, runs_of, stretches, Family, Merged, Refusal, Side};
+use crate::merge::reads::{content_prefix, first_difference, runs_of, stretches, Family, Merged, Refusal, Side};
+use crate::merge::undo::{net_changes, whole_change};
 
 use super::faults::{memo_landing_gone, own_fault, own_fault_face, shape_face};
 use super::records::{Newest, NoneBegun};
@@ -188,21 +193,37 @@ impl Writer<'_> {
         let head_text = head.to_string();
         let pair = Some((head_text.as_str(), merged.head_extent));
         let base = if meta.base.is_some() { pair } else { None };
-        let runs: Vec<Value> = target
-            .iter()
-            .map(|r| {
-                let i_start = r
-                    .address_at(0)
-                    .ok_or_else(|| own_fault_face("a run of M names no address", format!("{r:?}")))?;
-                Ok(frames::shot_run(&r.origin.to_string(), &i_start.to_string(), r.width))
-            })
-            .collect::<Result<_, Refusal>>()?;
+        if let Some(r) = target.iter().find(|r| r.address_at(0).is_none()) {
+            return Err(own_fault_face("a run of M names no address", format!("{r:?}")));
+        }
+        // THE CHANGE (wire.md §Arrangement, `set_arrangement`): a frame
+        // names what it changes. Where the draft is a side of the merge the
+        // composition read it at `as_of`, the position this write is typed
+        // against, so the write names the one stretch by which M differs
+        // from it, and no change at all where the draft holds M already.
+        // Any other draft — a fresh one staged for the landing, a draft
+        // named that is no side — the merge never read: every position it
+        // holds is replaced by M, its own count as just read.
+        // M as an image, each run under its origin's own content chain, as
+        // the landing spells it.
+        let tiled = |runs: &mut dyn Iterator<Item = (String, u64, u64)>, what: &str| {
+            Image::tiled(runs).ok_or_else(|| own_fault_face("a list of the landing's holds no image", what.to_string()))
+        };
+        let wanted = tiled(&mut target.iter().map(|r| (content_prefix(&r.origin), r.i_start, r.width)), "M")?;
+        let side = merged.inputs.sides.iter().position(|s| s.address() == into);
+        let changes = match side.and_then(|k| merged.maps.get(k + 1)) {
+            Some(read) => {
+                let standing = tiled(&mut read.runs.iter().map(|r| (r.prefix.clone(), r.first, r.width)), "the draft as the composition read it")?;
+                net_changes(&standing, &wanted)?
+            }
+            None => whole_change(into, meta.own_count, &wanted)?,
+        };
         let sides = marked_sides(merged, into);
         let side_refs: Vec<&str> = sides.iter().map(String::as_str).collect();
         let id = stem.id("draft");
         let frame = frames::set_arrangement(
             &into.to_string(),
-            &runs,
+            &changes,
             as_of,
             pair,
             base,

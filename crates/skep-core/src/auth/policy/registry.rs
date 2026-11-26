@@ -216,6 +216,7 @@ pub fn deposits_registry_link(op: &Op) -> bool {
         | Op::Reinstate { .. }
         | Op::Rearrange { .. }
         | Op::SetArrangement { .. }
+        | Op::Edit { .. }
         | Op::Version { .. }
         | Op::Stage { .. }
         | Op::Publish { .. }

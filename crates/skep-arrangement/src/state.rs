@@ -18,7 +18,7 @@ use crate::chain::is_birth_version;
 use crate::decode::entry_by_entry;
 use crate::provenance::Provenance;
 use crate::run::Run;
-use crate::run_list::RunList;
+use crate::run_list::{RunList, Splice};
 
 /// One document's POOM: the content and link run-lists (§Core data model).
 ///
@@ -129,14 +129,15 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// field, and the one a write reads: for every document whose content
 /// arrangement a record has changed, the position of the last record that
 /// changed it — the commit position M2 hands the fold, which is the `at`
-/// that commit's write was acknowledged at. The fold notes it off the five
+/// that commit's write was acknowledged at. The fold notes it off the six
 /// records that touch a content run-list ([`ContentPlace`](M5Rec::ContentPlace),
 /// [`ShotPlace`](M5Rec::ShotPlace), [`ContentRemove`](M5Rec::ContentRemove),
-/// [`ContentReorder`](M5Rec::ContentReorder) for their `doc`, and
+/// [`ContentReorder`](M5Rec::ContentReorder) and
+/// [`ContentEdit`](M5Rec::ContentEdit) for their `doc`, and
 /// [`VersionSnapshot`](M5Rec::VersionSnapshot) for the `new` it mints an
 /// arrangement for) and never off a [`LinkSeat`](M5Rec::LinkSeat), which
 /// touches the link run-list alone: a link write homed in a draft is not a
-/// change to the draft's arrangement. It is what the five in-place edits ask
+/// change to the draft's arrangement. It is what the six in-place edits ask
 /// through [`arranged_at`](M5State::arranged_at) to refuse an edit typed
 /// against an older state of the document (`Vstream`'s `AsOf`) and what the
 /// doc-metadata read serves as `arranged_at`, asked of the arrangement a
@@ -156,8 +157,8 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// draft since its base last moved at a shot (`stamped`) — a
 /// [`DraftBase`]. The op journals the record
 /// ([`DraftBase`](M5Rec::DraftBase)) beside the snapshot that shares the
-/// source; the landing op
-/// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)) journals
+/// source; the edit ([`Vstream::edit`](crate::Vstream::edit)), where it
+/// lands a merge, journals
 /// the same record to move the base and set or clear the marker (the
 /// landing lane; skep #764), or the restore record
 /// ([`MarkerRestore`](M5Rec::MarkerRestore)) to put a stamped marker back
@@ -199,11 +200,15 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   however the variant set grows (ASN-0047 P2).
 /// * **P4★ — present containment is recorded.** For every `doc`, the current
 ///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
-///   `provenance.ever_contained(doc)`. Established by the three arms that
+///   `provenance.ever_contained(doc)`. Established by the four arms that
 ///   place: [`ContentPlace`](M5Rec::ContentPlace) appends exactly the
 ///   iextents it splices in, [`ShotPlace`](M5Rec::ShotPlace) exactly the
 ///   iextents of the runs it splices at ordinal 1 (none when it places none),
-///   and [`VersionSnapshot`](M5Rec::VersionSnapshot) exactly the iextents of
+///   [`ContentEdit`](M5Rec::ContentEdit) exactly the iextents of the runs
+///   its changes place — the values a text edit minted and the runs a
+///   landing placed by identity alike, none where its changes only remove —
+///   while what its changes remove only contracts the image, and
+///   [`VersionSnapshot`](M5Rec::VersionSnapshot) exactly the iextents of
 ///   the run-list it installs. Preserved by the other three:
 ///   [`ContentRemove`](M5Rec::ContentRemove) only contracts the image,
 ///   [`ContentReorder`](M5Rec::ContentReorder) permutes the same arranged
@@ -290,16 +295,18 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// * **MOVED★ — a document's arranged-at position is the position of the
 ///   last record that changed its content arrangement.** `arranged_at` gains
 ///   or moves `doc`'s entry at every [`ContentPlace`](M5Rec::ContentPlace),
-///   [`ShotPlace`](M5Rec::ShotPlace), [`ContentRemove`](M5Rec::ContentRemove)
-///   and [`ContentReorder`](M5Rec::ContentReorder) naming `doc`, and `new`'s
+///   [`ShotPlace`](M5Rec::ShotPlace), [`ContentRemove`](M5Rec::ContentRemove),
+///   [`ContentReorder`](M5Rec::ContentReorder) and
+///   [`ContentEdit`](M5Rec::ContentEdit) naming `doc`, and `new`'s
 ///   at the [`VersionSnapshot`](M5Rec::VersionSnapshot) that mints it — on
-///   both branches of each arm that has two, an empty placement and an empty
-///   source included, since the fact is the record and not the content it
-///   left — to the position the fold is handed for that record; and at no
+///   both branches of each arm that has two, an empty placement, an empty
+///   source and an edit of no change included, since the fact is the record
+///   and not the content it left — to the position the fold is handed for
+///   that record; and at no
 ///   other: a [`LinkSeat`](M5Rec::LinkSeat) moves no entry, so a link write
 ///   homed in the draft never refuses the next edit typed before it, and
 ///   neither base record ([`DraftBase`](M5Rec::DraftBase),
-///   [`MarkerRestore`](M5Rec::MarkerRestore)) moves one, the placement
+///   [`MarkerRestore`](M5Rec::MarkerRestore)) moves one, the record
 ///   pushed before it having done so. The
 ///   position handed is the record's commit position, every record of a
 ///   transaction folded at the transaction's own (M2's `Staging::sealed`,
@@ -315,13 +322,13 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   landing names, and its marker travels with it.** `draft_bases` gains
 ///   or replaces `draft`'s entry at every [`DraftBase`](M5Rec::DraftBase)
 ///   record — the staging operation's, journaled beside the snapshot that
-///   shares the source, and the landing op's, journaled beside the
-///   placement that sets the draft's whole arrangement — the record's own
+///   shares the source, and the edit's, journaled beside the
+///   [`ContentEdit`](M5Rec::ContentEdit) that lands the merge — the record's own
 ///   `base`, `extent` and `source`, and its `merge` with THIS commit's
 ///   position stamped as the marker's `at` (the fold's, never a member a
 ///   record carries: the position the marker was put on this document, a
 ///   landing's own or the stage's that copied it); replaces it at every
-///   [`MarkerRestore`](M5Rec::MarkerRestore) — the landing op's where the
+///   [`MarkerRestore`](M5Rec::MarkerRestore) — the edit's where the
 ///   request puts a stamped marker back (skep #870) — with the record's
 ///   `base`, `extent` and `source` and its marker as carried, the one
 ///   marker the fold does not stamp; and moves it at every
@@ -335,8 +342,9 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   makes one — the member it rendered as its base and its source — so a
 ///   draft whose own first publication minted its edition stands on that
 ///   edition's first member. Three records move the map and no other: a
-///   `version`'s snapshot notes a source and no base, a placement and a
-///   removal mint nothing and touch no entry — so the publication's
+///   `version`'s snapshot notes a source and no base, a placement, a
+///   removal and an edit's own record mint nothing and touch no entry — so
+///   the publication's
 ///   re-window of an `also` draft, and of a rendering draft whose shot
 ///   keeps its base, leaves that draft's base and marker standing — and a
 ///   `fork` reaches this slice with no record. **The stamps** travel with
@@ -429,7 +437,7 @@ pub struct M5State {
     pub(crate) fork_sources: im::OrdMap<Address, Address>,
     // Each document whose content arrangement a record has changed → the
     // position of the last such record (MOVED★); written by the fold alone,
-    // read by `arranged_at` for the five in-place edits' check. Appended
+    // read by `arranged_at` for the in-place edits' check. Appended
     // after `fork_sources`, under the same no-default rule: a checkpoint
     // written without this field must fail to decode and hand the open to
     // the journal, which recomputes the map — never decode as "never
@@ -465,8 +473,8 @@ pub struct M5State {
 /// `merge` the marker of the merge the draft carries or `None`, `stamped`
 /// the markers stamped on the draft since its base last moved at a shot.
 /// Journaled by the op's own record ([`M5Rec::DraftBase`]) at the staging
-/// and at each landing that records a base
-/// ([`Vstream::set_arrangement`](crate::Vstream::set_arrangement)), by the
+/// and at each landing that records a base — the landing op, an edit whose
+/// request names one ([`Vstream::edit`](crate::Vstream::edit)) — by the
 /// restore record ([`M5Rec::MarkerRestore`]) at each landing that puts a
 /// stamped marker back, and moved by the shot's placing record
 /// ([`M5Rec::ShotPlace`]) at each publication of the draft itself, as
@@ -800,8 +808,9 @@ pub enum M5Rec {
     /// stages its snapshot alone and stays a free-standing draft. For the
     /// landing op: the base the frame told it to record, the source kept,
     /// and the frame's merge as the marker or `None` to clear one — pushed
-    /// after the placement that set the draft's arrangement, and only where
-    /// the frame names a base to record. `merge` carries no position: the
+    /// after the [`ContentEdit`](M5Rec::ContentEdit) that changed the
+    /// draft's arrangement, and only where the frame names a base to
+    /// record. `merge` carries no position: the
     /// fold stamps the commit's own on the marker it installs.
     #[non_exhaustive]
     DraftBase { draft: Address, base: Address, extent: Nat, source: Address, merge: Option<Merge> },
@@ -811,7 +820,8 @@ pub enum M5Rec {
     /// where the request's merge names a position
     /// ([`SetMerge::at`](crate::SetMerge::at)) and the draft's stamps
     /// ([`DraftBase::stamped`]) hold the marker of those sides, that head
-    /// pair and that position — after the placement that set the draft's
+    /// pair and that position — after the
+    /// [`ContentEdit`](M5Rec::ContentEdit) that changed the draft's
     /// arrangement, in the one commit the op makes. `draft` is the document
     /// the record is about; `base`, `extent` and `source` are installed as
     /// a `DraftBase` record's are, and `marker` as the merge the draft
@@ -820,6 +830,41 @@ pub enum M5Rec {
     /// stamps stand (BASE★).
     #[non_exhaustive]
     MarkerRestore { draft: Address, base: Address, extent: Nat, source: Address, marker: Marker },
+    /// The edit's record: a list of positional changes to one document's
+    /// content arrangement, made in one fold.
+    ///
+    /// `changes` are in the coordinates of `doc`'s arrangement as it stood
+    /// before the record — each a [`Splice`]: positions removed at an
+    /// ordinal, runs placed where they stood — ascending and apart, as the
+    /// op that stages it judged them
+    /// ([`Vstream::edit`](crate::Vstream::edit)). The fold splices every one
+    /// in one walk of the list, R-appends each placed run's iextent (J1★;
+    /// P4★), and moves `doc`'s arranged-at entry to its commit whatever the
+    /// list holds, an EMPTY list included (MOVED★): the record of a landing
+    /// that changed no position — its base and marker in the base record
+    /// pushed beside it — still refuses a frame typed before it.
+    ///
+    /// **What it appends to R, by surface.** One record serves two wire
+    /// frames, and R gains the same thing under both — a span for each run
+    /// a change places, and nothing for what a change removes (P2: the
+    /// removed addresses keep the pairs that placed them). For a text edit
+    /// (`edit`) the placed runs are the values the call minted, one run a
+    /// change that mints, so every minted address enters R↾doc in the
+    /// commit that mints it. For a landing, an undo, a withdrawal or a
+    /// restore (`set_arrangement`) they are the runs the frame names by
+    /// identity, appended whether or not R↾doc holds them already, as a
+    /// `reinstate`'s are: a run put back gains a second span, and a frame
+    /// that names only the stretch it changes appends only that stretch's
+    /// runs, where one replacing the whole arrangement appends every run it
+    /// re-places.
+    ///
+    /// It mints nothing and notes no birth extent, as a
+    /// [`ContentPlace`](M5Rec::ContentPlace) notes none (BIRTH★), and it
+    /// moves no base: a landing's base rides the
+    /// [`DraftBase`](M5Rec::DraftBase) or
+    /// [`MarkerRestore`](M5Rec::MarkerRestore) pushed after it (BASE★).
+    #[non_exhaustive]
+    ContentEdit { doc: Address, changes: Vec<Splice> },
 }
 
 impl M5State {
@@ -975,7 +1020,8 @@ impl M5State {
     /// It is the arranged-at map's entry (MOVED★ on [`M5State`]): the commit
     /// position of the last record that placed into, removed from, reordered
     /// or minted `doc`'s content arrangement — a placement's, a shot's, a
-    /// removal's, a reorder's, or the `version` snapshot's that minted `doc`
+    /// removal's, a reorder's, an edit's, or the `version` snapshot's that
+    /// minted `doc`
     /// — which is the `at` that commit's write was acknowledged at. `None`
     /// for a document never arranged: one created and not yet written, a
     /// `fork`-minted document, an address never minted, and a document
@@ -1014,7 +1060,8 @@ impl M5State {
     /// (every op validates before `stg.push`), or one M2 recovered with its
     /// journal/checkpoint integrity. An out-of-contract record (a
     /// `ContentPlace.at` past the append boundary, a `ContentRemove`
-    /// overrunning the run-list, a cut vector violating R-PRE) arises only
+    /// overrunning the run-list, a cut vector violating R-PRE, a
+    /// `ContentEdit` whose changes overlap or run past the list) arises only
     /// from corruption or from a record staged past the ops ([`M5Rec`]'s
     /// seals say how), is outside the input class, and is not re-validated
     /// here; the run-list clamps keep the fold panic-free regardless.
@@ -1287,7 +1334,7 @@ impl M5State {
             // that stood, its stamps kept and the marker stamped here
             // appended to them (skep #870). It touches no arrangement: the
             // records pushed before it did that work, the snapshot that
-            // shared the source or the placement that set the draft's
+            // shared the source or the edit that changed the draft's
             // arrangement. No arranged-at entry moves for it, the fact being
             // no change to any content arrangement (MOVED★).
             M5Rec::DraftBase { draft, base, extent, source, merge } => {
@@ -1339,6 +1386,40 @@ impl M5State {
                 ),
                 source_copied: self.source_copied.clone(),
             },
+            // The edit's fold: every change spliced in ONE walk of the list
+            // (`RunList::spliced`), and each placed run's iextent appended
+            // to R in the same fold, as the placement's arm appends them
+            // (J1★ ⇒ P4★) — the values a text edit minted and the runs a
+            // landing placed by identity alike; what a change removes
+            // leaves R as it stands (P2). A record of no change leaves the
+            // arrangement map as it stands, an absent document absent, and
+            // one that places no run appends no entry to R.
+            //
+            // The arranged-at entry moves on every branch (MOVED★): the
+            // fact is the record, so an edit of no change — a landing whose
+            // words already stand, its base in the record beside it —
+            // refuses the next frame typed before it all the same.
+            M5Rec::ContentEdit { doc, changes } => {
+                let placed = || changes.iter().flat_map(|change| change.runs.iter());
+                M5State {
+                    arrangements: if changes.is_empty() {
+                        self.arrangements.clone()
+                    } else {
+                        self.arrangements_with_content(doc, |c| c.spliced(changes, &mut |_| {}))
+                    },
+                    provenance: if placed().next().is_none() {
+                        self.provenance.clone()
+                    } else {
+                        self.provenance.append(doc, placed())
+                    },
+                    birth_extents: self.birth_extents.clone(),
+                    shot_terms: self.shot_terms.clone(),
+                    fork_sources: self.fork_sources.clone(),
+                    arranged_at: moved(doc),
+                    draft_bases: self.draft_bases.clone(),
+                    source_copied: self.source_copied.clone(),
+                }
+            }
         }
     }
 

@@ -96,7 +96,7 @@ fn a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit(
     let side = format!("{v1}.1");
     let before = head_position(port);
     let runs = runs_of(port, &owner, &edition, 2, 2);
-    let frame = set_arrangement_frame(&draft, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None);
+    let frame = set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None);
     let ack = op(port, Some(&owner), &frame);
     let at = acked_at(&ack);
     assert_eq!(expect_resp(&ack, "ack")["at"].as_u64(), Some(at));
@@ -118,7 +118,7 @@ fn a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit(
     assert_eq!(row["merge"], serde_json::json!({"head": v1, "sides": [side]}), "the merge recorded: {row}");
     assert_eq!(row["key"].as_str(), Some("bare"));
     // Typed against the state before the landing: refused, nothing wiped.
-    let stale = op(port, Some(&owner), &set_arrangement_frame(&draft, &runs_of(port, &owner, &edition, 1, 1).iter().map(|(o, s, w)| (o.as_str(), s.as_str(), *w)).collect::<Vec<_>>(), None, None, None, before));
+    let stale = op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &runs_of(port, &owner, &edition, 1, 1).iter().map(|(o, s, w)| (o.as_str(), s.as_str(), *w)).collect::<Vec<_>>(), None, None, None, before));
     let rej = expect_resp(&stale, "rejected");
     assert_eq!(rej["code"].as_str(), Some("arrangement_moved"), "{stale}");
     assert_eq!((rej["site"]["as_of"].as_u64(), rej["site"]["current"].as_u64()), (Some(before), Some(at)), "{stale}");
@@ -144,7 +144,7 @@ fn a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit(
     assert_eq!(widths, 4, "the four positions the draft arranged then: {image}");
     // A write on `/op-at`: the transport's refusal, before any store — the
     // frame typed, so the refusal is the route's and not the parse's.
-    let typed = set_arrangement_frame(&draft, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), at);
+    let typed = set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), at);
     let (st, body) = op_at(port, Some(&owner), at, &typed);
     assert_eq!(st, 400, "{body}");
     assert_eq!(body["error"].as_str(), Some("write_at_history"));
@@ -171,13 +171,17 @@ fn a_merge_taken_out_is_put_back_with_its_landings_own_position() {
     let (edition, v1, draft) = family(port, &signed, &owner);
     let side = format!("{v1}.1");
     let runs = runs_of(port, &owner, &edition, 2, 2);
-    let landing = set_arrangement_frame(&draft, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None);
+    let landing = set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None);
     let landed = acked_at(&op(port, Some(&owner), &landing));
     let marker = serde_json::json!({"at": landed, "head": v1, "head_copied": "3", "sides": [side]});
-    let withdrawn = acked_at(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&v1, 3)), None, None)));
+    let withdrawn = acked_at(&op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), None, Some((&v1, 3)), None, None)));
     assert!(standing(port, &owner, &draft).2.is_null(), "the premise: the marker cleared");
+    // The landing's frame again, its one change over the draft's whole
+    // count as the draft stands now, with the marker's position beside the
+    // sides.
     let put_back = |at: u64| {
         let mut frame: Value = serde_json::from_str(&landing).expect("the landing's frame");
+        frame["changes"][0]["width"] = serde_json::json!(own_count(port, &owner, &draft).to_string());
         frame["merge"]["at"] = serde_json::json!(at);
         frame.to_string()
     };
@@ -218,7 +222,7 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
     let v2 = shot(port, &signed, &edition, Some((&v1, 3)), Some(&sibling), &shot_runs(port, Some(&owner), &edition, 1, 3));
     assert_eq!(v2, format!("{edition}.2"));
     let runs = runs_of(port, &owner, &edition, 1, 2);
-    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[]), None));
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[]), None));
     let at = acked_at(&ack);
     assert_eq!(ack["head_moved"].as_str(), Some(v2.as_str()), "the trunk's current head, told: {ack}");
     assert_eq!(text_of(port, Some(&owner), &draft, 1, 2), "ab");
@@ -228,7 +232,7 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
         "recorded on the head used"
     );
     // Composed on the trunk's head: nothing to tell, the base moved there.
-    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 3)), Some((&v2, 3)), Some(&[]), None));
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v2, 3)), Some((&v2, 3)), Some(&[]), None));
     assert!(ack.get("head_moved").is_none(), "{ack}");
     assert_eq!(standing(port, &owner, &draft).0, some(&v2));
     // The head's three refusals — a member no mint has made, a head off the
@@ -242,22 +246,22 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
     let unminted = format!("{edition}.9");
     let head = head_position(port);
     for frame in [
-        set_arrangement_frame(&draft, &borrowed(&runs), Some((&unminted, 0)), None, None, None),
-        set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&unminted, 0)), None, None),
+        set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&unminted, 0)), None, None, None),
+        set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), None, Some((&unminted, 0)), None, None),
     ] {
         let v = op(port, Some(&owner), &frame);
         let rej = expect_resp(&v, "rejected");
         assert_eq!((rej["code"].as_str(), rej["disposition"].as_str()), (Some("source_not_registered"), Some("reorder")), "{v}");
     }
-    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&other_v1, 1)), None, None, None)), "base_not_in_chain");
-    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 4)), None, None, None)), "base_extent_too_large");
-    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&other_v1, 1)), None, None)), "base_not_in_chain");
-    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&v2, 4)), None, None)), "base_extent_too_large");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&other_v1, 1)), None, None, None)), "base_not_in_chain");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), Some((&v2, 4)), None, None, None)), "base_extent_too_large");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), None, Some((&other_v1, 1)), None, None)), "base_not_in_chain");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, own_count(port, &owner, &draft), &borrowed(&runs), None, Some((&v2, 4)), None, None)), "base_extent_too_large");
     // The edition itself: the store's `published_target` from the signed
     // owner; from the bare session the daemon's publish-class gate stands
     // ahead of it, as on the five in-place edits.
-    assert_permanent(&op(port, Some(&signed), &set_arrangement_frame(&edition, &borrowed(&runs), None, None, None, None)), "published_target");
-    assert_eq!(verdict(&op(port, Some(&owner), &set_arrangement_frame(&edition, &borrowed(&runs), None, None, None, None))), "credential_refused:signed_session_required");
+    assert_permanent(&op(port, Some(&signed), &set_arrangement_frame(&edition, own_count(port, &signed, &edition), &borrowed(&runs), None, None, None, None)), "published_target");
+    assert_eq!(verdict(&op(port, Some(&owner), &set_arrangement_frame(&edition, own_count(port, &owner, &edition), &borrowed(&runs), None, None, None, None))), "credential_refused:signed_session_required");
     assert_eq!(head_position(port), head, "every refusal commits nothing");
     assert_eq!(text_of(port, Some(&owner), &draft, 1, 2), "ab");
     sd.shutdown();
@@ -294,7 +298,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "a version records no base: {meta}");
     // The source is the head: admitted, nothing moved.
     let runs = runs_of(port, &stranger, &edition, 3, 1);
-    let ack = op(port, Some(&stranger), &set_arrangement_frame(&fork, &borrowed(&runs), Some((&v1, 3)), None, Some(&[]), None));
+    let ack = op(port, Some(&stranger), &set_arrangement_frame(&fork, own_count(port, &stranger, &fork), &borrowed(&runs), Some((&v1, 3)), None, Some(&[]), None));
     expect_resp(&ack, "ack");
     assert!(ack.get("head_moved").is_none());
     assert_eq!(text_of(port, Some(&stranger), &fork, 1, 1), "c");
@@ -309,13 +313,13 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_
     // Version 2 lands; a landing composed on it is refused by name.
     let v2 = shot(port, &signed, &edition, Some((&v1, 3)), Some(&draft), &shot_runs(port, Some(&owner), &edition, 1, 3));
     let head = head_position(port);
-    let refused = op(port, Some(&stranger), &set_arrangement_frame(&fork, &borrowed(&runs), Some((&v2, 3)), None, Some(&[]), None));
+    let refused = op(port, Some(&stranger), &set_arrangement_frame(&fork, own_count(port, &stranger, &fork), &borrowed(&runs), Some((&v2, 3)), None, Some(&[]), None));
     assert_permanent(&refused, "fork_base_moved");
     assert_eq!(refused["site"]["addr"].as_str(), Some(v1.as_str()), "the source named: {refused}");
     assert_eq!(head_position(port), head, "nothing written");
     assert_eq!(text_of(port, Some(&stranger), &fork, 1, 1), "c");
     // A base named for the fork: nothing to record.
-    assert_permanent(&op(port, Some(&stranger), &set_arrangement_frame(&fork, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), None, None)), "no_base_to_record");
+    assert_permanent(&op(port, Some(&stranger), &set_arrangement_frame(&fork, own_count(port, &stranger, &fork), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), None, None)), "no_base_to_record");
     assert_eq!(head_position(port), head);
     sd.shutdown();
 }
@@ -346,7 +350,7 @@ fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read(
     assert_withheld(&doc_metadata(port, Some(&stranger.session), &plain), &plain);
     let runs = runs_of(port, &stranger.session, &edition, 1, 3);
     for extent in [2, 3, 1_000_000] {
-        let ack = op(port, Some(&stranger.session), &set_arrangement_frame(&own, &borrowed(&runs), Some((&plain, extent)), None, None, None));
+        let ack = op(port, Some(&stranger.session), &set_arrangement_frame(&own, own_count(port, &stranger.session, &own), &borrowed(&runs), Some((&plain, extent)), None, None, None));
         assert_eq!(ack["resp"].as_str(), Some("ack"), "extent {extent}: {ack}");
         assert!(ack.get("head_moved").is_none(), "extent {extent}: {ack}");
         let v = doc_metadata(port, Some(&stranger.session), &own);
@@ -357,7 +361,7 @@ fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read(
     // The runs are what the op reads: naming the owner's draft, refused.
     let head = head_position(port);
     let theirs = runs_of(port, &owner, &plain, 1, 2);
-    let refused = op(port, Some(&stranger.session), &set_arrangement_frame(&own, &borrowed(&theirs), None, None, None, None));
+    let refused = op(port, Some(&stranger.session), &set_arrangement_frame(&own, own_count(port, &stranger.session, &own), &borrowed(&theirs), None, None, None, None));
     assert_withheld(&refused, &plain);
     assert_eq!(head_position(port), head, "nothing written");
     assert_eq!(text_of(port, Some(&stranger.session), &own, 1, 3), "abc");
@@ -386,12 +390,12 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     assert!(meta["base"].is_null() && meta["source"].is_null() && meta["merge"].is_null(), "{meta}");
     let runs = runs_of(port, &owner, &edition, 1, 3);
     let head = head_position(port);
-    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[]), None)), "no_base_to_record");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[]), None)), "no_base_to_record");
     assert_eq!(head_position(port), head, "nothing written");
     assert_eq!(text_of(port, Some(&owner), &plain, 1, 2), "xy");
     // Admitted with the head and a merge, nothing recorded; the row carries
     // the merge all the same.
-    let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&v1, 3)), None, Some(&[]), None));
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&runs), Some((&v1, 3)), None, Some(&[]), None));
     expect_resp(&ack, "ack");
     assert_eq!(text_of(port, Some(&owner), &plain, 1, 3), "abc");
     let meta = doc_metadata(port, Some(&owner), &plain);
@@ -406,23 +410,23 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     // on a draft with a chain, nothing written.
     let before = head_position(port);
     let unminted = format!("{edition}.9");
-    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&unminted, 0)), None, None, None));
+    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&runs), Some((&unminted, 0)), None, None, None));
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["disposition"].as_str()), (Some("source_not_registered"), Some("reorder")), "{v}");
     assert_eq!(head_position(port), before, "nothing written");
     assert_eq!(text_of(port, Some(&owner), &plain, 1, 3), "abc");
     // The empty arrangement.
-    let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, &[], None, None, None, None));
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &[], None, None, None, None));
     expect_resp(&ack, "ack");
     assert_eq!(content_extent(port, Some(&owner), &plain), 0, "emptied");
     // The wire's example, verbatim: parsed and answered as the op.
-    let example = r#"{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.64","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.64.0.1.1","origin":"1.0.1.0.64","width":"2"}]}"#;
+    let example = r#"{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"changes":[{"at":{"ordinal":"3","subspace":"1"},"runs":[{"i_start":"1.0.1.0.1.0.1.3","origin":"1.0.1.0.1","width":"2"}],"width":"1"},{"at":{"ordinal":"7","subspace":"1"},"runs":[{"i_start":"1.0.1.0.64.0.1.1","origin":"1.0.1.0.64","width":"2"}],"width":"0"}],"doc":"1.0.1.0.64","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement"}"#;
     let v = op_as_written(port, Some(&owner), example);
     assert_eq!(v["resp"].as_str(), Some("rejected"), "{v}");
     assert_eq!(v["op"].as_str(), Some("set_arrangement"), "the frame is the op: {v}");
     // A run list past the wire's cap is refused at the parse, as a shot's.
     let many: Vec<(String, String, u64)> = (0..4097).map(|_| runs[0].clone()).collect();
-    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&many), None, None, None, None));
+    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&many), None, None, None, None));
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("malformed"), "{}", v["detail"]);
     sd.shutdown();
 }

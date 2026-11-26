@@ -6,7 +6,9 @@
 //! line still projects onto its word, and an edit that does not land leaves
 //! the draft as it was — refused before any write where a read decides it,
 //! and, where another writer's change commits at the wrong moment, with the
-//! draft exactly as that writer left it and no line of the edit's held. The
+//! draft exactly as that writer left it and no line of the edit's held. An
+//! edit is one frame and one commit, removal and insert together, and is
+//! refused behind a held line of the agent's on its draft. The
 //! other writer is staged, never raced: the adapter dials the board through
 //! `common`'s relay, whose rule lands a second session's write between two
 //! exchanges of one tool call. Two pairs in one `edit_text` call land with
@@ -552,7 +554,7 @@ fn a_published_document_is_refused_before_any_write() {
         assert!(!is_error, "{answer}");
         assert_eq!(answer, json!({"outcome": "refused", "cause": "published", "doc": doc, "published": edition}));
     }
-    let writes: Vec<Passed> = fixture.relay().passed().into_iter().filter(|passed| ["insert", "delete", "set_arrangement"].contains(&passed.op.as_str())).collect();
+    let writes: Vec<Passed> = fixture.relay().passed().into_iter().filter(|passed| ["insert", "delete", "edit", "set_arrangement"].contains(&passed.op.as_str())).collect();
     assert!(writes.is_empty(), "no write reached the board: {writes:?}");
     assert_eq!(mcp.call_json("held", json!({})), json!([]));
     assert_eq!(text_of(&mut mcp, &member), CODE);
@@ -614,18 +616,22 @@ fn an_edit_against_text_that_changed_since_its_read_leaves_the_draft_as_the_othe
     assert!(mcp.finish().success());
 }
 
-/// A replacement whose second write is refused is taken back whole.
+/// A replacement is one commit, and another writer's change ahead of it
+/// refuses it whole.
 ///
-/// A change that both removes and inserts is two commits. Another session
-/// writes into the draft between the two: the relay lands its write as the
-/// insert's ack passes, so the removal, typed against the insert's own
-/// commit, is refused. The edit takes its insert back by identity — found
-/// where the other writer's bytes moved it to — and answers the refusal, as
-/// data: the draft reads exactly as the other writer left it, the three
-/// bytes the insert minted arranged nowhere, and no line is held. Called
-/// again, the edit lands.
+/// A change that both removes and inserts is ONE frame, the board's `edit`:
+/// one commit, no state standing between a removal and an insert. Another
+/// session writes into the draft as that frame is on its way — the relay
+/// lands its write before the frame reaches the board — so the frame, typed
+/// against the call's read, is refused: the answer is the board's verdict,
+/// as data, the one write the call sent the frame refused; the draft reads
+/// exactly as the other writer left it, nothing of the edit minted, and no
+/// line is held. Called again, the edit lands by one frame more, and the
+/// draft's feed shows one entry for it, an `edit` (the mutant that sends the
+/// insert and then the removal sends two writes, and leaves the new bytes
+/// minted where the second is refused).
 #[test]
-fn a_replacement_whose_second_write_is_refused_is_taken_back_whole() {
+fn a_replacement_is_one_commit_and_another_writers_change_ahead_of_it_refuses_it_whole() {
     let fixture = Fixture::relayed("replace-second");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
@@ -635,95 +641,54 @@ fn a_replacement_whose_second_write_is_refused_is_taken_back_whole() {
     let (rule_doc, landed) = (doc.clone(), Arc::new(AtomicUsize::new(0)));
     let seen = Arc::clone(&landed);
     fixture.relay().on(move |passing| {
-        let inserts = passing.frame["op"] == "insert" && passing.frame["doc"] == rule_doc.as_str();
-        if inserts && passing.answer.is_some_and(|answer| answer["resp"] == "ack_addr") && seen.load(Ordering::SeqCst) == 0 {
+        let edits = passing.frame["op"] == "edit" && passing.frame["doc"] == rule_doc.as_str();
+        if edits && passing.answer.is_none() && seen.load(Ordering::SeqCst) == 0 {
             seen.store(racer.insert(&rule_doc, 1, raced) as usize, Ordering::SeqCst);
         }
     });
     fixture.relay().forget();
     let (is_error, answer) = replace(&mut mcp, &doc, "add", "sub");
     let moved_at = landed.load(Ordering::SeqCst);
-    assert!(moved_at > 0, "premise: the other writer's change landed between the two commits");
+    assert!(moved_at > 0, "premise: the other writer's change landed ahead of the frame");
     assert!(!is_error, "the board's verdict is data: {answer}");
     assert_eq!((&answer["outcome"], &answer["cause"]), (&json!("refused"), &json!("arrangement_moved")), "{answer}\n{}", mcp.log());
-    assert_eq!((&answer["refusal"]["op"], &answer["refusal"]["site"]["current"]), (&json!("delete"), &json!(moved_at)), "the removal is the write refused: {answer}");
-    let passed = fixture.relay().passed();
-    let writes: Vec<(&str, &str)> = passed
-        .iter()
-        .filter(|passed| ["insert", "delete"].contains(&passed.op.as_str()) && passed.frame["doc"] == doc.as_str())
-        .map(|passed| (passed.op.as_str(), passed.answer["resp"].as_str().unwrap_or_default()))
-        .collect();
-    assert_eq!(writes, [("insert", "ack_addr"), ("delete", "rejected"), ("delete", "ack")], "the insert, the removal refused, and the insert taken back");
+    assert_eq!((&answer["refusal"]["op"], &answer["refusal"]["site"]["current"]), (&json!("edit"), &json!(moved_at)), "the one frame is the write refused: {answer}");
+    let writes = |fixture: &Fixture| -> Vec<(String, String)> {
+        fixture
+            .relay()
+            .passed()
+            .iter()
+            .filter(|passed| ["insert", "delete", "edit", "set_arrangement"].contains(&passed.op.as_str()) && passed.frame["doc"] == doc.as_str())
+            .map(|passed| (passed.op.clone(), passed.answer["resp"].as_str().unwrap_or_default().to_string()))
+            .collect()
+    };
+    assert_eq!(writes(&fixture), [("edit".to_string(), "rejected".to_string())], "one write, refused: nothing to take back");
     assert_eq!(text_of(&mut mcp, &doc), format!("{raced}{CODE}"), "the draft exactly as the other writer left it");
     assert_eq!(addresses(&mut mcp, &doc)[raced.len()..], before[..], "every byte the draft held keeps its address");
-    assert_eq!(minted(&mut mcp, &doc), (CODE.len() + raced.len() + 3) as u64, "the insert's three bytes were minted, and are arranged nowhere");
+    assert_eq!(minted(&mut mcp, &doc), (CODE.len() + raced.len()) as u64, "nothing of the edit was minted");
     assert_eq!(mcp.call_json("held", json!({})), json!([]), "no line of the edit's is held");
     fixture.relay().on(|_| {});
-    replaced(&mut mcp, &doc, "add", "sub");
+    fixture.relay().forget();
+    let typed = mcp.position();
+    let landed = replaced(&mut mcp, &doc, "add", "sub");
+    assert_eq!(writes(&fixture), [("edit".to_string(), "ack_addr".to_string())], "one frame: the removal and the insert together");
     assert_eq!(text_of(&mut mcp, &doc), format!("{raced}{}", CODE.replace("add", "sub")));
+    let page = mcp.call_json("changes_since", json!({"since": typed, "under": doc, "class": "drafts"}));
+    let entries: Vec<(&str, u64)> = page["entries"].as_array().expect("entries").iter().map(|entry| (entry["op"].as_str().unwrap_or_default(), entry["at"].as_u64().unwrap_or_default())).collect();
+    assert_eq!(entries, [("edit", landed["at"].as_u64().expect("the edit's commit"))], "one commit on the feed, the edit's own: {page}");
     assert!(mcp.finish().success());
 }
 
-/// A replacement that lands in part says exactly what stands.
+/// An edit behind a held line of the agent's is refused `held_lines`.
 ///
-/// Another session writes into the draft ahead of every removal the edit
-/// sends — its second write, and each attempt to take its insert back — so
-/// neither lands. The answer is `partial`, `isError`: it names the new
-/// bytes standing, by their I-address, their commit and their width, and
-/// the old bytes not removed, and the board bears each out — the new word
-/// read back by identity, standing in the draft directly after the old one,
-/// which still stands — with no line held. The edit is then finished as the
-/// answer says: `replace_text` with `old` the two together.
-#[test]
-fn a_replacement_that_lands_in_part_says_exactly_what_stands() {
-    let fixture = Fixture::relayed("replace-partial");
-    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
-    mcp.initialize();
-    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
-    let racer = fixture.racer(1);
-    let (rule_doc, raced) = (doc.clone(), Arc::new(AtomicUsize::new(0)));
-    let races = Arc::clone(&raced);
-    fixture.relay().on(move |passing| {
-        if passing.frame["op"] == "delete" && passing.frame["doc"] == rule_doc.as_str() && passing.answer.is_none() {
-            racer.insert(&rule_doc, 1, "/");
-            races.fetch_add(1, Ordering::SeqCst);
-        }
-    });
-    let (is_error, answer) = replace(&mut mcp, &doc, "add", "subtract");
-    assert!(is_error, "a partial landing is an error: {answer}");
-    assert_eq!((&answer["outcome"], &answer["cause"], &answer["refusal"]["op"]), (&json!("partial"), &json!("arrangement_moved"), &json!("delete")), "{answer}\n{}", mcp.log());
-    let raced = raced.load(Ordering::SeqCst);
-    assert_eq!(raced, 4, "the removal, and three attempts to take the insert back");
-    let word = ordinal_of(CODE, "add");
-    assert_eq!(answer["old_text"], json!({"ordinal": word.to_string(), "width": "3"}), "{answer}");
-    assert_eq!((&answer["new_text"]["ordinal"], &answer["new_text"]["width"]), (&json!((word + 3).to_string()), &json!("8")), "directly after the old word, as the insert left it: {answer}");
-    let (addr, at) = (answer["new_text"]["addr"].as_str().expect("the new bytes' address").to_string(), answer["new_text"]["at"].as_u64().expect("the insert's commit"));
-    let minted_new = mcp.call_json("retrieve_i", json!({"spans": [{"start": addr, "width": "8"}]}));
-    let new_word: String = minted_new["items"].as_array().expect("items").iter().map(|item| item["value"]["content"].as_str().expect("a byte")).collect();
-    assert_eq!(new_word, "subtract", "the address names the new word's bytes");
-    assert!(at < mcp.position(), "the insert's commit is behind the head");
-    let text = text_of(&mut mcp, &doc);
-    assert_eq!(text, format!("{}{}", "/".repeat(raced), CODE.replace("add", "addsubtract")), "the new word stands directly after the old, which was not removed");
-    let now = addresses(&mut mcp, &doc);
-    assert_eq!(now[raced + word + 3 - 1], addr, "the new bytes stand where the image finds their address");
-    assert_eq!(mcp.call_json("held", json!({})), json!([]), "no line of the edit's is held");
-    fixture.relay().on(|_| {});
-    let finished = replaced(&mut mcp, &doc, "addsubtract", "subtract");
-    assert_eq!((&finished["removed"], &finished["inserted"]), (&json!("3"), &json!("0")), "finishing is one removal: {finished}");
-    assert_eq!(text_of(&mut mcp, &doc), format!("{}{}", "/".repeat(raced), CODE.replace("add", "subtract")));
-    assert_eq!(addresses(&mut mcp, &doc)[raced + word - 1], addr, "the new word keeps the identity its insert gave it");
-    assert!(mcp.finish().success());
-}
-
-/// An edit behind a held line of the agent's is refused, and leaves none.
-///
-/// A raw insert typed against an older state is held `moved`, and the shell
-/// sends no burst of the agent's past a held line. `replace_text` is then
-/// refused `behind`, `isError` — the shell could not get its write to the
-/// board — its own line dropped: the one line held is still the raw
+/// A raw insert typed against an older state is held `moved`, its line
+/// standing on the draft. `replace_text`, `edit_text` and a raw `edit` are
+/// each refused `held_lines`, `isError`, naming the draft and the one line,
+/// nothing read past the door and nothing written: an edit is no burst and
+/// would land ahead of the line. The one line held is still the raw
 /// insert's. Once the agent resolves that line, the edit lands.
 #[test]
-fn an_edit_behind_a_held_line_is_refused_and_leaves_no_line_of_its_own() {
+fn an_edit_behind_a_held_line_is_refused_held_lines_and_lands_once_it_is_resolved() {
     let fixture = Fixture::new("replace-behind");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
@@ -731,9 +696,15 @@ fn an_edit_behind_a_held_line_is_refused_and_leaves_no_line_of_its_own() {
     let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
     let held = mcp.call_json("insert", json!({"as_of": stale, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "premise: a stale raw insert is held: {held}");
+    let refused = json!({"kind": "shell", "name": "held_lines", "doc": doc, "held": 1});
     let (is_error, answer) = replace(&mut mcp, &doc, "add", "sub");
-    assert!(is_error, "the shell could not get the write to the board: {answer}");
-    assert_eq!(answer, json!({"outcome": "refused", "cause": "behind", "doc": doc}));
+    assert!(is_error, "the shell's own refusal: {answer}");
+    assert_eq!(answer, refused, "replace_text");
+    let (is_error, answer, _) = edit(&mut mcp, &doc, json!([{"old": "add", "new": "sub"}]));
+    assert_eq!((is_error, &answer), (true, &refused), "edit_text");
+    let typed = mcp.position();
+    let raw = mcp.call_error("edit", json!({"as_of": typed, "doc": doc, "changes": [{"at": {"subspace": "1", "ordinal": "1"}, "width": "0", "values": ["y"]}]}));
+    assert_eq!(raw, refused, "a raw edit");
     let lines = mcp.call_json("held", json!({}));
     assert_eq!(lines.as_array().map(Vec::len), Some(1), "the raw insert's line alone: {lines}");
     assert_eq!((&lines[0]["held"], &lines[0]["cause"]), (&held["held"], &json!("moved")), "{lines}");
@@ -747,9 +718,9 @@ fn an_edit_behind_a_held_line_is_refused_and_leaves_no_line_of_its_own() {
 /// A draft the session does not own is refused by the board, nothing held.
 ///
 /// The agent space's principal reads the claimant's draft, which lies above
-/// it, and may not write it: the edit is found, its write refused
+/// it, and may not write it: the edit is found, its one write refused
 /// `not_owner` by the board — the verdict under `refusal`, as data — and
-/// the refused run the shell held for it is dropped within the call.
+/// nothing is held, the write being no burst.
 #[test]
 fn a_draft_that_is_not_the_sessions_is_refused_by_the_board_and_nothing_is_held() {
     let fixture = Fixture::new("replace-owner");
@@ -763,10 +734,10 @@ fn a_draft_that_is_not_the_sessions_is_refused_by_the_board_and_nothing_is_held(
     assert!(!is_error, "the board's verdict is data: {answer}");
     assert_eq!(
         (&answer["outcome"], &answer["cause"], &answer["refusal"]["code"], &answer["refusal"]["op"]),
-        (&json!("refused"), &json!("not_owner"), &json!("not_owner"), &json!("insert")),
+        (&json!("refused"), &json!("not_owner"), &json!("not_owner"), &json!("edit")),
         "{answer}"
     );
-    assert_eq!(mcp.call_json("held", json!({})), json!([]), "the refused run is dropped within the call");
+    assert_eq!(mcp.call_json("held", json!({})), json!([]), "nothing held");
     assert_eq!(text_of(&mut mcp, &doc), CODE);
     let own = draft_holding(&mut mcp, AGENT_SPACE, CODE);
     replaced(&mut mcp, &own, "add", "sub");
@@ -828,9 +799,9 @@ fn a_draft_past_one_read_is_read_in_parts_and_a_character_cut_between_them_is_te
     assert!(mcp.finish().success());
 }
 
-/// One edit inserts as much as one insert carries, and no more.
+/// One edit inserts as much as one `edit` frame carries, and no more.
 ///
-/// A changed text of the insert's cap lands in one commit, and one a byte
+/// A changed text of the frame's cap lands in one commit, and one a byte
 /// past it is refused `too_large` before any write, naming the cap — the
 /// figure skep-shell's `MAX_NEW_BYTES` states and the catalog tells an
 /// agent (SP-25): a cap the board lowered would fail the first, one it
@@ -909,11 +880,11 @@ fn median_ms(samples: &mut [Duration]) -> f64 {
 /// budget — each take `SKEP_MEASURE_RUNS` one-word edits (3 unless set; the
 /// report's figures are of 15) in the middle of their text. A first pass, on
 /// a plain board, times each call whole as the agent meets it: `replace_text`,
-/// and the same edit by a raw `insert` then `delete` with the positions
-/// given. A second, through the relay, splits the call by what it asked of
-/// the board: its reads — how many, their bytes and the board's time on
-/// them — and each write. Prints its figures; asserts only that each edit
-/// landed.
+/// and the same edit by a raw `edit` of one change with the position given.
+/// A second, through the relay, splits the call by what it asked of the
+/// board: its reads — how many, their bytes and the board's time on them —
+/// and its one write, the `edit` frame. Prints its figures; asserts only
+/// that each edit landed.
 #[test]
 #[ignore = "measurement - run by hand"]
 fn measure_replace_text_by_its_parts_beside_the_raw_ops() {
@@ -958,12 +929,11 @@ fn measure_replace_text_by_its_parts_beside_the_raw_ops() {
             // position in the text it holds.
             let at = ordinal_of(&text, &old.replace("combine", "compute")) + 3;
             let began = Instant::now();
-            let inserted = mcp.acked("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": (at + 3).to_string()}, "values": [&new[3..6]]}));
-            let deleted = mcp.acked("delete", json!({"as_of": inserted["at"], "doc": doc, "p": {"subspace": "1", "ordinal": at.to_string()}, "width": "3"}));
+            let edited = mcp.acked("edit", json!({"as_of": typed, "doc": doc, "changes": [{"at": {"subspace": "1", "ordinal": at.to_string()}, "width": "3", "values": [&new[3..6]]}]}));
             raw.push(began.elapsed());
-            typed = deleted["at"].as_u64().expect("the delete's commit");
+            typed = edited["at"].as_u64().expect("the edit's commit");
         }
-        eprintln!("  {label} ({} bytes): replace_text {:.3}; raw insert + delete, positions given {:.3}", text.len(), median_ms(&mut whole), median_ms(&mut raw));
+        eprintln!("  {label} ({} bytes): replace_text {:.3}; a raw edit of one change, its position given {:.3}", text.len(), median_ms(&mut whole), median_ms(&mut raw));
     }
     assert!(mcp.finish().success());
     // The second pass: the call split by what it asked of the board.
@@ -973,8 +943,8 @@ fn measure_replace_text_by_its_parts_beside_the_raw_ops() {
     for (label, bytes) in sizes {
         let text = numbered_lines(bytes);
         let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, &text);
-        let (mut whole, mut reading, mut inserting, mut deleting) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        let (mut reads, mut read_bytes, mut insert_bytes) = (0, 0, 0);
+        let (mut whole, mut reading, mut writing) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut reads, mut read_bytes, mut write_bytes) = (0, 0, 0);
         for run in 0..runs {
             settle_the_index(&mut mcp);
             let (old, new) = spelled(&text, run % 2 == 1);
@@ -982,26 +952,25 @@ fn measure_replace_text_by_its_parts_beside_the_raw_ops() {
             let began = Instant::now();
             replaced(&mut mcp, &doc, &old, &new);
             whole.push(began.elapsed());
-            // The edit's exchanges: its reads are those ahead of its insert —
-            // the index is settled, so no other reader is about — and its two
-            // writes are the one insert and the one delete on the draft.
+            // The edit's exchanges: its reads are those ahead of its write —
+            // the index is settled, so no other reader is about — and its
+            // one write is the `edit` frame on the draft.
             let passed = fixture.relay().passed();
-            let first_write = passed.iter().position(|passed| passed.op == "insert").expect("the edit's insert");
+            let first_write = passed.iter().position(|passed| passed.op == "edit").expect("the call's one write");
+            assert_eq!(passed.iter().filter(|passed| ["edit", "insert", "delete"].contains(&passed.op.as_str())).count(), 1, "one write a call");
             let of_the_draft = |passed: &&Passed| passed.frame["doc"] == doc.as_str() || passed.frame["specs"][0]["doc"] == doc.as_str();
             let read: Vec<&Passed> = passed[..first_write].iter().filter(of_the_draft).collect();
             (reads, read_bytes) = (read.len(), read.iter().map(|passed| passed.answer_bytes).sum::<usize>());
             reading.push(read.iter().map(|passed| passed.took).sum());
-            inserting.push(passed[first_write].took);
-            insert_bytes = passed[first_write].request_bytes;
-            deleting.push(passed.iter().find(|passed| passed.op == "delete").expect("the edit's delete").took);
+            writing.push(passed[first_write].took);
+            write_bytes = passed[first_write].request_bytes;
         }
         eprintln!(
-            "  {label} ({} bytes), through the relay: replace_text {:.3} — {reads} reads answering {read_bytes} bytes {:.3}, insert (a frame of {insert_bytes} bytes, its signature within) {:.3}, delete {:.3}",
+            "  {label} ({} bytes), through the relay: replace_text {:.3} — {reads} reads answering {read_bytes} bytes {:.3}, its one write (an edit, a frame of {write_bytes} bytes) {:.3}",
             text.len(),
             median_ms(&mut whole),
             median_ms(&mut reading),
-            median_ms(&mut inserting),
-            median_ms(&mut deleting)
+            median_ms(&mut writing)
         );
     }
     assert!(mcp.finish().success());

@@ -2,6 +2,7 @@ use num_traits::Zero;
 use skep_address::{Span, Tumbler};
 
 use super::*;
+use crate::run_list::Splice;
 use crate::testutil::{a, ca, doc1, doc2, la, n, nth_doc, pca, pdoc, run, vca, vdoc};
 use crate::vspace::VPos;
 
@@ -1185,6 +1186,13 @@ fn m5rec_survives_a_bincode_round_trip() {
             source: doc1(),
             marker: Marker { sides: vec![vdoc()], head: doc1(), head_copied: n(5), at: Seq(3) },
         },
+        M5Rec::ContentEdit {
+            doc: doc1(),
+            changes: vec![
+                Splice { at: n(2), width: n(1), runs: vec![run(&vca(1), 2)] },
+                Splice { at: n(6), width: n(0), runs: vec![run(&pca(1), 1)] },
+            ],
+        },
     ] {
         let bytes = bincode::serialize(&rec).expect("record serializes");
         let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
@@ -1787,5 +1795,67 @@ fn the_stamps_keep_every_marker_stamped_and_the_restore_installs_one_as_carried(
         bincode::serialize(&restore).expect("encodes"),
         bincode::serialize(&(7u32, doc2(), pdoc(), n(2), pdoc(), (vec![vca(1)], pdoc(), n(2), Seq(8)))).expect("encodes"),
         "`MarkerRestore` is index 7, then its five fields, the marker whole with its position"
+    );
+}
+
+/// The edit's record: its changes spliced in one fold, each placed run
+/// appended to R and nothing a change removes taken from it (P4★, P2), and
+/// the document's arranged-at entry moved to the record's position whatever
+/// it holds (MOVED★) — a record of no change included, which leaves the
+/// arrangement and R as they stand, an absent document absent.
+#[test]
+fn the_edits_record_splices_its_changes_appends_what_it_places_and_always_moves_the_position() {
+    let base = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
+    let edit = M5Rec::ContentEdit {
+        doc: doc1(),
+        changes: vec![
+            Splice { at: n(2), width: n(2), runs: vec![run(&vca(1), 1)] },
+            Splice { at: n(5), width: n(1), runs: vec![] },
+            Splice { at: n(6), width: n(0), runs: vec![run(&pca(1), 2)] },
+        ],
+    };
+    let s = base.apply_m5(Seq(7), &edit);
+    assert_eq!(
+        s.content_runs(&doc1()).cloned().collect::<Vec<_>>(),
+        vec![run(&ca(1), 1), run(&vca(1), 1), run(&ca(4), 1), run(&pca(1), 2)]
+    );
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(7)));
+    // R: the two placed runs appended, in the changes' order, after what
+    // stood; the removed addresses keep the span that placed them.
+    assert_eq!(s.recorded_span_count(&doc1()), base.recorded_span_count(&doc1()) + 2);
+    let ever = s.provenance.ever_contained(&doc1());
+    for placed in [run(&ca(1), 5), run(&vca(1), 1), run(&pca(1), 2)] {
+        assert!(ever.iter().any(|span| *span == placed.iextent()), "{placed:?} is recorded");
+    }
+    assert!(!s.deletions(&doc1()).is_empty(), "what the changes removed reads as deleted");
+    // A record of removals alone appends nothing to R.
+    let removing = M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(1), width: n(2), runs: vec![] }] };
+    assert_eq!(base.apply_m5(Seq(7), &removing).provenance, base.provenance);
+    // A record of no change: the position moves, and nothing else does.
+    let none = M5Rec::ContentEdit { doc: doc1(), changes: vec![] };
+    let bytes = bincode::serialize(&none).expect("record serializes");
+    assert_eq!(bincode::deserialize::<M5Rec>(&bytes).expect("record deserializes"), none);
+    let moved = base.apply_m5(Seq(9), &none);
+    assert_eq!(moved.arranged_at(&doc1()), Some(Seq(9)));
+    assert_eq!(moved.arrangement_map(), base.arrangement_map());
+    assert_eq!(moved.provenance, base.provenance);
+    let absent = M5State::genesis().apply_m5(Seq(9), &M5Rec::ContentEdit { doc: doc2(), changes: vec![] });
+    assert_eq!(absent.arranged_at(&doc2()), Some(Seq(9)));
+    assert!(absent.arrangement_map().is_empty(), "an absent document stays absent");
+    assert!(!absent.provenance.is_recorded(&doc2()));
+    // Outside the input class the fold answers without a panic: changes
+    // that overlap, and one past the list.
+    let wild = M5Rec::ContentEdit {
+        doc: doc1(),
+        changes: vec![
+            Splice { at: n(3), width: n(9), runs: vec![] },
+            Splice { at: n(2), width: n(0), runs: vec![run(&vca(1), 1)] },
+            Splice { at: n(99), width: n(4), runs: vec![run(&pca(1), 1)] },
+        ],
+    };
+    let folded = base.apply_m5(Seq(7), &wild);
+    assert_eq!(
+        folded.content_runs(&doc1()).cloned().collect::<Vec<_>>(),
+        vec![run(&ca(1), 2), run(&vca(1), 1), run(&pca(1), 1)]
     );
 }

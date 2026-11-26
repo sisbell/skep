@@ -17,10 +17,11 @@
 //! place in the system where destructive change lives (ASN-0047 P3). It
 //! provides the editing/versioning operations (INSERT [ASN-0116], DELETE
 //! [ASN-0117], COPY [ASN-0118], REINSTATE [the write by identity, the
-//! replacement act's record], REARRANGE [ASN-0119/0084], SET_ARRANGEMENT
-//! [a draft's whole arrangement set in one write, the landing lane],
-//! CREATENEWVERSION [ASN-0123], STAGE [the staging act, B3-S10], and the
-//! publish shot [PUB-2.33]), a
+//! replacement act's record], REARRANGE [ASN-0119/0084], EDIT [a list of
+//! positional changes to one draft in one commit, each minting values or
+//! placing runs by identity — the write a text edit and a merge's landing
+//! are both sent as], CREATENEWVERSION [ASN-0123], STAGE [the staging act,
+//! B3-S10], and the publish shot [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
 //! resolution and reverse I→V projection for readers, the R reads for
 //! provenance queries, the birth-extent, shot-terms, fork-source and
@@ -38,7 +39,7 @@
 //!
 //! The POOM is **authoritative mutable state, not a hint** (ASN-0047 P3): it
 //! is the only component that loses information (`ContentRemove`,
-//! `ContentReorder`), and it is recovered by replaying the one edit-delta
+//! `ContentReorder`, a `ContentEdit`'s removals), and it is recovered by replaying the one edit-delta
 //! journal ([`M5Rec`]) onto [`M5State::genesis`], or onto a checkpoint of
 //! that replay. R is authoritative and non-recomputable from the current
 //! arrangement (a deleted address keeps its R pair — P2) but, like the POOM,
@@ -92,7 +93,7 @@
 //! * content/link *queries* (M6/M8) — M5 exposes the read primitives;
 //!   RETRIEVEV/SHOWDELETIONS/FINDDOCSCONTAINING are M6's compositions;
 //! * read permission — M5 knows no principal's read rights: `copy`,
-//!   `reinstate`, `set_arrangement`, `version` and `stage` read any
+//!   `reinstate`, `edit`, `version` and `stage` read any
 //!   registered source and owe their source gate (PUB-6.23) to the caller,
 //!   M10's pre-dispatch consult on the wire route; `publish` alone takes
 //!   the gate's predicate as an argument —
@@ -108,7 +109,7 @@
 //! The three write-path refusals of the version-chain model run here
 //! (PUB-kickoff D2b), at the transact, as typed errors beside the ownership
 //! gate — the in-place advance refusal `PublishedTarget` on
-//! `insert`/`copy`/`reinstate`/`delete`/`rearrange`/`set_arrangement`
+//! `insert`/`copy`/`reinstate`/`delete`/`rearrange`/`edit`
 //! (PUB-2.11), the
 //! private-member refusal `PrivateVersionOfPublished` and the versionless
 //! sibling `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9), the
@@ -227,8 +228,9 @@ mod run;
 // tumbler order, so that whether it holds every address of a run is one
 // search.
 mod run_union;
-// The implicit-position run-list: splice, contract, reorder, the merge
-// condition and its one accumulator, the mapping blocks, the lazy walks.
+// The implicit-position run-list: splice, contract, reorder, the one-walk
+// splice of several changes, the merge condition and its one accumulator,
+// the mapping blocks, the lazy walks.
 mod run_list;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
@@ -269,17 +271,17 @@ pub use chain::{
 };
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
-    CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    SetArrangementError, StageError, VersionError,
+    CopyError, DeleteError, EditError, InsertError, PublishError, RearrangeError, ReinstateError,
+    SeatError, StageError, VersionError,
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, SetArrangement, SetMerge,
-    Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    stage_reinstate_at, AsOf, Change, Edit, Edited, MintedRun, Pairing, Placed, PublishWorld,
+    SetMerge, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};
-pub use run_list::Runs;
+pub use run_list::{Runs, Splice};
 #[cfg(feature = "test-hooks")]
 pub use seat::seat_link;
 pub use seat::stage_seat_link;

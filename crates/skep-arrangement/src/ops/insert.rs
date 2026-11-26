@@ -4,17 +4,12 @@
 //! composite — and here too is the one insert a published document admits,
 //! a declared deposit at a fresh position.
 
-use std::sync::Arc;
-
 use skep_address::Address;
 use skep_content::{ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
-use super::{
-    allocate_for_placement, allocate_stretch_for_placement, arrangement_moved, head_lock_key,
-    AsOf, Vstream,
-};
+use super::{allocate_values_for_placement, arrangement_moved, head_lock_key, AsOf, Vstream};
 use crate::chain::{deposit_surface, published_target};
 use crate::deposit::{deposit_class_types, Deposit};
 use crate::error::InsertError;
@@ -137,7 +132,8 @@ where
     /// each atom through `allocate_for_placement` — J0's two steps, shared
     /// with the shot's re-insert, whose own docs state why the placement they
     /// accumulate is never widened over addresses nobody allocated. **The
-    /// coalescing**: `values` is walked in order, every one-byte value joining
+    /// coalescing** (`allocate_values_for_placement`, the walk the edit
+    /// shares): `values` is walked in order, every one-byte value joining
     /// a pending byte-run, and the run is flushed as one stretch at the next
     /// atom and at the end — every one-byte value the codec hands in is a
     /// per-byte value (the wire canonicalizes a one-byte atom to its per-byte
@@ -252,30 +248,12 @@ where
             if !stg.working().m5().admits_content_boundary(&surface, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
+            // The coalescing walk (the op's doc), which the edit shares: a
+            // one-byte value joins the pending run; an atom flushes the run
+            // as one stretch, then stages its own pair; the run left at the
+            // end flushes too.
             let mut runs: Vec<Run> = Vec::new();
-            // The coalescing walk (the op's doc): a one-byte value joins the
-            // pending run; an atom flushes the run as one stretch, then stages
-            // its own pair; the run left at the end flushes too.
-            let mut pending: Vec<u8> = Vec::new();
-            for value in values {
-                if let [byte] = value.as_bytes() {
-                    pending.push(*byte);
-                    continue;
-                }
-                if !pending.is_empty() {
-                    let run = Arc::from(std::mem::take(&mut pending));
-                    allocate_stretch_for_placement::<_, InsertError>(stg, doc, run, &mut runs)?;
-                }
-                allocate_for_placement::<_, InsertError>(stg, doc, value, &mut runs)?;
-            }
-            if !pending.is_empty() {
-                allocate_stretch_for_placement::<_, InsertError>(
-                    stg,
-                    doc,
-                    Arc::from(pending),
-                    &mut runs,
-                )?;
-            }
+            allocate_values_for_placement::<_, InsertError>(stg, doc, values, &mut runs)?;
             // The placement's start is the first address minted: the
             // accumulator only ever widens a run rightwards or opens a new
             // one after it, so the first run's start is the first mint.

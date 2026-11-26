@@ -258,14 +258,18 @@ fn composed_over(g: &Ground, f: &Family, side: Side) -> Merged {
 
 /// Lands `merged` in `draft` under `token` by hand, writing no record.
 ///
-/// It is the draft landing's one write as the library sends it: M as the
-/// draft's whole arrangement, the head's pair as its base and the merge of
-/// `side` marked beside it. Answers the write's position.
+/// It is the draft landing's one write as the library sends it for a draft
+/// the merge never read: M in one change over every position the draft
+/// holds, the head's pair as its base and the merge of `side` marked beside
+/// it. Answers the write's position.
 fn mark(g: &Ground, token: &Token, draft: &str, merged: &Merged, side: &str) -> u64 {
     let runs: Vec<Value> = merged.composed.runs.iter().map(|p| frames::shot_run(&p.run.origin.to_string(), &p.run.address_at(0).unwrap().to_string(), p.run.width)).collect();
     let head = merged.inputs.head.to_string();
     let pair = (head.as_str(), merged.head_extent);
-    written(g, token, &frames::set_arrangement(draft, &runs, g.position(), Some(pair), Some(pair), Some((&[side], None)), None))["at"].as_u64().unwrap()
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let Answer::Document(meta) = entry.board.op(Some(token), &frames::doc_metadata(draft)).unwrap() else { panic!("closed") };
+    let held: u64 = meta["own_count"].as_str().and_then(|count| count.parse().ok()).unwrap_or_else(|| panic!("the draft's count: {meta}"));
+    written(g, token, &frames::set_arrangement(draft, &[frames::placed(1, held, &runs)], g.position(), Some(pair), Some(pair), Some((&[side], None)), None))["at"].as_u64().unwrap()
 }
 
 /// Writes `other`'s record of [`KIND`], answering its link's address.

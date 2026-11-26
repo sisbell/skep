@@ -689,10 +689,10 @@ fn help_result(catalog: &Catalog, topic: Option<&Value>) -> Value {
 /// skep-shell's `text.replace`, `text.edit`, `text.move`, `text.mark` and
 /// `text.diff` set it on every answer that is an error — a write the shell
 /// could not get to the board, a read it does not read, a line left held,
-/// an edit or a mark landed in part — and declare it in their shapes
-/// (`TextRefused`, `TextHeld`, `TextPartial`, `TextEditPartial`,
-/// `TextEditHeld`, `TextMoveHeld`, `TextMarkHeld`, `TextMarkPartial`), which
-/// the suite holds this spelling to.
+/// a mark landed in part, an edit's answer lost and settled by no read —
+/// and declare it in their shapes (`TextRefused`, `TextAnswerLost`,
+/// `TextMoveHeld`, `TextMarkHeld`, `TextMarkPartial`), which the suite
+/// holds this spelling to.
 pub(crate) const EDIT_ERROR: &str = "error";
 
 /// The member a landed text call answers the lines it changed in.

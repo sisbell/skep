@@ -672,6 +672,22 @@ impl World {
         self.position
     }
 
+    /// How many positions `doc` holds as it stands.
+    fn held(&self, doc: &str) -> u64 {
+        width_of(&self.docs[doc].runs)
+    }
+
+    /// The changes that set `doc` to `runs` whole: one change over every
+    /// position the document holds as it stands, and none where it holds
+    /// nothing and `runs` is empty.
+    fn whole(&self, doc: &str, runs: &[Run]) -> Vec<Value> {
+        let held = self.held(doc);
+        if held == 0 && runs.is_empty() {
+            return Vec::new();
+        }
+        vec![frames::placed(1, held, &shot_runs(runs))]
+    }
+
     /// One commit of `records` records: the position advances by each,
     /// the numbers inside the commit answer `not_a_position` on `/op-at`
     /// (wire.md §Reading history), and the row's `at` is the commit's
@@ -682,6 +698,20 @@ impl World {
         self.inside_commits.extend(first..self.position);
         self.rows.push(FeedRow { at: self.position, op, docs, terms: None });
         self.position
+    }
+
+    /// An `edit`'s commit as the feed shows it, answering its position:
+    /// `doc` arranged as `runs` by one commit of the three records a
+    /// minting edit stages, its row named `edit` and carrying the two
+    /// terms a `set_arrangement` row carries, each `null` (wire.md §The
+    /// change feed).
+    fn text_edit(&mut self, doc: &str, runs: Vec<Run>) -> u64 {
+        let at = self.commit_records("edit", vec![doc.to_string()], 3);
+        self.rows.last_mut().expect("the commit's row").terms = Some((None, None));
+        let d = self.docs.get_mut(doc).expect("a registered draft");
+        d.runs = runs.clone();
+        d.history.insert(at, runs);
+        at
     }
 
     /// The delivery items over clipped runs: adjacent bytes one
@@ -1441,8 +1471,9 @@ impl World {
     /// chain and its extent; then each run's origin registered and a
     /// value at every address it names, a `merge.at` naming no marker
     /// the board stamped on the draft refused `marker_not_restorable`
-    /// after the base's checks and ahead of the runs'. The whole
-    /// arrangement is replaced in one commit, the base re-recorded and
+    /// after the base's checks and ahead of the changes'; then each
+    /// change's shape and its runs', the change named in the site. The
+    /// changes are made in one commit, the base re-recorded and
     /// the marker set — stamped at the commit, or put back with the
     /// position named — or cleared where a base is named, the row
     /// carrying the request's merge whatever the base, and `head_moved`
@@ -1526,31 +1557,71 @@ impl World {
                 return reject("marker_not_restorable", Value::Null);
             }
         }
-        let mut positions = Vec::new();
-        for r in frame["runs"].as_array().expect("`runs`, a list") {
-            let origin = r["origin"].as_str().unwrap().to_string();
-            if !self.docs.contains_key(&origin) {
-                return reject("source_not_registered", Value::Null);
+        // The changes, in the coordinates of the draft as it stands: each
+        // judged against the count and the reach of the one before it, then
+        // its runs — each origin registered, a value at every address — and
+        // all of them made from the last down, so no change moves the
+        // positions of one still to make. An empty list is admitted beside
+        // a base or a merge alone.
+        let changes = frame["changes"].as_array().expect("`changes`, a list; a frame's top-level `runs` is no member of it");
+        assert!(frame.get("runs").is_none(), "a `set_arrangement` names its changes, never a whole run list: {frame}");
+        if changes.is_empty() && base.is_none() && frame["merge"].is_null() {
+            return reject("empty_result", Value::Null);
+        }
+        let mut positions: Vec<(Address, u64)> = d.runs.iter().flat_map(|r| (0..r.width).map(|k| (r.origin.clone(), r.i_start + k))).collect();
+        let count = positions.len() as u64;
+        let (mut reach, mut made) = (0u64, Vec::new());
+        for (k, change) in changes.iter().enumerate() {
+            let named = json!({"index": k});
+            let at: u64 = change["at"]["ordinal"].as_str().expect("a change's `at`").parse().unwrap();
+            let width: u64 = change["width"].as_str().expect("a change's `width`, a decimal string").parse().unwrap();
+            let runs = change["runs"].as_array().expect("a change's `runs`, a list");
+            if at < reach {
+                return reject("not_ascending", named);
             }
-            let i_start: u64 = r["i_start"].as_str().unwrap().rsplit('.').next().unwrap().parse().unwrap();
-            let width: u64 = r["width"].as_str().unwrap().parse().unwrap();
-            for k in 0..width {
-                if !self.values.contains_key(&(origin.clone(), i_start + k)) {
-                    return reject("dangling_source", Value::Null);
+            if width == 0 {
+                if at == 0 || at > count + 1 {
+                    return reject("out_of_bounds", named);
                 }
-                positions.push((a(&origin), i_start + k));
+                if runs.is_empty() {
+                    return reject("empty_result", named);
+                }
+            } else if at == 0 || at > count {
+                return reject("not_arranged", named);
+            } else if at + width > count + 1 {
+                return reject("out_of_bounds", named);
             }
+            reach = at + width;
+            let mut placed = Vec::new();
+            for r in runs {
+                let origin = r["origin"].as_str().unwrap().to_string();
+                if !self.docs.contains_key(&origin) {
+                    return reject("source_not_registered", named);
+                }
+                let i_start: u64 = r["i_start"].as_str().unwrap().rsplit('.').next().unwrap().parse().unwrap();
+                let run_width: u64 = r["width"].as_str().unwrap().parse().unwrap();
+                for k in 0..run_width {
+                    if !self.values.contains_key(&(origin.clone(), i_start + k)) {
+                        return reject("dangling_source", named);
+                    }
+                    placed.push((a(&origin), i_start + k));
+                }
+            }
+            made.push((at, width, placed));
+        }
+        for (at, width, placed) in made.into_iter().rev() {
+            let from = (at - 1) as usize;
+            positions.splice(from..from + width as usize, placed);
         }
         // The tell (R5): the trunk's current head where it is not the
         // one named.
         let head_moved = head.as_ref().and_then(|(h, _)| self.trunk_head.get(&trunk(h)).filter(|cur| **cur != *h).cloned());
         let runs = coalesce(positions);
-        // ONE COMMIT of two records — the removal and the placement —
-        // and a third where a base is recorded (the skepd suite's
-        // `a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit`),
-        // so the number below the ack's `at` lies inside it.
+        // ONE COMMIT of one record — the changes' own — and a second where
+        // a base is recorded, so there the number below the ack's `at` lies
+        // inside it, and on a draft recording none it is the commit before.
         let recorded = base.as_ref().filter(|_| standing.is_some()).cloned();
-        let at = self.commit_records("set_arrangement", vec![doc.clone()], if recorded.is_some() { 3 } else { 2 });
+        let at = self.commit_records("set_arrangement", vec![doc.clone()], if recorded.is_some() { 2 } else { 1 });
         let d = self.docs.get_mut(&doc).unwrap();
         d.runs = runs.clone();
         d.history.insert(at, runs);
@@ -1933,11 +2004,6 @@ fn as_found(landed: &Landed) -> Landed {
     found
 }
 
-/// M's runs as a `set_arrangement` frame spells them.
-fn frame_runs(m: &[Run]) -> Value {
-    Value::Array(m.iter().map(|r| json!({"origin": r.origin.to_string(), "i_start": i_addr(&r.origin, r.i_start), "width": r.width.to_string()})).collect())
-}
-
 /// Lands M into `S` as the draft landing does — the base re-recorded on
 /// `D.2` at fifteen, the marker beside it, the record written — and
 /// answers the composition with the landing.
@@ -1964,15 +2030,39 @@ fn shot_runs(m: &[Run]) -> Vec<Value> {
     m.iter().map(|r| frames::shot_run(&r.origin.to_string(), &i_addr(&r.origin, r.i_start), r.width)).collect()
 }
 
+/// How many positions `runs` fill.
+fn width_of(runs: &[Run]) -> u64 {
+    runs.iter().map(|r| r.width).sum()
+}
+
+/// The changes of a write that replaces every position of a draft holding
+/// `held` of them by `wanted`: one change over them all, as an act that
+/// holds no read of the draft at its typed position sends it.
+fn whole_changes(held: u64, wanted: &[Run]) -> Value {
+    json!([frames::placed(1, held, &shot_runs(wanted))])
+}
+
+/// The changes that set `doc` to `runs` whole on the dialer's board as it
+/// stands ([`World::whole`]), for a frame built by hand.
+///
+/// It takes the board's lock: never call it in the arguments of a call on
+/// a held `dialer.world()`.
+fn whole_of(dialer: &Scripted, doc: &str, runs: &[Run]) -> Vec<Value> {
+    dialer.world().whole(doc, runs)
+}
+
 /// Lands `runs` in `S` by hand, as a draft landing's one write does.
 ///
 /// The base is re-recorded on the head `D.2` at fifteen and the marker
-/// stamped, no side named and no record written. Answers the write's
-/// position.
+/// stamped, no side named and no record written: one change over every
+/// position `S` holds as the write is sent. Answers the write's position.
 fn landed_by_hand(board: &Board, session: &Session<'_>, dialer: &Scripted, runs: &[Run]) -> u64 {
     let head = format!("{D}.2");
-    let typed = dialer.world().position;
-    let frame = frames::set_arrangement(S, &shot_runs(runs), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+    let (typed, held) = {
+        let world = dialer.world();
+        (world.position, world.docs[S].runs.iter().map(|r| r.width).sum::<u64>())
+    };
+    let frame = frames::set_arrangement(S, &[frames::placed(1, held, &shot_runs(runs))], typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
     let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
     acked_at(&ack).unwrap_or_else(|| panic!("the landing by hand was refused: {ack}"))
 }

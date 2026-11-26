@@ -24,11 +24,13 @@ use super::*;
 /// THE WITHDRAWAL (ruled 1 (a); skep #783): the draft's `doc_metadata`
 /// read live, its image read at the head and held to that read's position
 /// by its `arranged_at`, read again after the image — nothing read through
-/// `/op-at` — and ONE `set_arrangement` — the current image as the runs,
-/// `as_of` the read's position, the recorded base re-sent unmoved (address
-/// and extent as read), no `head`, no `merge`, the id naming the draft and
-/// the position — so the marker is cleared and the draft's words and base
-/// stay as they are; the replacing record follows.
+/// `/op-at` — and ONE `set_arrangement` — no change named, the draft's
+/// words standing as read, `as_of` the read's position, the recorded base
+/// re-sent unmoved (address and extent as read), no `head`, no `merge`, the
+/// id naming the draft and the position — so the marker is cleared and the
+/// draft's words and base stay as they are; the replacing record follows
+/// (the mutant that sends the image back as one change over every position
+/// names four runs).
 #[test]
 fn the_withdrawal_clears_the_marker_and_keeps_the_runs_and_the_base_in_one_frame() {
     let (dialer, board, signer) = open(draft_landing_world());
@@ -54,7 +56,8 @@ fn the_withdrawal_clears_the_marker_and_keeps_the_runs_and_the_base_in_one_frame
     let frame = &frames[0];
     assert_eq!(frame["doc"], S);
     assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_m()), "the current image, M, sent back whole");
+    assert_eq!(frame["changes"], json!([]), "no change named: the words stand as read, and the frame names no run of them: {frame}");
+    assert!(frame.get("runs").is_none(), "no whole list beside the changes: {frame}");
     assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the recorded base re-sent unmoved");
     assert!(frame.get("head").is_none() && frame.get("merge").is_none(), "no head, no merge: {frame}");
     assert_eq!(frame["id"].as_str(), Some(format!("withdraw:{S}:{read_at}.arrangement").as_str()));
@@ -109,7 +112,7 @@ fn the_withdrawal_is_refused_arrangement_moved_after_an_edit_since_its_read() {
     assert!(detail.contains("run this again, which reads the draft as it stands"), "{detail}");
     let frame = &dialer.frames("set_arrangement")[0];
     assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_m()), "the image as read");
+    assert_eq!(frame["changes"], json!([]), "no change named: {frame}");
     let w = dialer.world();
     assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands");
     assert_eq!(w.rows.len(), rows + 1, "the edit's commit alone");
@@ -125,8 +128,8 @@ fn the_withdrawal_is_refused_arrangement_moved_after_an_edit_since_its_read() {
 /// read's position through `/op-at`: the one frame names the image as it
 /// stood there, M, typed against that position, and the board refuses it
 /// `arrangement_moved`, the edit standing, the marker standing, no record.
-/// The mutant keeping the head image without the second read sends the
-/// edit's runs and is refused `OverCap`.
+/// The mutant keeping the head image without the second read reads nothing
+/// at the position.
 #[test]
 fn a_withdrawal_reads_at_the_head_and_falls_back_where_the_draft_changed() {
     // The place of the head image among a withdrawal's requests, off one
@@ -153,7 +156,7 @@ fn a_withdrawal_reads_at_the_head_and_falls_back_where_the_draft_changed() {
     assert_eq!(dialer.positions("image"), [read_at], "the draft read again as of the first read: {:?}", dialer.ops());
     let frame = &dialer.frames("set_arrangement")[0];
     assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
-    assert_eq!(frame["runs"], frame_runs(&draft_m()), "the image as it stood at the read");
+    assert_eq!(frame["changes"], json!([]), "no change named, whatever the draft holds since: {frame}");
     let w = dialer.world();
     assert_eq!(w.docs.get(S).unwrap().runs, alternating(), "the other hand's edit stands");
     assert_eq!(w.standing(S).1.map(|m| m.at), Some(at), "the marker stands");
@@ -221,7 +224,7 @@ fn each_call_writes_the_replaces_record_where_a_record_stands_and_none_where_non
     let head = format!("{D}.2");
     for (act, name) in [("undo", "the undo"), ("withdraw", "the withdrawal")] {
         let typed = dialer.world().position;
-        let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+        let frame = frames::set_arrangement(S, &whole_of(&dialer, S, &draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
         let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
         assert_eq!(ack["resp"], "ack", "{name}: {ack}");
         assert!(dialer.world().standing(S).1.is_some(), "{name}: the premise, the marker stands");
@@ -353,7 +356,7 @@ fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_land
     );
     assert_eq!(
         dialer.positions("image"),
-        [marker.at - 3, marker.at, unwithdrawn.position],
+        [marker.at - 2, marker.at, unwithdrawn.position],
         "C, then the draft at the landing and at the put-back: {ops:?}"
     );
     let sent = dialer.frames("set_arrangement");
@@ -364,7 +367,7 @@ fn a_withdrawal_taken_back_puts_the_marker_back_and_the_next_undo_takes_the_land
         "typed against the put-back: {}",
         sent[0]
     );
-    assert_eq!(sent[0]["runs"], frame_runs(&draft_c()), "C, read before the landing");
+    assert_eq!(sent[0]["changes"], whole_changes(width_of(&draft_m()), &draft_c()), "C, read before the landing, over every position the draft holds");
     assert!(
         sent[0].get("head").is_none() && sent[0].get("merge").is_none(),
         "no marker before the landing, none put back: {}",
@@ -512,7 +515,7 @@ fn a_withdrawals_undo_finds_nothing_to_undo_past_a_landing_or_a_publication() {
     // The same merge landed again by hand, a marker of its own.
     let head = format!("{D}.2");
     let typed = dialer.world().position;
-    let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+    let frame = frames::set_arrangement(S, &whole_of(&dialer, S, &draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
     let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
     assert_eq!(ack["resp"], "ack", "{ack}");
     dialer.clear();
@@ -585,13 +588,13 @@ fn a_withdrawals_undo_run_again_after_its_put_back_was_taken_out_sends_nothing()
 ///
 /// The draft holds M and, after it, one word a deposit naming `D.2` minted
 /// under the member's chain, whose ordinal is the trunk's first word's. The
-/// withdrawal sends the image as read — the member's word at `D.2.0.1.1`,
-/// its `origin` the member — reading no correspondence record, and the
-/// withdrawal's undo sends the same runs with the marker put back; the
-/// draft holds the member's word throughout (the mutants that spell either
-/// write from the core's runs send the trunk's first word in its place).
+/// withdrawal names no change, reading no correspondence record, and the
+/// withdrawal's undo, whose mapping moves no word, names none either, the
+/// marker put back beside it; the draft holds the member's word throughout
+/// (the mutants that send the core's runs back whole send the trunk's first
+/// word in its place).
 #[test]
-fn a_withdrawal_and_its_undo_send_a_members_own_word_under_the_members_chain() {
+fn a_withdrawal_and_its_undo_keep_a_members_own_word_under_the_members_chain() {
     let (dialer, board, signer) = open(draft_landing_world());
     let session = sign_in(&board, &signer);
     let m = merger(&session, &signer);
@@ -607,15 +610,14 @@ fn a_withdrawal_and_its_undo_send_a_members_own_word_under_the_members_chain() {
     let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
     let sent = dialer.frames("set_arrangement");
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
-    assert_eq!(sent[0]["runs"], frame_runs(&held), "the image as read, each run on the chain that minted it");
-    assert_eq!(sent[0]["runs"][4], frames::shot_run(&member(), &format!("{}.0.1.1", member()), 1), "the member its word's origin, never the trunk's first word");
+    assert_eq!(sent[0]["changes"], json!([]), "no change named: every word stands on the chain that minted it: {}", sent[0]);
     assert!(dialer.frames("find_links_ftt").iter().all(|f| f["q"]["ty"] != correspondence), "no correspondence record is read: {:?}", dialer.ops());
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, held, "the words stay, each its own");
     dialer.clear();
     unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
     let sent = dialer.frames("set_arrangement");
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
-    assert_eq!(sent[0]["runs"], frame_runs(&held), "the same runs, the marker put back beside them");
+    assert_eq!(sent[0]["changes"], json!([]), "no word moved by the mapping, none named, the marker put back beside none: {}", sent[0]);
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, held, "the words stay, each its own");
     assert!(dialer.world().standing(S).1.is_some(), "the marker back");
 }
@@ -624,10 +626,11 @@ fn a_withdrawal_and_its_undo_send_a_members_own_word_under_the_members_chain() {
 ///
 /// A record of the merger's names `S`'s own words in M as the trunk's
 /// `D·19–21` they became. The withdrawal keeps the draft's words as they
-/// stand: it never asks for the record, and sends `S·1–3` as read (the
-/// mutant that maps the image through the records sends the trunk's words).
+/// stand: it never asks for the record, and names no change of `S·1–3`
+/// (the mutant that maps the image through the records places the trunk's
+/// words in their stead).
 #[test]
-fn the_withdrawal_reads_no_correspondence_record_and_sends_the_words_as_read() {
+fn the_withdrawal_reads_no_correspondence_record_and_leaves_the_words_as_read() {
     let (dialer, board, signer) = open(draft_landing_world());
     let session = sign_in(&board, &signer);
     landed_in_s(&board, &session, &signer);
@@ -641,7 +644,7 @@ fn the_withdrawal_reads_no_correspondence_record_and_sends_the_words_as_read() {
     withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
     assert!(dialer.frames("find_links_ftt").iter().all(|f| f["q"]["ty"] != correspondence), "no records' read: {:?}", dialer.ops());
     assert!(dialer.frames("read_link").iter().all(|f| f["a"] != record), "the record is never read: {:?}", dialer.ops());
-    assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_m()), "M as read, S's own words its own");
+    assert_eq!(dialer.frames("set_arrangement")[0]["changes"], json!([]), "no change named, S's own words its own");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "the words stay");
 }
 
@@ -650,11 +653,14 @@ fn the_withdrawal_reads_no_correspondence_record_and_sends_the_words_as_read() {
 ///
 /// M holds "abc", words of `THEIR_DRAFT`, a draft of the account `1.0.2`
 /// whose owner published them into `THEIR_EDITION`, the record homed in
-/// the draft. The withdrawal sends the draft's words back as read, the
-/// draft's among them; its undo reads the records of the draft's origins at
-/// the head, the draft's in its own account, and sends the words mapped —
-/// the edition's where the draft's stood — the marker put back (the mutant
-/// that reads the merger's own origins alone sends the draft's words again).
+/// the draft. The withdrawal names no change, the draft's words standing;
+/// its undo reads the records of the draft's origins at the head, the
+/// draft's in its own account, and names the one stretch its mapping moved
+/// — the edition's three words in place of the draft's, positions 16 to
+/// 18, no run of the fifteen positions before them — the marker put back
+/// (the mutant that reads the merger's own origins alone names no change,
+/// and the one that sends the mapped words whole names four runs from
+/// position 1).
 #[test]
 fn a_withdrawals_undo_sends_another_accounts_words_as_their_owner_published_them() {
     let mut w = draft_landing_world();
@@ -666,14 +672,14 @@ fn a_withdrawals_undo_sends_another_accounts_words_as_their_owner_published_them
     landed_by_hand(&board, &session, &dialer, &held);
     dialer.clear();
     let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
-    assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&held), "the premise: the withdrawal sends the words as read");
+    assert_eq!(dialer.frames("set_arrangement")[0]["changes"], json!([]), "the premise: the withdrawal names no change");
     dialer.clear();
     unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("the withdrawal taken back");
     assert_eq!(dialer.frames("read_link").iter().filter(|f| f["a"] == record).count(), 1, "the draft's record read once: {:?}", dialer.ops());
     let mapped = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_EDITION, 1, 3)];
     let sent = dialer.frames("set_arrangement");
     assert_eq!(sent.len(), 1, "one write: {:?}", dialer.ops());
-    assert_eq!(sent[0]["runs"], frame_runs(&mapped), "the edition's words where the draft's stood");
+    assert_eq!(sent[0]["changes"], json!([frames::placed(16, 3, &shot_runs(&[run(THEIR_EDITION, 1, 3)]))]), "the one stretch the mapping moved: the edition's words where the draft's stood");
     let w = dialer.world();
     assert_eq!(w.docs.get(S).unwrap().runs, mapped);
     assert!(w.standing(S).1.is_some(), "the marker back");
@@ -701,7 +707,7 @@ fn a_write_that_changed_a_members_word_for_the_trunks_names_no_withdrawal() {
     }
     let head = format!("{D}.2");
     let typed = dialer.world().position;
-    let frame = frames::set_arrangement(S, &shot_runs(&swapped), typed, None, Some((&head, 15)), None, None);
+    let frame = frames::set_arrangement(S, &whole_of(&dialer, S, &swapped), typed, None, Some((&head, 15)), None, None);
     let at = dialer.world().apply(&frame)["at"].as_u64().expect("the write's ack");
     assert_eq!(dialer.world().standing(S), (Some((head, 15)), None), "the premise: the base re-sent, the marker cleared");
     let rows = dialer.world().rows.len();
@@ -751,49 +757,73 @@ fn an_undo_after_a_put_back_is_typed_at_the_landing_where_a_members_word_became_
     assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
 }
 
-/// A withdrawal and its undo are refused at the cap on their written runs.
+/// The cap is counted on the runs a write places, never on the draft's.
 ///
 /// The draft holds the trunk's words and a member's by turns at adjoining
 /// ordinals, 4,097 runs as the board serves and takes them and one run of
-/// `D` as the core joins them. (a) The withdrawal answers `OverCap` with
-/// the written count after its image read: nothing sent, the marker
-/// standing. (b) The withdrawal's undo, typed at the caller's own change
-/// that left the draft so, answers it after the records' read: nothing
-/// sent, the marker staying out (the mutants that count the core's runs,
-/// or count none at the withdrawal, send a frame of 4,097 runs).
+/// `D` as the core joins them. (a) The withdrawal lands: it names no
+/// change, so no run of the draft is sent or counted, the image still read
+/// in halves past the board's run budget, the marker cleared and every word
+/// standing (the mutant that sends the image back whole answers `OverCap`).
+/// (b) Its undo lands the same way, no record moving a word: the marker
+/// back, no run named. (c) A draft whose first and last words are `S`'s
+/// own, each named by a record as the trunk's word it became, 4,095 runs
+/// between: the one stretch the undo's mapping moves reaches from the first
+/// word to the last, so the write would place 4,097 runs and is refused
+/// `OverCap` with that count after the records' read, nothing sent and the
+/// marker staying out (the mutant that counts none sends a frame of 4,097
+/// runs).
 #[test]
-fn a_withdrawal_and_its_undo_are_refused_over_cap_on_the_runs_they_would_write() {
-    let over = || Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP };
+fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     let wrote = |dialer: &Scripted| !(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
-    // (a) The withdrawal.
+    // (a) The withdrawal of a draft in more runs than a write may name.
     let (dialer, board, signer) = open(draft_landing_world());
     let session = sign_in(&board, &signer);
     let m = merger(&session, &signer);
     landed_in_s(&board, &session, &signer);
     dialer.world().change(S, alternating());
-    let rows = dialer.world().rows.len();
     dialer.clear();
-    assert_eq!(withdraw(&board, m, &a(S), &a(K), None).map(drop), Err(over()), "(a)");
-    assert_eq!(dialer.frames("image").len(), 3, "(a): the premise: the image read in halves past the board's run budget: {:?}", dialer.names());
-    assert!(!wrote(&dialer), "(a): nothing sent: {:?}", dialer.names());
-    assert_eq!(dialer.world().rows.len(), rows, "(a): nothing committed");
-    assert!(dialer.world().standing(S).1.is_some(), "(a): the marker stands");
-    // (b) The withdrawal's undo.
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("(a): withdrawn");
+    let names = dialer.names();
+    let write = names.iter().position(|n| n == "set_arrangement").expect("(a): the write");
+    assert_eq!(names[..write].iter().filter(|n| *n == "image").count(), 3, "(a): the premise: the image read in halves past the board's run budget: {names:?}");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!((sent.len(), &sent[0]["changes"]), (1, &json!([])), "(a): one write, naming no change");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, alternating(), "(a): every word stands");
+    assert!(dialer.world().standing(S).1.is_none(), "(a): the marker cleared");
+    // (b) Its undo, no record moving a word.
+    dialer.clear();
+    unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, None, None).expect("(b): the withdrawal taken back");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!((sent.len(), &sent[0]["changes"]), (1, &json!([])), "(b): one write, naming no change");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, alternating(), "(b): every word stands");
+    assert!(dialer.world().standing(S).1.is_some(), "(b): the marker back");
+    // (c) The undo whose mapping moves the first word and the last.
     let (dialer, board, signer) = open(draft_landing_world());
     let session = sign_in(&board, &signer);
     let m = merger(&session, &signer);
     landed_in_s(&board, &session, &signer);
     let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
-    let own = dialer.world().change(S, alternating());
+    let between = alternating().into_iter().take(SHOT_RUN_CAP - 1);
+    let held: Vec<Run> = [run(S, 1, 1)].into_iter().chain(between).chain([run(S, 3, 1)]).collect();
+    let (own, records) = {
+        let mut w = dialer.world();
+        let own = w.change(S, held);
+        (own, [plant_record(&mut w, 1, 9_000, 1), plant_record(&mut w, 3, 9_500, 1)])
+    };
     let rows = dialer.world().rows.len();
     dialer.clear();
-    assert_eq!(unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, Some(own), None).map(drop), Err(over()), "(b)");
-    let correspondence = frames::unit_span(frames::T_CORRESPONDENCE);
-    let asked: Vec<Value> = dialer.frames("find_links_ftt").into_iter().filter(|f| f["q"]["ty"] == correspondence).map(|f| f["q"]["from"].clone()).collect();
-    assert_eq!(asked, [json!([frames::i_span(&format!("{D}.0.1.1"), SHOT_RUN_CAP as u64 + 1)])], "(b): the premise: one run of D as the core joins them, the records read first");
-    assert!(!wrote(&dialer), "(b): nothing sent: {:?}", dialer.names());
-    assert_eq!(dialer.world().rows.len(), rows, "(b): nothing committed");
-    assert!(dialer.world().standing(S).1.is_none(), "(b): the marker stays out");
+    assert_eq!(
+        unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, Some(own), None).map(drop),
+        Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }),
+        "(c): the two words mapped and the 4,095 runs between them"
+    );
+    for record in &records {
+        assert!(dialer.frames("read_link").iter().any(|f| f["a"] == *record), "(c): the records read first: {:?}", dialer.names());
+    }
+    assert!(!wrote(&dialer), "(c): nothing sent: {:?}", dialer.names());
+    assert_eq!(dialer.world().rows.len(), rows, "(c): nothing committed");
+    assert!(dialer.world().standing(S).1.is_none(), "(c): the marker stays out");
 }
 
 /// A withdrawal's undo looks past records naming the draft as a side.
@@ -831,4 +861,58 @@ fn a_withdrawals_undo_writes_the_landings_record_again_past_records_naming_the_d
         assert_eq!(atom["landed"], json!({"draft": S, "position": at}), "{case}: the landing's: {atom}");
         assert_eq!(atom["replaces"].as_str(), Some(taken.to_string().as_str()), "{case}: the withdrawal's record replaced");
     }
+}
+
+/// A take-back's write is read back off its own row, whatever its changes
+/// named.
+///
+/// Each act's answer is lost, and its re-ask's: the act reads the draft's
+/// own row past the position it typed, a `set_arrangement` carrying its
+/// frame's terms, and the draft there holding the whole state the act meant
+/// to leave — never the runs its changes place, which are not that state.
+/// (a) A withdrawal, whose frame names no change. (b) Its undo, whose frame
+/// names the one stretch its mapping moved, three positions of eighteen.
+/// (c) The undo of the landing, whose frame replaces every position. Each
+/// answers its own row's position, one row committed (the mutant that
+/// compares the state at the row with the runs the frame's changes place
+/// finds no write of the withdrawal's or of its undo's, and halts).
+#[test]
+fn a_take_backs_lost_answer_is_read_back_whatever_its_changes_named() {
+    let mut w = draft_landing_world();
+    their_publication(&mut w);
+    let (dialer, board, signer) = open(w);
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    let c = vec![run(D, 1, 11), run(THEIR_DRAFT, 1, 3)];
+    dialer.world().change(S, c);
+    let held = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_DRAFT, 1, 3)];
+    let mapped = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(THEIR_EDITION, 1, 3)];
+    landed_by_hand(&board, &session, &dialer, &held);
+    // One act with its answer and its re-ask's lost: the frames it sent,
+    // and the rows it committed.
+    let lost = |act: &dyn Fn() -> u64| {
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        dialer.world().drop_acks = 2;
+        let position = act();
+        let frames = dialer.frames("set_arrangement");
+        assert!(frames.len() == 2 && frames[0] == frames[1], "the write and its one re-ask, the same frame: {frames:?}");
+        let committed: Vec<u64> = dialer.world().rows[rows..].iter().filter(|r| r.op == "set_arrangement").map(|r| r.at).collect();
+        assert_eq!(committed, [position], "one row, its position answered");
+        (position, frames[0]["changes"].clone())
+    };
+    // (a) The withdrawal.
+    let (withdrawal, changes) = lost(&|| withdraw(&board, m, &a(S), &a(K), None).expect("(a): the withdrawal read back").position);
+    assert_eq!(changes, json!([]), "(a): no change named");
+    assert_eq!(dialer.world().standing(S).1, None, "(a): the marker cleared");
+    // (b) Its undo.
+    let (_, changes) = lost(&|| unwithdraw(&board, m, &a(S), &a(K), withdrawal, None, None).expect("(b): the put-back read back").position);
+    assert_eq!(changes, json!([frames::placed(16, 3, &shot_runs(&[run(THEIR_EDITION, 1, 3)]))]), "(b): the one stretch the mapping moved");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, mapped, "(b): the draft holds the words mapped");
+    assert!(dialer.world().standing(S).1.is_some(), "(b): the marker back");
+    // (c) The undo of the landing.
+    let (_, changes) = lost(&|| undo(&board, m, &a(S), &a(K), None, None).expect("(c): the undo read back").position);
+    assert_eq!(changes[0]["at"], frames::place(1), "(c): one change from the first position");
+    assert_eq!(changes[0]["width"], json!(width_of(&mapped).to_string()), "(c): over every position the draft held");
+    assert_eq!(dialer.world().standing(S).1, None, "(c): the marker cleared");
 }

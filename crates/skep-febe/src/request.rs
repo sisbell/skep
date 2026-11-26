@@ -5,7 +5,7 @@
 //! the lifecycle gates on (§1).
 
 use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Deposit, SetArrangement, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{trunk_of, Deposit, Edit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::{Attestation, Seq};
@@ -310,34 +310,59 @@ pub enum Op {
     ///
     /// `as_of` is the typed state, as on [`Op::Insert`].
     Rearrange { doc: Address, cuts: Vec<VPos>, as_of: Seq },
-    /// SET_ARRANGEMENT (the landing lane; skep #764): a draft's whole content
-    /// arrangement set by identity in one commit.
+    /// SET_ARRANGEMENT (the landing lane; skep #764): the edit
+    /// ([`Op::Edit`]) under the name a merge's landing into a draft, its
+    /// undo, a withdrawal and a restore are sent by.
     ///
-    /// `arrangement` is M5's own request value, carried verbatim
-    /// ([`SetArrangement`]): the runs the draft is set to, in
-    /// [`Op::Reinstate`]'s run form, placed in place of everything the draft
-    /// arranged; the head the merge was composed on at the extent read,
-    /// where the write is a merge's landing; the base to record, where the
-    /// draft's recorded base is to move; and the merge's sides, where the
-    /// draft is to carry a marker beside that base, with the position of a
-    /// marker put back where the write is a take-back's undo (skep #870).
-    /// M5 decides everything of them — the head and the base against the
-    /// draft's chain, the fork gate, whether a position names a marker the
-    /// board stamped on the draft, what moves and what stands — and M10
-    /// hands them through; a `merge` carried without a `head`, or a
-    /// `merge.at` without a `base`, is the codec's `malformed`. A
-    /// draft's write, owner-gated on `doc`, and never publish-class: no
-    /// `attest` rides it, the codec refusing the member as on `stage`.
+    /// It is one operation with [`Op::Edit`], M5's `edit`, and `arrangement`
+    /// is the same request value ([`Edit`]), carried verbatim: a list of
+    /// positional changes to the draft, typed against one state of it, each
+    /// placing runs by identity in [`Op::Reinstate`]'s run form where the
+    /// frame came off the wire; the head the merge was composed on at the
+    /// extent read, where the write is a merge's landing; the base to
+    /// record, where the draft's recorded base is to move; and the merge's
+    /// sides, where the draft is to carry a marker beside that base, with
+    /// the position of a marker put back where the write is a take-back's
+    /// undo (skep #870). M5 decides everything of them — each change's
+    /// shape, the head and the base against the draft's chain, the fork
+    /// gate, whether a position names a marker the board stamped on the
+    /// draft, what moves and what stands — and M10 hands them through; a
+    /// `merge` carried without a `head`, or a `merge.at` without a `base`,
+    /// is the codec's `malformed`. What the name decides is the row the
+    /// commit writes on the change feed, which a landing's readers find it
+    /// by. A draft's write, owner-gated on `doc`, and never publish-class:
+    /// no `attest` rides it, the codec refusing the member as on `stage`.
     ///
     /// **The reach is wide**, as `reinstate`'s: a run's origin may be any
     /// document the session principal may read, consulted at the write
-    /// door per distinct origin in run order ([`Op::source_arguments`]),
-    /// the destination's own I-space excepted. `as_of` is the draft's typed
-    /// state, as on [`Op::Insert`], REQUIRED: a frame typed against an
-    /// older arrangement is refused `arrangement_moved` with nothing wiped
-    /// — the one refusal that keeps a landing from landing over an edit
-    /// made since it was composed.
-    SetArrangement { doc: Address, arrangement: SetArrangement, as_of: Seq },
+    /// door per distinct origin in the changes' order
+    /// ([`Op::source_arguments`]), the destination's own I-space excepted.
+    /// `as_of` is the draft's typed state, as on [`Op::Insert`], REQUIRED: a
+    /// frame typed against an older arrangement is refused
+    /// `arrangement_moved` with nothing changed — the one refusal that
+    /// keeps a landing from landing over an edit made since it was
+    /// composed.
+    SetArrangement { doc: Address, arrangement: Edit, as_of: Seq },
+    /// EDIT: a list of positional changes to one draft, made in one commit.
+    ///
+    /// `edit` is M5's own request value, carried verbatim ([`Edit`]): the
+    /// changes, each a content position of the state the call is typed
+    /// against, a width removed there and what is put in its place —
+    /// values, minted as [`Op::Insert`] mints them, where the frame came
+    /// off the wire — ascending and apart; and the three optional members
+    /// [`Op::SetArrangement`] carries, with its checks. All the changes
+    /// land or none does, and the commit writes one row on the change feed
+    /// under this op's name. A draft's write, owner-gated on `doc`: the
+    /// store refuses it into a published document, so it is never
+    /// publish-class and no `attest` rides it, the codec refusing the
+    /// member.
+    ///
+    /// The ack names the first address the call minted, the values of every
+    /// change minted in the frame's order from there, and none where it
+    /// minted nothing; beside either, the trunk's head where the frame
+    /// named a head that is no longer it. `as_of` is the draft's typed
+    /// state, as on [`Op::Insert`], REQUIRED.
+    Edit { doc: Address, edit: Edit, as_of: Seq },
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
     ///
     /// `published` is the three-valued flag with `None` ⇒ inherit
@@ -941,6 +966,8 @@ pub enum OpKind {
     Rearrange,
     /// The kind of [`Op::SetArrangement`].
     SetArrangement,
+    /// The kind of [`Op::Edit`].
+    Edit,
     /// The kind of [`Op::Version`].
     Version,
     /// The kind of [`Op::Stage`].
@@ -1093,6 +1120,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::SetArrangement { .. }
+            | Op::Edit { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1130,6 +1158,7 @@ impl Op {
             Op::Reinstate { .. } => OpKind::Reinstate,
             Op::Rearrange { .. } => OpKind::Rearrange,
             Op::SetArrangement { .. } => OpKind::SetArrangement,
+            Op::Edit { .. } => OpKind::Edit,
             Op::Version { .. } => OpKind::Version,
             Op::Stage { .. } => OpKind::Stage,
             Op::Publish { .. } => OpKind::Publish,
@@ -1261,6 +1290,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::SetArrangement { .. }
+            | Op::Edit { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1363,6 +1393,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::SetArrangement { .. }
+            | Op::Edit { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1376,13 +1407,15 @@ impl Op {
 
     /// Returns a write's source-argument list, in declaration order.
     ///
-    /// They are the documents whose arrangement — or, for `reinstate` and
-    /// `set_arrangement`, whose minted content — the write reads before it
+    /// They are the documents whose arrangement — or, for `reinstate`,
+    /// `set_arrangement` and `edit`, whose minted content — the write reads
+    /// before it
     /// writes (PUB-6.23, PUB-6.24, PUB-6.4), so the first unreadable one is
     /// the `site.addr` the write door's `Withheld` rejection carries. `copy`
-    /// names each `specs[].source` by index; `reinstate` and
-    /// `set_arrangement` each distinct `runs[].origin` in run order, the
-    /// destination's own I-space excepted (the shot's rule: the document's
+    /// names each `specs[].source` by index; `reinstate` each distinct
+    /// `runs[].origin` in run order, and `set_arrangement` and `edit` each
+    /// distinct origin of the runs their changes place, in the changes'
+    /// order, the destination's own I-space excepted (the shot's rule: the document's
     /// own needs no consult — address arithmetic on the stated origin,
     /// PUB-2.15); `version` its `d_src`; `stage` its `from`, the surface it
     /// copies; `make_link` and `edit_link`
@@ -1419,7 +1452,10 @@ impl Op {
         /// to `doc`'s trunk (PUB-2.15) is the writer's own, which the
         /// deferral has just found it owns. The one arm the two writes by
         /// identity share.
-        fn distinct_origins<'a>(doc: &Address, runs: &'a [ShotRun]) -> Vec<&'a Address> {
+        fn distinct_origins<'a>(
+            doc: &Address,
+            runs: impl IntoIterator<Item = &'a ShotRun>,
+        ) -> Vec<&'a Address> {
             let own = trunk_of(doc);
             let mut out: Vec<&Address> = Vec::new();
             for ShotRun { origin, .. } in runs {
@@ -1432,15 +1468,20 @@ impl Op {
         match self {
             Op::Copy { specs, .. } => specs.iter().map(|s| &s.source).collect(),
             Op::Reinstate { doc, runs, .. } => distinct_origins(doc, runs),
-            // The whole arrangement's runs are REINSTATE's, consulted as
-            // REINSTATE's are; the head, the base and the sides are names,
-            // not sources — an address is not secret (PUB-1.13). That holds
-            // while M5 reads nothing of a named document but a published
-            // chain's and a registration: it judges the head and the base
-            // against the draft's chain, a published document's, and asks
-            // the head of a draft with none its registration alone, a
-            // document's existence being visible (PUB-1.14).
-            Op::SetArrangement { doc, arrangement, .. } => distinct_origins(doc, &arrangement.runs),
+            // The runs an edit places by identity are REINSTATE's, consulted
+            // as REINSTATE's are, over every change in the changes' order —
+            // under either of the edit's two names, whose request is one
+            // type: a change that mints names no source. The head, the base
+            // and the sides are names, not sources — an address is not
+            // secret (PUB-1.13). That holds while M5 reads nothing of a
+            // named document but a published chain's and a registration: it
+            // judges the head and the base against the draft's chain, a
+            // published document's, and asks the head of a draft with none
+            // its registration alone, a document's existence being visible
+            // (PUB-1.14).
+            Op::SetArrangement { doc, arrangement: edit, .. } | Op::Edit { doc, edit, .. } => {
+                distinct_origins(doc, edit.runs())
+            }
             Op::Version { d_src, .. } => vec![d_src],
             Op::Stage { from } => vec![from],
             Op::MakeLink { from, to, ty, .. } => {

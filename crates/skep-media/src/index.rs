@@ -7,8 +7,9 @@
 //! cells name at their size — the base, one number derived from the record
 //! and nothing else (M-I6 (a)). Two writers, and three readers beside the
 //! door's binding and the pruner's pass. Entered at every commit that mints
-//! a cell, whichever op minted it — an `insert`'s values, a shot's
-//! re-inserted values — before that commit's serialization guard drops
+//! a cell, whichever op minted it — an `insert`'s values, an edit's, a
+//! shot's re-inserted values — before that commit's serialization guard
+//! drops
 //! ([`CellIndex::enter_insert`], [`CellIndex::enter_publish`], the write
 //! path's one hook). Rebuilt whole at every open from the world replayed
 //! there and never from the retained journal alone: a thread walks an
@@ -459,12 +460,16 @@ impl CellIndex {
         }
     }
 
-    /// Enters the values an `insert`'s commit placed: the entry at its commit.
+    /// Enters the values an `insert`'s commit placed, or an edit's: the
+    /// entry at its commit.
     ///
     /// They are read off the post-commit `world` at the addresses the commit
     /// minted — `start` (the ack's address, the first minted) and the next
     /// ones, I-adjacent under the named document's content chain — for the
     /// value indices `naming` the prefix test admitted ahead of the commit.
+    /// An edit's values are counted over all its changes, in the order they
+    /// are minted, which is the changes' own: one index space from the one
+    /// address its ack names.
     pub fn enter_insert<W: FebeWorld>(&self, world: &W, start: &Address, naming: &[usize]) {
         let content = world.content();
         for &i in naming {

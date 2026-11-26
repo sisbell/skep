@@ -1,5 +1,7 @@
-//! SET_ARRANGEMENT's in-crate claims, in a world assembled from the four
-//! slices the op and its fixtures touch — M3 for the mints, M4 for the
+//! The landing's in-crate claims — an edit carrying a head, a base and a
+//! merge, its one change setting the draft's whole arrangement by identity,
+//! as the wire's `set_arrangement` frame sends one — in a world assembled
+//! from the four slices the op and its fixtures touch — M3 for the mints, M4 for the
 //! bytes, M5 for the arrangement — a state built by the ops themselves
 //! (`version`, `stage`, `insert`) over a seeded edition: the refusal order
 //! the op states, each refusal writing nothing; the base's extent judged
@@ -24,27 +26,63 @@ use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val}
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{M3Rec, PrincipalId};
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use skep_content::HasContent;
+use skep_kernel::{TxnError, WorldState};
+use skep_namespace::HasM3;
+
 use super::*;
-use crate::error::SetArrangementError as E;
-use crate::ops::MAX_PLACED_RUNS;
+use crate::error::EditError as E;
+use crate::ops::{AsOf, Change, Edit, Placed, Vstream, MAX_PLACED_RUNS};
+use crate::ownership::Caller;
 use crate::run::Run;
+use crate::shot::ShotRun;
 use crate::state::{DraftBase, M5State, Marker};
 use crate::testutil::{a, ca, doc1, doc2, la, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vca, vp};
 use crate::Deposit;
+use crate::HasM5;
 
+/// The world the edit's in-crate suites run in: M3, M4 and M5, folded by
+/// the real folds under the real kernel.
 #[derive(Clone, Serialize, Deserialize)]
-struct LandWorld {
-    m3: M3State,
-    content: ContentStore,
-    m5: M5State,
+pub(crate) struct LandWorld {
+    pub(crate) m3: M3State,
+    pub(crate) content: ContentStore,
+    pub(crate) m5: M5State,
 }
 
+/// The world's records, each store's own.
 #[derive(Clone, Serialize, Deserialize)]
-enum Rec {
+pub(crate) enum Rec {
     M3(M3Rec),
     Content(ContentWrite),
     Stretch(ContentStretch),
     M5(M5Rec),
+}
+
+/// How many records this thread's worlds have folded, and how many of
+/// those rebuilt a content run-list.
+///
+/// The fold counts itself, so a test reads what M2 asked of it: a record
+/// folded at its push and again at the seal counts twice. A thread's own,
+/// since each test runs on one and the suites run side by side.
+#[derive(Default)]
+pub(crate) struct Folds {
+    records: AtomicU64,
+    lists: AtomicU64,
+}
+
+thread_local! {
+    static FOLDS: Folds = Folds::default();
+}
+
+impl Folds {
+    /// Returns this thread's counts since the last call, `(records, lists)`,
+    /// and starts both again from nothing.
+    pub(crate) fn take() -> (u64, u64) {
+        FOLDS.with(|folds| (folds.records.swap(0, Ordering::Relaxed), folds.lists.swap(0, Ordering::Relaxed)))
+    }
 }
 
 impl From<M3Rec> for Rec {
@@ -71,6 +109,23 @@ impl From<M5Rec> for Rec {
 impl WorldState for LandWorld {
     type Record = Rec;
     fn apply(&self, at: Seq, r: &Rec) -> LandWorld {
+        // Every record folded, and each that rebuilds a content run-list:
+        // the six records of M5's that touch one.
+        let rebuilds = matches!(
+            r,
+            Rec::M5(
+                M5Rec::ContentPlace { .. }
+                    | M5Rec::ShotPlace { .. }
+                    | M5Rec::ContentRemove { .. }
+                    | M5Rec::ContentReorder { .. }
+                    | M5Rec::ContentEdit { .. }
+                    | M5Rec::VersionSnapshot { .. }
+            )
+        );
+        FOLDS.with(|folds| {
+            folds.records.fetch_add(1, Ordering::Relaxed);
+            folds.lists.fetch_add(u64::from(rebuilds), Ordering::Relaxed);
+        });
         match r {
             Rec::M3(x) => LandWorld { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Rec::Content(x) => LandWorld { content: self.content.apply_write(x), ..self.clone() },
@@ -95,13 +150,13 @@ impl HasM5 for LandWorld {
     }
 }
 
-const P1: Caller = Caller::Principal(PrincipalId(1));
+pub(crate) const P1: Caller = Caller::Principal(PrincipalId(1));
 const P2: Caller = Caller::Principal(PrincipalId(2));
 
 /// The seeded world: the published edition `pdoc` holding `a b c` at its
 /// first three addresses, and the private draft `doc1` holding `x y` at its
 /// own — a plain draft, never staged, the board recording no base for it.
-fn seeded() -> Kernel<LandWorld> {
+pub(crate) fn seeded() -> Kernel<LandWorld> {
     let mut content = ContentStore::default();
     for (k, byte) in [(1u32, b'a'), (2, b'b'), (3, b'c')] {
         let cw = stage_write(&content, pca(k), Val::new(&[byte][..])).expect("written once");
@@ -122,7 +177,7 @@ fn seeded() -> Kernel<LandWorld> {
 /// with the member as its recorded base at three. The draft is the account's
 /// fourth document, the first its counter hands out here: the seeded world
 /// holds its first three.
-fn staged(k: &Kernel<LandWorld>) -> (Address, Address) {
+pub(crate) fn staged(k: &Kernel<LandWorld>) -> (Address, Address) {
     let vs = Vstream::new(k);
     let (member, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the edition's first member");
     assert_eq!(member, a(&[1, 0, 1, 0, nth_doc(3), 1]));
@@ -144,18 +199,48 @@ fn of_edition(start: u32, width: u32) -> ShotRun {
     ShotRun { origin: pdoc(), run: run(&pca(start), width) }
 }
 
+/// A draft's whole arrangement and a landing's three terms: what a request
+/// sets the draft to, said as the whole list.
+struct Whole {
+    runs: Vec<ShotRun>,
+    head: Option<Base>,
+    base: Option<Base>,
+    merge: Option<SetMerge>,
+}
+
 fn request(
     runs: Vec<ShotRun>,
     head: Option<Base>,
     base: Option<Base>,
     merge: Option<Vec<Address>>,
-) -> SetArrangement {
-    SetArrangement { runs, head, base, merge: merge.map(|sides| SetMerge { sides, at: None }) }
+) -> Whole {
+    Whole { runs, head, base, merge: merge.map(|sides| SetMerge { sides, at: None }) }
 }
 
-/// A frame putting back the marker of `sides` stamped at `at`.
-fn restore(runs: Vec<ShotRun>, head: Option<Base>, base: Option<Base>, sides: Vec<Address>, at: Seq) -> SetArrangement {
-    SetArrangement { runs, head, base, merge: Some(SetMerge { sides, at: Some(at) }) }
+/// A request putting back the marker of `sides` stamped at `at`.
+fn restore(runs: Vec<ShotRun>, head: Option<Base>, base: Option<Base>, sides: Vec<Address>, at: Seq) -> Whole {
+    Whole { runs, head, base, merge: Some(SetMerge { sides, at: Some(at) }) }
+}
+
+/// Sets `doc`'s whole arrangement to `whole`'s runs by one edit of one
+/// change over `[1, n_C]`, `n_C` the count `doc` holds as the call is made;
+/// no change at all where the draft is empty and so is the list. Answers
+/// the commit position and the tell.
+fn set(
+    k: &Kernel<LandWorld>,
+    caller: Caller,
+    doc: &Address,
+    whole: &Whole,
+    as_of: AsOf,
+) -> Result<(Seq, Option<Address>), TxnError<E>> {
+    let count = k.snapshot().world().m5().content_count(doc);
+    let changes = if count == n(0) && whole.runs.is_empty() {
+        Vec::new()
+    } else {
+        vec![Change { at: vp(1, 1), width: count, placed: Placed::Runs(whole.runs.clone()) }]
+    };
+    let request = Edit { changes, head: whole.head.clone(), base: whole.base.clone(), merge: whole.merge.clone() };
+    Vstream::new(k).edit(caller, doc, request, as_of).map(|edited| (edited.at, edited.head_moved))
 }
 
 fn runs_of(k: &Kernel<LandWorld>, doc: &Address) -> Vec<Run> {
@@ -199,21 +284,21 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     };
     // Registration, then ω, then publication — with a bad run behind each.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &a(&[1, 0, 1, 0, 71]), &request(bad_run(), None, None, None), now(&k))),
+        rejected(set(&k, P1, &a(&[1, 0, 1, 0, 71]), &request(bad_run(), None, None, None), now(&k))),
         E::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P2, &draft, &request(bad_run(), None, None, None), now(&k))),
+        rejected(set(&k, P2, &draft, &request(bad_run(), None, None, None), now(&k))),
         E::NotOwner(d) if d == draft
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &pdoc(), &request(bad_run(), None, None, None), now(&k))),
+        rejected(set(&k, P1, &pdoc(), &request(bad_run(), None, None, None), now(&k))),
         E::PublishedTarget
     ));
     // The typed state, ahead of the head's checks and the runs: typed
     // against the state before the stage, with a head off the chain.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&doc1(), 1)), None, None), AsOf::Typed(Seq(0)))),
+        rejected(set(&k, P1, &draft, &request(bad_run(), Some(pair(&doc1(), 1)), None, None), AsOf::Typed(Seq(0)))),
         E::ArrangementMoved { as_of: Seq(0), current } if current > Seq(0)
     ));
     unchanged("the destination's four");
@@ -222,33 +307,33 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     // its extent past the head's count, ahead of the fork gate and of a base
     // off the chain.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&ghost, 99)), None, None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &draft, &request(bad_run(), Some(pair(&ghost, 99)), None, None), now(&k))),
+        E::SourceNotRegistered { .. }
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&doc1(), 99)), None, None), now(&k))),
+        rejected(set(&k, P1, &draft, &request(bad_run(), Some(pair(&doc1(), 99)), None, None), now(&k))),
         E::BaseNotInChain
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 4)), Some(pair(&doc1(), 1)), None), now(&k))),
+        rejected(set(&k, P1, &draft, &request(bad_run(), Some(pair(&member, 4)), Some(pair(&doc1(), 1)), None), now(&k))),
         E::BaseExtentTooLarge
     ));
     // The fork gate: the fork's source is the member, the head the trunk —
     // in the chain, under its count, not the source — ahead of the base's
     // and the runs' verdicts.
     assert!(matches!(
-        rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&pdoc(), 3)), Some(pair(&pdoc(), 3)), None), now(&k))),
+        rejected(set(&k, P2, &fork, &request(bad_run(), Some(pair(&pdoc(), 3)), Some(pair(&pdoc(), 3)), None), now(&k))),
         E::ForkBaseMoved(source) if source == member
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&pdoc(), 99)), None, None), now(&k))),
+        rejected(set(&k, P2, &fork, &request(bad_run(), Some(pair(&pdoc(), 99)), None, None), now(&k))),
         E::BaseExtentTooLarge
     ), "the extent ahead of the gate");
     // A head in the fork's chain that no mint has made: its registration
     // ahead of the gate, which would name the source.
     assert!(matches!(
-        rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P2, &fork, &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
+        E::SourceNotRegistered { .. }
     ), "the registration ahead of the gate");
     // A free-standing draft's head: its registration asked alone — naming
     // an address no mint has made, refused ahead of the runs, and naming no
@@ -256,16 +341,16 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     // four — and, registered, its extent past the member's count unjudged,
     // so the bad run is the verdict.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &doc1(), &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
+        E::SourceNotRegistered { .. }
     ), "a free-standing draft's head asked its registration");
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&ghost, 99)), Some(pair(&member, 3)), None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &doc1(), &request(bad_run(), Some(pair(&ghost, 99)), Some(pair(&member, 3)), None), now(&k))),
+        E::SourceNotRegistered { .. }
     ), "the head's registration ahead of nothing to record");
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 99)), None, None), now(&k))),
-        E::BadRun
+        rejected(set(&k, P1, &doc1(), &request(bad_run(), Some(pair(&member, 99)), None, None), now(&k))),
+        E::BadRun { .. }
     ), "nothing of a free-standing draft's head judged past its registration");
     unchanged("the head's three");
     // The base to record: none recorded, ahead of its extent and of its
@@ -274,52 +359,52 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     // two; its extent past its member's count, the head passing, ahead of
     // the runs.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 99)), None), now(&k))),
+        rejected(set(&k, P1, &doc1(), &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 99)), None), now(&k))),
         E::NoBaseToRecord
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
+        rejected(set(&k, P1, &doc1(), &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
         E::NoBaseToRecord
     ), "nothing to record, ahead of the registration");
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &draft, &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
+        E::SourceNotRegistered { .. }
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&unminted, 0)), None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &draft, &request(bad_run(), None, Some(pair(&unminted, 0)), None), now(&k))),
+        E::SourceNotRegistered { .. }
     ), "a base in the chain that no mint has made, ahead of the runs");
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&doc1(), 99)), None), now(&k))),
+        rejected(set(&k, P1, &draft, &request(bad_run(), None, Some(pair(&doc1(), 99)), None), now(&k))),
         E::BaseNotInChain
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![])), now(&k))),
+        rejected(set(&k, P1, &draft, &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![])), now(&k))),
         E::BaseExtentTooLarge
     ));
     unchanged("the base's four");
     // The runs, as REINSTATE judges them — each refused past the removal
     // the body staged first, the transaction discarded whole.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, None, None), now(&k))),
-        E::BadRun
+        rejected(set(&k, P1, &draft, &request(bad_run(), None, None, None), now(&k))),
+        E::BadRun { .. }
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(vec![ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1) }], None, None, None), now(&k))),
-        E::SourceNotRegistered
+        rejected(set(&k, P1, &draft, &request(vec![ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 71, 0, 1, 1]), 1) }], None, None, None), now(&k))),
+        E::SourceNotRegistered { .. }
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(3, 2)], None, None, None), now(&k))),
-        E::DanglingSource
+        rejected(set(&k, P1, &draft, &request(vec![of_edition(3, 2)], None, None, None), now(&k))),
+        E::DanglingSource { .. }
     ), "every address probed: the fourth holds nothing");
     let same: Vec<ShotRun> = std::iter::repeat_with(|| of_edition(1, 1)).take(MAX_PLACED_RUNS + 1).collect();
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(same, None, None, None), now(&k))),
+        rejected(set(&k, P1, &draft, &request(same, None, None, None), now(&k))),
         E::TooManyRuns
     ));
     unchanged("the runs' four");
     // The control: the same draft takes a sound request.
-    vs.set_arrangement(P1, &draft, &request(good(), None, None, None), now(&k)).expect("a sound request lands");
+    set(&k, P1, &draft, &request(good(), None, None, None), now(&k)).expect("a sound request lands");
     assert_eq!(runs_of(&k, &draft), vec![run(&pca(2), 2)]);
 }
 
@@ -339,18 +424,17 @@ fn a_base_extent_past_its_members_count_is_refused_and_one_at_the_count_records(
     let before = k.current_seq();
     let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None, stamped: vec![] });
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![vca(1)])), now(&k))),
+        rejected(set(&k, P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![vca(1)])), now(&k))),
         E::BaseExtentTooLarge
     ), "the landing's shape: the head at its count, the base past it");
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], None, Some(pair(&member, 4)), None), now(&k))),
+        rejected(set(&k, P1, &draft, &request(vec![of_edition(1, 3)], None, Some(pair(&member, 4)), None), now(&k))),
         E::BaseExtentTooLarge
     ), "the undo's shape: the base alone, past its count");
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
     assert_eq!(base_of(&k, &draft), recorded, "the record stands");
     assert_eq!(k.snapshot().world().m5().content_count(&draft), n(4), "the arrangement stands");
-    let (at, _) = vs
-        .set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
+    let (at, _) = set(&k, P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
         .expect("an extent at the count");
     assert_eq!(
         base_of(&k, &draft),
@@ -386,12 +470,12 @@ fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
         assert!(!k.snapshot().world().m3().is_registered_document(unminted), "{unminted:?}: no mint has made it");
         assert_eq!(trunk_of(unminted), pdoc(), "{unminted:?}: in the chain by its address");
         assert!(matches!(
-            rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(unminted, 0)), Some(pair(&member, 3)), Some(vec![])), now(&k))),
-            E::SourceNotRegistered
+            rejected(set(&k, P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(unminted, 0)), Some(pair(&member, 3)), Some(vec![])), now(&k))),
+            E::SourceNotRegistered { .. }
         ), "{unminted:?} as the head, the base passing");
         assert!(matches!(
-            rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(unminted, 0)), None), now(&k))),
-            E::SourceNotRegistered
+            rejected(set(&k, P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(unminted, 0)), None), now(&k))),
+            E::SourceNotRegistered { .. }
         ), "{unminted:?} as the base to record");
     }
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
@@ -400,7 +484,7 @@ fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
     // The trunk's next member minted: the same base frame records it.
     let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
     assert_eq!(second, next);
-    vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(&next, 0)), None), now(&k))
+    set(&k, P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(&next, 0)), None), now(&k))
         .expect("the member a mint has made since");
     assert_eq!(
         base_of(&k, &draft),
@@ -422,8 +506,8 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
     vs.insert(P1, &draft, vp(1, 4), vec![Val::new(&b"z"[..])], Deposit::Undeclared, now(&k)).expect("the draft's own word");
     assert_eq!(k.snapshot().world().m5().content_count(&draft), n(4));
     let before = k.current_seq();
-    let (at, head_moved) = vs
-        .set_arrangement(
+    let (at, head_moved) = set(
+            &k,
             P1,
             &draft,
             &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])),
@@ -455,8 +539,7 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
     // composed on. The landing lands and tells.
     let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
     assert_eq!(second, a(&[1, 0, 1, 0, nth_doc(3), 2]));
-    let (at2, head_moved) = vs
-        .set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![])), now(&k))
+    let (at2, head_moved) = set(&k, P1, &draft, &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![])), now(&k))
         .expect("land and tell");
     assert_eq!(head_moved, Some(second.clone()), "the trunk's current head, told");
     assert_eq!(
@@ -466,8 +549,7 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
     );
     assert_eq!(base_of(&k, &draft).map(|b| b.base), Some(member.clone()));
     // Composed on the trunk's head: nothing to tell.
-    let (_, head_moved) = vs
-        .set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], Some(pair(&second, 3)), Some(pair(&second, 3)), Some(vec![])), now(&k))
+    let (_, head_moved) = set(&k, P1, &draft, &request(vec![of_edition(1, 3)], Some(pair(&second, 3)), Some(pair(&second, 3)), Some(vec![])), now(&k))
         .expect("on the head");
     assert_eq!(head_moved, None);
     assert_eq!(base_of(&k, &draft).map(|b| b.base), Some(second));
@@ -482,22 +564,19 @@ fn a_landing_sets_the_arrangement_moves_the_base_marks_the_merge_and_tells_a_mov
 fn a_base_absent_moves_nothing_and_a_base_without_a_merge_clears_the_marker() {
     let k = seeded();
     let (member, draft) = staged(&k);
-    let vs = Vstream::new(&k);
-    let (landed_at, _) = vs
-        .set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
+    let (landed_at, _) = set(&k, P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
         .expect("the landing");
     let marked = base_of(&k, &draft);
     assert!(marked.as_ref().is_some_and(|b| b.merge.as_ref().is_some_and(|m| m.at == landed_at)));
     // A plain re-arrangement: the arrangement moves, the record does not.
-    vs.set_arrangement(P1, &draft, &request(vec![of_edition(1, 1)], None, None, None), now(&k)).expect("a plain re-arrangement");
+    set(&k, P1, &draft, &request(vec![of_edition(1, 1)], None, None, None), now(&k)).expect("a plain re-arrangement");
     assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 1)]);
     assert_eq!(base_of(&k, &draft), marked, "base and marker stand");
     // A head and a merge with no base: admitted, nothing recorded.
-    vs.set_arrangement(P1, &draft, &request(vec![of_edition(3, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k)).expect("a head told, no base to record");
+    set(&k, P1, &draft, &request(vec![of_edition(3, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k)).expect("a head told, no base to record");
     assert_eq!(base_of(&k, &draft), marked, "the marker stands as it was: nothing moved");
     // The undo's shape: the old base, no merge — the marker cleared.
-    let (undone_at, _) = vs
-        .set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], None, Some(pair(&member, 3)), None), now(&k))
+    let (undone_at, _) = set(&k, P1, &draft, &request(vec![of_edition(1, 3)], None, Some(pair(&member, 3)), None), now(&k))
         .expect("the undo");
     assert_eq!(
         base_of(&k, &draft),
@@ -520,20 +599,19 @@ fn a_base_absent_moves_nothing_and_a_base_without_a_merge_clears_the_marker() {
 #[test]
 fn an_empty_draft_takes_a_placement_and_an_empty_runs_empties_the_draft() {
     let k = seeded();
-    let vs = Vstream::new(&k);
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
-    let (at, head_moved) = vs.set_arrangement(P1, &doc2(), &request(vec![of_edition(1, 2)], None, None, None), now(&k)).expect("into the empty draft");
+    let (at, head_moved) = set(&k, P1, &doc2(), &request(vec![of_edition(1, 2)], None, None, None), now(&k)).expect("into the empty draft");
     assert_eq!(head_moved, None);
     assert_eq!(runs_of(&k, &doc2()), vec![run(&pca(1), 2)]);
     assert_eq!(k.snapshot().world().m5().arranged_at(&doc2()), Some(at));
-    let (emptied_at, _) = vs.set_arrangement(P1, &doc2(), &request(vec![], None, None, None), now(&k)).expect("the empty arrangement is admitted");
+    let (emptied_at, _) = set(&k, P1, &doc2(), &request(vec![], None, None, None), now(&k)).expect("the empty arrangement is admitted");
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
     assert!(runs_of(&k, &doc2()).is_empty());
     assert_eq!(k.snapshot().world().m5().arranged_at(&doc2()), Some(emptied_at), "the removal moved the typed state");
     assert!(emptied_at > at);
     // Typed against the state before the emptying: refused, nothing wiped.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc2(), &request(vec![of_edition(3, 1)], None, None, None), AsOf::Typed(at))),
+        rejected(set(&k, P1, &doc2(), &request(vec![of_edition(3, 1)], None, None, None), AsOf::Typed(at))),
         E::ArrangementMoved { as_of, current } if as_of == at && current == emptied_at
     ));
     assert!(runs_of(&k, &doc2()).is_empty());
@@ -558,8 +636,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     let (fork, _) = vs.version(PrincipalId(2), &member, Some(false)).expect("the stranger's private fork");
     assert_eq!(k.snapshot().world().m5().fork_source(&fork), Some(&member));
     assert_eq!(base_of(&k, &fork), None);
-    let (at, head_moved) = vs
-        .set_arrangement(P2, &fork, &request(vec![of_edition(3, 1)], Some(pair(&member, 3)), None, Some(vec![vca(1)])), now(&k))
+    let (at, head_moved) = set(&k, P2, &fork, &request(vec![of_edition(3, 1)], Some(pair(&member, 3)), None, Some(vec![vca(1)])), now(&k))
         .expect("the source is the head: admitted");
     assert_eq!(head_moved, None);
     assert_eq!(runs_of(&k, &fork), vec![run(&pca(3), 1)]);
@@ -568,8 +645,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     assert_eq!(k.snapshot().world().m5().arranged_at(&fork), Some(at));
     // The plain draft: no base, no source — the head registered, admitted,
     // and the trunk's head, so nothing told.
-    let (_, head_moved) = vs
-        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k))
+    let (_, head_moved) = set(&k, P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k))
         .expect("free-standing: admitted");
     assert_eq!(head_moved, None, "the head named is the trunk's");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 1)]);
@@ -578,7 +654,7 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // registered, and nothing else of it is read — its count would answer
     // the fork's size.
     assert_eq!(k.snapshot().world().m5().content_count(&fork), n(1), "the fork holds one");
-    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 2)], Some(pair(&fork, 99)), None, None), now(&k))
+    set(&k, P1, &doc1(), &request(vec![of_edition(2, 2)], Some(pair(&fork, 99)), None, None), now(&k))
         .expect("free-standing: another's draft past its count, unread");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 2)]);
     assert_eq!(base_of(&k, &doc1()), None);
@@ -589,8 +665,8 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     let before = k.current_seq();
     for unminted in [a(&[1, 0, 1, 0, 65, 9]), a(&[1, 0, 1, 0, 71])] {
         assert!(matches!(
-            rejected(vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&unminted, 5)), None, None), now(&k))),
-            E::SourceNotRegistered
+            rejected(set(&k, P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&unminted, 5)), None, None), now(&k))),
+            E::SourceNotRegistered { .. }
         ), "{unminted:?}: free-standing, refused by its registration");
     }
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
@@ -601,12 +677,10 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // nothing; neither is recorded.
     let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
     assert_eq!(second, a(&[1, 0, 1, 0, nth_doc(3), 2]));
-    let (_, head_moved) = vs
-        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), None, None), now(&k))
+    let (_, head_moved) = set(&k, P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), None, None), now(&k))
         .expect("free-standing: a head the trunk has moved past");
     assert_eq!(head_moved, Some(second.clone()), "the trunk's current head, told");
-    let (_, head_moved) = vs
-        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&second, 3)), None, None), now(&k))
+    let (_, head_moved) = set(&k, P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&second, 3)), None, None), now(&k))
         .expect("free-standing: the trunk's head");
     assert_eq!(head_moved, None, "the head named is the trunk's");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 3)]);
@@ -615,14 +689,14 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // its head asked its registration alone, and nothing moves.
     let (alternative, _) = vs.stage(PrincipalId(1), &doc1()).expect("an alternative of the plain draft");
     assert_eq!(k.snapshot().world().m5().fork_source(&alternative), Some(&doc1()));
-    vs.set_arrangement(P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&ca(2), 1) }], Some(pair(&member, 3)), None, None), now(&k))
+    set(&k, P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&ca(2), 1) }], Some(pair(&member, 3)), None, None), now(&k))
         .expect("free-standing: admitted");
     assert_eq!(runs_of(&k, &alternative), vec![run(&ca(2), 1)]);
     assert_eq!(base_of(&k, &alternative), None);
     // A link-subspace start is a bad run here as everywhere.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&la(1), 1) }], None, None, None), now(&k))),
-        E::BadRun
+        rejected(set(&k, P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&la(1), 1) }], None, None, None), now(&k))),
+        E::BadRun { .. }
     ));
 }
 
@@ -637,7 +711,7 @@ fn a_pair_judged_against_a_private_chain_is_the_stores_bug_and_stops() {
     let world = seeded().snapshot().world().clone();
     let m5 = world.m5.apply_m5(Seq(0), &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(2), source: doc1(), merge: None });
     let k = mem_kernel_of(LandWorld { m5, ..world });
-    let _ = Vstream::new(&k).set_arrangement(P1, &doc2(), &request(vec![], None, Some(pair(&doc1(), 1)), None), now(&k));
+    let _ = set(&k, P1, &doc2(), &request(vec![], None, Some(pair(&doc1(), 1)), None), now(&k));
 }
 
 /// A merge taken out is put back as the landing left it (skep #870).
@@ -652,10 +726,8 @@ fn a_pair_judged_against_a_private_chain_is_the_stores_bug_and_stops() {
 fn a_merge_taken_out_is_put_back_as_the_landing_left_it_and_a_repeat_moves_nothing() {
     let k = seeded();
     let (member, draft) = staged(&k);
-    let vs = Vstream::new(&k);
     let words = || vec![of_edition(2, 2)];
-    let (landed_at, _) = vs
-        .set_arrangement(P1, &draft, &request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
+    let (landed_at, _) = set(&k, P1, &draft, &request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
         .expect("the landing");
     let landed = base_of(&k, &draft);
     let marker = Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at: landed_at };
@@ -663,15 +735,15 @@ fn a_merge_taken_out_is_put_back_as_the_landing_left_it_and_a_repeat_moves_nothi
         landed,
         Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: Some(marker.clone()), stamped: vec![marker] })
     );
-    vs.set_arrangement(P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the merge taken out");
+    set(&k, P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the merge taken out");
     assert_eq!(base_of(&k, &draft).and_then(|b| b.merge), None, "the marker cleared");
     let put_back = restore(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), vec![vca(1)], landed_at);
-    let (restored_at, head_moved) = vs.set_arrangement(P1, &draft, &put_back, now(&k)).expect("the merge put back");
+    let (restored_at, head_moved) = set(&k, P1, &draft, &put_back, now(&k)).expect("the merge put back");
     assert_eq!(head_moved, None);
     assert_eq!(base_of(&k, &draft), landed, "the marker, its position and the stamps as the landing left them");
     assert_eq!(runs_of(&k, &draft), vec![run(&pca(2), 2)], "the words as sent");
     assert_eq!(k.snapshot().world().m5().arranged_at(&draft), Some(restored_at), "the typed state moves to the restore");
-    vs.set_arrangement(P1, &draft, &put_back, now(&k)).expect("put back again");
+    set(&k, P1, &draft, &put_back, now(&k)).expect("put back again");
     assert_eq!(base_of(&k, &draft), landed, "a marker already standing is put back as itself");
 }
 
@@ -695,10 +767,10 @@ fn a_position_naming_no_stamp_of_the_drafts_is_refused_in_its_place_and_writes_n
     let (other, _) = vs.stage(PrincipalId(1), &member).expect("a second staging draft");
     let words = || vec![of_edition(2, 2)];
     let landing = request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)]));
-    let (landed_at, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the landing");
-    let (other_at, _) = vs.set_arrangement(P1, &other, &landing, now(&k)).expect("the other draft's landing");
+    let (landed_at, _) = set(&k, P1, &draft, &landing, now(&k)).expect("the landing");
+    let (other_at, _) = set(&k, P1, &other, &landing, now(&k)).expect("the other draft's landing");
     let (withdrawn_at, _) =
-        vs.set_arrangement(P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the withdrawal");
+        set(&k, P1, &draft, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("the withdrawal");
     let put_back = |runs: Vec<ShotRun>, sides: Vec<Address>, extent: u32, at: Seq| {
         restore(runs, Some(pair(&member, extent)), Some(pair(&member, 3)), sides, at)
     };
@@ -710,31 +782,31 @@ fn a_position_naming_no_stamp_of_the_drafts_is_refused_in_its_place_and_writes_n
         ("another head extent", put_back(words(), vec![vca(1)], 2, landed_at)),
         ("the draft's own mint, no marker inherited", put_back(words(), vec![vca(1)], 3, minted_at)),
         ("another draft's stamp", put_back(words(), vec![vca(1)], 3, other_at)),
-        ("no base", SetArrangement { base: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
-        ("no head", SetArrangement { head: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
+        ("no base", Whole { base: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
+        ("no head", Whole { head: None, ..put_back(words(), vec![vca(1)], 3, landed_at) }),
     ] {
-        assert_eq!(rejected(vs.set_arrangement(P1, &draft, &frame, now(&k))), E::MarkerNotRestorable, "{what}");
+        assert_eq!(rejected(set(&k, P1, &draft, &frame, now(&k))), E::MarkerNotRestorable, "{what}");
     }
     // In its place: after the base's four, ahead of the runs'.
     let bad_run = || vec![ShotRun { origin: doc1(), run: run(&pca(9), 1) }];
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &doc1(), &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
+        rejected(set(&k, P1, &doc1(), &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
         E::NoBaseToRecord,
         "a free-standing draft records no base, ahead of the stamps"
     );
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &draft, &restore(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), vec![vca(1)], landed_at), now(&k))),
+        rejected(set(&k, P1, &draft, &restore(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), vec![vca(1)], landed_at), now(&k))),
         E::BaseExtentTooLarge,
         "the base's extent ahead of the stamps"
     );
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, withdrawn_at), now(&k))),
+        rejected(set(&k, P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, withdrawn_at), now(&k))),
         E::MarkerNotRestorable,
         "an unstamped position ahead of the runs"
     );
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
-        E::BadRun,
+        rejected(set(&k, P1, &draft, &put_back(bad_run(), vec![vca(1)], 3, landed_at), now(&k))),
+        E::BadRun { change: 0 },
         "a stamped position, then the runs"
     );
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
@@ -757,12 +829,12 @@ fn an_earlier_landing_and_an_inherited_marker_are_each_put_back_at_their_own_pos
     let vs = Vstream::new(&k);
     let words = || vec![of_edition(2, 2)];
     let landing = request(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)]));
-    let (first, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the first landing");
-    let (second, _) = vs.set_arrangement(P1, &draft, &landing, now(&k)).expect("the same merge landed again");
+    let (first, _) = set(&k, P1, &draft, &landing, now(&k)).expect("the first landing");
+    let (second, _) = set(&k, P1, &draft, &landing, now(&k)).expect("the same merge landed again");
     let marker = |at| Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at };
     assert_eq!(base_of(&k, &draft).map(|b| b.stamped), Some(vec![marker(first), marker(second)]), "two stamps, in order");
     let put_back = |at| restore(words(), Some(pair(&member, 3)), Some(pair(&member, 3)), vec![vca(1)], at);
-    vs.set_arrangement(P1, &draft, &put_back(first), now(&k)).expect("the first put back over the second");
+    set(&k, P1, &draft, &put_back(first), now(&k)).expect("the first put back over the second");
     assert_eq!(base_of(&k, &draft).and_then(|b| b.merge), Some(marker(first)));
     let (alternative, minted_at) = vs.stage(PrincipalId(1), &draft).expect("an alternative of the marked draft");
     let stood = Some(DraftBase {
@@ -773,12 +845,12 @@ fn an_earlier_landing_and_an_inherited_marker_are_each_put_back_at_their_own_pos
         stamped: vec![marker(minted_at)],
     });
     assert_eq!(base_of(&k, &alternative), stood, "the inherited marker, stamped at the alternative's mint alone");
-    vs.set_arrangement(P1, &alternative, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("taken out");
+    set(&k, P1, &alternative, &request(words(), None, Some(pair(&member, 3)), None), now(&k)).expect("taken out");
     assert_eq!(
-        rejected(vs.set_arrangement(P1, &alternative, &put_back(first), now(&k))),
+        rejected(set(&k, P1, &alternative, &put_back(first), now(&k))),
         E::MarkerNotRestorable,
         "the source draft's stamp is not the alternative's"
     );
-    vs.set_arrangement(P1, &alternative, &put_back(minted_at), now(&k)).expect("put back at its own mint");
+    set(&k, P1, &alternative, &put_back(minted_at), now(&k)).expect("put back at its own mint");
     assert_eq!(base_of(&k, &alternative), stood, "as the stage left it");
 }

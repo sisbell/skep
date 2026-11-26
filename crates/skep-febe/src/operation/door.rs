@@ -375,10 +375,14 @@ impl Op {
             // document's (the replacement act's record, Q2) — so it is
             // consulted exactly as `copy` is, behind the destination's gate.
             Op::Reinstate { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
-            // The whole arrangement's runs are REINSTATE's, read as
+            // The runs an edit places by identity are REINSTATE's, read as
             // REINSTATE reads them: consulted exactly as `reinstate` is,
-            // behind the destination's gate.
-            Op::SetArrangement { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
+            // behind the destination's gate — under either of the edit's
+            // names, whose request is one type. A request whose every
+            // change mints names no source, and its consult passes.
+            Op::SetArrangement { doc, .. } | Op::Edit { doc, .. } => {
+                WriteConsult::AfterOwnershipOf(vec![doc])
+            }
             Op::Version { .. } => WriteConsult::AfterOwnershipOf(Vec::new()),
             // The staging act reads `from` as `version` reads `d_src`, and
             // its draft lands in the caller's own account: consulted, with
@@ -437,8 +441,8 @@ impl Op {
     /// Returns the destination this write edits in place, if any (PUB-2.11).
     ///
     /// The class is `insert`, `delete`, `copy`-into, `reinstate`,
-    /// `rearrange` and `set_arrangement`, the six writes that advance an
-    /// existing document's arrangement. `None` for everything else, and each
+    /// `rearrange`, `set_arrangement` and `edit`, the seven writes that
+    /// advance an existing document's arrangement. `None` for everything else, and each
     /// exclusion is the rule's own: the link writes are outside it
     /// (PUB-2.12), `version` and `create`/`fork` mint a document rather than
     /// advancing one, `publish` appends a chain member whose destination
@@ -446,8 +450,8 @@ impl Op {
     /// Exhaustive with no `_` arm: a new `Op` decides its row here.
     ///
     /// This names the class; what restricts the door's pre-evaluation to
-    /// `copy`, `reinstate` and `set_arrangement` is the order in which the
-    /// door asks. `consult_write` asks only after the deferral, so only
+    /// `copy`, `reinstate`, `set_arrangement` and `edit` is the order in
+    /// which the door asks. `consult_write` asks only after the deferral, so only
     /// consulted writes reach it — `insert`, `delete` and `rearrange` read
     /// no source, answer [`WriteConsult::NotTaken`] from
     /// [`Op::write_consult`], and meet the store's own `published_target` as
@@ -465,7 +469,8 @@ impl Op {
             | Op::Copy { doc, .. }
             | Op::Reinstate { doc, .. }
             | Op::Rearrange { doc, .. }
-            | Op::SetArrangement { doc, .. } => Some(doc),
+            | Op::SetArrangement { doc, .. }
+            | Op::Edit { doc, .. } => Some(doc),
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
@@ -556,6 +561,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::SetArrangement { .. }
+            | Op::Edit { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -894,10 +900,11 @@ mod tests {
 
     /// PUB-2.11 / PUB-6.36 slot 5: the other pairing `consult_write` needs.
     ///
-    /// `in_place_destination` names the class — the six writes that advance
-    /// an existing document's arrangement, the five in-place edits and
-    /// `set_arrangement` — and the door's order is what narrows the
-    /// pre-evaluation to `copy`, `reinstate` and `set_arrangement`: the
+    /// `in_place_destination` names the class — the seven writes that
+    /// advance an existing document's arrangement, the five in-place edits
+    /// and the edit under its two names, `set_arrangement` and `edit` — and
+    /// the door's order is what narrows the pre-evaluation to `copy`,
+    /// `reinstate`, `set_arrangement` and `edit`: the
     /// check runs past the deferral, so only a consulted member reaches it,
     /// and the three that are not consulted meet the store's own
     /// `published_target` as the store words it. Both halves are stated
@@ -905,7 +912,7 @@ mod tests {
     /// consulted write that quietly left the class, would reorder a refusal
     /// with nothing to say so.
     #[test]
-    fn the_in_place_class_is_the_six_arrangement_edits_and_the_three_that_read_a_source_are_consulted() {
+    fn the_in_place_class_is_the_seven_arrangement_edits_and_the_four_that_read_a_source_are_consulted() {
         for (op, is_read) in all_ops() {
             let in_place = op.in_place_destination().is_some();
             let expects = !is_read
@@ -917,6 +924,7 @@ mod tests {
                         | Op::Reinstate { .. }
                         | Op::Rearrange { .. }
                         | Op::SetArrangement { .. }
+                        | Op::Edit { .. }
                 );
             assert_eq!(in_place, expects, "{:?}: the in-place arrangement-edit row", op.kind());
             assert!(
@@ -930,8 +938,8 @@ mod tests {
                 in_place && matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
             assert_eq!(
                 pre_evaluated,
-                matches!(op, Op::Copy { .. } | Op::Reinstate { .. } | Op::SetArrangement { .. }),
-                "{:?}: `copy`, `reinstate` and `set_arrangement` are the members the door's pre-evaluation reaches",
+                matches!(op, Op::Copy { .. } | Op::Reinstate { .. } | Op::SetArrangement { .. } | Op::Edit { .. }),
+                "{:?}: `copy`, `reinstate`, `set_arrangement` and `edit` are the members the door's pre-evaluation reaches",
                 op.kind()
             );
         }
@@ -960,25 +968,45 @@ mod tests {
         assert_eq!(reinstate.in_place_destination(), Some(&d));
         assert_eq!(reinstate.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
         assert_eq!(reinstate.source_arguments(), vec![&src], "the origin it is consulted on");
-        // The whole arrangement: REINSTATE's runs, REINSTATE's consult, the
-        // head and the base names and no sources.
-        let whole = Op::SetArrangement {
-            doc: d.clone(),
-            arrangement: skep_arrangement::SetArrangement {
-                runs: vec![ShotRun {
+        // The edit, under either of its names: the runs its changes place
+        // are REINSTATE's, under REINSTATE's consult, the head and the base
+        // names and no sources.
+        let landing = skep_arrangement::Edit {
+            changes: vec![skep_arrangement::Change {
+                at: vpos(),
+                width: Nat::from(1u32),
+                placed: skep_arrangement::Placed::Runs(vec![ShotRun {
                     origin: src.clone(),
                     run: Run::new(addr(&[1, 0, 1, 0, 64, 0, 1, 1]), Nat::from(1u32))
                         .expect("a content run"),
-                }],
-                head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
-                base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
-                merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 66])], at: None }),
+                }]),
+            }],
+            head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
+            base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 65, 1]), extent: Nat::from(1u32) }),
+            merge: Some(SetMerge { sides: vec![addr(&[1, 0, 1, 0, 66])], at: None }),
+        };
+        for op in [
+            Op::SetArrangement { doc: d.clone(), arrangement: landing.clone(), as_of: Seq(7) },
+            Op::Edit { doc: d.clone(), edit: landing.clone(), as_of: Seq(7) },
+        ] {
+            assert_eq!(op.in_place_destination(), Some(&d));
+            assert_eq!(op.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
+            assert_eq!(op.source_arguments(), vec![&src], "the runs' origin alone: the head, the base and the sides are names, M5 reading nothing of one but a published chain's and a registration");
+        }
+        // An edit whose every change mints names no source, and is consulted
+        // all the same: the consult passes on an empty list.
+        let minting = Op::Edit {
+            doc: d.clone(),
+            edit: skep_arrangement::Edit {
+                changes: vec![skep_arrangement::Change { at: vpos(), width: Nat::from(0u32), placed: skep_arrangement::Placed::Values(vec![Val::new(vec![b'x'])]) }],
+                head: None,
+                base: None,
+                merge: None,
             },
             as_of: Seq(7),
         };
-        assert_eq!(whole.in_place_destination(), Some(&d));
-        assert_eq!(whole.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
-        assert_eq!(whole.source_arguments(), vec![&src], "the runs' origin alone: the head, the base and the sides are names, M5 reading nothing of one but a published chain's and a registration");
+        assert_eq!(minting.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
+        assert!(minting.source_arguments().is_empty());
     }
 
     /// PUB-6.6: the third pairing `consult_write` depends on.

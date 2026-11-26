@@ -28,6 +28,7 @@ mod common;
 mod attested;
 mod copy;
 mod delete;
+mod edit;
 mod family;
 mod head_float;
 mod insert;

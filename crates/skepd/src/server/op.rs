@@ -417,7 +417,12 @@ impl Daemon {
     /// units are counted only where that class admits every draft the shot
     /// names — this step stands ahead of the store's ω of a named draft, so
     /// of a draft the caller may not read it counts no unit and reads no
-    /// value. Ahead of
+    /// value, and no content run either: a re-windowed draft adds its runs
+    /// to the re-window's steps only where that class admits it. The step
+    /// stands ahead of the plan's judgment of an original too, so the
+    /// stored type an `originals` entry's rest is priced from is read only
+    /// where that class admits the original's home, and a link homed
+    /// elsewhere is priced as an address where no link stands. Ahead of
     /// `serial_lock()` means off a
     /// snapshot the lock does not cover (the survey's C8): the counts may
     /// move before the composite reads them, and the budget is conservative

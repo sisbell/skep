@@ -35,7 +35,9 @@
 //! over two links, so the link-ended figure bounds it), per `originals`
 //! entry a retraction ([`RETRACTION_BYTES`]) and, over a rest, the fresh
 //! mark — a copy's fixed part ([`COPY_FIXED_BYTES`]) with the rest's spans
-//! and the original's stored type slot at their own bytes — the re-window
+//! and the original's stored type slot at their own bytes, the type read
+//! only where the caller's visibility class admits the original's home and
+//! priced as an absent link's where it does not — the re-window
 //! per piece at a kept place ([`KEPT_PLACE_BYTES`], a change of one run in
 //! the draft's one record) and once for each draft it re-windows
 //! ([`REWINDOWED_DRAFT_BYTES`], that record past its changes, the draft's
@@ -47,7 +49,7 @@
 //! ([`EDITION_MINT_BYTES`]) and, where the deposits claim at either form,
 //! the edition claim ([`EDITION_CLAIM_BYTES`]).
 
-use skep_address::{document_of, subtree_of, Nat, Span, Tumbler};
+use skep_address::{document_of, subtree_of, Address, Nat, Span, Tumbler};
 use skep_arrangement::{trunk_of, ReinsertWorld, Run, Shot, UnitTally, VPos};
 
 use super::plan::{EndArg, NamedAddress, PublishDeposits, PublishTarget};
@@ -314,9 +316,11 @@ pub(super) fn reinsert_tally<W: ReinsertWorld>(
 /// Prices the bytes a publication would stage, from the table: an UPPER
 /// bound on what the kernel charges the transaction, read off the request,
 /// one stab of every home's records per stray place, at the caller's
-/// visibility class `readable`, and one walk of the stored pieces its
+/// visibility class `readable`, one walk of the stored pieces its
 /// re-insert reads (M5's count of its units), made only where that class
-/// admits every draft the shot names.
+/// admits every draft the shot names, and one read of the stored type of
+/// each original a rest is named of, made only where that class admits the
+/// original's home.
 ///
 /// The terms, each at the table's figure:
 ///
@@ -371,9 +375,11 @@ pub(super) fn reinsert_tally<W: ReinsertWorld>(
 /// * per `originals` entry [`RETRACTION_BYTES`] and, where it names a rest,
 ///   the fresh mark: [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of every
 ///   rest span the request spells + [`stored_span_bytes`] of every span of
-///   the original's type slot as stored, read by one `readlink` — the
-///   shallow type span where no link stands at the address, an entry the
-///   plan refuses.
+///   the original's type slot as stored, read by one `readlink` where
+///   `readable` admits the original's home (`original_type_bytes`) — and
+///   the shallow type span where it does not, as where no link stands at
+///   the address: entries the plan refuses, priced alike, so the bytes do
+///   not tell a link the caller may not read from no link at all.
 ///
 /// An upper bound: the twin fence refuses before anything is staged, the
 /// plan's skips (a retracted target, a standing read-with, a daughter
@@ -383,7 +389,8 @@ pub(super) fn reinsert_tally<W: ReinsertWorld>(
 /// past its first share its one change, and a unit past a shot's first, or
 /// an atom, stages a few bytes under the unit's figure. Request arithmetic — `run_pieces`'s,
 /// and linear in the lists — plus the stray stabs, one `readlink` per rest
-/// and the count's walk of the draft-native runs' stored pieces, at most
+/// whose original's home the class admits and the count's walk of the
+/// draft-native runs' stored pieces, at most
 /// M5's `MAX_REINSERTED_VALUES` of them and none past that budget;
 /// saturating, so an absurd request prices at `u64::MAX`.
 ///
@@ -403,7 +410,37 @@ pub fn price_staged_bytes<W: LinkWorld + ReinsertWorld>(
     let pieces = run_pieces(world, readable, shot, |index| placed_in(places, also_places, index) > 0);
     let by_draft = also_places_by_draft(also_places);
     let units = reinsert_tally(world, readable, shot, &mut |_| {});
-    staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows(shot, places, &by_draft), units)
+    staged_bytes(world, readable, target, shot, places, also_places, deposits, &pieces, &rewindows(shot, places, &by_draft), units)
+}
+
+/// Returns the bytes the type slot of the fresh mark over a rest of the
+/// original at `old` is priced at: the original's type slot as stored, read
+/// at the class `readable`, and the shallow type span wherever that read is
+/// not made or finds no link.
+///
+/// THE CLASS, for the rider's one read. A link's stored type says what kind
+/// of link stands at an address, and a price is answered ahead of the plan's
+/// own judgment of whose the original is, so the type is read only where
+/// `readable` admits the original's home — the home read off the address by
+/// [`document_of`], the link element's document, as the plan and the stray
+/// read find a link's home. Where the class does not admit the home, where
+/// the address derives no document, and where no link stands at it, the
+/// figure is one, `SHALLOW_TYPE_SPAN_BYTES`: a link homed where the caller
+/// may not read is priced as no link is, so the bytes answered do not tell
+/// the two apart, and nothing of that link is read. The price stays a bound
+/// on what the commit stages, since the plan refuses each of the three
+/// (`plan_deposits`' (4′)): an address where no link stands is `Absent`,
+/// and a link homed where the caller's class does not read is not the
+/// caller's own — a principal's class admits every home it owns — and is
+/// `NotOwner`; `Caller::System`, which passes ω, owns no home a claim onto
+/// a mark could stand in, and is refused `Unclaimed`.
+fn original_type_bytes<W: LinkWorld>(world: &W, readable: &Visibility<'_, W>, old: &Address) -> u64 {
+    document_of(old)
+        .filter(|home| readable(world, home))
+        .and_then(|_| world.links().readlink(old))
+        .map_or(SHALLOW_TYPE_SPAN_BYTES, |original| {
+            original.type_slot().spans().map(stored_span_bytes).fold(0u64, u64::saturating_add)
+        })
 }
 
 /// Returns [`price_staged_bytes`]'s figure over `pieces`, the shot's runs
@@ -411,10 +448,14 @@ pub fn price_staged_bytes<W: LinkWorld + ReinsertWorld>(
 /// re-windows, and `units`, the re-insert as M5's count tallied it — the
 /// one body both prices share, so the reads' price stabs each stray once,
 /// groups the lists once for its two terms and walks the draft's stored
-/// pieces once for its units figure and these bytes.
+/// pieces once for its units figure and these bytes. `readable` is the
+/// class the rider's read is made at (`original_type_bytes`): the one read
+/// of `world` this body makes, an original's stored type, is made only
+/// where it admits the original's home.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn staged_bytes<W: LinkWorld>(
     world: &W,
+    readable: &Visibility<'_, W>,
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
@@ -493,19 +534,18 @@ pub(super) fn staged_bytes<W: LinkWorld>(
     bytes = bytes.saturating_add((deposits.read_with.len() as u64).saturating_mul(READ_WITH_BYTES));
     bytes = bytes.saturating_add((deposits.supersede.len() as u64).saturating_mul(CLAIM_BYTES));
     // The rider: a retraction per original and, over a rest, the fresh mark
-    // — the rest's spans as spelled and the original's type as stored.
+    // — the rest's spans as spelled and the original's type as stored, read
+    // at the caller's class and priced as an absent link's where that class
+    // does not admit the original's home.
     for entry in &deposits.originals {
         bytes = bytes.saturating_add(RETRACTION_BYTES);
         if entry.rest.is_empty() {
             continue;
         }
-        let ty = world.links().readlink(&entry.old).map_or(SHALLOW_TYPE_SPAN_BYTES, |original| {
-            original.type_slot().spans().map(stored_span_bytes).fold(0u64, u64::saturating_add)
-        });
         bytes = bytes
             .saturating_add(COPY_FIXED_BYTES)
             .saturating_add(entry.rest.iter().map(stored_span_bytes).fold(0u64, u64::saturating_add))
-            .saturating_add(ty);
+            .saturating_add(original_type_bytes(world, readable, &entry.old));
     }
     bytes
 }

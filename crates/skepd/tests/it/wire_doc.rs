@@ -1544,6 +1544,30 @@ fn doc_states_the_reinserts_two_budgets_under_one_code_and_what_is_read_by_the_u
     );
 }
 
+/// THE PRICE's CLASS, FOR WHAT IT READS OF A NAMED DRAFT AND OF AN ORIGINAL:
+/// the budget paragraph states that a re-windowed draft's run count is
+/// counted only where the caller may read that draft — one it may not read
+/// adding its placed pieces and no run — and that the bytes price an
+/// `originals` entry's retraction and, over a rest, a fresh mark whose type
+/// is read off the original only where the caller may read the original's
+/// home, a link homed elsewhere priced as an address where no link stands.
+/// The daemon's answers are pinned in `publication_reads.rs`; this pins
+/// that the contract says so.
+#[test]
+fn doc_states_a_drafts_run_count_and_an_originals_type_are_priced_at_the_callers_class() {
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "its content run count and the pieces its lists place, summed",
+        "a draft's run count is counted only where the caller may read that draft",
+        "a draft the caller may not read adding the pieces placed in it and no run, whatever it holds",
+        "a retraction per `originals` entry and, where the entry names a `rest`, a fresh mark at the rest's spans and the original's stored type",
+        "the type read only where the caller may read the original's home",
+        "a link homed where the caller may not read priced as an address where no link stands",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+}
+
 /// THE PRICE READ. §Arrangement's `publish_cost` row and §The response
 /// envelope's entry carry what a client builds on. The row: the members are
 /// a `publish`'s, each parsed as `publish` parses it; no `attest`; the

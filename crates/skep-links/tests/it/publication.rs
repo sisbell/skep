@@ -3471,3 +3471,156 @@ fn a_stray_place_is_priced_at_the_callers_class_and_counts_no_record_it_may_not_
     assert_eq!(read[2].staged_bytes - read[0].staged_bytes, 2 * KEPT_PLACE_BYTES, "and a kept place's change a piece");
     assert_eq!((read[0], read[1]), (unread[0], unread[1]), "where at most one record names the words the two classes are priced alike");
 }
+
+/// NO RUN COUNT FROM A DRAFT THE CALLER CANNOT READ. doc1 holds one content
+/// run, then sixteen — an insert at its first position each, no two
+/// merging — and doc2 two. A shot naming doc1 as its draft places one run
+/// in it: a stray run of the edition's identity that no record names, one
+/// piece. At a class that reads doc1 the two worlds answer two prices, the
+/// re-window's steps fifteen apart: the draft's runs and the piece. At a
+/// class that does NOT read doc1 they answer ONE, figure for figure — the
+/// piece and no run, for another account's principal and for the caller
+/// that is no principal — since the price is taken ahead of every judgment
+/// of who owns the draft. The same holds where doc1 is an `also` draft
+/// re-windowed at its own list. And the count is taken draft by draft:
+/// doc2, which the class reads, re-windowed beside doc1 by the same shot,
+/// is still counted its two runs. What the price leaves out is never
+/// walked: the store refuses the shot by the draft's ownership.
+#[test]
+fn a_re_windowed_draft_the_class_does_not_admit_is_counted_no_run() {
+    use skep_links::price_publication_reads;
+    let (into, none) = (PublishTarget::Document(sib_doc()), PublishDeposits::default());
+    // doc1 in `runs` runs, doc2 in two.
+    let holding = |runs: usize| {
+        world_after(&|k| {
+            fragment(k, runs);
+            other_draft_holding(k, "xy");
+            Vstream::new(k).insert(P1, &doc2(), vp(1, 1), vec![Val::new(*b"w")], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("w ahead of x y");
+        })
+    };
+    let worlds = [holding(1), holding(16)];
+    for (world, runs) in worlds.iter().zip([1, 16]) {
+        assert_eq!((world.m5.content_run_count(&doc1()), world.m5.content_run_count(&doc2())), (runs, 2), "premise: the drafts' runs");
+    }
+    // One stray run, placed at the first position of whichever draft a list
+    // names it in.
+    let stray = || vec![shot_run(&pdoc(), &pca(1), 1)];
+    let rendering = Shot { base: None, draft: Some(doc1()), also: vec![], keep_base: false, runs: stray() };
+    let among_also = Shot { base: None, draft: Some(sib_doc()), also: vec![doc1()], keep_base: false, runs: stray() };
+    let beside_doc2 = Shot { base: None, draft: Some(doc2()), also: vec![doc1()], keep_base: false, runs: stray() };
+    let one_place = places(1, &[(0, 1)]);
+    let in_doc1 = [AlsoPlaces { draft: doc1(), places: vec![Some(vp(1, 1))] }];
+    let all_but_doc1: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc1();
+    let priced = |world: &World, caller: Caller, class: &Visibility<'_, World>, the_shot: &Shot, in_draft: &[Option<VPos>], in_also: &[AlsoPlaces]| {
+        price_publication_reads(world, caller, class, &into, the_shot, in_draft, in_also, &none, &mut |_| {})
+    };
+    // The class that reads doc1: its runs, and the one piece placed in it.
+    let read: Vec<_> = worlds.iter().map(|world| priced(world, P2, &ALL_VISIBLE, &rendering, &one_place, &[])).collect();
+    assert_eq!(read.iter().map(|price| price.rewindow).collect::<Vec<_>>(), [1 + 1, 16 + 1], "the draft's runs and the one piece");
+    assert_eq!(read[1].staged_bytes, read[0].staged_bytes, "premise: the bytes do not turn on the draft's runs");
+    // The class that does not: one answer, whatever the draft holds.
+    for caller in [P2, Caller::System] {
+        let unread: Vec<_> = worlds.iter().map(|world| priced(world, caller, all_but_doc1, &rendering, &one_place, &[])).collect();
+        assert_eq!(unread[1], unread[0], "{caller:?}: fifteen more runs in a draft the class does not admit move no figure");
+        assert_eq!((unread[0].rewindow, unread[0].staged_bytes), (1, read[0].staged_bytes), "{caller:?}: the one piece and no run, the bytes as any caller's");
+    }
+    // The same draft named among `also`, re-windowed at its own list.
+    let read: Vec<_> = worlds.iter().map(|world| priced(world, P2, &ALL_VISIBLE, &among_also, &[], &in_doc1).rewindow).collect();
+    assert_eq!(read, [1 + 1, 16 + 1], "an `also` draft's runs and its one piece");
+    for caller in [P2, Caller::System] {
+        let unread: Vec<_> = worlds.iter().map(|world| priced(world, caller, all_but_doc1, &among_also, &[], &in_doc1)).collect();
+        assert_eq!(unread[1], unread[0], "{caller:?}: nor do an `also` draft's runs");
+        assert_eq!(unread[0].rewindow, 1, "{caller:?}: its one piece and no run");
+    }
+    // Draft by draft: doc2, which the class admits, re-windowed beside doc1.
+    let beside: Vec<_> = worlds.iter().map(|world| priced(world, P2, all_but_doc1, &beside_doc2, &one_place, &in_doc1).rewindow).collect();
+    assert_eq!(beside, [(2 + 1) + 1, (2 + 1) + 1], "doc2's two runs and its piece, and doc1's piece alone");
+    let read: Vec<_> = worlds.iter().map(|world| priced(world, P2, &ALL_VISIBLE, &beside_doc2, &one_place, &in_doc1).rewindow).collect();
+    assert_eq!(read, [(2 + 1) + (1 + 1), (2 + 1) + (16 + 1)], "each draft its own runs where both are read");
+    // What the price leaves out is never walked: ω refuses the shot.
+    let k = kernel_over(worlds[1].clone());
+    assert_eq!(
+        refused(writer_at(&k, all_but_doc1).publication(P2, &into, &rendering, &one_place, &[], &none)),
+        PublicationError::Publish(PublishError::NotOwner(doc1())),
+        "the draft is not the caller's: refused at the shot's admission, no draft re-windowed"
+    );
+}
+
+/// NO STORED TYPE OF A LINK THE CALLER CANNOT READ. An `originals` entry
+/// naming a rest is priced a fresh mark of the original's type, and the
+/// type is read off the link. doc2, a private draft, holds at one link
+/// address nothing, a link typed one ten-component address — the shallow
+/// span — a link typed a shorter address, or a link typed three addresses.
+/// At a class that reads doc2 the four worlds are priced apart, each at
+/// the spans its type slot stores: the first two alike, the shorter type
+/// under them, the three spans over. At a class that does NOT read doc2
+/// they answer ONE figure — the address's where no link stands — in the
+/// bytes' own price and in the reads' price alike, for another account's
+/// principal and for the caller that is no principal: the bytes do not
+/// tell a link the caller may not read from no link at all. An address
+/// deriving no document is priced the same at any class. No such entry is
+/// staged: the plan refuses an original that is absent or not the
+/// caller's own.
+#[test]
+fn an_originals_stored_type_is_priced_only_where_the_class_admits_its_home() {
+    use skep_address::subtree_of;
+    use skep_links::{price_publication_reads, price_staged_bytes, stored_span_bytes, COPY_FIXED_BYTES, RETRACTION_BYTES};
+    let into = PublishTarget::Document(sib_doc());
+    let the_shot = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
+    let old = link_of(&doc2(), 1);
+    // doc2 holding at `old` a link over doc1's `a b c` typed `ty`, or no
+    // link where `ty` is empty.
+    let typed = |ty: Vec<Address>| {
+        world_after(&|k| {
+            draft_holding(k, "abc");
+            if !ty.is_empty() {
+                let link = writer(k)
+                    .makelink(P1, &doc2(), SlotArg::Spans(vec![run(&ca(1), 3).iextent()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(ty.clone()))
+                    .expect("the original in the private draft")
+                    .0;
+                assert_eq!(link, old, "premise: the draft's first link");
+            }
+        })
+    };
+    let shallow_ty = a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 2]);
+    let worlds = [typed(vec![]), typed(vec![shallow_ty.clone()]), typed(vec![citation()]), typed(vec![shallow_ty.clone(), citation(), a(&[1, 1, 0, 1, 0, 1, 0, 3, 13, 1, 1])])];
+    let shallow = stored_span_bytes(&subtree_of(shallow_ty.tumbler()));
+    let stored: Vec<Option<u64>> = worlds.iter().map(|world| world.links.readlink(&old).map(|link| link.type_slot().spans().map(stored_span_bytes).sum())).collect();
+    assert_eq!(stored[..2], [None, Some(shallow)], "premise: no link, and a type of the one shallow span");
+    assert!(stored[2].is_some_and(|ty| ty < shallow) && stored[3].is_some_and(|ty| ty > 2 * shallow), "premise: a narrower type and a wider one: {stored:?}");
+    // The bytes a request is priced at, by both prices: one figure.
+    let bytes = |world: &World, caller: Caller, class: &Visibility<'_, World>, deposits: &PublishDeposits| {
+        let alone = price_staged_bytes(world, class, &into, &the_shot, &[], &[], deposits);
+        let price = price_publication_reads(world, caller, class, &into, &the_shot, &[], &[], deposits, &mut |_| {});
+        assert_eq!(price.staged_bytes, alone, "the reads' price carries the bytes' own figure");
+        alone
+    };
+    let rest = run(&ca(3), 1).iextent();
+    let rider = originals(vec![(old.clone(), vec![rest.clone()])]);
+    // The rider past its type: the retraction, and the mark's fixed part
+    // and rest span.
+    let fixed = bytes(&worlds[0], P2, &ALL_VISIBLE, &PublishDeposits::default()) + RETRACTION_BYTES + COPY_FIXED_BYTES + stored_span_bytes(&rest);
+    // The class that reads doc2: each world at its stored type's spans.
+    for (world, ty) in worlds.iter().zip(&stored) {
+        assert_eq!(bytes(world, P2, &ALL_VISIBLE, &rider), fixed + ty.unwrap_or(shallow), "the type slot as stored, the shallow span where no link stands: {ty:?}");
+    }
+    // The class that does not: one figure, the absent link's.
+    let all_but_doc2: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc2();
+    for caller in [P2, Caller::System] {
+        for (world, ty) in worlds.iter().zip(&stored) {
+            assert_eq!(bytes(world, caller, all_but_doc2, &rider), fixed + shallow, "{caller:?}: a link the class does not admit the home of is priced as no link, whatever its type stores: {ty:?}");
+        }
+    }
+    // An address that derives no document names no link: the same figure.
+    let no_element = originals(vec![(a(&[1, 0, 1]), vec![rest.clone()])]);
+    assert_eq!(bytes(&worlds[3], P2, &ALL_VISIBLE, &no_element), fixed + shallow, "an account's address: no home, no link");
+    // No such entry is staged: the plan refuses each.
+    for (world, cause) in worlds.iter().zip([OriginalCause::Absent, OriginalCause::NotOwner, OriginalCause::NotOwner, OriginalCause::NotOwner]) {
+        let k = kernel_over(world.clone());
+        assert_eq!(
+            refused(writer_at(&k, all_but_doc2).publication(P2, &into, &the_shot, &[], &[], &rider)),
+            PublicationError::Plan(PlanFault::Original { index: 0, cause }),
+            "an original that is absent or another account's: refused by the plan, nothing staged"
+        );
+    }
+}

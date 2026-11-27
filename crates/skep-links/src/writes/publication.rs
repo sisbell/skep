@@ -69,7 +69,7 @@ use std::collections::BTreeMap;
 use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
     head_lock_key, shot_admission, stage_publish, stage_seat_link, stage_substitute, trunk_head,
-    trunk_of, Caller, HasM5, M5State, Pairing, PublishWorld, ReinsertWorld, ReinstateError,
+    trunk_of, Caller, HasM5, Pairing, PublishWorld, ReinsertWorld, ReinstateError,
     Replacement, Run, Shot, ShotRun, SubstituteError, Substitution, VPos, MAX_REINSERTED_UNITS,
     MAX_REINSERTED_VALUES,
 };
@@ -244,7 +244,9 @@ pub struct ReadPrice {
     /// places, compares each piece on that walk and puts every one in by
     /// one record, so a place adds its pieces and nothing for the runs it
     /// cuts; a run no list places adds no piece, and `0` is a shot that
-    /// re-windows nothing.
+    /// re-windows nothing. The runs are counted only where the class the
+    /// price is taken at admits the document: a re-windowed draft the
+    /// caller may not read adds its pieces and no run, whatever it holds.
     pub rewindow: usize,
     /// The twin fence's stabs: one per re-inserted run, of whichever named
     /// draft — each run one stab of its own draft's records
@@ -341,7 +343,8 @@ impl ReadPrice {
 /// records `readable` admits the home of — read
 /// once beside the staged bytes, which [`price_staged_bytes`] prices off
 /// the same pieces from the table; and THE RUNS, each re-windowed
-/// document's content run count by M5's one map lookup. No run-list is
+/// document's content run count by M5's one map lookup, made of the
+/// documents `readable` admits and of no other. No run-list is
 /// walked for the price: a place that cuts a run costs the commit nothing a
 /// step a piece does not cover. THE UNITS are M5's own count of the shot's
 /// re-insert over `world`'s stored content ([`Shot::reinserted_units`]):
@@ -369,7 +372,18 @@ impl ReadPrice {
 /// store has asked who owns a draft, so without the class its bytes would
 /// tell a caller how a draft it may not read holds its content. Such a shot
 /// stages nothing: the store's ω of every named draft refuses it ahead of
-/// its count.
+/// its count. THE RUNS are counted at it draft by draft (`rewindow_steps`):
+/// a re-windowed draft `readable` does not admit adds its placed pieces and
+/// no run to the re-window's steps, and one it admits beside it its own.
+/// And AN ORIGINAL's STORED TYPE is read at it (`sizes::staged_bytes`): the
+/// fresh mark over an `originals` entry's rest is priced at the original's
+/// type slot only where `readable` admits the original's home, and at the
+/// figure of an address where no link stands where it does not, so the
+/// bytes do not tell a link the caller may not read from no link at all.
+/// Neither request stages what the price leaves out — the first is refused
+/// by ω of the draft, the second by the plan, the original not the
+/// caller's own — so every figure answered is the same whatever a document
+/// the caller may not read holds, and the price stays a bound.
 ///
 /// The counts may move between this read and the composite's own, where
 /// the transport takes its lock after it (the survey's C8): the budget is
@@ -413,32 +427,53 @@ pub fn price_publication_reads<W: LinkWorld + HasM5 + ReinsertWorld>(
             .saturating_add(deposits.supersede.len()),
         rewindow: rewindows
             .iter()
-            .map(|rewindow| rewindow_steps(world.m5(), shot, rewindow, &pieces))
+            .map(|rewindow| rewindow_steps(world, readable, shot, rewindow, &pieces))
             .fold(0usize, usize::saturating_add),
         fence: shot.reinserted_runs_by_draft().iter().map(|(_, runs)| runs.len()).fold(0usize, usize::saturating_add),
-        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows, units),
+        staged_bytes: sizes::staged_bytes(world, readable, target, shot, places, also_places, deposits, &pieces, &rewindows, units),
         units: units.units,
     }
 }
 
 /// Returns the steps of one document's re-window, as the reads' price
-/// charges them: its content runs and the pieces its lists place, summed,
-/// saturating.
+/// charges them at the class `readable`: its content runs, where the class
+/// admits the document, and the pieces its lists place, summed, saturating.
 ///
 /// The runs are the document's content run count, one map lookup off the
-/// snapshot; the pieces [`sizes::RunPieces::pieces`] of each run a list
-/// carries a place at, summed over the document's lists. It is what the
-/// commit walks for the document: one walk of its run-list, which checks
-/// every place and is made once whatever the places number, and a step a
-/// piece compared and put in.
-fn rewindow_steps(m5: &M5State, shot: &Shot, rewindow: &Rewindow<'_>, pieces: &[sizes::RunPieces]) -> usize {
+/// snapshot, made only where `readable` admits the document; the pieces
+/// [`sizes::RunPieces::pieces`] of each run a list carries a place at,
+/// summed over the document's lists. It is what the commit walks for the
+/// document: one walk of its run-list, which checks every place and is made
+/// once whatever the places number, and a step a piece compared and put in.
+///
+/// **The class**, for the run count. How many runs a draft's content lies in
+/// is a fact about that draft, and the price is answered ahead of the
+/// store's ω of it, so the count is read at the caller's own class and of
+/// no other document: a draft `readable` does not admit adds no run and is
+/// not looked up, whatever it holds, while one it admits — re-windowed
+/// beside it by the same shot — adds its own. The pieces stay either way:
+/// a draft-native run's are request arithmetic, and a stray's are counted
+/// at this class already (`sizes::run_pieces`). The price stays a bound on
+/// what a request's commit walks: a principal's class admits every draft it
+/// owns, so a shot naming one its class does not admit is refused at the
+/// shot's admission, ω of every named draft, before any draft is
+/// re-windowed (`Caller::System` alone passes ω, and no request path
+/// carries it).
+fn rewindow_steps<W: HasM5>(
+    world: &W,
+    readable: &Visibility<'_, W>,
+    shot: &Shot,
+    rewindow: &Rewindow<'_>,
+    pieces: &[sizes::RunPieces],
+) -> usize {
     let (draft, lists) = rewindow;
     let placed = lists
         .iter()
         .flat_map(|list| placed_runs(shot, list))
         .map(|(index, _, _)| usize::try_from(pieces[index].pieces()).unwrap_or(usize::MAX))
         .fold(0usize, usize::saturating_add);
-    m5.content_run_count(draft).saturating_add(placed)
+    let runs = if readable(world, draft) { world.m5().content_run_count(draft) } else { 0 };
+    runs.saturating_add(placed)
 }
 
 /// Returns the runs `list` carries a place at, each with its index and its

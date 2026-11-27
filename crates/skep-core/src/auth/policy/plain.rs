@@ -339,8 +339,9 @@ pub struct PublicationReadRefusal {
     pub entries: usize,
     /// The re-window's steps: per document the commit re-windows — the
     /// rendering draft where `places` carries a place, each `also` draft
-    /// where its `also_places` entry does — its content runs and the pieces
-    /// its lists place, summed; `0` for a shot re-windowing none.
+    /// where its `also_places` entry does — its content runs, counted only
+    /// where the caller may read it, and the pieces its lists place,
+    /// summed; `0` for a shot re-windowing none.
     pub rewindow: usize,
     /// The twin fence's stabs: one per re-inserted run.
     pub fence: usize,
@@ -401,7 +402,10 @@ impl PublicationReadRefusal {
 /// stray place in either list, of the correspondence records across every
 /// home, counting those the caller may read, wherever homed, and no other
 /// — and, for the units, the stored pieces of the named drafts' runs the
-/// shot re-inserts, by M5's one count, the positions' arithmetic first.
+/// shot re-inserts, by M5's one count, the positions' arithmetic first;
+/// for the re-window's runs, the content run count of each re-windowed
+/// draft the caller may read; and, for a rest's fresh mark, the stored
+/// type of its original where the caller may read the original's home.
 ///
 /// **The class** is the one the commit reads at: the write's own
 /// visibility class, the engine's mapping of the caller
@@ -412,8 +416,15 @@ impl PublicationReadRefusal {
 /// once a consult. So the refusal's detail states no figure a record in a
 /// document the caller may not read has moved, and no byte counted off a
 /// draft the caller may not read: this refusal is answered ahead of the
-/// store's own judgment of who owns a named draft, and the units are
-/// counted only where the class admits every draft the shot names.
+/// store's own judgment of who owns a named draft and whose an original
+/// is. The units are counted only where the class admits every draft the
+/// shot names; a re-windowed draft's runs only where it admits that draft,
+/// one it does not admit adding its placed pieces and no run; and an
+/// original's stored type is read only where it admits the original's
+/// home, a link homed elsewhere priced as an address where no link stands
+/// is. A request priced so is never staged past its price: the store
+/// refuses the first two by the draft's ownership and the third by the
+/// original's.
 ///
 /// The read door answers the same price whole, inside the budgets or past
 /// them, to a client that asks before it sends (`publish_cost`; M10's

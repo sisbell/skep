@@ -1057,7 +1057,15 @@ fn publish_cost_answers_the_units_the_publication_then_stages() {
 /// with the same detail, byte for byte, whichever words its stray names —
 /// and, where it names the claimant's draft itself to re-insert from,
 /// whichever of that draft's positions it names, held or not: no unit of a
-/// draft it may not read is counted.
+/// draft it may not read is counted. Nor is a link's stored type: a
+/// `publish` past the transaction budget whose `originals` entry names a
+/// link of that draft with a rest is refused with the same detail, byte
+/// for byte, to the other account and to the principal seated at no
+/// account, whether the address holds no link, a link typed one span or a
+/// link typed three. Nor the draft's run count: a `publish` of the other
+/// account's past the reads' budget that names the draft and places a run
+/// in it is refused with the same detail while the draft holds one content
+/// run and once it holds sixteen.
 #[test]
 fn publish_cost_and_the_refusal_count_no_record_homed_in_a_draft_the_caller_may_not_read() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1135,5 +1143,87 @@ fn publish_cost_and_the_refusal_count_no_record_homed_in_a_draft_the_caller_may_
     let (held, missing) = (naming(1), naming(5_000));
     assert!(held.contains("bytes would be staged against the transaction budget"), "premise: the bytes speak: {held}");
     assert_eq!(held, missing, "a draft it may not read moves no byte of the detail, whatever its positions hold");
+    // NO STORED TYPE EITHER. The claimant's private draft takes two links
+    // of its own, their type slots one span and three, and the address
+    // past them holds no link. A `publish` past the transaction budget —
+    // 128 runs placed by reference, under 3,200 `links` entries whose
+    // `from` names the member's 128 positions — names one of the three in
+    // `originals` with a rest, whose fresh mark is priced at the
+    // original's stored type, read off the link. Neither the other account
+    // nor the principal seated at no account may read that draft, and this
+    // refusal stands ahead of the plan's own judgment of whose the original
+    // is: each is answered ONE detail, byte for byte, whichever address its
+    // entry names — the figure of an address where no link stands. The
+    // claimant, who reads its draft, is refused with each link's own type
+    // priced.
+    let link_typed = |types: u64| {
+        let ty: Vec<String> = (1..=types).map(|k| format!(r#""{d}.0.3.6.{k}""#)).collect();
+        acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"make_link","home":"{d}","from":{{"addrs":["{d}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":[{}]}}}}"#, ty.join(","))))
+    };
+    let (one_span, three_spans) = (link_typed(1), link_typed(3));
+    let olds = [next_link_address(&three_spans), one_span, three_spans];
+    let by_reference = (1..=128).map(|k| run(CLAIMANT_DOC1, &format!("{CLAIMANT_DOC1}.0.1.{k}"), 1)).collect::<Vec<_>>().join(",");
+    let entry = r#"{"home":"member","from":{"member":[{"ordinal":"1","width":"128"}]},"to":{"addrs":[]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}"#;
+    let many = vec![entry; 3200].join(",");
+    let ending = |token: &str, old: &str| {
+        let frame = format!(r#"{{"op":"publish","doc":"{their_home}","runs":[{by_reference}],"originals":[{{"old":"{old}","rest":[{{"start":"{d}.0.1.1","width":"1"}}]}}],"links":[{many}]}}"#);
+        let v = op_as_written(port, Some(token), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{}", rej["detail"]);
+        rej["detail"].as_str().expect("the bound passed, with its figures").to_string()
+    };
+    let staged = |detail: &str| -> u64 { detail.split(' ').next().and_then(|bytes| bytes.parse().ok()).unwrap_or_else(|| panic!("the bytes lead the detail: {detail}")) };
+    let theirs: Vec<String> = olds.iter().map(|old| ending(&other, old)).collect();
+    let unseated_theirs: Vec<String> = olds.iter().map(|old| ending(&unseated, old)).collect();
+    for (reader, answers) in [("another account", &theirs), ("a principal seated at no account", &unseated_theirs)] {
+        assert!(answers[0].contains("bytes would be staged against the transaction budget") && !answers[0].contains("in-lock reads"), "{reader}: premise: the bytes speak, alone: {}", answers[0]);
+        assert_eq!(answers[1], answers[0], "{reader}: a link in a draft it may not read moves no byte of the detail");
+        assert_eq!(answers[2], answers[0], "{reader}: nor does the width of its type");
+    }
+    let mine: Vec<u64> = olds.iter().map(|old| staged(&ending(&bare, old))).collect();
+    let type_span = skep_links::stored_span_bytes(&skep_address::subtree_of(skep_core::codec::wire_address(&format!("{d}.0.3.6.1")).expect("an address").tumbler()));
+    assert_eq!(mine[2] - mine[1], 2 * type_span, "the claimant reads its draft: its link's three type spans against its one");
+    assert_eq!(mine[0], staged(&theirs[0]), "and where no link stands, the one figure every caller is answered");
+    assert_ne!(mine[1], mine[0], "which the link's one type span is not");
+    // NO RUN COUNT EITHER. The other account takes sixteen link-holding
+    // homes — sixteen drafts of its own, a link in each — and sends a
+    // `publish` that names the claimant's private draft as its `draft`, one
+    // stray run placed in it, beside a full `read_with` list: sixteen homes
+    // times 4,096 entries are the reads' budget exactly, so the one placed
+    // piece is past it and the refusal states the re-window's steps, ahead
+    // of the store's own judgment of who owns the draft. The claimant then
+    // fragments that draft from one content run into sixteen. The detail is
+    // the same, byte for byte, before and after: the one piece, and no run
+    // of a draft the caller may not read — where the claimant's own price of
+    // the same place grows by the fifteen runs.
+    for _ in 0..16 {
+        let home = acked_addr(&op(port, Some(&other), &create));
+        expect_resp(&op(port, Some(&other), &format!(r#"{{"op":"make_link","home":"{home}","from":{{"addrs":["{home}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{home}.0.3.6.1"]}}}}"#)), "ack_addr");
+    }
+    let entries = vec![format!(r#""{their_home}""#); 4096].join(",");
+    let stepping = || {
+        let frame = format!(r#"{{"op":"publish","doc":"{their_home}","draft":"{d}","runs":[{}],"places":[{{"subspace":"1","ordinal":"1"}}],"read_with":[{entries}]}}"#, strays[0].1);
+        let v = op_as_written(port, Some(&other), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{}", rej["detail"]);
+        rej["detail"].as_str().expect("the bound passed, with its figures").to_string()
+    };
+    let own_steps = || expect_resp(&op(port, Some(&bare), &placing("publish_cost", &p, &d, &strays[0].1, "")), "publish_cost")["rewindow"].as_u64();
+    let (in_one_run, own_in_one_run) = (stepping(), own_steps());
+    for _ in 0..15 {
+        expect_resp(&op(port, Some(&bare), &format!(r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#)), "ack_addr");
+    }
+    let (in_sixteen_runs, own_in_sixteen_runs) = (stepping(), own_steps());
+    assert_eq!((own_in_one_run, own_in_sixteen_runs), (Some(1 + 1), Some(16 + 1)), "premise: the draft's runs, as its owner is priced them beside the one piece");
+    let budget = skep_links::MAX_PUBLICATION_READS;
+    assert_eq!(
+        in_one_run,
+        format!(
+            "{} in-lock reads priced over the budget of {budget}: 16 link-holding homes × 4096 links, originals, read-with and supersede entries + 1 re-window steps + 0 re-inserted runs; narrow the request",
+            budget + 1
+        ),
+        "the one placed piece, and no run of the draft"
+    );
+    assert_eq!(in_sixteen_runs, in_one_run, "fifteen more runs in a draft it may not read move no figure of the detail");
     sd.shutdown();
 }

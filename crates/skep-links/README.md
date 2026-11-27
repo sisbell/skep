@@ -51,9 +51,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   budgets), which the store refuses on and the price never does. It is
   taken at the caller's read class: a stray place counts the
   correspondence records the caller may read and no other, in the
-  re-window's steps and in the bytes, and a shot's units are counted
-  only where the class admits every draft it names — a price is answered
-  ahead of the store's own judgment of who owns a draft. One function
+  re-window's steps and in the bytes, a shot's units are counted only
+  where the class admits every draft it names, a re-windowed draft's
+  content runs only where the class admits that draft, and the stored
+  type a rest's fresh mark is priced from is read only where the class
+  admits the original's home, a link homed elsewhere priced as an
+  address where no link stands — a price is answered ahead of the
+  store's own judgment of who owns a draft or a link. One function
   prices the daemon's refusal and the price a client asks for before it
   sends.
 

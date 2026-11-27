@@ -458,6 +458,170 @@ fn the_refusal_ahead_of_the_lock_counts_no_unit_of_a_draft_the_caller_may_not_re
     assert_eq!(read[2].staged_bytes - unread[2].staged_bytes, REINSERTED_UNIT_BYTES + 1, "the one byte ahead of the hole");
 }
 
+/// THE REFUSAL's DETAIL COUNTS NO RUN OF A DRAFT THE CALLER MAY NOT READ.
+/// The maker's private draft holds one content run, then sixteen — an
+/// insert at its first position each. The other account, which may not
+/// read that draft and holds one link-holding home, sends a publication
+/// whose reads pass the budget on a read-with list, and NAMES the maker's
+/// draft — as its `draft`, or among `also` — with one stray run placed in
+/// it: the refusal is answered ahead of the lock, before the store has
+/// asked who owns the draft, and it names the SAME terms on both boards —
+/// the one placed piece, and no run of the draft. The maker, refused for
+/// the same request, is priced its draft's runs: fifteen steps more on the
+/// second board.
+#[test]
+fn the_refusal_ahead_of_the_lock_counts_no_run_of_a_draft_the_caller_may_not_read() {
+    use serde_json::json;
+    use skep_address::Nat;
+    use skep_arrangement::{HasM5, VPos};
+    use skep_febe::{AlsoPlaces, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_links::MAX_PUBLICATION_READS;
+
+    use crate::auth::policy::publication_read_refusal;
+
+    let wire = |text: &str| crate::codec::wire_address(text).expect("an address");
+    // The board whose maker's draft holds `runs` content runs, each account
+    // holding one link in its home.
+    let holding = |runs: usize| -> TwoAccounts {
+        let board = TwoAccounts::open();
+        for (session, home) in [(board.maker.1, &board.home), (board.other.1, &board.other_home)] {
+            exec(&board.febe, session, json!({"op": "make_link", "home": home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+        }
+        for _ in 0..runs {
+            exec(&board.febe, board.maker.1, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": board.febe.log_position().0}));
+        }
+        assert_eq!(board.engine.kernel().snapshot().world().m5().content_run_count(&wire(&board.draft)), runs, "premise: an insert at the front, a run");
+        board
+    };
+    // The request: one stray run of the maker's home, placed at the first
+    // position of the maker's draft — the rendering draft, or an `also`
+    // draft beside a document of the caller's — and a read-with list that
+    // brings the caller's one home to the reads' budget, so the one placed
+    // piece is past it and the refusal names every term.
+    let request = |board: &TwoAccounts, among_also: bool| {
+        let (draft, home, theirs) = (wire(&board.draft), wire(&board.home), wire(&board.other_home));
+        let stray = ShotRun { origin: home.clone(), run: Run::new(wire(&format!("{}.0.1.1", board.home)), Nat::from(1u32)).expect("a run") };
+        let place = Some(VPos::content(Nat::from(1u32)));
+        let (shot, places, also_places) = if among_also {
+            (Shot { base: None, draft: Some(theirs.clone()), also: vec![draft.clone()], keep_base: false, runs: vec![stray] }, Vec::new(), vec![AlsoPlaces { draft, places: vec![place] }])
+        } else {
+            (Shot { base: None, draft: Some(draft), also: vec![], keep_base: false, runs: vec![stray] }, vec![place], Vec::new())
+        };
+        let deposits = PublishDeposits { read_with: vec![home; MAX_PUBLICATION_READS], ..PublishDeposits::default() };
+        Op::Publish { target: PublishTarget::Document(theirs), shot, places, also_places, deposits }
+    };
+    let refused = |board: &TwoAccounts, caller: PrincipalId, among_also: bool| {
+        let snap = board.engine.kernel().snapshot();
+        publication_read_refusal(snap.world(), &request(board, among_also), caller).expect("past the reads' budget: refused, every term named")
+    };
+    let boards = [holding(1), holding(16)];
+    for among_also in [false, true] {
+        // The other account: its terms do not move with the maker's draft.
+        let unread: Vec<_> = boards.iter().map(|board| refused(board, board.other.0, among_also)).collect();
+        assert!(unread[0].reads_over() && !unread[0].bytes_over(), "premise: the reads speak: {:?}", unread[0]);
+        assert_eq!(unread[1], unread[0], "fifteen more runs in a draft the caller may not read move no term of the detail (among `also`: {among_also})");
+        assert_eq!(
+            (unread[0].homes, unread[0].rewindow, unread[0].total),
+            (1, 1, MAX_PUBLICATION_READS + 1),
+            "its one home's entries, and the one placed piece: no run of the draft (among `also`: {among_also})"
+        );
+        // The maker, who reads its own draft, is priced its runs.
+        let read: Vec<_> = boards.iter().map(|board| refused(board, board.maker.0, among_also)).collect();
+        assert_eq!(read.iter().map(|refusal| refusal.rewindow).collect::<Vec<_>>(), [1 + 1, 16 + 1], "the draft's runs and the one piece (among `also`: {among_also})");
+        assert_eq!(read[1].total - read[0].total, 15, "fifteen steps more");
+    }
+}
+
+/// THE REFUSAL's DETAIL PRICES NO STORED TYPE OF A LINK THE CALLER MAY NOT
+/// READ. The maker's private draft holds, at its first link address,
+/// nothing, a link typed one address, or a link typed three. The other
+/// account and a principal seated at no account, neither of whom may read
+/// that draft, each send a publication past the transaction budget whose
+/// `originals` entry names that address with a rest: the refusal is
+/// answered ahead of the lock, before the plan has asked whose the
+/// original is, and it names the SAME terms on all three boards — the
+/// rest's fresh mark priced at the figure of an address where no link
+/// stands. The maker, refused for the same request, is priced the type its
+/// link stores: the three boards three ways, by the spans of the type slot.
+#[test]
+fn the_refusal_ahead_of_the_lock_prices_no_stored_type_of_a_link_the_caller_may_not_read() {
+    use serde_json::json;
+    use skep_address::Nat;
+    use skep_febe::{EndArg, LinkEntry, MemberSpan, NamedAddress, OriginalEntry, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_links::stored_span_bytes;
+
+    use crate::auth::policy::publication_read_refusal;
+
+    let wire = |text: &str| crate::codec::wire_address(text).expect("an address");
+    // The board whose maker's draft holds a link typed the draft's own
+    // `types` type addresses — none where `types` is zero — beside the
+    // address the draft's first link takes.
+    let typed = |types: u32| -> (TwoAccounts, Address) {
+        let board = TwoAccounts::open();
+        let first = wire(&format!("{}.0.2.1", board.draft));
+        if types > 0 {
+            let ty: Vec<String> = (1..=types).map(|k| format!("{}.0.3.6.{k}", board.draft)).collect();
+            let link = exec(&board.febe, board.maker.1, json!({"op": "make_link", "home": board.draft, "from": {"addrs": [board.draft]}, "to": {"addrs": []}, "ty": {"addrs": ty}}));
+            assert_eq!(link, first, "premise: the draft's first link");
+        }
+        (board, first)
+    };
+    let boards = [typed(0), typed(1), typed(3)];
+    // The bytes each board's link stores its type slot in, where one stands.
+    let stored: Vec<Option<u64>> = boards
+        .iter()
+        .map(|(board, first)| {
+            let snap = board.engine.kernel().snapshot();
+            snap.world().links().readlink(first).map(|link| link.type_slot().spans().map(stored_span_bytes).sum())
+        })
+        .collect();
+    let (narrow, wide) = (stored[1].expect("a link of one type span"), stored[2].expect("a link of three"));
+    assert!(stored[0].is_none() && wide == 3 * narrow, "premise: no link, one type span and three: {stored:?}");
+    // The request: 4,096 runs placed by reference and a hundred `links`
+    // entries whose `from` names the member's 4,096 positions — past the
+    // transaction budget, so the refusal speaks and states its bytes — and
+    // the rider naming the address with a rest.
+    let request = |board: &TwoAccounts, old: &Address| {
+        let (home, theirs) = (wire(&board.home), wire(&board.other_home));
+        let by_reference = ShotRun { origin: home.clone(), run: Run::new(wire(&format!("{}.0.1.1", board.home)), Nat::from(1u32)).expect("a run") };
+        let entry = LinkEntry {
+            home: NamedAddress::Member,
+            from: EndArg::Member(vec![MemberSpan { ordinal: 1, width: 4096 }]),
+            to: EndArg::Addrs(Vec::new()),
+            ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]),
+            old: None,
+        };
+        let rest = Run::new(wire(&format!("{}.0.1.1", board.draft)), Nat::from(1u32)).expect("a run").iextent();
+        Op::Publish {
+            target: PublishTarget::Document(theirs),
+            shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![by_reference; 4096] },
+            places: Vec::new(),
+            also_places: Vec::new(),
+            deposits: PublishDeposits { links: vec![entry; 100], originals: vec![OriginalEntry { old: old.clone(), rest: vec![rest] }], ..PublishDeposits::default() },
+        }
+    };
+    let refused = |(board, first): &(TwoAccounts, Address), caller: PrincipalId| {
+        let snap = board.engine.kernel().snapshot();
+        publication_read_refusal(snap.world(), &request(board, first), caller).expect("past the transaction budget: refused, its bytes stated")
+    };
+    // The other account, and a principal M3 seats nowhere: neither reads the
+    // maker's draft, and the terms of neither move with what its link holds.
+    let unseated = PrincipalId(4242);
+    for (reader, caller) in [("another account", boards[0].0.other.0), ("a principal seated at no account", unseated)] {
+        let unread: Vec<_> = boards.iter().map(|board| refused(board, caller)).collect();
+        assert!(unread[0].bytes_over() && !unread[0].reads_over(), "{reader}: premise: the bytes speak: {:?}", unread[0]);
+        assert_eq!(unread[1], unread[0], "{reader}: a link in a draft it may not read moves no term of the detail");
+        assert_eq!(unread[2], unread[0], "{reader}: nor does the width of its type");
+    }
+    // The maker, who reads its own draft, is priced the type its link
+    // stores; and where no link stands, the figure the others are answered.
+    let read: Vec<_> = boards.iter().map(|board| refused(board, board.0.maker.0)).collect();
+    let absent = refused(&boards[0], boards[0].0.other.0).staged_bytes;
+    assert_eq!(read[0].staged_bytes, absent, "no link at the address: the one figure every caller is answered");
+    assert_eq!(read[2].staged_bytes - read[1].staged_bytes, wide - narrow, "the type slot as stored: two spans more");
+    assert_ne!(read[1].staged_bytes, absent, "and the link's one type span is not the absent link's figure");
+}
+
 /// Executes `frame` through M10 as `sid`, answering the ack's address.
 ///
 /// # Panics

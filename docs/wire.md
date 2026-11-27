@@ -2761,7 +2761,9 @@ its places number), plus one per re-inserted run, against
 places costs the re-window nothing, and a piece is a run's share of the
 pairing, or a stray run's per record covering it that the caller may
 read, a record homed in a document the caller may not read counting for
-nothing — AND THE STAGED
+nothing; and a draft's run count is counted only where the caller may
+read that draft, a draft the caller may not read adding the pieces
+placed in it and no run, whatever it holds — AND THE STAGED
 BYTES, the price's fifth term (the link-sets design §5.6, M6): the
 bytes the one commit
 would stage, priced from the worst-case table off the request — per
@@ -2781,7 +2783,11 @@ it that the caller may read; per `links` entry its copy at the spans its slots s
 as its unit span, an I-span as itself, a member-position span as up to
 the fewer of its width and the request's runs) and its claim; a
 retraction per `retract` entry, a read-with per `read_with` entry, a
-claim per `supersede` entry; the
+claim per `supersede` entry; a retraction per `originals` entry and,
+where the entry names a `rest`, a fresh mark at the rest's spans and the
+original's stored type — the type read only where the caller may read
+the original's home, a link homed where the caller may not read priced
+as an address where no link stands; the
 shot's own records and, at the mint form, the edition's mint and claim
 — against the kernel's transaction budget, `MAX_TXN_BYTES` = 67108864
 (64 MiB), an upper bound on what the kernel charges, so the kernel's

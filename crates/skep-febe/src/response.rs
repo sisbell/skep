@@ -508,7 +508,8 @@ pub enum Response {
     ///
     /// `price` is M7's [`ReadPrice`] of the request as the caller, whole and
     /// as the transport's refusal ahead of its lock computes it — the
-    /// caller's link-holding homes, the entries read per home, the
+    /// caller's link-holding homes, those the caller may read, the entries
+    /// read per home, the
     /// re-window's steps, the twin fence's stabs and the bytes the commit
     /// would stage — inside the budgets or past them: an answer, where the
     /// write past a budget is refused `publication_over_budget`; and the

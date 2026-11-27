@@ -645,7 +645,8 @@ pub enum RejectCode {
     /// AHEAD OF THE LOCK; lane S4).
     ///
     /// The daemon's own cell, raised ahead of its serialization lock off a
-    /// lock-free snapshot: the caller's link-holding home count ×
+    /// lock-free snapshot: the caller's link-holding home count — the
+    /// homes under its seat that the caller may read, and no other — ×
     /// (`links` + `originals` + `read_with` + `supersede` entries), plus
     /// the re-window's steps — per draft the commit re-windows, its content
     /// runs and the pieces its lists place, summed

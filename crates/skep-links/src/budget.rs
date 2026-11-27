@@ -122,7 +122,8 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 /// §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK).
 ///
 /// It bounds the price `price_publication_reads` computes — the caller's
-/// link-holding home count × (`links` + `originals` + `read_with` +
+/// link-holding home count, the homes under its seat that the class the
+/// price is taken at admits, × (`links` + `originals` + `read_with` +
 /// `supersede` entries); plus, per document the commit re-windows, its
 /// content runs and the pieces its lists place; plus one per re-inserted
 /// run — which is the work the composite's in-lock reads and the re-window's

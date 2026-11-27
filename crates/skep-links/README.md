@@ -52,7 +52,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   carries those units too (`ReadPrice::units`,
   beside `UNIT_BUDGET` and `POSITION_BUDGET`, M5's two re-insert
   budgets), which the store refuses on and the price never does. It is
-  taken at the caller's read class: a stray place counts the
+  taken at the caller's read class: a link-holding home counts only
+  where the class admits it — every home under its account, for an
+  account's own principal, and for the node's own principal, seated
+  above every account, the homes it may read and no other; a stray place
+  counts the
   correspondence records the caller may read and no other, in the
   re-window's steps and in the bytes, a shot's units are counted only
   where the class admits every draft it names, a re-windowed draft's

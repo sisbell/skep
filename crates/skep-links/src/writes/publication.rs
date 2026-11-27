@@ -106,7 +106,7 @@ pub use plan::{
     plan_deposits, read_with_in, read_with_type, request_image, resolve_end,
     supersession_claim_in, DepositPlan, EndArg, LinkEntry, MemberEnd, MemberSpan, NamedAddress,
     OriginalEntry, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PlannedOriginal,
-    PublishDeposits, PublishTarget,
+    PositionImage, PublishDeposits, PublishTarget,
 };
 pub use sizes::{
     price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
@@ -226,10 +226,14 @@ fn rewindows<'a>(
 /// ([`ReadPrice::UNIT_BUDGET`], [`ReadPrice::POSITION_BUDGET`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPrice {
-    /// The caller's link-holding homes: `homes_under` of the caller's
-    /// account — every document under it holding a resident link, the
-    /// plan's `own_homes` before its ownership filter, so at or above the
-    /// homes the plan reads.
+    /// The caller's link-holding homes: the documents under the caller's
+    /// seat that hold a resident link (`homes_under` of the seat) and that
+    /// the class the price is taken at admits. A home the caller may not
+    /// read counts nothing, whatever it holds and whether it holds a link
+    /// at all. At or above the homes the plan reads, which are the homes ω
+    /// answers the caller (its `own_homes`): a document's owner is its own
+    /// account's seat, and a principal's class admits every document of the
+    /// account it is seated at.
     pub homes: usize,
     /// The `links` entries, the `originals` entries, the `read_with` entries
     /// and the `supersede` entries, summed: the entries whose read ranges
@@ -332,9 +336,11 @@ impl ReadPrice {
 /// ahead of its lock, as `caller` at the visibility class `readable`.
 ///
 /// The caller's link-holding homes are [`homes_under`] of the caller's
-/// account (one seek per home found, the account's prefix read off M3's
-/// principal table); a caller that is no principal — `Caller::System`, which
-/// no request path carries — has no account and so no homes. The entries
+/// seat — its account, and for the node's own principal the node — each
+/// counted where `readable` admits it (one seek per home found and one
+/// question of the class per home, the seat read off M3's principal table);
+/// a caller that is no principal — `Caller::System`, which no request path
+/// carries — has no seat and so no homes. The entries
 /// and the fence's stabs are request arithmetic, the stabs counted off the
 /// one grouping the fence walks ([`Shot::reinserted_runs_by_draft`]). The
 /// re-window is priced per document the commit re-windows, in two reads:
@@ -384,6 +390,19 @@ impl ReadPrice {
 /// by ω of the draft, the second by the plan, the original not the
 /// caller's own — so every figure answered is the same whatever a document
 /// the caller may not read holds, and the price stays a bound.
+/// THE HOMES are counted at it too, home by home: a link-holding home
+/// under the caller's seat counts only where `readable` admits it. A
+/// principal seated at an account is admitted to every home under it — its
+/// own account's drafts and those of the accounts beneath it by its seat, a
+/// published document as every reader is — so its count is every home
+/// [`homes_under`] finds, as it was before the class was asked. The node's
+/// own principal is seated at the node, under which every home on the
+/// board lies, and its class admits no draft by its seat: asked at no
+/// class, its count would be every link-holding home on the board, the
+/// private drafts of every account among them. The count stays at or above
+/// the homes the plan reads, the homes ω answers the caller: a document's
+/// owner is its own account's seat, so the node's principal owns no home,
+/// and an account's principal owns none its class does not admit.
 ///
 /// The counts may move between this read and the composite's own, where
 /// the transport takes its lock after it (the survey's C8): the budget is
@@ -403,11 +422,12 @@ pub fn price_publication_reads<W: LinkWorld + HasM5 + ReinsertWorld>(
     deposits: &PublishDeposits,
     steps: &mut impl FnMut(u64),
 ) -> ReadPrice {
+    // The homes under the caller's seat, each counted where the class admits
+    // it: a home the caller may not read counts nothing, whatever it holds.
     let homes = match caller {
-        Caller::Principal(p) => world
-            .m3()
-            .principal_prefix(p)
-            .map_or(0, |account| world.links().homes_under(&enc([account])).len()),
+        Caller::Principal(p) => world.m3().principal_prefix(p).map_or(0, |seat| {
+            world.links().homes_under(&enc([seat])).iter().filter(|home| readable(world, home)).count()
+        }),
         Caller::System => 0,
     };
     let pieces = sizes::run_pieces(world, readable, shot, |index| sizes::placed_in(places, also_places, index) > 0);
@@ -868,7 +888,9 @@ where
     W: PublishWorld + LinkWorld,
     W::Record: From<LinkRec>,
 {
-    let image = member_image(shot, pairing);
+    // The member's image, prepared at the first member-position end and
+    // read by every one after it.
+    let image = PositionImage::of(member_image(shot, pairing));
     for PlannedHome { home, deposits } in &plan.homes {
         let home: Address = match home {
             NamedAddress::Member => member.clone(),

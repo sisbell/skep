@@ -72,8 +72,8 @@ use skep_febe::{
 use skep_identity::SigAlgRow;
 use skep_kernel::{Attestation, Seq};
 use skep_links::{
-    member_end, request_image, AlsoPlaces, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
-    OriginalEntry, PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
+    request_image, AlsoPlaces, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
+    OriginalEntry, PositionImage, PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
 };
 use skep_namespace::{PrincipalId, WellKnownSlot};
 use skep_retrieval::{CompareRegion, RegionSpec, Spec};
@@ -1890,7 +1890,10 @@ impl Fields {
     /// `member` and `edition` are admitted where an address is expected
     /// inside an entry — a home, an element of an address-form end —
     /// `edition` at the mint form alone; the member-position end form is
-    /// read against the shot's runs ([`p_end`]). The board's own member, the
+    /// read against the shot's runs ([`p_end`]) — over ONE image of them
+    /// for the whole frame, prepared at the first such end and read by
+    /// every one after it, so the runs are paid once a frame and never
+    /// once an end. The board's own member, the
     /// base's runs, is never read off the wire: it is left empty here, and a
     /// frame naming it meets the closed member set as any unknown field does.
     ///
@@ -1900,7 +1903,7 @@ impl Fields {
     /// index), and naming the entry in its `index` — the `malformed`
     /// rejection's `site.index` — where an entry is refused.
     fn deposits(&mut self, shot: &Shot, target: &PublishTarget, claim: bool) -> Result<PublishDeposits, Refusal> {
-        let image = request_image(shot);
+        let image = PositionImage::of(request_image(shot));
         let mints = target.mints();
         let links = match self.take_opt("links") {
             None => Vec::new(),
@@ -1991,7 +1994,7 @@ fn indexed_list<T>(v: &Value, k: &str, f: impl Fn(&Value) -> PResult<T>) -> Resu
 /// A [`PErr`] where the entry is no object of those keys, a member is
 /// missing or refused, `home` is the tag `edition` at the document form,
 /// or `ty` carries a tag or the member-position form.
-fn p_link_entry(v: &Value, mints: bool, image: &[Run]) -> PResult<LinkEntry> {
+fn p_link_entry(v: &Value, mints: bool, image: &PositionImage) -> PResult<LinkEntry> {
     let m = p_obj(v, &["home", "ty", "from", "to", "old"])?;
     let home = field(m, "home", |v| p_named(v, mints))?;
     let ty = field(m, "ty", |v| p_end(v, mints, image))?;
@@ -2039,8 +2042,18 @@ fn p_named(v: &Value, mints: bool) -> PResult<NamedAddress> {
 /// positions inside `[1, placed]`, 1-based, each a natural as `reinstate`'s
 /// `at` spells one — which must be CANONICAL: the lowest member positions
 /// holding each value, consecutive positions merged, as M7's own
-/// [`member_end`] spells them over the request's runs, so one signed row
+/// `member_end` spells them over the request's runs, so one signed row
 /// stands against one request.
+///
+/// `image` is the request's runs as M7 prepared them for the frame
+/// ([`PositionImage`]), and the form is JUDGED, never built: whether the
+/// spans are their own canonical row is a search a span
+/// ([`PositionImage::is_canonical`]), with no piece cut and no row spelled,
+/// so an end costs its own spans whatever they resolve to. This parse
+/// stands ahead of every budget, and the spans of one end can resolve to
+/// pieces, and to a row, far past anything a budget would admit. Only the
+/// one end a frame is refused for has its row spelled, and that to the
+/// spans one list carries ([`PositionImage::canonical_row`]).
 ///
 /// A V-spec array is admitted in no entry (the survey's ruling 7): the
 /// ceremony sends I-spans or addresses, and the form is refused here.
@@ -2051,8 +2064,11 @@ fn p_named(v: &Value, mints: bool) -> PResult<NamedAddress> {
 /// the three keys, where the list under it is refused, where a member span
 /// has a zero ordinal or width, lies outside the runs' positions, or
 /// passes `u64`, and where the member-position row is not its canonical
-/// spelling — the refusal naming the spelling the request owes.
-fn p_end(v: &Value, mints: bool, image: &[Run]) -> PResult<EndArg> {
+/// spelling — the refusal naming the spelling the request owes, whole
+/// where one list could carry it and its first [`MAX_WIRE_LIST`] spans
+/// where it runs on past them, which the refusal then says: such an end has
+/// no member-position spelling a request can send.
+fn p_end(v: &Value, mints: bool, image: &PositionImage) -> PResult<EndArg> {
     if v.is_array() {
         return Err(PErr(
             "a V-spec array is admitted in no publication entry: send {\"addrs\": […]}, {\"spans\": […]} or {\"member\": […]}".into(),
@@ -2068,21 +2084,28 @@ fn p_end(v: &Value, mints: bool, image: &[Run]) -> PResult<EndArg> {
         }
         (None, None, Some(p)) => {
             let spans = p_list(p, p_member_span).map_err(|e| PErr(format!("member: {e}")))?;
-            let end = member_end(image, &spans).ok_or_else(|| {
+            let no_span = || {
                 PErr("member: a span of the member's positions has a zero ordinal or width, or reaches past the positions the runs place".into())
-            })?;
-            if end.canonical != spans {
-                let owed = end
-                    .canonical
-                    .iter()
-                    .map(|s| format!("{{\"ordinal\":\"{}\",\"width\":\"{}\"}}", s.ordinal, s.width))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                return Err(PErr(format!(
-                    "member: not the canonical spelling — the lowest member positions holding each value, consecutive positions merged: [{owed}]"
-                )));
+            };
+            if image.is_canonical(&spans).ok_or_else(no_span)? {
+                return Ok(EndArg::Member(spans));
             }
-            Ok(EndArg::Member(spans))
+            // The one end the frame is refused for: its row, to the spans
+            // one list carries.
+            let (row, runs_on) = image.canonical_row(&spans, MAX_WIRE_LIST).ok_or_else(no_span)?;
+            let owed = row
+                .iter()
+                .map(|s| format!("{{\"ordinal\":\"{}\",\"width\":\"{}\"}}", s.ordinal, s.width))
+                .collect::<Vec<_>>()
+                .join(",");
+            let past = if runs_on {
+                format!(", the first {MAX_WIRE_LIST} spans of a row that runs on past what one list carries")
+            } else {
+                String::new()
+            };
+            Err(PErr(format!(
+                "member: not the canonical spelling — the lowest member positions holding each value, consecutive positions merged: [{owed}]{past}"
+            )))
         }
         _ => Err(PErr("expected exactly one of 'addrs', 'spans' or 'member'".into())),
     }

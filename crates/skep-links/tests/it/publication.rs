@@ -1794,8 +1794,8 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 /// THE PRICE OF THE IN-LOCK READS (the link-sets design §5.7, W8 (1)): the
 /// four terms read off one snapshot — the caller's link-holding homes by
 /// `homes_under` of the account (doc1 holding the record of `E.1`'s shot,
-/// `N` holding `L`, `E.1` holding `M`: three, whatever the caller may read of
-/// them), the `links` and `read_with` entries summed, the re-window's steps
+/// `N` holding `L`, `E.1` holding `M`: three, each one the class the cell
+/// prices at admits), the `links` and `read_with` entries summed, the re-window's steps
 /// where a place is carried — doc1's one run and the one piece placed in
 /// it; none where no place is — and the twin fence's stab per re-inserted run,
 /// placed or not — and the one comparison against `MAX_PUBLICATION_READS`:
@@ -3655,6 +3655,94 @@ fn an_originals_stored_type_is_priced_only_where_the_class_admits_its_home() {
             PublicationError::Plan(PlanFault::Original { index: 0, cause }),
             "an original that is absent or another account's: refused by the plan, nothing staged"
         );
+    }
+}
+
+/// NO HOME THE CALLER CANNOT READ. A publication's price counts the
+/// caller's link-holding homes, the documents under its seat that hold a
+/// link, and the node's own principal is seated at the node, under which
+/// every home on the board lies. An account holds sixteen private drafts
+/// and one published document that holds a link, and on three boards none
+/// of the drafts, two of them, and all sixteen hold a link. At a class that
+/// admits no private draft — published documents alone, the guest's — the
+/// node's principal is priced ONE home on every board, the published one,
+/// figure for figure: its count says nothing of how many drafts it may not
+/// read hold a link, or whether any does. At the class that admits every
+/// document its homes are the published one and the drafts holding links:
+/// none, two and sixteen more. The account's own principal, at a class that
+/// admits what it owns, is priced every home under its account on each
+/// board — `homes_under` of the account, as before the class was asked —
+/// and at the class of published documents alone the published one, the
+/// count following the class and never the seat. The caller that is no
+/// principal holds no seat and is priced no home at any class. And the
+/// count stays at or above the homes the plan reads, the homes ω answers
+/// the caller: none for the node's principal on any board, and for the
+/// account's principal homes its own class admits, every one.
+#[test]
+fn a_home_the_class_does_not_admit_is_counted_no_home() {
+    use skep_arrangement::M5State;
+    use skep_content::ContentStore;
+    use skep_links::{price_publication_reads, LinkState};
+    use skep_namespace::BOOTSTRAP_PRINCIPAL;
+
+    const NODE: Caller = Caller::Principal(BOOTSTRAP_PRINCIPAL);
+    let (account, published) = (a(&[1, 0, 1]), doc(17));
+    // The account's sixteen private drafts and its published document, the
+    // first `linked` drafts and the published one each holding a link.
+    let board = |linked: u32| -> World {
+        let mut m3 = M3State::genesis()
+            .apply_m3(Seq(0), &M3Rec::allocate(account.clone(), false))
+            .apply_m3(Seq(0), &M3Rec::register_principal(account.clone(), PrincipalId(1)));
+        for d in 1..=16 {
+            m3 = m3.apply_m3(Seq(0), &M3Rec::allocate(doc(d), false));
+        }
+        m3 = m3.apply_m3(Seq(0), &M3Rec::allocate(published.clone(), true));
+        let k = kernel_over(World { m3, content: ContentStore::default(), m5: M5State::genesis(), links: LinkState::genesis() });
+        deposit_in(&k, &published, &[], &[], &citation());
+        for d in 1..=linked {
+            deposit_in(&k, &doc(d), &[], &[], &citation());
+        }
+        let world = k.snapshot().world().clone();
+        world
+    };
+    let boards = [board(0), board(2), board(16)];
+    assert_eq!(boards[0].m3.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])), "premise: the node's principal is seated at the node");
+    let under = |world: &World, seat: &Address| world.links.homes_under(&enc([seat])).len();
+    for (world, linked) in boards.iter().zip([0, 2, 16]) {
+        assert_eq!((under(world, &a(&[1])), under(world, &account)), (1 + linked, 1 + linked), "premise: the homes under the node are the account's, the published one and the drafts holding links");
+    }
+    let (into, the_shot) = (PublishTarget::Document(published.clone()), shot(None, vec![]));
+    let one_entry = PublishDeposits { read_with: vec![published.clone()], ..PublishDeposits::default() };
+    let priced = |caller: Caller, class: &Visibility<'_, World>| -> Vec<skep_links::ReadPrice> {
+        boards.iter().map(|world| price_publication_reads(world, caller, class, &into, &the_shot, &[], &[], &one_entry, &mut |_| {})).collect()
+    };
+    let homes = |caller: Caller, class: &Visibility<'_, World>| -> Vec<usize> { priced(caller, class).iter().map(|price| price.homes).collect() };
+    let published_alone: &Visibility<'_, World> = &|world: &World, d: &Address| world.m3.published(d);
+    let owned_or_published: &Visibility<'_, World> = &|world: &World, d: &Address| world.m3.published(d) || P1.is_owner(&world.m3, d);
+    // The node's principal, at a class admitting no private draft: one
+    // answer, whatever the drafts hold.
+    let unread = priced(NODE, published_alone);
+    assert_eq!(unread[1], unread[0], "two private drafts holding a link move no figure");
+    assert_eq!(unread[2], unread[0], "nor do sixteen");
+    assert_eq!((unread[0].homes, unread[0].total()), (1, 1), "the published home, which every class admits, and its one entry");
+    // At the class admitting every document: the drafts holding links too.
+    assert_eq!(homes(NODE, &ALL_VISIBLE), [1, 3, 17], "a home a link-holding document the class admits");
+    // The account's principal: every home under its account, as before.
+    let own = homes(P1, owned_or_published);
+    assert_eq!(own, [1, 3, 17], "its own class admits each of its homes");
+    for (world, count) in boards.iter().zip(&own) {
+        assert_eq!(*count, under(world, &account), "`homes_under` of the account, the figure before the class was asked");
+    }
+    assert_eq!(homes(P1, published_alone), [1, 1, 1], "the count follows the class, never the seat");
+    // No principal, no seat, no home.
+    for class in [published_alone, &ALL_VISIBLE] {
+        assert_eq!(homes(Caller::System, class), [0, 0, 0], "the caller that is no principal");
+    }
+    // At or above the homes the plan reads: those ω answers the caller.
+    let owned = |world: &World, caller: Caller, seat: &Address| world.links.homes_under(&enc([seat])).iter().filter(|home| caller.is_owner(&world.m3, home)).count();
+    for (world, (theirs, mine)) in boards.iter().zip(unread.iter().zip(&own)) {
+        assert_eq!(owned(world, NODE, &a(&[1])), 0, "a document's owner is its own account's seat: the node's principal owns no home");
+        assert!(owned(world, NODE, &a(&[1])) <= theirs.homes && owned(world, P1, &account) <= *mine, "the price is a bound on the homes the plan reads");
     }
 }
 

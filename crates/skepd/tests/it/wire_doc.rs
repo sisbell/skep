@@ -1577,7 +1577,10 @@ fn doc_states_the_reinserts_two_budgets_under_one_code_and_what_is_read_by_the_u
 /// THE PRICE's CLASS, FOR WHAT IT READS OF A NAMED DRAFT AND OF AN ORIGINAL:
 /// the budget paragraph states that a re-windowed draft's run count is
 /// counted only where the caller may read that draft — one it may not read
-/// adding its placed pieces and no run — and that the bytes price an
+/// adding its placed pieces and no run — that a link-holding home is
+/// counted only where the caller may read it, with what that comes to for
+/// a principal seated at an account and for the node's own, and that the
+/// bytes price an
 /// `originals` entry's retraction and, over a rest, a fresh mark whose type
 /// is read off the original only where the caller may read the original's
 /// home, a link homed elsewhere priced as an address where no link stands.
@@ -1590,6 +1593,9 @@ fn doc_states_a_drafts_run_count_and_an_originals_type_are_priced_at_the_callers
         "its content run count and the pieces its lists place, summed",
         "a draft's run count is counted only where the caller may read that draft",
         "a draft the caller may not read adding the pieces placed in it and no run, whatever it holds",
+        "a link-holding home is counted only where the caller may read it",
+        "a home the caller may not read counting nothing, whatever it holds",
+        "for the node's own principal, seated above every account, the homes it may read and no private draft of another account's",
         "a retraction per `originals` entry and, where the entry names a `rest`, a fresh mark at the rest's spans and the original's stored type",
         "the type read only where the caller may read the original's home",
         "a link homed where the caller may not read priced as an address where no link stands",
@@ -1698,7 +1704,9 @@ fn doc_states_the_stretch_list_its_signed_row_and_the_terms_a_member_serves() {
 /// figures are the refusal's own, by the one function, answered whether or
 /// not a budget is passed; nothing is written and neither a permit nor a
 /// lock is taken; the named drafts are document arguments and an
-/// `originals` entry's home one by derivation; a guest is priced with no
+/// `originals` entry's home one by derivation; the homes are those under
+/// the caller's seat that it may read, a home it may not read counting
+/// nothing; a guest is priced with no
 /// homes; the class the price is taken at, which counts no record of a
 /// document the caller may not read; and the rule a client admits a request
 /// by. The entry: the five figures the refusal names with what each counts,
@@ -1726,6 +1734,9 @@ fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() 
         "are document arguments",
         "one you may not read answers `withheld`, `site.addr` that draft",
         "by derivation, is the home of each `originals` entry",
+        "The `homes` are the documents under the session's principal's seat that hold a link, counted at your own read rights",
+        "a home you may not read counts nothing, whatever it holds",
+        "the node's own principal, seated above every account, is counted the homes it may read and no other",
         "a guest holds no account and is priced with none",
         "The price is taken at your own read rights, the ones a `publish` of the same members would be committed at",
         "a record homed in a document you may not read counts for nothing, in any figure",

@@ -2834,7 +2834,12 @@ pairing, or a stray run's per record covering it that the caller may
 read, a record homed in a document the caller may not read counting for
 nothing; and a draft's run count is counted only where the caller may
 read that draft, a draft the caller may not read adding the pieces
-placed in it and no run, whatever it holds — AND THE STAGED
+placed in it and no run, whatever it holds; and a link-holding home is
+counted only where the caller may read it, a home the caller may not
+read counting nothing, whatever it holds — every home under its account
+for a principal seated at one, and for the node's own principal, seated
+above every account, the homes it may read and no private draft of
+another account's — AND THE STAGED
 BYTES, the price's fifth term (the link-sets design §5.6, M6): the
 bytes the one commit
 would stage, priced from the worst-case table off the request — per
@@ -4908,7 +4913,12 @@ are document arguments: the answer states each re-windowed draft's run
 count, so one you may not read answers `withheld`, `site.addr` that
 draft; and so, by derivation, is the home of each `originals` entry,
 whose stored type the bytes are priced from. The `homes` are the
-session's principal's; a guest holds no account and is priced with none.
+documents under the session's principal's seat that hold a link, counted
+at your own read rights: a home you may not read counts nothing,
+whatever it holds. A principal seated at an account reads every home
+under it, so its count is all of them; the node's own principal, seated
+above every account, is counted the homes it may read and no other; a
+guest holds no account and is priced with none.
 The price is taken at your own read rights, the ones a `publish` of the
 same members would be committed at: a kept place beside a run of
 published words counts the correspondence records you may read that name

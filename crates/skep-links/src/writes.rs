@@ -89,7 +89,7 @@ pub use publication::{
     stored_tumbler_bytes, supersession_claim_in, AlsoPlaces, DepositPlan, EndArg, LinkEntry,
     MemberEnd, MemberSpan,
     NamedAddress, OriginalEntry, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome,
-    PlannedOriginal, PublishDeposits,
+    PlannedOriginal, PositionImage, PublishDeposits,
     PublishTarget, ReadPrice, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
     EDITION_CLAIM_BYTES, EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES,
     REINSERTED_UNIT_BYTES, REQUEST_BODY_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES,

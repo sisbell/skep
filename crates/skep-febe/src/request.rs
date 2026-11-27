@@ -846,12 +846,16 @@ pub enum Op {
     /// is: the board may move before a `publish` of the same members is
     /// priced again.
     ///
-    /// The caller's link-holding homes are the session's principal's; a
-    /// guest holds no account and is priced with none. THE CLASS the price
+    /// The caller's link-holding homes are the documents under the
+    /// session's principal's seat that hold a link and that the principal
+    /// may read: every one under its account, for a principal seated at
+    /// one, and for the node's own principal — seated at the node, above
+    /// every account — those it may read and no other. A guest holds no
+    /// account and is priced with none. THE CLASS the price
     /// is taken at is this request's read predicate — the principal's, or
     /// the guest's — which is the class a `publish` of the same members
     /// would be committed at: nothing is counted in a document the caller
-    /// may not read.
+    /// may not read, and no home it may not read is counted.
     ///
     /// **The documents consulted.** The named drafts — the rendering
     /// `draft`, then each `also` draft, in the request's order — are

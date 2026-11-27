@@ -1228,6 +1228,83 @@ fn publish_cost_and_the_refusal_count_no_record_homed_in_a_draft_the_caller_may_
     sd.shutdown();
 }
 
+/// NO HOME THE CALLER CANNOT READ, over the wire. A publication's price
+/// counts the caller's link-holding homes, and the node's own principal is
+/// seated at the node, under which every account's documents lie. The
+/// claimant publishes editions holding a link each until the node's
+/// principal, which reads every published document, is priced seventeen
+/// homes: enough that a `publish` of its own under one full `read_with`
+/// list passes the reads' budget, so the refusal ahead of the lock states
+/// its home count. Another account then takes sixteen private drafts, a
+/// link in each, none of which the node's principal may read. Its
+/// `publish_cost` answers the SAME `homes`, and its `publish` is refused
+/// with the SAME detail, byte for byte, before those drafts stand and
+/// after — seventeen homes, where that account's own price counts sixteen
+/// more. The claimant's own count does not move, and the guest, holding no
+/// account, is priced none.
+#[test]
+fn publish_cost_and_the_refusal_count_no_home_the_caller_may_not_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let node = open_session(port, 0);
+    let (their_account, other) = stranger(port, 9);
+    let e = published_edition(port, &signed);
+    let draftless = json!({"op": "publish_cost", "doc": e, "runs": []}).to_string();
+    let homes = |token: Option<&str>| -> u64 {
+        let v = op(port, token, &draftless);
+        expect_resp(&v, "publish_cost")["homes"].as_u64().unwrap_or_else(|| panic!("homes: {v}"))
+    };
+    let link_in = |token: &str, home: &str| {
+        let frame = format!(r#"{{"op":"make_link","home":"{home}","from":{{"addrs":["{home}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{home}.0.3.6.1"]}}}}"#);
+        expect_resp(&op(port, Some(token), &frame), "ack_addr");
+    };
+    // The other account's first document, born published and holding no
+    // link, so that every document it mints after is a private draft.
+    let create = format!(r#"{{"op":"create_new_document","account":"{their_account}"}}"#);
+    acked_addr(&op(port, Some(&other), &create));
+    // Published homes holding a link, until the node's principal reads
+    // seventeen of them.
+    let standing = homes(Some(&node));
+    assert!(standing <= 17, "premise: a new board's published link-holding homes are few: {standing}");
+    for _ in standing..17 {
+        link_in(&signed, &published_edition(port, &signed));
+    }
+    let entries = vec![format!(r#""{e}""#); 4096].join(",");
+    let refusal = || {
+        let frame = format!(r#"{{"op":"publish","doc":"{e}","runs":[],"read_with":[{entries}]}}"#);
+        let v = op_as_written(port, Some(&node), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{}", rej["detail"]);
+        rej["detail"].as_str().expect("the bound passed, with its figures").to_string()
+    };
+    let before = (homes(Some(&node)), refusal(), homes(Some(&bare)), homes(Some(&other)), homes(None));
+    assert_eq!((before.0, before.3, before.4), (17, 0, 0), "premise: the published homes the node's principal reads; the other account and the guest hold none");
+    let budget = skep_links::MAX_PUBLICATION_READS;
+    assert_eq!(
+        before.1,
+        format!(
+            "{} in-lock reads priced over the budget of {budget}: 17 link-holding homes × 4096 links, originals, read-with and supersede entries + 0 re-window steps + 0 re-inserted runs; narrow the request",
+            17 * 4096
+        ),
+        "seventeen homes under one full list are past the reads' budget"
+    );
+    // Sixteen private drafts of the other account's, a link in each.
+    let drafts: Vec<String> = (0..16).map(|_| acked_addr(&op(port, Some(&other), &create))).collect();
+    for draft in &drafts {
+        link_in(&other, draft);
+        assert_withheld(&doc_metadata(port, Some(&node), draft), draft);
+    }
+    let after = (homes(Some(&node)), refusal(), homes(Some(&bare)), homes(Some(&other)), homes(None));
+    assert_eq!(after.3, 16, "premise: each draft holds a link, and counts for the account that reads it");
+    assert_eq!(after.0, before.0, "sixteen private drafts holding a link move the node's principal's count not at all");
+    assert_eq!(after.1, before.1, "nor one byte of its refusal's detail");
+    assert_eq!((after.2, after.4), (before.2, before.4), "the claimant's own homes and the guest's none stand");
+    sd.shutdown();
+}
+
 /// The journal's bytes under `dir`: its segment files' lengths, summed.
 fn journal_bytes(dir: &std::path::Path) -> u64 {
     std::fs::read_dir(dir)

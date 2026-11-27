@@ -411,8 +411,12 @@ impl Daemon {
     /// lock and commits nothing. THE CLASS it is priced at is the caller's
     /// own, the visibility class the commit itself reads at
     /// (`publication_read_refusal` takes the principal and asks the engine's
-    /// mapping of it): a stray place counts the correspondence records the
-    /// caller may read and no other, so the detail states no figure a
+    /// mapping of it): the caller's link-holding homes are counted only
+    /// where the caller may read them — every home under its account for a
+    /// principal seated at one, and for the node's own principal, seated
+    /// above every account, the homes it may read and no private draft of
+    /// another account's; a stray place counts the correspondence records
+    /// the caller may read and no other, so the detail states no figure a
     /// record in a document the caller may not read has moved; and the
     /// units are counted only where that class admits every draft the shot
     /// names — this step stands ahead of the store's ω of a named draft, so

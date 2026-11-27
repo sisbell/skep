@@ -332,7 +332,8 @@ pub fn retract_class_refusal(
 /// names the bound passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicationReadRefusal {
-    /// The caller's link-holding homes, `homes_under` of the account.
+    /// The caller's link-holding homes: the documents under its seat that
+    /// hold a link and that the caller may read.
     pub homes: usize,
     /// The `links`, `originals`, `read_with` and `supersede` entries,
     /// summed: the entries whose read ranges over the caller's homes.
@@ -424,7 +425,16 @@ impl PublicationReadRefusal {
 /// home, a link homed elsewhere priced as an address where no link stands
 /// is. A request priced so is never staged past its price: the store
 /// refuses the first two by the draft's ownership and the third by the
-/// original's.
+/// original's. And THE HOMES are counted at the class, home by home: a
+/// link-holding home under the caller's seat counts only where the caller
+/// may read it. That is every home under its account for a principal
+/// seated at one, whose count does not move; for the node's own principal,
+/// seated at the node above every account, it is the homes it may read —
+/// the published ones, and a draft a grant opens to it — and no private
+/// draft of another account's, whatever that draft holds: the count this
+/// refusal states says nothing of them. The plan reads only the homes the
+/// caller owns, each of which its class admits, so the price stays a
+/// bound.
 ///
 /// The read door answers the same price whole, inside the budgets or past
 /// them, to a client that asks before it sends (`publish_cost`; M10's

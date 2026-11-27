@@ -390,3 +390,59 @@ fn an_attest_of_null_is_the_members_absence() {
     let canonical = String::from_utf8(JsonCodec.marshal_request(&request)).expect("utf-8");
     assert!(!canonical.contains("attest"), "re-marshals without the member: {canonical}");
 }
+
+/// THE MEMBER-POSITION END AT THE PARSE: judged over the frame's one
+/// prepared image, and refused in the words it was always refused in. Over
+/// the edition's three positions and the draft's two, placed twice: a
+/// canonical row parses to its spans as spelled; a row split where no run
+/// parts, and a row over the second holding of a repeated identity, are
+/// refused naming the row owed, whole; a span of no width, and one past the
+/// positions, are refused as no span. A `ty` in the member form is refused
+/// by its own rule only once the form has passed, so a `ty` whose row is
+/// not canonical, or names no span, is answered by the form's refusal, as
+/// before. And THE ROW OWED IS NAMED TO ONE LIST's SPANS: over one address
+/// held at 4,096 positions the row owed for one span over all of them is
+/// 4,096 spans and is named whole; held at one position more, the row
+/// passes what any request's list carries, and the refusal names its first
+/// 4,096 spans and says it runs on — such an end has no spelling to send.
+#[test]
+fn a_member_position_end_is_judged_over_one_image_and_its_owed_row_is_named_to_one_lists_spans() {
+    let run = |start: &str, width: u32| Run::new(wire_address(start).expect("an address"), Nat::from(width)).expect("a run");
+    let end = |image: &PositionImage, member: &str| p_end(&serde_json::from_str(&format!(r#"{{"member":{member}}}"#)).expect("json"), false, image);
+    let refused = |image: &PositionImage, member: &str| end(image, member).expect_err("refused").0;
+    let image = PositionImage::of(vec![run("1.0.1.0.64.0.1.1", 3), run("1.0.1.0.1.0.1.1", 2), run("1.0.1.0.1.0.1.1", 2)]);
+    let spans = |pairs: &[(u64, u64)]| EndArg::Member(pairs.iter().map(|&(ordinal, width)| MemberSpan { ordinal, width }).collect());
+    assert_eq!(end(&image, r#"[{"ordinal":"2","width":"3"}]"#).expect("canonical"), spans(&[(2, 3)]));
+    assert_eq!(end(&image, r#"[{"ordinal":4,"width":2},{"ordinal":"1","width":"1"}]"#).expect("canonical, out of order"), spans(&[(4, 2), (1, 1)]));
+    assert_eq!(end(&image, "[]").expect("the empty end"), spans(&[]));
+    let owed = "member: not the canonical spelling — the lowest member positions holding each value, consecutive positions merged: ";
+    assert_eq!(refused(&image, r#"[{"ordinal":"1","width":"1"},{"ordinal":"2","width":"2"}]"#), format!(r#"{owed}[{{"ordinal":"1","width":"3"}}]"#), "split where no run parts");
+    assert_eq!(refused(&image, r#"[{"ordinal":"3","width":"5"}]"#), format!(r#"{owed}[{{"ordinal":"3","width":"3"}},{{"ordinal":"4","width":"2"}}]"#), "the draft's words a second time: their first positions");
+    let no_span = "member: a span of the member's positions has a zero ordinal or width, or reaches past the positions the runs place";
+    for none in [r#"[{"ordinal":"1","width":"0"}]"#, r#"[{"ordinal":"0","width":"1"}]"#, r#"[{"ordinal":"7","width":"2"}]"#, r#"[{"ordinal":"18446744073709551615","width":"2"}]"#] {
+        assert_eq!(refused(&image, none), no_span, "{none}");
+    }
+    // A `ty` in the member form: the form's own refusal first, then the
+    // type slot's.
+    let entry = |ty: &str| {
+        let frame = format!(r#"{{"home":"member","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"member":{ty}}}}}"#);
+        p_link_entry(&serde_json::from_str(&frame).expect("json"), false, &image).expect_err("no type slot takes the form").0
+    };
+    assert_eq!(entry(r#"[{"ordinal":"1","width":"3"}]"#), "ty: a type slot takes no member-position form");
+    assert_eq!(entry(r#"[{"ordinal":"6","width":"2"}]"#), format!(r#"ty: {owed}[{{"ordinal":"4","width":"2"}}]"#));
+    assert_eq!(entry(r#"[{"ordinal":"9","width":"1"}]"#), format!("ty: {no_span}"));
+    // One address at every position, and one span over all of them.
+    let one = r#"{"ordinal":"1","width":"1"}"#;
+    let at_the_cap = PositionImage::of(vec![run("1.0.1.0.1.0.1.1", 1); MAX_WIRE_LIST]);
+    assert_eq!(
+        refused(&at_the_cap, &format!(r#"[{{"ordinal":"1","width":"{MAX_WIRE_LIST}"}}]"#)),
+        format!("{owed}[{}]", vec![one; MAX_WIRE_LIST].join(",")),
+        "a row of one list's spans is named whole"
+    );
+    let past_it = PositionImage::of(vec![run("1.0.1.0.1.0.1.1", 1); MAX_WIRE_LIST + 1]);
+    assert_eq!(
+        refused(&past_it, &format!(r#"[{{"ordinal":"1","width":"{}"}}]"#, MAX_WIRE_LIST + 1)),
+        format!("{owed}[{}], the first {MAX_WIRE_LIST} spans of a row that runs on past what one list carries", vec![one; MAX_WIRE_LIST].join(",")),
+        "a row past them is named to its first {MAX_WIRE_LIST} spans, and said to run on"
+    );
+}

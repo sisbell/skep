@@ -1,5 +1,5 @@
 use skep_address::{validate, Nat, Tumbler};
-use skep_arrangement::{head_lock_key, Base, MintedRun, ShotRun, VPos};
+use skep_arrangement::{head_lock_key, Base, MintedRun, ShotRun, ShotStretch, VPos};
 use skep_kernel::LockKey;
 use skep_namespace::{M3State, FIRST_ORDINARY_DOCUMENT};
 
@@ -193,7 +193,7 @@ fn the_pairings_pieces_at_an_index_are_the_entries_a_scan_finds() {
 #[test]
 fn resolve_end_resolves_the_tags_and_the_member_positions_at_the_commit() {
     let (member, edition) = (a(&[1, 0, 1, 0, nth_doc(3), 1]), a(&[1, 0, 1, 0, nth_doc(3)]));
-    let image = [run(&pca(1), 3)];
+    let image = PositionImage::of(vec![run(&pca(1), 3)]);
     let stored = PlannedEnd::Stored(enc([&edition]));
     assert_eq!(resolve_end(&stored, &member, Some(&edition), &image), Some(enc([&edition])));
     let named = PlannedEnd::Named(vec![NamedAddress::Member, NamedAddress::Edition, NamedAddress::Address(a(&[1, 0, 2]))]);
@@ -776,4 +776,755 @@ fn an_entrys_original_is_superseded_over_the_published_words_its_base_does_not_h
     assert_eq!(plan(original.clone(), vec![run(&pca(1), 3)]), Ok(()), "4..5 left, which no copy covers");
     assert_eq!(plan(original, vec![run(&ca(1), 5)]), Ok(()), "the base's words on another chain");
     assert_eq!(plan(link_in(&draft, 3), vec![run(&pca(1), 5)]), Ok(()), "a revision: its original's copy over the spans whole");
+}
+
+// ──────────── the member-position end: the one pass against the scan ────────────
+//
+// The member-position check as it was first spelled, kept here as the
+// oracle the prepared image is held to, answer for answer, and counted in
+// the unit the prepared image's own passes are counted in.
+
+/// The check's first spelling: every row of the image for each span, every
+/// row for each piece, every holding row for each cut. Kept word for word
+/// but for the `steps` each loop charges — one for a row built, one for a
+/// row a span's walk or a piece's filter looks at, one for a piece cut, one
+/// for a holding row a piece's cuts are read off, one for a cut window made
+/// and one for a holding row a window's scan looks at. The sum that counts
+/// the placed positions charges nothing.
+mod oracle {
+    use std::collections::BTreeSet;
+
+    use skep_address::{Nat, Span, Tumbler};
+    use skep_arrangement::Run;
+
+    use super::super::{MemberEnd, MemberSpan};
+    use crate::endset::Endset;
+
+    pub(super) fn member_end(image: &[Run], spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> Option<MemberEnd> {
+        let rows = rows_of(image, steps)?;
+        let placed: u64 = rows.iter().map(|r| r.width).sum();
+        let mut pieces: Vec<Piece> = Vec::new();
+        for span in spans {
+            if span.width == 0 || span.ordinal == 0 {
+                return None;
+            }
+            let reach = span.ordinal.checked_add(span.width)?;
+            if reach - 1 > placed {
+                return None;
+            }
+            for row in &rows {
+                steps(1);
+                let row_reach = row.position + row.width;
+                let lo = span.ordinal.max(row.position);
+                let hi = reach.min(row_reach);
+                if lo >= hi {
+                    continue;
+                }
+                steps(1);
+                let piece = Piece { chain: row.chain.clone(), first: row.first + (lo - row.position), width: hi - lo };
+                match pieces.last_mut() {
+                    Some(last) if last.chain == piece.chain && last.first + last.width == piece.first => {
+                        last.width += piece.width;
+                    }
+                    _ => pieces.push(piece),
+                }
+            }
+        }
+        let stored = Endset::from_spans(pieces.iter().map(Piece::span));
+        let canonical = canonical_over(&rows, &pieces, steps)?;
+        Some(MemberEnd { canonical, stored })
+    }
+
+    pub(super) fn canonical_member_spans(image: &[Run], stored: &Endset, steps: &mut impl FnMut(u64)) -> Option<Vec<MemberSpan>> {
+        let rows = rows_of(image, steps)?;
+        let pieces: Vec<Piece> = stored.spans().map(Piece::of_span).collect::<Option<_>>()?;
+        canonical_over(&rows, &pieces, steps)
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Row {
+        chain: Vec<Nat>,
+        first: u64,
+        width: u64,
+        position: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Piece {
+        chain: Vec<Nat>,
+        first: u64,
+        width: u64,
+    }
+
+    impl Piece {
+        fn span(&self) -> Span {
+            let tumbler = |ordinal: u64| {
+                Tumbler::new(self.chain.iter().cloned().chain([Nat::from(ordinal)]))
+                    .expect("a content address has a chain and an ordinal")
+            };
+            Span::from_endpoints(tumbler(self.first), &tumbler(self.first + self.width))
+                .expect("width ≥ 1 and one length: the span is well-formed")
+        }
+
+        fn of_span(span: &Span) -> Option<Piece> {
+            let start = span.start();
+            let width = span.width();
+            if start.len() != width.len() || start.len() < 2 {
+                return None;
+            }
+            if width.iter().take(width.len() - 1).any(|c| *c != Nat::from(0u32)) {
+                return None;
+            }
+            let (chain, first) = split(start)?;
+            let count = u64::try_from(width.get(width.len())?).ok()?;
+            (count > 0).then_some(Piece { chain, first, width: count })
+        }
+    }
+
+    fn split(t: &Tumbler) -> Option<(Vec<Nat>, u64)> {
+        let mut chain: Vec<Nat> = t.iter().cloned().collect();
+        let ordinal = chain.pop()?;
+        Some((chain, u64::try_from(&ordinal).ok()?))
+    }
+
+    fn rows_of(image: &[Run], steps: &mut impl FnMut(u64)) -> Option<Vec<Row>> {
+        let mut rows = Vec::with_capacity(image.len());
+        let mut position: u64 = 1;
+        for run in image {
+            steps(1);
+            let (chain, first) = split(run.i_start().tumbler())?;
+            let width = u64::try_from(run.width()).ok()?;
+            rows.push(Row { chain, first, width, position });
+            position = position.checked_add(width)?;
+        }
+        Some(rows)
+    }
+
+    fn canonical_over(rows: &[Row], pieces: &[Piece], steps: &mut impl FnMut(u64)) -> Option<Vec<MemberSpan>> {
+        let mut out: Vec<MemberSpan> = Vec::new();
+        for piece in pieces {
+            let reach = piece.first + piece.width;
+            let holding: Vec<&Row> = rows
+                .iter()
+                .filter(|r| {
+                    steps(1);
+                    r.chain == piece.chain && r.first < reach && r.first + r.width > piece.first
+                })
+                .collect();
+            let mut cuts: BTreeSet<u64> = BTreeSet::from([piece.first, reach]);
+            for r in &holding {
+                steps(1);
+                for c in [r.first, r.first + r.width] {
+                    if c > piece.first && c < reach {
+                        cuts.insert(c);
+                    }
+                }
+            }
+            let cuts: Vec<u64> = cuts.into_iter().collect();
+            for pair in cuts.windows(2) {
+                steps(1);
+                let (x, y) = (pair[0], pair[1]);
+                let best = holding
+                    .iter()
+                    .filter(|r| {
+                        steps(1);
+                        r.first <= x && x < r.first + r.width
+                    })
+                    .min_by_key(|r| r.position + (x - r.first))?;
+                let ordinal = best.position + (x - best.first);
+                match out.last_mut() {
+                    Some(last) if last.ordinal + last.width == ordinal => last.width += y - x,
+                    _ => out.push(MemberSpan { ordinal, width: y - x }),
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
+/// `count` runs of one position each, every one on doc1's first content
+/// address: one identity at every position.
+fn one_address(count: u32) -> Vec<Run> {
+    (0..count).map(|_| run(&ca(1), 1)).collect()
+}
+
+/// `count` runs of one position each on `count` addresses of doc1's content,
+/// the highest first: no run continues the one before it, and no address is
+/// held twice.
+fn descending(count: u32) -> Vec<Run> {
+    (0..count).map(|k| run(&ca(count - k), 1)).collect()
+}
+
+/// `short` runs of one position each on doc1's even content addresses
+/// `2, 4, …`, then ONE run over the addresses `1 ..= 2 × short + 1`: the wide
+/// run holds every even address a second time, at a higher position, so its
+/// values' lowest positions alternate between a short run and itself.
+fn striped(short: u32) -> Vec<Run> {
+    (1..=short).map(|k| run(&ca(2 * k), 1)).chain([run(&ca(1), 2 * short + 1)]).collect()
+}
+
+/// The card's `L` for an image of `runs` runs: `⌈log₂(runs + 2)⌉`.
+fn log_of(runs: usize) -> u64 {
+    u64::from(64 - (runs as u64 + 1).leading_zeros())
+}
+
+/// The steps the card allows the preparation of an image of `runs` runs.
+fn prepared_within(runs: usize) -> u64 {
+    8 * (runs as u64 + 1) * log_of(runs)
+}
+
+/// The steps the card allows `is_canonical` of `spans` spans.
+fn canonical_within(runs: usize, spans: usize) -> u64 {
+    (spans as u64 + 1) * (log_of(runs) + 3)
+}
+
+/// The steps the card allows `canonical_row` of `spans` spans asked for at
+/// most `most` spans of the row.
+fn row_within(runs: usize, spans: usize, most: usize) -> u64 {
+    4 * (spans as u64 + most as u64 + 1) * (log_of(runs) + 3)
+}
+
+/// The steps the card allows `stored` of `spans` spans resolving to
+/// `pieces` pieces.
+fn stored_within(runs: usize, spans: usize, pieces: usize) -> u64 {
+    (spans as u64 + 1) * (log_of(runs) + 3) + 2 * (pieces as u64 + spans as u64)
+}
+
+/// The steps the card allows `canonical_spans` of `pieces` stored spans
+/// whose row has `row` spans.
+fn spans_within(runs: usize, pieces: usize, row: usize) -> u64 {
+    2 * (pieces as u64 + 1) * (log_of(runs) + 3) + row as u64 + pieces as u64
+}
+
+/// A seeded sequence (xorshift64*): the same shapes on every run, and no
+/// dependency taken for them.
+struct Seeded(u64);
+
+impl Seeded {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// A number under `n`, which is not zero.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn one_in(&mut self, n: u64) -> bool {
+        self.below(n) == 0
+    }
+}
+
+/// Element `k` of one of six chains: doc1's content, the edition's, doc1's
+/// links (a chain apart from its content by the subspace alone), a member's
+/// content and a sub-account's document's (each a component longer), and
+/// the sibling account's.
+fn on(chain: u64, k: u32) -> Address {
+    match chain {
+        0 => ca(k),
+        1 => pca(k),
+        2 => a(&[1, 0, 1, 0, 1, 0, 2, k]),
+        3 => a(&[1, 0, 1, 0, nth_doc(3), 1, 0, 1, k]),
+        4 => a(&[1, 0, 1, 2, 0, 1, 0, 1, k]),
+        _ => a(&[1, 0, 2, 0, 1, 0, 1, k]),
+    }
+}
+
+/// An image of up to twelve runs over one, two, three or six chains, their
+/// addresses drawn from a dozen so that runs repeat, overlap and nest; one
+/// run in four continues the run before it, one in six repeats it, one in
+/// six stands one address below it, and one in eight is wide.
+fn seeded_image(seed: &mut Seeded) -> Vec<Run> {
+    let chains = [1, 1, 2, 3, 6][seed.below(5) as usize];
+    let mut rows: Vec<(u64, u32, u32)> = Vec::new();
+    for _ in 0..seed.below(13) {
+        let fresh = |seed: &mut Seeded| {
+            let width = 1 + if seed.one_in(8) { seed.below(30) } else { seed.below(5) };
+            (seed.below(chains), 1 + seed.below(12) as u32, width as u32)
+        };
+        let row = match (rows.last().copied(), seed.below(12)) {
+            (Some((chain, first, width)), 0..=2) => (chain, first + width, 1 + seed.below(4) as u32),
+            (Some(before), 3..=4) => before,
+            (Some((chain, first, _)), 5..=6) if first > 1 => (chain, first - 1, 1),
+            _ => fresh(seed),
+        };
+        rows.push(row);
+    }
+    rows.into_iter().map(|(chain, first, width)| run(&on(chain, first), width)).collect()
+}
+
+/// A request of up to six spans over `placed` positions: most inside them,
+/// one in three beginning where the span before it ends, and one in forty
+/// no span at all — a zero ordinal, a zero width, a start or a reach past
+/// the positions, or a reach past `u64`.
+fn seeded_spans(seed: &mut Seeded, placed: u64) -> Vec<MemberSpan> {
+    let mut spans: Vec<MemberSpan> = Vec::new();
+    for _ in 0..seed.below(7) {
+        let next = if placed == 0 || seed.one_in(40) {
+            match seed.below(5) {
+                0 => span(0, 1),
+                1 => span(1, 0),
+                2 => span(placed + 1, 1),
+                3 => span(placed.max(1), 2),
+                _ => span(u64::MAX, 2),
+            }
+        } else {
+            let touching = spans.last().map(|last| last.ordinal.saturating_add(last.width)).filter(|at| *at <= placed);
+            let ordinal = match touching {
+                Some(at) if seed.one_in(3) => at,
+                _ => 1 + seed.below(placed),
+            };
+            let room = placed - ordinal + 1;
+            span(ordinal, 1 + if seed.one_in(3) { seed.below(room) } else { seed.below(room.min(3)) })
+        };
+        spans.push(next);
+    }
+    spans
+}
+
+/// A stored endset of up to three spans, as a verifier might hand one:
+/// content spans on `chains` chains at a dozen addresses — some held whole
+/// by an image over those chains, some in part, some in no run — and, one
+/// in six, a span that is no I-span: an address's own span, a span whose
+/// width is not at its start's depth, or one a tier wide.
+fn seeded_endset(seed: &mut Seeded, chains: u64) -> Endset {
+    let t = |comps: &[u32]| Tumbler::new(comps.iter().map(|&c| Nat::from(c))).unwrap();
+    Endset::from_spans((0..seed.below(4)).filter_map(|_| match seed.below(18) {
+        0 => Some(subtree_of(a(&[1, 0, 1, 0, 1]).tumbler())),
+        1 => Span::new(t(&[5, 3]), t(&[0, 2, 7])).ok(),
+        2 => Span::new(ca(1 + seed.below(12) as u32).tumbler().clone(), t(&[0, 0, 0, 0, 0, 1, 0, 0])).ok(),
+        _ => Some(ispan(&on(seed.below(chains), 1 + seed.below(14) as u32), 1 + seed.below(8) as u32)),
+    }))
+}
+
+/// What the equality fence asked, by answer: the ends, those the first
+/// spelling answers no end for, those whose request is its own canonical
+/// row, and the stored endsets read back, with those no row holds whole.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Asked {
+    ends: usize,
+    none: usize,
+    canonical: usize,
+    endsets: usize,
+    unheld: usize,
+}
+
+/// Holds every answer the prepared image gives for `spans` over `image` to
+/// the first spelling's, and every count to the card's bound; answers the
+/// first spelling's end.
+fn held_to_the_first_spelling(image: &[Run], spans: &[MemberSpan], asked: &mut Asked) -> Option<MemberEnd> {
+    let first = oracle::member_end(image, spans, &mut |_| {});
+    let (runs, count) = (image.len(), spans.len());
+    asked.ends += 1;
+    asked.none += usize::from(first.is_none());
+    assert_eq!(member_end(image, spans), first, "the one function: {image:?} {spans:?}");
+    let prepared = PositionImage::of(image.to_vec());
+    let mut steps = 0u64;
+    prepared.rows(&mut |n| steps += n);
+    assert!(steps <= prepared_within(runs), "the preparation, {steps} steps: {image:?}");
+    let (mut steps, mut again) = (0u64, 0u64);
+    assert_eq!(prepared.end_counted(spans, &mut |n| steps += n), first, "the end, the image prepared once: {image:?} {spans:?}");
+    prepared.rows(&mut |n| again += n);
+    assert_eq!(again, 0, "prepared once: a second ask charges nothing");
+    let (pieces, row) = first.as_ref().map_or((0, 0), |end| (end.stored.len(), end.canonical.len()));
+    assert!(steps <= stored_within(runs, count, pieces) + row_within(runs, count, row), "the end, {steps} steps: {image:?} {spans:?}");
+    let mut steps = 0u64;
+    assert_eq!(prepared.stored_counted(spans, &mut |n| steps += n), first.as_ref().map(|end| end.stored.clone()), "the stored endset alone: {image:?} {spans:?}");
+    assert!(steps <= stored_within(runs, count, pieces), "the stored endset, {steps} steps: {image:?} {spans:?}");
+    let mut steps = 0u64;
+    let verdict = first.as_ref().map(|end| end.canonical == spans);
+    asked.canonical += usize::from(verdict == Some(true));
+    assert_eq!(prepared.is_canonical_counted(spans, &mut |n| steps += n), verdict, "whether the request is its own row: {image:?} {spans:?}");
+    assert!(steps <= canonical_within(runs, count), "the verdict, {steps} steps: {image:?} {spans:?}");
+    for most in [0, 1, 2, 3, usize::MAX] {
+        let mut steps = 0u64;
+        let head = first.as_ref().map(|end| (end.canonical[..most.min(row)].to_vec(), row > most));
+        assert_eq!(prepared.canonical_row_counted(spans, most, &mut |n| steps += n), head, "the row's first {most} spans: {image:?} {spans:?}");
+        assert!(steps <= row_within(runs, count, most.min(row)), "the row's first {most} spans, {steps} steps: {image:?} {spans:?}");
+    }
+    if let Some(end) = &first {
+        read_back_as_the_first_spelling_reads(image, &end.stored, asked);
+    }
+    first
+}
+
+/// Holds the prepared image's reading of `stored` back to its row to the
+/// first spelling's, and its count to the card's bound.
+fn read_back_as_the_first_spelling_reads(image: &[Run], stored: &Endset, asked: &mut Asked) {
+    let first = oracle::canonical_member_spans(image, stored, &mut |_| {});
+    asked.endsets += 1;
+    asked.unheld += usize::from(first.is_none());
+    assert_eq!(canonical_member_spans(image, stored), first, "the verifier's half: {image:?} {stored:?}");
+    let prepared = PositionImage::of(image.to_vec());
+    prepared.rows(&mut |_| {});
+    let mut steps = 0u64;
+    assert_eq!(prepared.canonical_spans_counted(stored, &mut |n| steps += n), first, "the verifier's half, the image prepared once: {image:?} {stored:?}");
+    let row = first.as_ref().map_or(0, Vec::len);
+    assert!(steps <= spans_within(image.len(), stored.len(), row), "the verifier's half, {steps} steps: {image:?} {stored:?}");
+}
+
+/// THE ONE PASS ANSWERS AS THE SCAN DID, over every shape a seeded sequence
+/// makes — four thousand images of up to twelve runs on one chain and on
+/// several, their runs repeating one identity at several positions,
+/// overlapping, nesting and continuing one another; over each, four
+/// requests of up to six spans — inside one run, across many, touching the
+/// span before them, of zero ordinal or width, past the positions and past
+/// `u64` — and the empty request; each request's own canonical row sent
+/// back as a request; and three stored endsets a verifier might read back,
+/// held whole, in part or in no run, or no I-span at all. Then the shapes
+/// at `u64`'s top, and the two images of one shot — the request's and the
+/// minted member's — of a shot naming its whole arrangement and of a shot
+/// naming its change by a stretch list. Every answer is the first
+/// spelling's: the end's stored endset and its row, the stored endset
+/// alone, whether the request is its own row, the row's first spans up to
+/// a count and whether it runs on, and the verifier's reading of an endset
+/// back to its row — `None` for `None`. And every one is counted inside the
+/// bound the prepared image's card states.
+#[test]
+fn the_prepared_image_answers_as_the_first_spelling_does_over_every_shape() {
+    let mut seed = Seeded(0x05EE_D0FA_5EED);
+    let mut asked = Asked::default();
+    for _ in 0..4_000 {
+        let image = seeded_image(&mut seed);
+        let placed: u64 = image.iter().map(|run| u64::try_from(run.width()).expect("a small width")).sum();
+        let chains = 1 + seed.below(6);
+        held_to_the_first_spelling(&image, &[], &mut asked).expect("the empty request is the empty end");
+        for _ in 0..4 {
+            let spans = seeded_spans(&mut seed, placed);
+            if let Some(end) = held_to_the_first_spelling(&image, &spans, &mut asked) {
+                // The row is its own canonical spelling: asked again as one.
+                let again = held_to_the_first_spelling(&image, &end.canonical, &mut asked).expect("a row is a request");
+                assert_eq!(again.canonical, end.canonical, "a row spells itself: {image:?} {spans:?}");
+            }
+        }
+        for _ in 0..3 {
+            read_back_as_the_first_spelling_reads(&image, &seeded_endset(&mut seed, chains), &mut asked);
+        }
+    }
+    assert_eq!(
+        asked,
+        Asked { ends: 33_919, none: 2_081, canonical: 22_710, endsets: 43_838, unheld: 8_534 },
+        "the seeded shapes, by answer"
+    );
+    // The top of `u64`: one run over all but the last two positions a
+    // `u64` counts, and spans at its edge.
+    let top = [Run::new(ca(1), Nat::from(u64::MAX - 1)).unwrap()];
+    let mut edge = Asked::default();
+    for spans in [
+        vec![span(1, u64::MAX - 1)],
+        vec![span(u64::MAX - 1, 1)],
+        vec![span(u64::MAX - 2, 2)],
+        vec![span(u64::MAX - 1, 2)],
+        vec![span(u64::MAX, 1)],
+        vec![span(u64::MAX, u64::MAX)],
+        vec![span(1, 1), span(2, u64::MAX - 2)],
+        vec![span(7, 3), span(u64::MAX - 5, 4), span(1, 6)],
+    ] {
+        held_to_the_first_spelling(&top, &spans, &mut edge);
+    }
+    assert_eq!((edge.ends, edge.none, edge.canonical), (8, 3, 4), "at the top of `u64`: a reach past it is no span");
+    // An image no end is read over: a run as wide as `u64` counts, whose
+    // positions pass it; a width past `u64`; an ordinal past it; and two
+    // runs whose positions together pass it.
+    let mut unread = Asked::default();
+    let past = Nat::from(u64::MAX) + Nat::from(1u32);
+    let beyond = validate(Tumbler::new([1u32, 0, 1, 0, 1, 0, 1].into_iter().map(Nat::from).chain([past.clone()])).unwrap()).unwrap();
+    for image in [
+        vec![Run::new(ca(1), Nat::from(u64::MAX)).unwrap()],
+        vec![run(&ca(1), 2), Run::new(ca(9), past.clone()).unwrap()],
+        vec![Run::new(beyond, Nat::from(1u32)).unwrap(), run(&ca(1), 2)],
+        vec![Run::new(ca(1), Nat::from(u64::MAX / 2 + 1)).unwrap(), Run::new(pca(1), Nat::from(u64::MAX / 2)).unwrap()],
+    ] {
+        for spans in [vec![], vec![span(1, 1)]] {
+            assert_eq!(held_to_the_first_spelling(&image, &spans, &mut unread), None, "no end over such an image, the empty one included: {spans:?}");
+        }
+        read_back_as_the_first_spelling_reads(&image, &Endset::from_spans([ispan(&ca(1), 1)]), &mut unread);
+    }
+    assert_eq!(unread, Asked { ends: 8, none: 8, canonical: 0, endsets: 4, unheld: 4 }, "no end, and no row read back");
+    // One shot, two images: the request's, and the member's once minted.
+    let draft = a(&[1, 0, 1, 0, 1]);
+    let mut shots = Asked::default();
+    for form in 0..400 {
+        // The shot's runs: the draft's own words and words placed by
+        // reference; and the pairing a mint would return for them, each
+        // draft address given one fresh address at its first placing.
+        let mut fresh: BTreeMap<u32, u32> = BTreeMap::new();
+        let (mut runs, mut pairing): (Vec<ShotRun>, Pairing) = (Vec::new(), Vec::new());
+        for index in 0..1 + seed.below(8) as usize {
+            if seed.one_in(3) {
+                let chain = [1, 5][seed.below(2) as usize];
+                let origin = document_of(&on(chain, 1)).expect("an element lies in a document");
+                runs.push(ShotRun { origin, run: run(&on(chain, 1 + seed.below(12) as u32), 1 + seed.below(4) as u32) });
+                continue;
+            }
+            let (first, width) = (1 + seed.below(10) as u32, 1 + seed.below(4) as u32);
+            runs.push(ShotRun { origin: draft.clone(), run: run(&ca(first), width) });
+            let mut k = first;
+            while k < first + width {
+                let minted = !fresh.contains_key(&k);
+                let next = 1_000 + fresh.len() as u32;
+                let to = *fresh.entry(k).or_insert(next);
+                let mut len = 1;
+                while k + len < first + width {
+                    let held = fresh.get(&(k + len)).copied();
+                    let runs_on = match held {
+                        Some(at) => !minted && at == to + len,
+                        None => minted,
+                    };
+                    if !runs_on {
+                        break;
+                    }
+                    fresh.entry(k + len).or_insert(to + len);
+                    len += 1;
+                }
+                pairing.push(MintedRun { from: run(&ca(k), len), to: run(&pca(to), len), home: draft.clone(), index, minted });
+                k += len;
+            }
+        }
+        let by_stretches = form % 2 == 1;
+        let shot = Shot {
+            base: by_stretches.then(|| Base { member: member(2), extent: Nat::from(40u32) }),
+            draft: Some(draft.clone()),
+            also: vec![],
+            keep_base: false,
+            stretches: if by_stretches { vec![ShotStretch { start: Nat::from(3u32), width: Nat::from(2u32), count: runs.len() }] } else { Vec::new() },
+            runs,
+        };
+        let (before, after) = (request_image(&shot), member_image(&shot, &pairing));
+        let placed: u64 = before.iter().map(|run| u64::try_from(run.width()).expect("a small width")).sum();
+        for _ in 0..4 {
+            let spans = seeded_spans(&mut seed, placed);
+            let (b, a) = (held_to_the_first_spelling(&before, &spans, &mut shots), held_to_the_first_spelling(&after, &spans, &mut shots));
+            assert_eq!(b.map(|end| end.canonical), a.map(|end| end.canonical), "one row over the request's image and the member's: {shot:?} {spans:?}");
+        }
+    }
+    assert_eq!(shots, Asked { ends: 3_200, none: 244, canonical: 1_210, endsets: 2_956, unheld: 0 }, "the shots' two images, by answer");
+}
+
+/// WHERE THE FIRST SPELLING OVERFLOWED: a run whose addresses pass `u64` —
+/// its ordinal and its width each within it, their sum not. The first
+/// spelling added the two in `u64` wherever a span reached such a run, and
+/// so had no answer for it (its arithmetic overflowed); the prepared image
+/// reads a reach wider than `u64` and answers by the same rule as for any
+/// run. Beside a run on another chain that no span reaches, such a run
+/// changes nothing, and there the two spellings agree.
+#[test]
+fn a_run_whose_addresses_pass_u64_is_read_by_the_same_rule() {
+    let last = validate(Tumbler::new([1u32, 0, 1, 0, 1, 0, 1].into_iter().map(Nat::from).chain([Nat::from(u64::MAX)])).unwrap()).unwrap();
+    let image = vec![run(&pca(1), 2), Run::new(last.clone(), Nat::from(2u32)).unwrap(), Run::new(last.clone(), Nat::from(2u32)).unwrap()];
+    let prepared = PositionImage::of(image.clone());
+    let past = Run::new(last, Nat::from(2u32)).unwrap().iextent();
+    let end = prepared.end(&[span(2, 3)]).expect("inside the positions");
+    assert_eq!(end.stored, Endset::from_spans([ispan(&pca(2), 1), past.clone()]), "the run's two addresses, the second past `u64`");
+    assert_eq!(end.canonical, vec![span(2, 3)]);
+    assert_eq!(prepared.is_canonical(&[span(2, 3)]), Some(true));
+    assert_eq!(prepared.is_canonical(&[span(5, 2)]), Some(false), "the same two addresses a second time");
+    assert_eq!(prepared.canonical_row(&[span(5, 2)], 4), Some((vec![span(3, 2)], false)), "their lowest positions");
+    assert_eq!(prepared.canonical_spans(&Endset::from_spans([past])), Some(vec![span(3, 2)]), "and read back");
+    // No span on the far run: the two spellings agree.
+    let mut asked = Asked::default();
+    held_to_the_first_spelling(&image, &[span(1, 2)], &mut asked).expect("the edition's two words");
+}
+
+/// Runs `call` over a count of the steps it charges and answers both. The
+/// count may not pass `within`: one that does stops the call where it
+/// passes, so a spelling that rescans is refused at its first rescan and
+/// never run out.
+fn counted<T>(within: u64, what: &str, call: impl FnOnce(&mut dyn FnMut(u64)) -> T) -> (T, u64) {
+    let mut steps = 0u64;
+    let out = call(&mut |n| {
+        steps += n;
+        assert!(steps <= within, "{what}: {steps} steps, past the {within} the card allows");
+    });
+    (out, steps)
+}
+
+/// The first spelling's steps for one end over `rows` runs holding ONE
+/// address, the end one span over all of them: every row for the span,
+/// then, for each of the `rows` pieces, every row filtered, every row
+/// holding it read for its cuts and scanned for its one cut.
+fn first_over_one_address(rows: u64) -> u64 {
+    3 * rows * rows + 4 * rows
+}
+
+/// The first spelling's steps for one end over those runs, the end `spans`
+/// spans of the first position.
+fn first_over_one_position(rows: u64, spans: u64) -> u64 {
+    rows + spans * (4 * rows + 2)
+}
+
+/// The first spelling's steps for one end over `rows` runs on descending
+/// addresses, the end `spans` spans over all of them: `spans × rows`
+/// pieces, every row filtered for each.
+fn first_over_descending(rows: u64, spans: u64) -> u64 {
+    rows + spans * rows * (rows + 5)
+}
+
+/// The first spelling's steps for one end over `rows − 1` runs on even
+/// addresses and the wide run after them, the end `spans` spans over the
+/// wide run: each piece cut `2 × rows − 1` times, every row scanned a cut.
+fn first_over_striped(rows: u64, spans: u64) -> u64 {
+    rows + spans * (2 * rows * rows + 4 * rows)
+}
+
+/// THE WORST SHAPES AT THE CAPS, COUNTED: images of 4,096 runs (one list's
+/// cap, a shot's runs before they took the store's number), 16,384, and
+/// 65,536 (the store's number, which a shot's runs take now), and over
+/// each the ends that cost the first spelling most — the count of every
+/// answer inside the bound the prepared image's card states, the
+/// preparation charged ONCE an image however many ends are asked of it.
+///
+/// * One address at every position, the end one span over all of them: not
+///   canonical, its row a span a position. The verdict is one search, and
+///   the row owed is read to one list's 4,096 spans and no further.
+/// * The same image, the end a full list of spans of the first position:
+///   canonical, a search a span; stored, a piece a span.
+/// * Runs on descending addresses, the end one span over all of them:
+///   canonical by one search, whatever the runs; stored, a piece a run; and
+///   those pieces read back to the one span they spell.
+/// * The same image, the end a full list of such spans: canonical, a search
+///   a span — where the spans resolve to `4,096 × runs` pieces, none of
+///   which the verdict builds. Their walk is counted where they number a
+///   sixteenth of that.
+/// * Short runs on even addresses and one wide run over them all, the end a
+///   full list of spans over the wide run: not canonical at its first span,
+///   where the search stops, its row `4,096 × (2 × runs − 1)` spans long
+///   and read to 4,096.
+///
+/// Beside each stands what the first spelling charged the same end, by the
+/// formulas `the_first_spelling_looks_at_every_row_for_every_piece_of_an_end`
+/// holds it to by count: past the prepared image's whole allowance at every
+/// shape and size — the preparation included — and never run here. At
+/// 65,536 runs it is 12,885,164,032 steps for the first end,
+/// 1,073,815,552 for the second, 4,295,360,512 for the third, about
+/// 1.76 × 10¹³ for the fourth and about 3.52 × 10¹³ for the fifth.
+#[test]
+fn the_prepared_image_reads_the_worst_shapes_inside_its_bounds_at_the_caps() {
+    const LIST: usize = MAX_SLOT_SPANS;
+    assert_eq!(
+        (first_over_one_address(65_536), first_over_one_position(65_536, 4_096), first_over_descending(65_536, 1)),
+        (12_885_164_032, 1_073_815_552, 4_295_360_512),
+        "the first spelling at the store's number, by its formulas"
+    );
+    assert_eq!((first_over_descending(65_536, 4_096), first_over_striped(65_536, 4_096)), (17_593_528_287_232, 35_185_445_896_192));
+    for rows in [4_096u32, 16_384, 65_536] {
+        let (r, n) = (u64::from(rows), rows as usize);
+        let (whole, list) = ([span(1, r)], LIST as u64);
+        // One address at every position.
+        let image = PositionImage::of(one_address(rows));
+        counted(prepared_within(n), "the preparation", |mut steps| image.rows(&mut steps).is_some());
+        let (verdict, _) = counted(canonical_within(n, 1), "one span over one address", |mut steps| image.is_canonical_counted(&whole, &mut steps));
+        assert_eq!(verdict, Some(false), "{rows}: the positions past the first hold the first's value");
+        let (owed, _) = counted(row_within(n, 1, LIST), "the row owed", |mut steps| image.canonical_row_counted(&whole, LIST, &mut steps));
+        let (owed, more) = owed.expect("an end");
+        assert_eq!((owed.len(), more), (LIST, n > LIST), "{rows}: the row read to one list's spans, and whether it runs on");
+        assert!(owed.iter().all(|spelled| *spelled == span(1, 1)), "{rows}: a span a position, each the first");
+        assert!(first_over_one_address(r) > (prepared_within(n) + canonical_within(n, 1) + row_within(n, 1, LIST)), "{rows}: the first spelling's steps");
+        let ones: Vec<MemberSpan> = (0..LIST).map(|_| span(1, 1)).collect();
+        let (verdict, _) = counted(canonical_within(n, LIST), "a list of the first position", |mut steps| image.is_canonical_counted(&ones, &mut steps));
+        assert_eq!(verdict, Some(true), "{rows}");
+        let (stored, _) = counted(stored_within(n, LIST, LIST), "a list of the first position, stored", |mut steps| image.stored_counted(&ones, &mut steps));
+        let stored = stored.expect("an end");
+        assert_eq!(stored.len(), LIST, "{rows}: a piece a span");
+        let (back, _) = counted(spans_within(n, LIST, LIST), "those pieces read back", |mut steps| image.canonical_spans_counted(&stored, &mut steps));
+        assert_eq!(back, Some(ones.clone()), "{rows}");
+        assert!(first_over_one_position(r, list) > (prepared_within(n) + canonical_within(n, LIST) + stored_within(n, LIST, LIST)), "{rows}: the first spelling's steps");
+        // Runs on descending addresses.
+        let image = PositionImage::of(descending(rows));
+        counted(prepared_within(n), "the preparation", |mut steps| image.rows(&mut steps).is_some());
+        let (verdict, _) = counted(canonical_within(n, 1), "one span over descending runs", |mut steps| image.is_canonical_counted(&whole, &mut steps));
+        assert_eq!(verdict, Some(true), "{rows}");
+        let (stored, _) = counted(stored_within(n, 1, n), "one span over descending runs, stored", |mut steps| image.stored_counted(&whole, &mut steps));
+        let stored = stored.expect("an end");
+        assert_eq!(stored.len(), n, "{rows}: a piece a run");
+        let (back, _) = counted(spans_within(n, n, 1), "those pieces read back", |mut steps| image.canonical_spans_counted(&stored, &mut steps));
+        assert_eq!(back, Some(whole.to_vec()), "{rows}: the one span they spell");
+        assert!(first_over_descending(r, 1) > (prepared_within(n) + canonical_within(n, 1) + stored_within(n, 1, n)), "{rows}: the first spelling's steps");
+        let wide: Vec<MemberSpan> = (0..LIST).map(|_| span(1, r)).collect();
+        let (verdict, _) = counted(canonical_within(n, LIST), "a list of spans over descending runs", |mut steps| image.is_canonical_counted(&wide, &mut steps));
+        assert_eq!(verdict, Some(true), "{rows}: no piece built for the verdict");
+        let sixteenth = &wide[..LIST / 16];
+        let within = stored_within(n, sixteenth.len(), sixteenth.len() * n);
+        let (pieces, _) = counted(within, "a sixteenth of those spans, walked", |mut steps| {
+            let rows = image.rows(&mut steps).expect("an image");
+            assert!(rows.holds(sixteenth, &mut steps));
+            rows.pieces(sixteenth, &mut steps).len()
+        });
+        assert_eq!(pieces, sixteenth.len() * n, "{rows}: a piece a run a span");
+        assert!(first_over_descending(r, list) > (prepared_within(n) + canonical_within(n, LIST)), "{rows}: the first spelling's steps");
+        // A FRAME's ends: the `from` and the `to` of a full `links` list,
+        // each one span over the image — prepared once for all of them.
+        let ends = 2 * list;
+        let (_, frame) = counted(prepared_within(n) + ends * canonical_within(n, 1), "a frame's ends over one image", |mut steps| {
+            let image = PositionImage::of(descending(rows));
+            for _ in 0..ends {
+                assert_eq!(image.is_canonical_counted(&whole, &mut steps), Some(true));
+                assert_eq!(image.stored_counted(&[span(1, 1)], &mut steps).map(|stored| stored.len()), Some(1));
+            }
+        });
+        assert!(ends * first_over_descending(r, 1) > frame, "{rows}: the first spelling's steps for the same ends");
+        // Short runs on even addresses, and the wide run over them.
+        let image = PositionImage::of(striped(rows - 1));
+        counted(prepared_within(n), "the preparation", |mut steps| image.rows(&mut steps).is_some());
+        let over: Vec<MemberSpan> = (0..LIST).map(|_| span(r, 2 * r - 1)).collect();
+        let (verdict, judged_striped) = counted(canonical_within(n, LIST), "a list of spans over the wide run", |mut steps| image.is_canonical_counted(&over, &mut steps));
+        assert_eq!(verdict, Some(false), "{rows}: the wide run's even addresses stand lower");
+        assert!(judged_striped <= list + canonical_within(n, 1), "{rows}: every span held to the positions, a step each, and the search stopped at the first span");
+        let (owed, _) = counted(row_within(n, LIST, LIST), "the row owed", |mut steps| image.canonical_row_counted(&over, LIST, &mut steps));
+        let (owed, more) = owed.expect("an end");
+        assert_eq!((owed.len(), more, &owed[..4]), (LIST, true, &[span(r, 1), span(1, 1), span(r + 2, 1), span(2, 1)][..]), "{rows}: the wide run's own position, then the short run's, by turns");
+        let (stored, _) = counted(stored_within(n, LIST, LIST), "a list of spans over the wide run, stored", |mut steps| image.stored_counted(&over, &mut steps));
+        assert_eq!(stored.map(|stored| stored.len()), Some(LIST), "{rows}: a piece a span");
+        assert!(first_over_striped(r, list) > (prepared_within(n) + canonical_within(n, LIST) + row_within(n, LIST, LIST)), "{rows}: the first spelling's steps");
+    }
+}
+
+/// THE FIRST SPELLING, COUNTED, where it can be run: over 4,096 runs — one
+/// list's cap, a shot's runs before they took the store's number — one end
+/// of each of the three shapes that fit there, and over 256 runs the two
+/// whose pieces or rows outgrow any run of it. Its count is the formula's,
+/// step for step, at every shape; its answer is the prepared image's; and
+/// its count is past the prepared image's whole allowance for the same end,
+/// the preparation included — 50,348,032 steps against 688,392 for one
+/// span over one address at 4,096 runs.
+///
+/// Past these sizes the first spelling is not run: at the store's 65,536
+/// runs its steps are the formulas' (the fence beside this one states
+/// them), 256 times these and more.
+#[test]
+fn the_first_spelling_looks_at_every_row_for_every_piece_of_an_end() {
+    let first = |image: &[Run], spans: &[MemberSpan]| {
+        let mut steps = 0u64;
+        let end = oracle::member_end(image, spans, &mut |n| steps += n);
+        assert_eq!(PositionImage::of(image.to_vec()).end(spans), end, "one answer");
+        (end.expect("an end"), steps)
+    };
+    let (rows, r, n) = (4_096u32, 4_096u64, 4_096usize);
+    let (end, steps) = first(&one_address(rows), &[span(1, r)]);
+    assert_eq!((steps, end.stored.len(), end.canonical.len()), (first_over_one_address(r), n, n), "one span over one address: a piece and a span a position");
+    assert_eq!(steps, 50_348_032);
+    let allowed = prepared_within(n) + canonical_within(n, 1) + row_within(n, 1, MAX_SLOT_SPANS);
+    assert_eq!(allowed, 688_392, "what the prepared image is allowed for the same end: prepared, judged, its row read");
+    assert!(steps > allowed);
+    let ones: Vec<MemberSpan> = (0..1_024).map(|_| span(1, 1)).collect();
+    let (end, steps) = first(&one_address(rows), &ones);
+    assert_eq!((steps, end.stored.len(), end.canonical == ones), (first_over_one_position(r, 1_024), 1_024, true), "a quarter of a list of the first position");
+    assert!(steps > (prepared_within(n) + canonical_within(n, 1_024) + stored_within(n, 1_024, 1_024)));
+    let (end, steps) = first(&descending(rows), &[span(1, r)]);
+    assert_eq!((steps, end.stored.len(), end.canonical), (first_over_descending(r, 1), n, vec![span(1, r)]), "one span over descending runs: a piece a run, one span");
+    assert_eq!(steps, 16_801_792);
+    assert!(steps > (prepared_within(n) + canonical_within(n, 1) + stored_within(n, 1, n)));
+    // The two shapes that outgrow it, where they are small.
+    let (rows, r, n) = (256u32, 256u64, 256usize);
+    let wide: Vec<MemberSpan> = (0..16).map(|_| span(1, r)).collect();
+    let (end, steps) = first(&descending(rows), &wide);
+    assert_eq!((steps, end.stored.len(), end.canonical == wide), (first_over_descending(r, 16), 16 * n, true), "sixteen spans over descending runs: a piece a run a span");
+    assert!(steps > (prepared_within(n) + canonical_within(n, 16) + stored_within(n, 16, 16 * n)));
+    let over: Vec<MemberSpan> = (0..16).map(|_| span(r, 2 * r - 1)).collect();
+    let (end, steps) = first(&striped(rows - 1), &over);
+    assert_eq!((steps, end.stored.len(), end.canonical.len()), (first_over_striped(r, 16), 16, 16 * (2 * n - 1)), "sixteen spans over the wide run: a piece a span, a span a cut");
+    assert!(steps > (prepared_within(n) + canonical_within(n, 16) + row_within(n, 16, 16 * (2 * n - 1))));
 }

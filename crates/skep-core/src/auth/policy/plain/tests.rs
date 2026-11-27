@@ -623,6 +623,76 @@ fn the_refusal_ahead_of_the_lock_prices_no_stored_type_of_a_link_the_caller_may_
     assert_ne!(read[1].staged_bytes, absent, "and the link's one type span is not the absent link's figure");
 }
 
+/// THE REFUSAL's DETAIL COUNTS NO HOME THE CALLER MAY NOT READ. The node's
+/// own principal is seated at the node, under which every account's
+/// documents lie. The maker holds one link in its published home and two
+/// private drafts minted beside its first, and on a second board each of
+/// those two holds a link. The node's principal, which reads no draft of
+/// the maker's, sends a publication whose reads pass the budget on a
+/// read-with list: the refusal is answered ahead of the lock, and it names
+/// the SAME terms on both boards — ONE home, the published one, whatever
+/// the private drafts hold. The maker, refused for the same request, is
+/// priced its own homes, its two drafts among them on the second board, as
+/// it was before the homes were counted at the caller's class.
+#[test]
+fn the_refusal_ahead_of_the_lock_counts_no_home_the_caller_may_not_read() {
+    use serde_json::json;
+    use skep_febe::{PublishDeposits, PublishTarget, Shot};
+    use skep_links::MAX_PUBLICATION_READS;
+    use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
+
+    use crate::auth::policy::publication_read_refusal;
+
+    let wire = |text: &str| crate::codec::wire_address(text).expect("an address");
+    let link_in = |board: &TwoAccounts, home: &str| {
+        exec(&board.febe, board.maker.1, json!({"op": "make_link", "home": home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    };
+    // The board whose maker holds a link in its published home, and in
+    // `linked` of the two private drafts it mints beside its first.
+    let holding = |linked: usize| -> (TwoAccounts, Vec<Address>) {
+        let board = TwoAccounts::open();
+        link_in(&board, &board.home);
+        let drafts: Vec<Address> = (0..2).map(|_| exec(&board.febe, board.maker.1, json!({"op": "create_new_document", "account": "1.0.1"}))).collect();
+        for draft in &drafts[..linked] {
+            link_in(&board, &draft.to_string());
+        }
+        (board, drafts)
+    };
+    // The request: the maker's published home named, no shot run, and a
+    // read-with list one entry past the reads' budget — past it on one home.
+    let request = |board: &TwoAccounts| {
+        let home = wire(&board.home);
+        Op::Publish {
+            target: PublishTarget::Document(home.clone()),
+            shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
+            places: Vec::new(),
+            also_places: Vec::new(),
+            deposits: PublishDeposits { read_with: vec![home; MAX_PUBLICATION_READS + 1], ..PublishDeposits::default() },
+        }
+    };
+    let refused = |(board, _): &(TwoAccounts, Vec<Address>), caller: PrincipalId| {
+        let snap = board.engine.kernel().snapshot();
+        publication_read_refusal(snap.world(), &request(board), caller).expect("past the reads' budget: refused, every term named")
+    };
+    let boards = [holding(0), holding(2)];
+    for (board, drafts) in &boards {
+        let snap = board.engine.kernel().snapshot();
+        let world = snap.world();
+        assert_eq!(world.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).map(ToString::to_string).as_deref(), Some("1"), "premise: seated at the node");
+        assert!(drafts.iter().all(|draft| !world.readable(Some(BOOTSTRAP_PRINCIPAL), draft)), "premise: it reads no draft of the maker's");
+        assert!(world.readable(Some(BOOTSTRAP_PRINCIPAL), &wire(&board.home)), "premise: and reads the published home");
+    }
+    // The node's principal: one home on both boards, the published one.
+    let unread: Vec<_> = boards.iter().map(|board| refused(board, BOOTSTRAP_PRINCIPAL)).collect();
+    assert!(unread[0].reads_over() && !unread[0].bytes_over(), "premise: the reads speak: {:?}", unread[0]);
+    assert_eq!(unread[1], unread[0], "two private drafts holding a link move no term of the detail");
+    assert_eq!((unread[0].homes, unread[0].total), (1, MAX_PUBLICATION_READS + 1), "the one home it may read, and its entries");
+    // The maker, who reads its own drafts, is priced each home it holds.
+    let read: Vec<_> = boards.iter().map(|board| refused(board, board.0.maker.0)).collect();
+    assert_eq!(read.iter().map(|refusal| refusal.homes).collect::<Vec<_>>(), [1, 3], "its home, and its two drafts once they hold a link");
+    assert_eq!(read[1].total, 3 * (MAX_PUBLICATION_READS + 1), "every home times every entry");
+}
+
 /// Executes `frame` through M10 as `sid`, answering the ack's address.
 ///
 /// # Panics

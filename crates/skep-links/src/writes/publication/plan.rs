@@ -80,7 +80,7 @@ use skep_address::{
 };
 use skep_arrangement::{trunk_head, trunk_of, Caller, HasM5, MintedRun, Pairing, Run, Shot};
 use skep_namespace::M3State;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use super::super::makelink::SlotArg;
 use super::super::{is_correspondence_class, is_replaces_class};
@@ -688,7 +688,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
         };
         homes.entry(edition).or_default().push(PlannedDeposit::EditionClaim { origin });
     }
-    let image = request_image(shot);
+    let image = PositionImage::of(request_image(shot));
     let base_words = BaseWords::of(&deposits.base_runs);
     let mut originals: BTreeSet<&Address> = BTreeSet::new();
     // (3) each link.
@@ -722,7 +722,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
                 }
                 let spans = published_spans(&from, &to, &image, shot);
                 let new_words = holds_new_words(&from, &to, &image, shot);
-                let home = check_old(world, caller, old, &image, &spans, new_words, &base_words)
+                let home = check_old(world, caller, old, image.runs(), &spans, new_words, &base_words)
                     .map_err(|cause| PlanFault::Old { index, cause })?;
                 Some(PlannedClaim { old: old.clone(), home })
             }
@@ -1044,9 +1044,10 @@ fn stored_spans(spans: &[Span], index: usize, slot: usize) -> Result<Endset, Pla
 /// The address form with no tag is stored outright, `enc`'s unit spans; with
 /// a tag it stays named, resolved at the commit; the I-span form is stored
 /// under the content clause; the member-position form is held to its
-/// canonical spelling ([`member_end`] over the request's image) and kept as
+/// canonical spelling ([`PositionImage::is_canonical`] over the request's
+/// image: a search a span, no row and no endset built) and kept as
 /// positions, resolved once the member is minted.
-fn planned_end(end: &EndArg, image: &[Run], index: usize, slot: usize) -> Result<PlannedEnd, PlanFault> {
+fn planned_end(end: &EndArg, image: &PositionImage, index: usize, slot: usize) -> Result<PlannedEnd, PlanFault> {
     Ok(match end {
         EndArg::Addrs(named) => {
             if named.len() > MAX_SLOT_SPANS {
@@ -1066,8 +1067,7 @@ fn planned_end(end: &EndArg, image: &[Run], index: usize, slot: usize) -> Result
             if spans.len() > MAX_SLOT_SPANS {
                 return Err(PlanFault::SlotTooLarge { index });
             }
-            let end = member_end(image, spans).ok_or(PlanFault::MemberSpan { index })?;
-            if end.canonical != *spans {
+            if image.is_canonical(spans) != Some(true) {
                 return Err(PlanFault::MemberSpan { index });
             }
             PlannedEnd::Member(spans.clone())
@@ -1088,7 +1088,7 @@ fn planned_end(end: &EndArg, image: &[Run], index: usize, slot: usize) -> Result
 /// draft's own address, which names a named draft). An address-form end
 /// names no content span. Whether an end lies on new words at all is
 /// [`holds_new_words`]'s answer, which (3) reads beside these spans.
-fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Shot) -> Vec<Span> {
+fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &PositionImage, shot: &Shot) -> Vec<Span> {
     let mut out = Vec::new();
     for end in [from, to] {
         match end {
@@ -1097,8 +1097,8 @@ fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Sho
             }
             PlannedEnd::Named(_) => {}
             PlannedEnd::Member(spans) => {
-                if let Some(end) = member_end(image, spans) {
-                    out.extend(end.stored.spans().filter(|s| !on_named_draft(s, shot)).cloned());
+                if let Some(stored) = image.stored(spans) {
+                    out.extend(stored.spans().filter(|s| !on_named_draft(s, shot)).cloned());
                 }
             }
         }
@@ -1115,10 +1115,10 @@ fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Sho
 /// words takes (§5.7): an I-span end on a named draft's words is stored as
 /// the draft's own identity, the far end of an original on words the shot
 /// leaves out.
-fn holds_new_words(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Shot) -> bool {
+fn holds_new_words(from: &PlannedEnd, to: &PlannedEnd, image: &PositionImage, shot: &Shot) -> bool {
     [from, to].into_iter().any(|end| match end {
         PlannedEnd::Member(spans) => {
-            member_end(image, spans).is_some_and(|end| end.stored.spans().any(|s| on_named_draft(s, shot)))
+            image.stored(spans).is_some_and(|stored| stored.spans().any(|s| on_named_draft(s, shot)))
         }
         PlannedEnd::Stored(_) | PlannedEnd::Named(_) => false,
     })
@@ -1492,37 +1492,13 @@ pub struct MemberEnd {
 ///
 /// `None` where a span has a zero width, lies outside `[1, placed]`, or a
 /// width passes `u64`.
+///
+/// It is [`PositionImage::end`] over an image prepared for this one call:
+/// the call pays the preparation, a step a run times the logarithm of the
+/// runs, whatever `spans` asks. A caller reading more than one end over one
+/// image prepares it once ([`PositionImage::of`]) and asks each end of it.
 pub fn member_end(image: &[Run], spans: &[MemberSpan]) -> Option<MemberEnd> {
-    let rows = rows_of(image)?;
-    let placed: u64 = rows.iter().map(|r| r.width).sum();
-    let mut pieces: Vec<Piece> = Vec::new();
-    for span in spans {
-        if span.width == 0 || span.ordinal == 0 {
-            return None;
-        }
-        let reach = span.ordinal.checked_add(span.width)?;
-        if reach - 1 > placed {
-            return None;
-        }
-        for row in &rows {
-            let row_reach = row.position + row.width;
-            let lo = span.ordinal.max(row.position);
-            let hi = reach.min(row_reach);
-            if lo >= hi {
-                continue;
-            }
-            let piece = Piece { chain: row.chain.clone(), first: row.first + (lo - row.position), width: hi - lo };
-            match pieces.last_mut() {
-                Some(last) if last.chain == piece.chain && last.first + last.width == piece.first => {
-                    last.width += piece.width;
-                }
-                _ => pieces.push(piece),
-            }
-        }
-    }
-    let stored = Endset::from_spans(pieces.iter().map(Piece::span));
-    let canonical = canonical_over(&rows, &pieces)?;
-    Some(MemberEnd { canonical, stored })
+    PositionImage::of(image.to_vec()).end(spans)
 }
 
 /// Returns the canonical member-position spelling of `stored` over `image`:
@@ -1533,45 +1509,325 @@ pub fn member_end(image: &[Run], spans: &[MemberSpan]) -> Option<MemberEnd> {
 /// deposited link composes the signed row from the stored endset and
 /// `image(member, [1..placed])`. `None` where a stored span is no content
 /// span the image holds whole.
+///
+/// It is [`PositionImage::canonical_spans`] over an image prepared for this
+/// one call, as [`member_end`] is [`PositionImage::end`].
 pub fn canonical_member_spans(image: &[Run], stored: &Endset) -> Option<Vec<MemberSpan>> {
-    let rows = rows_of(image)?;
-    let pieces: Vec<Piece> = stored.spans().map(Piece::of_span).collect::<Option<_>>()?;
-    canonical_over(&rows, &pieces)
+    PositionImage::of(image.to_vec()).canonical_spans(stored)
 }
 
-/// One run of an image as the position arithmetic reads it: its content
-/// chain (every component but the ordinal), its first ordinal, its width,
-/// and the member position its first address holds.
+/// An image prepared for the member-position ends read over it: the
+/// positions `[1, placed]` its runs hold ([`request_image`] before the
+/// mint, [`member_image`] after it), with the lowest position holding each
+/// value marked ONCE, so that every end over the image is answered by
+/// search and never by a walk of the runs.
+///
+/// One image serves every end of a request: the codec prepares the
+/// request's once a frame, the plan once a call, the commit the member's
+/// once, and each hands it to every end. The preparation is made at the
+/// first end that asks and kept, so an image no member-position end is read
+/// over is never prepared.
+///
+/// **What it answers.** [`PositionImage::end`] is [`member_end`]'s answer
+/// and [`PositionImage::canonical_spans`] is [`canonical_member_spans`]'s,
+/// span for span. Beside them, three answers that build less:
+/// [`PositionImage::stored`], the stored endset alone;
+/// [`PositionImage::is_canonical`], whether a request's spelling IS its
+/// canonical row, with no row built; and [`PositionImage::canonical_row`],
+/// the row's first spans up to a count, for a refusal that names the
+/// spelling owed. Each answers `None` exactly where [`member_end`] does: a
+/// span of zero ordinal or width, a span past `[1, placed]`, a span whose
+/// reach passes `u64`, and — whatever the spans, an empty list included —
+/// an image holding a run whose ordinal or width passes `u64` or whose
+/// positions do.
+///
+/// **What it costs**, in STEPS: one for each run read, each comparison a
+/// sort makes, each probe a search makes, each row, point, mark, unit or
+/// span a pass looks at, and two for each piece cut — the unit the check's
+/// first spelling is counted in by this module's tests, a row looked at or
+/// built, or a cut made. With `n` the image's runs and
+/// `L = ⌈log₂(n + 2)⌉`:
+///
+/// * the preparation, once an image: at most `8 · (n + 1) · L` steps — a
+///   pass over the runs, a sort of the stretches of runs lying on one
+///   chain, one sort of the rows' `2n` end points, and four passes over
+///   those points and the rows;
+/// * [`PositionImage::is_canonical`], of `s` spans: at most
+///   `(s + 1) · (L + 3)` steps, whatever the spans resolve to — every span
+///   held to the positions by arithmetic, a step each, then a search a
+///   span, stopped at the first span that is not its own canonical
+///   spelling; it builds no piece and no row;
+/// * [`PositionImage::canonical_row`], asked for at most `m` spans: at most
+///   `4 · (s + m + 1) · (L + 3)` steps, whatever the row's whole length;
+/// * [`PositionImage::stored`], resolving to `p` pieces: at most
+///   `(s + 1) · (L + 3) + 2 · (p + s)` steps;
+/// * [`PositionImage::end`]: the two before it, the row asked whole, so
+///   `m` its length; and [`PositionImage::canonical_spans`] of `p` stored
+///   spans whose row has `m` spans: at most
+///   `2 · (p + 1) · (L + 3) + (m + p)` steps.
+///
+/// So the codec, which asks [`PositionImage::is_canonical`] of every end
+/// and [`PositionImage::canonical_row`] of the one it refuses, pays the
+/// runs once a frame and the spans of its ends, and nothing for the pieces
+/// an end resolves to or the length of its canonical row — it parses ahead
+/// of every budget, so nothing else bounds it. The plan and the commit,
+/// which ask [`PositionImage::stored`], pay the pieces too, a number the
+/// price has bounded by then: it prices a member span at up to one slot's
+/// spans, and a span resolves to no more pieces than the image has runs.
+/// The check's first spelling
+/// looked at every row for each span, at every row again for each piece,
+/// and at every row holding a piece for each cut of it — a step a row
+/// squared for one wide end; `plan/tests.rs` holds the two to one answer
+/// over every shape and states both counts.
+#[derive(Debug)]
+pub struct PositionImage {
+    /// The image, as its maker built it.
+    runs: Vec<Run>,
+    /// The image prepared, at the first end that asks: `None` where it
+    /// holds no member-position end at all.
+    rows: OnceLock<Option<Rows>>,
+}
+
+impl PositionImage {
+    /// Takes `runs` as an image a member-position end is read over. Nothing
+    /// is prepared until an end asks.
+    pub fn of(runs: Vec<Run>) -> PositionImage {
+        PositionImage { runs, rows: OnceLock::new() }
+    }
+
+    /// Returns the image's runs, as given.
+    pub fn runs(&self) -> &[Run] {
+        &self.runs
+    }
+
+    /// Builds a member-position end over this image: [`member_end`]'s
+    /// answer, the image prepared once for every end asked of it.
+    pub fn end(&self, spans: &[MemberSpan]) -> Option<MemberEnd> {
+        self.end_counted(spans, &mut |_| {})
+    }
+
+    /// Returns the endset a member-position end stores: the I-spans the
+    /// image holds at `spans`' positions, in order, consecutive I-adjacent
+    /// pieces merged — [`MemberEnd::stored`], with no canonical row built.
+    /// `None` where [`member_end`] answers `None`.
+    pub fn stored(&self, spans: &[MemberSpan]) -> Option<Endset> {
+        self.stored_counted(spans, &mut |_| {})
+    }
+
+    /// Returns whether `spans` is its own canonical spelling — whether
+    /// [`MemberEnd::canonical`] would equal it — with neither the row nor
+    /// the stored endset built. `None` where [`member_end`] answers `None`.
+    ///
+    /// The row is the lowest position holding each value the spans name,
+    /// in the spans' order, consecutive positions merged. So a spelling is
+    /// canonical exactly where every position it names is the lowest
+    /// holding its value, and no span begins at the position the span
+    /// before it ends on, which the row would merge: two tests a span, the
+    /// first a search of the positions the preparation marked lowest.
+    pub fn is_canonical(&self, spans: &[MemberSpan]) -> Option<bool> {
+        self.is_canonical_counted(spans, &mut |_| {})
+    }
+
+    /// Returns the canonical row of `spans` up to its first `most` spans,
+    /// and whether the row runs on past them: [`MemberEnd::canonical`]
+    /// whole where it holds no more than `most` spans. `None` where
+    /// [`member_end`] answers `None`.
+    ///
+    /// The row is read off the positions and never off the pieces: a
+    /// stretch of positions whose values' lowest positions lie one distance
+    /// back — however many runs it crosses — spells one span, and the read
+    /// stops where a span past `most` would begin. So a row far longer than
+    /// any request could send costs its first `most` spans and no more.
+    pub fn canonical_row(&self, spans: &[MemberSpan], most: usize) -> Option<(Vec<MemberSpan>, bool)> {
+        self.canonical_row_counted(spans, most, &mut |_| {})
+    }
+
+    /// Returns the canonical member-position spelling of `stored` over this
+    /// image: [`canonical_member_spans`]'s answer, the image prepared once
+    /// for every endset asked of it.
+    pub fn canonical_spans(&self, stored: &Endset) -> Option<Vec<MemberSpan>> {
+        self.canonical_spans_counted(stored, &mut |_| {})
+    }
+
+    /// Returns the image prepared, preparing it at the first call: `None`
+    /// where it holds no member-position end. `steps` is charged the
+    /// preparation by the call that makes it, and nothing by a later one.
+    fn rows(&self, steps: &mut impl FnMut(u64)) -> Option<&Rows> {
+        self.rows.get_or_init(|| Rows::of(&self.runs, steps)).as_ref()
+    }
+
+    /// [`PositionImage::end`], charging `steps` (the card's unit).
+    fn end_counted(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> Option<MemberEnd> {
+        let rows = self.rows(steps)?;
+        if !rows.holds(spans, steps) {
+            return None;
+        }
+        let pieces = rows.pieces(spans, steps);
+        let stored = Endset::from_spans(pieces.iter().map(|piece| piece.span(&rows.chains)));
+        let (canonical, _) = rows.row(spans, usize::MAX, steps);
+        Some(MemberEnd { canonical, stored })
+    }
+
+    /// [`PositionImage::stored`], charging `steps` (the card's unit).
+    fn stored_counted(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> Option<Endset> {
+        let rows = self.rows(steps)?;
+        if !rows.holds(spans, steps) {
+            return None;
+        }
+        Some(Endset::from_spans(rows.pieces(spans, steps).iter().map(|piece| piece.span(&rows.chains))))
+    }
+
+    /// [`PositionImage::is_canonical`], charging `steps` (the card's unit).
+    fn is_canonical_counted(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> Option<bool> {
+        let rows = self.rows(steps)?;
+        rows.holds(spans, steps).then(|| rows.is_canonical(spans, steps))
+    }
+
+    /// [`PositionImage::canonical_row`], charging `steps` (the card's
+    /// unit).
+    fn canonical_row_counted(
+        &self,
+        spans: &[MemberSpan],
+        most: usize,
+        steps: &mut impl FnMut(u64),
+    ) -> Option<(Vec<MemberSpan>, bool)> {
+        let rows = self.rows(steps)?;
+        rows.holds(spans, steps).then(|| rows.row(spans, most, steps))
+    }
+
+    /// [`PositionImage::canonical_spans`], charging `steps` (the card's
+    /// unit).
+    fn canonical_spans_counted(&self, stored: &Endset, steps: &mut impl FnMut(u64)) -> Option<Vec<MemberSpan>> {
+        let rows = self.rows(steps)?;
+        let mut pieces = Vec::with_capacity(stored.len());
+        for span in stored.spans() {
+            let (chain, first, width) = Piece::read(span)?;
+            // A chain the image holds no run of is an address in no row.
+            let at = rows.chains.partition_point(|held| {
+                steps(1);
+                *held < chain
+            });
+            if rows.chains.get(at) != Some(&chain) {
+                return None;
+            }
+            pieces.push(Piece { chain: at, first: u128::from(first), width });
+        }
+        rows.spans_of(&pieces, steps)
+    }
+}
+
+/// An image as the position arithmetic reads it, prepared once
+/// ([`PositionImage`]'s card states what each part costs to build).
+#[derive(Debug)]
+struct Rows {
+    /// The content chains the runs lie on, each once, ascending; a row, a
+    /// mark and a piece name theirs by its index here.
+    chains: Vec<Vec<Nat>>,
+    /// The runs in position order, a run that continues the one before it
+    /// — the next address of its chain, at the next position — folded into
+    /// it, so no row continues the row before it.
+    rows: Vec<Row>,
+    /// The positions the runs place: the image is `[1, placed]`.
+    placed: u64,
+    /// The lowest position holding each address some run holds: per chain,
+    /// in address order, each mark a stretch of addresses whose lowest
+    /// positions are consecutive, no mark running on from the one before it
+    /// at the next position.
+    marks: Vec<Mark>,
+    /// The positions that are the lowest holding their own value, as
+    /// stretches `[start, end)` in position order, no two touching.
+    lowest: Vec<(u64, u64)>,
+    /// The positions `[1, placed]` in order, each stretch read one way: a
+    /// stretch whose values' lowest positions lie one distance back, or one
+    /// row whose values' lowest positions change along it.
+    units: Vec<Unit>,
+}
+
+/// One run of an image, or several each continuing the one before it: its
+/// content chain (every component but the ordinal), its first ordinal, its
+/// width, and the member position its first address holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Row {
-    chain: Vec<Nat>,
+    chain: usize,
     first: u64,
     width: u64,
     position: u64,
 }
 
-/// One piece of a resolved end: `width` addresses from `first` on `chain`.
+impl Row {
+    /// Returns the address past the row's last, which a run reaching the
+    /// top of `u64` carries past it.
+    fn reach(&self) -> u128 {
+        u128::from(self.first) + u128::from(self.width)
+    }
+
+    /// Returns the position past the row's last: within `u64`, the image's
+    /// positions being so.
+    fn end(&self) -> u64 {
+        self.position + self.width
+    }
+}
+
+/// The addresses `[first, reach)` of one chain, and the lowest position
+/// holding the first: each address of the stretch stands lowest that many
+/// positions on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Mark {
+    chain: usize,
+    first: u128,
+    reach: u128,
+    position: u64,
+}
+
+/// The positions `[start, end)` of an image, and how the lowest positions
+/// holding their values are read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Unit {
+    start: u64,
+    end: u64,
+    lowest: Lowest,
+}
+
+/// How a [`Unit`]'s lowest positions are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lowest {
+    /// The value at each position `p` stands lowest at `p − back`: one or
+    /// more whole rows, `0` where the positions are the lowest themselves.
+    Back(u64),
+    /// One row whose values' lowest positions change along it: they are
+    /// read off the marks `marks[first..past]`, the row's own.
+    Marks { row: usize, first: usize, past: usize },
+}
+
+/// One piece of a resolved end: `width` addresses from `first` on a chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Piece {
-    chain: Vec<Nat>,
-    first: u64,
+    chain: usize,
+    first: u128,
     width: u64,
 }
 
 impl Piece {
-    /// Returns the piece as the I-span it names.
-    fn span(&self) -> Span {
-        let tumbler = |ordinal: u64| {
-            Tumbler::new(self.chain.iter().cloned().chain([Nat::from(ordinal)]))
+    /// Returns the address past the piece's last.
+    fn reach(&self) -> u128 {
+        self.first + u128::from(self.width)
+    }
+
+    /// Returns the piece as the I-span it names, its chain read off
+    /// `chains`.
+    fn span(&self, chains: &[Vec<Nat>]) -> Span {
+        let tumbler = |ordinal: u128| {
+            Tumbler::new(chains[self.chain].iter().cloned().chain([Nat::from(ordinal)]))
                 .expect("a content address has a chain and an ordinal")
         };
-        Span::from_endpoints(tumbler(self.first), &tumbler(self.first + self.width))
+        Span::from_endpoints(tumbler(self.first), &tumbler(self.reach()))
             .expect("width ≥ 1 and one length: the span is well-formed")
     }
 
-    /// Reads a stored I-span as a piece: its start's chain and ordinal, its
-    /// width's last component. `None` for a span that is no I-span.
-    fn of_span(span: &Span) -> Option<Piece> {
+    /// Reads a stored I-span as its chain, its first ordinal and its width:
+    /// its start's chain and ordinal, its width's last component. `None`
+    /// for a span that is no I-span.
+    fn read(span: &Span) -> Option<(Vec<Nat>, u64, u64)> {
         let start = span.start();
         let width = span.width();
         if start.len() != width.len() || start.len() < 2 {
@@ -1580,80 +1836,375 @@ impl Piece {
         if width.iter().take(width.len() - 1).any(|c| *c != Nat::from(0u32)) {
             return None;
         }
-        let (chain, first) = split(start)?;
+        let first = u64::try_from(start.iter().next_back()?).ok()?;
         let count = u64::try_from(width.get(width.len())?).ok()?;
-        (count > 0).then_some(Piece { chain, first, width: count })
+        (count > 0).then(|| (chain_of(start).cloned().collect(), first, count))
     }
 }
 
-/// Splits a content address into its chain and its ordinal.
-fn split(t: &Tumbler) -> Option<(Vec<Nat>, u64)> {
-    let mut chain: Vec<Nat> = t.iter().cloned().collect();
-    let ordinal = chain.pop()?;
-    Some((chain, u64::try_from(&ordinal).ok()?))
+/// A canonical row as it is spelled, span by span, up to a count.
+struct Spelled {
+    spans: Vec<MemberSpan>,
+    most: usize,
+    more: bool,
 }
 
-/// Returns `image`'s runs as rows, their positions tiling from 1.
-fn rows_of(image: &[Run]) -> Option<Vec<Row>> {
-    let mut rows = Vec::with_capacity(image.len());
-    let mut position: u64 = 1;
-    for run in image {
-        let (chain, first) = split(run.i_start().tumbler())?;
-        let width = u64::try_from(run.width()).ok()?;
-        rows.push(Row { chain, first, width, position });
-        position = position.checked_add(width)?;
+impl Spelled {
+    /// Spells `width` positions from `ordinal`, into the last span where
+    /// they run on from it. Answers `false` — and spells nothing — where
+    /// they would begin a span past the count: the row runs on.
+    fn spell(&mut self, ordinal: u64, width: u64) -> bool {
+        if let Some(last) = self.spans.last_mut().filter(|last| last.ordinal + last.width == ordinal) {
+            last.width += width;
+        } else if self.spans.len() == self.most {
+            self.more = true;
+            return false;
+        } else {
+            self.spans.push(MemberSpan { ordinal, width });
+        }
+        true
     }
-    Some(rows)
 }
 
-/// Returns the canonical spelling of `pieces` over `rows`: each piece's
-/// addresses at the lowest position holding each, consecutive positions
-/// merged. `None` where a piece's address lies in no row.
-fn canonical_over(rows: &[Row], pieces: &[Piece]) -> Option<Vec<MemberSpan>> {
-    let mut out: Vec<MemberSpan> = Vec::new();
-    for piece in pieces {
-        let reach = piece.first + piece.width;
-        // The rows holding some of the piece, and the breakpoints they cut.
-        let holding: Vec<&Row> = rows
-            .iter()
-            .filter(|r| r.chain == piece.chain && r.first < reach && r.first + r.width > piece.first)
-            .collect();
-        let mut cuts: BTreeSet<u64> = BTreeSet::from([piece.first, reach]);
-        for r in &holding {
-            for c in [r.first, r.first + r.width] {
-                if c > piece.first && c < reach {
-                    cuts.insert(c);
+/// Returns a content address's chain: every component but the ordinal.
+fn chain_of(t: &Tumbler) -> impl Iterator<Item = &Nat> + Clone {
+    t.iter().take(t.len() - 1)
+}
+
+/// Returns an offset inside a row or a mark as the positions count it: it
+/// is under the row's width, so within `u64`.
+fn offset(of: u128) -> u64 {
+    of as u64
+}
+
+/// Returns the first interval at or past `k` that no row has taken, each
+/// link the walk follows halved behind it: a taken interval points past
+/// itself, an untaken one at itself, and the last point is never taken.
+fn untaken_from(next: &mut [usize], mut k: usize, steps: &mut impl FnMut(u64)) -> usize {
+    while next[k] != k {
+        steps(1);
+        next[k] = next[next[k]];
+        k = next[k];
+    }
+    k
+}
+
+impl Rows {
+    /// Prepares `image`: its rows, its positions tiling from 1, and the
+    /// lowest position holding each address. `None` where a run's ordinal
+    /// or width passes `u64`, or the positions do.
+    ///
+    /// The lowest positions are found without comparing two rows: the
+    /// rows' first addresses and reaches, sorted by chain, cut each chain
+    /// into intervals no row begins or ends inside; the rows then take
+    /// their intervals in position order, each taking those of its
+    /// addresses that no row before it took — the taken ones skipped by a
+    /// link past them, so an interval is visited once however many rows
+    /// hold it — and a row stands lowest exactly on the intervals it took.
+    fn of(image: &[Run], steps: &mut impl FnMut(u64)) -> Option<Rows> {
+        // The rows, each naming its chain by the stretch of runs it lies
+        // in, and the positions.
+        let mut rows: Vec<Row> = Vec::new();
+        let mut stretches: Vec<&Tumbler> = Vec::new();
+        let mut position: u64 = 1;
+        for run in image {
+            steps(1);
+            let at = run.i_start().tumbler();
+            let first = u64::try_from(at.iter().next_back()?).ok()?;
+            let width = u64::try_from(run.width()).ok()?;
+            let same = stretches.last().is_some_and(|last| chain_of(last).eq(chain_of(at)));
+            if !same {
+                stretches.push(at);
+            }
+            match rows.last_mut() {
+                Some(last) if same && last.reach() == u128::from(first) => last.width += width,
+                _ => rows.push(Row { chain: stretches.len() - 1, first, width, position }),
+            }
+            position = position.checked_add(width)?;
+        }
+        // The chains, each once: the stretches' sorted, equal ones folded.
+        let mut order: Vec<usize> = (0..stretches.len()).collect();
+        order.sort_by(|&a, &b| {
+            steps(1);
+            chain_of(stretches[a]).cmp(chain_of(stretches[b]))
+        });
+        let mut chains: Vec<Vec<Nat>> = Vec::new();
+        let mut chain_at = vec![0usize; stretches.len()];
+        for (k, &stretch) in order.iter().enumerate() {
+            steps(1);
+            if k == 0 || !chain_of(stretches[order[k - 1]]).eq(chain_of(stretches[stretch])) {
+                chains.push(chain_of(stretches[stretch]).cloned().collect());
+            }
+            chain_at[stretch] = chains.len() - 1;
+        }
+        // The points: every row's first address and its reach, by chain,
+        // each once, and each row's own two among them.
+        let mut ends: Vec<(usize, u128, usize)> = Vec::with_capacity(2 * rows.len());
+        for (index, row) in rows.iter_mut().enumerate() {
+            steps(1);
+            row.chain = chain_at[row.chain];
+            ends.push((row.chain, u128::from(row.first), 2 * index));
+            ends.push((row.chain, row.reach(), 2 * index + 1));
+        }
+        ends.sort_unstable_by(|a, b| {
+            steps(1);
+            a.cmp(b)
+        });
+        let mut points: Vec<(usize, u128)> = Vec::new();
+        let mut between = vec![(0usize, 0usize); rows.len()];
+        for &(chain, address, end) in &ends {
+            steps(1);
+            if points.last() != Some(&(chain, address)) {
+                points.push((chain, address));
+            }
+            let point = points.len() - 1;
+            match end % 2 {
+                0 => between[end / 2].0 = point,
+                _ => between[end / 2].1 = point,
+            }
+        }
+        // The lowest row holding each interval, the interval `k` lying
+        // between the points `k` and `k + 1`; and with it the positions
+        // that are the lowest holding their value, which come in position
+        // order, rows and then addresses ascending.
+        const NO_ROW: usize = usize::MAX;
+        let mut taker = vec![NO_ROW; points.len()];
+        let mut next: Vec<usize> = (0..points.len()).collect();
+        let mut lowest: Vec<(u64, u64)> = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            steps(1);
+            let (from, to) = between[index];
+            let mut k = untaken_from(&mut next, from, steps);
+            while k < to {
+                steps(1);
+                taker[k] = index;
+                next[k] = k + 1;
+                let start = row.position + offset(points[k].1 - u128::from(row.first));
+                let end = start + offset(points[k + 1].1 - points[k].1);
+                match lowest.last_mut() {
+                    Some(last) if last.1 == start => last.1 = end,
+                    _ => lowest.push((start, end)),
+                }
+                k = untaken_from(&mut next, k + 1, steps);
+            }
+        }
+        // The marks: the taken intervals in address order, one folded into
+        // the one before it where its lowest positions run on from it.
+        let mut marks: Vec<Mark> = Vec::new();
+        let mut mark_at = vec![0usize; points.len()];
+        for (k, &(chain, first)) in points.iter().enumerate() {
+            steps(1);
+            if taker[k] == NO_ROW {
+                continue;
+            }
+            let row = &rows[taker[k]];
+            // A taken interval lies inside a row, so its far point follows.
+            let reach = points[k + 1].1;
+            let position = row.position + offset(first - u128::from(row.first));
+            match marks.last_mut() {
+                Some(last)
+                    if last.chain == chain
+                        && last.reach == first
+                        && last.position + offset(last.reach - last.first) == position =>
+                {
+                    last.reach = reach;
+                }
+                _ => marks.push(Mark { chain, first, reach, position }),
+            }
+            mark_at[k] = marks.len() - 1;
+        }
+        // The units: a row lying whole inside one mark stands one distance
+        // back from its positions, and joins the rows before it that stand
+        // the same distance back; any other row is read off its marks.
+        let mut units: Vec<Unit> = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            steps(1);
+            let (from, to) = between[index];
+            let (first, past) = (mark_at[from], mark_at[to - 1] + 1);
+            let mark = &marks[first];
+            let lowest = if mark.reach >= row.reach() {
+                Lowest::Back(row.position - (mark.position + offset(u128::from(row.first) - mark.first)))
+            } else {
+                Lowest::Marks { row: index, first, past }
+            };
+            match (units.last_mut(), lowest) {
+                (Some(Unit { end, lowest: Lowest::Back(before), .. }), Lowest::Back(back)) if *before == back => {
+                    *end = row.end();
+                }
+                _ => units.push(Unit { start: row.position, end: row.end(), lowest }),
+            }
+        }
+        Some(Rows { chains, rows, placed: position - 1, marks, lowest, units })
+    }
+
+    /// Returns whether every span of `spans` is a span of the positions:
+    /// no zero ordinal, no zero width, and a reach within `u64` and the
+    /// image.
+    fn holds(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> bool {
+        spans.iter().all(|span| {
+            steps(1);
+            span.ordinal != 0
+                && span.width != 0
+                && span.ordinal.checked_add(span.width).is_some_and(|reach| reach - 1 <= self.placed)
+        })
+    }
+
+    /// Returns the pieces `spans` resolve to: the addresses the rows hold
+    /// at each span's positions, in order, a piece that continues the one
+    /// before it folded into it. `spans` are spans of the positions
+    /// ([`Rows::holds`]).
+    ///
+    /// The rows under a span are found by one search and walked; no row
+    /// continues the row before it, so inside one span every row walked
+    /// cuts a piece of its own, and only a span's first piece can fold into
+    /// the piece before it.
+    fn pieces(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> Vec<Piece> {
+        let mut pieces: Vec<Piece> = Vec::new();
+        for span in spans {
+            let reach = span.ordinal + span.width;
+            let from = self.rows.partition_point(|row| {
+                steps(1);
+                row.end() <= span.ordinal
+            });
+            for row in self.rows[from..].iter().take_while(|row| row.position < reach) {
+                steps(2);
+                let (lo, hi) = (span.ordinal.max(row.position), reach.min(row.end()));
+                let first = u128::from(row.first) + u128::from(lo - row.position);
+                let piece = Piece { chain: row.chain, first, width: hi - lo };
+                match pieces.last_mut() {
+                    Some(last) if last.chain == piece.chain && last.reach() == piece.first => last.width += piece.width,
+                    _ => pieces.push(piece),
                 }
             }
         }
-        let cuts: Vec<u64> = cuts.into_iter().collect();
-        for pair in cuts.windows(2) {
-            let (x, y) = (pair[0], pair[1]);
-            // The row placing `x` lowest: positions rise with the address
-            // at the same slope in every row, so the lowest is the row with
-            // the least `position - first` among those holding `x`.
-            let best = holding
-                .iter()
-                .filter(|r| r.first <= x && x < r.first + r.width)
-                .min_by_key(|r| r.position + (x - r.first))?;
-            let ordinal = best.position + (x - best.first);
-            match out.last_mut() {
-                Some(last) if last.ordinal + last.width == ordinal => last.width += y - x,
-                _ => out.push(MemberSpan { ordinal, width: y - x }),
+        pieces
+    }
+
+    /// Returns whether `spans` is its own canonical row
+    /// ([`PositionImage::is_canonical`] states the two tests). `spans` are
+    /// spans of the positions ([`Rows::holds`]).
+    fn is_canonical(&self, spans: &[MemberSpan], steps: &mut impl FnMut(u64)) -> bool {
+        // Where the span before this one ends: a span beginning there is
+        // one the row merges into it.
+        let mut before: Option<u64> = None;
+        for span in spans {
+            steps(1);
+            if before == Some(span.ordinal) {
+                return false;
+            }
+            let reach = span.ordinal + span.width;
+            let at = self.lowest.partition_point(|&(_, end)| {
+                steps(1);
+                end <= span.ordinal
+            });
+            if !self.lowest.get(at).is_some_and(|&(start, end)| start <= span.ordinal && reach <= end) {
+                return false;
+            }
+            before = Some(reach);
+        }
+        true
+    }
+
+    /// Returns the canonical row of `spans` up to its first `most` spans,
+    /// and whether it runs on past them. `spans` are spans of the positions
+    /// ([`Rows::holds`]).
+    ///
+    /// Each span is read unit by unit: a unit standing one distance back
+    /// spells its positions that distance back, as one stretch; a row read
+    /// off its marks spells one stretch a mark. Two units of one span spell
+    /// one span of the row only where they stand the same distance back,
+    /// which no two neighbours inside one row do and no two units of whole
+    /// rows do — so at most three stretches in a row join, and the read
+    /// looks at no more than three units or marks for each span it spells.
+    fn row(&self, spans: &[MemberSpan], most: usize, steps: &mut impl FnMut(u64)) -> (Vec<MemberSpan>, bool) {
+        let mut row = Spelled { spans: Vec::new(), most, more: false };
+        'spans: for span in spans {
+            let reach = span.ordinal + span.width;
+            let from = self.units.partition_point(|unit| {
+                steps(1);
+                unit.end <= span.ordinal
+            });
+            for unit in self.units[from..].iter().take_while(|unit| unit.start < reach) {
+                steps(1);
+                let (lo, hi) = (span.ordinal.max(unit.start), reach.min(unit.end));
+                match unit.lowest {
+                    Lowest::Back(back) => {
+                        if !row.spell(lo - back, hi - lo) {
+                            break 'spans;
+                        }
+                    }
+                    Lowest::Marks { row: index, first, past } => {
+                        let held = &self.rows[index];
+                        let mut at = u128::from(held.first) + u128::from(lo - held.position);
+                        let end = at + u128::from(hi - lo);
+                        let marks = &self.marks[first..past];
+                        let skip = marks.partition_point(|mark| {
+                            steps(1);
+                            mark.reach <= at
+                        });
+                        for mark in marks[skip..].iter().take_while(|mark| mark.first < end) {
+                            steps(1);
+                            let stop = end.min(mark.reach);
+                            if !row.spell(mark.position + offset(at - mark.first), offset(stop - at)) {
+                                break 'spans;
+                            }
+                            at = stop;
+                        }
+                    }
+                }
             }
         }
+        (row.spans, row.more)
     }
-    Some(out)
+
+    /// Returns the canonical spelling of `pieces`: each piece's addresses at
+    /// the lowest position holding each, consecutive positions merged.
+    /// `None` where a piece's address lies in no row.
+    ///
+    /// Each piece is read off the marks of its chain: the mark holding its
+    /// first address by one search, then mark by mark to its reach, a gap
+    /// between two marks being an address no row holds.
+    fn spans_of(&self, pieces: &[Piece], steps: &mut impl FnMut(u64)) -> Option<Vec<MemberSpan>> {
+        let mut row = Spelled { spans: Vec::new(), most: usize::MAX, more: false };
+        for piece in pieces {
+            let reach = piece.reach();
+            let mut at = piece.first;
+            let from = self.marks.partition_point(|mark| {
+                steps(1);
+                (mark.chain, mark.reach) <= (piece.chain, at)
+            });
+            for mark in &self.marks[from..] {
+                if at >= reach {
+                    break;
+                }
+                steps(1);
+                if mark.chain != piece.chain || mark.first > at {
+                    return None;
+                }
+                let stop = reach.min(mark.reach);
+                row.spell(mark.position + offset(at - mark.first), offset(stop - at));
+                at = stop;
+            }
+            if at < reach {
+                return None;
+            }
+        }
+        Some(row.spans)
+    }
 }
 
 /// Resolves a planned end to the endset the commit stores, once the member
 /// is minted: a stored end as it is, a named end's tags to the minted
 /// addresses, a member-position end through the member's image
-/// ([`member_end`]).
+/// ([`PositionImage::stored`], [`member_end`]'s stored endset).
+///
+/// `image` is the member's image ([`member_image`]) as the commit prepared
+/// it, once for every end it resolves: an end costs a search a span and its
+/// pieces, never the image's runs again.
 ///
 /// `None` where the member-position end does not resolve, which the plan's
 /// own check over the request's image rules out for every end it holds.
-pub fn resolve_end(end: &PlannedEnd, member: &Address, edition: Option<&Address>, image: &[Run]) -> Option<Endset> {
+pub fn resolve_end(end: &PlannedEnd, member: &Address, edition: Option<&Address>, image: &PositionImage) -> Option<Endset> {
     Some(match end {
         PlannedEnd::Stored(endset) => endset.clone(),
         PlannedEnd::Named(named) => Endset::from_spans(named.iter().map(|n| match n {
@@ -1661,7 +2212,7 @@ pub fn resolve_end(end: &PlannedEnd, member: &Address, edition: Option<&Address>
             NamedAddress::Edition => subtree_of(edition.unwrap_or(member).tumbler()),
             NamedAddress::Address(a) => subtree_of(a.tumbler()),
         })),
-        PlannedEnd::Member(spans) => member_end(image, spans)?.stored,
+        PlannedEnd::Member(spans) => image.stored(spans)?,
     })
 }
 

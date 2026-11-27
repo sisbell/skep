@@ -147,8 +147,9 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 /// withheld run owns an `Address` besides, order 300 heap bytes. `2^17` items
 /// is therefore 8 MiB of delivery, and about 45 MiB at worst: under
 /// [`MAX_COMPARE_PAIRS`]' 64 MiB report, the largest answer any budget here
-/// admits. It is also M5's `MAX_REINSERTED_VALUES`, the substrate's existing
-/// ceiling on how many values one operation may stage live. What the items
+/// admits. It is also M5's `MAX_REINSERTED_UNITS`, the substrate's existing
+/// ceiling on how many units — values, or whole runs of single bytes — one
+/// publish shot may stage live. What the items
 /// RENDER to — each content item's bytes — is the transport's to bound.
 ///
 /// A REFUSAL, never a truncation, counted as the delivery is produced: a

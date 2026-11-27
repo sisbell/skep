@@ -119,7 +119,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("PublicationStanding", json!({"base": "1.0.1.0.64.1", "standing": "behind", "head": "1.0.1.0.64.3", "left_behind": ["1.0.1.0.71"]})),
         (
             "PublicationPanel",
-            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.65": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.71", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.73", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "behind", "head": "1.0.1.0.64.3", "left_behind": ["1.0.1.0.71"], "hold": {"since": 1}}),
+            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.65": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0, 0], "body": 0, "values": 0, "units": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "parts": [], "inherited": [{"draft": "1.0.1.0.71", "passages": 2}], "merge_records": [{"draft": "1.0.1.0.73", "n": 2}], "edition_links": 1, "p3_stands": true, "standing": "behind", "head": "1.0.1.0.64.3", "left_behind": ["1.0.1.0.71"], "hold": {"since": 1}}),
         ),
         ("PublicationRow", json!({"home": "1.0.1.0.67", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.67.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0, "unchanged": ["1.0.1.0.67.0.2.1"], "fold": {"unchanged": 1, "changed": 0}, "changed_types": [], "unchanged_types": []})),
         ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.70"]})),
@@ -130,7 +130,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("LinkValue", json!({"from": [{"start": "1.0.1.0.64.0.1.5", "width": "0.0.0.0.0.0.0.5"}], "to": [], "ty": [{"start": "1.1.0.1.0.1.0.3.13", "width": "0.0.0.0.0.0.0.0.1"}], "at": 7})),
         ("LinkSpan", json!({"start": "1.0.1.0.64.0.1.5", "width": "0.0.0.0.0.0.0.5"})),
         ("Count", json!({"l": 3, "n": 2, "r": 1, "e": 0, "claim": false, "read_with": ["1.0.1.0.66"], "supersede": ["1.0.1.0.64.1.1"]})),
-        ("Price", json!({"lists": [3, 1, 4, 1, 1, 0], "body": 120, "values": 10, "reads": 20, "bytes": 5000, "over": [{"term": "lists", "by": 1}]})),
+        ("Price", json!({"lists": [3, 1, 4, 1, 1, 0], "body": 120, "values": 10, "units": 2, "reads": 20, "bytes": 5000, "over": [{"term": "lists", "by": 1}]})),
         ("PriceOver", json!({"term": "links", "by": 4})),
         ("Window", json!({"run": 2, "origin": "1.0.1.0.69", "owner": "1.0.1", "i_start": 1, "width": 5, "parts": [{"part": 0, "from": {"chain": "1.0.1.0.69.0.1", "first": 1, "width": 4}, "ordinal": 30, "admits": ["counterpart", "drop"], "record": "1.0.1.0.69.0.2.1", "to": {"chain": "1.0.1.0.64.0.1", "first": 16, "width": 4}}]})),
         ("PartCounts", json!({"run": 2, "part": 0, "marks": 1, "links": 1, "kept_marks": 0})),

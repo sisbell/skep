@@ -42,8 +42,20 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   pieces placed, a fence stab a re-inserted run — against
   `MAX_PUBLICATION_READS`, and the bytes it would stage, from a
   worst-case table held equal to the kernel's own accounting, against
-  the transaction budget. One function prices the daemon's refusal and
-  the price a client asks for before it sends.
+  the transaction budget — a shot's re-inserted values BY THE UNIT, an
+  atom or a whole run of single bytes at `REINSERTED_UNIT_BYTES` and its
+  own bytes, the units the ones M5's count answers
+  (`Shot::reinserted_units`), so a long run of typed bytes is priced
+  near its length. The price carries those units too (`ReadPrice::units`,
+  beside `UNIT_BUDGET` and `POSITION_BUDGET`, M5's two re-insert
+  budgets), which the store refuses on and the price never does. It is
+  taken at the caller's read class: a stray place counts the
+  correspondence records the caller may read and no other, in the
+  re-window's steps and in the bytes, and a shot's units are counted
+  only where the class admits every draft it names — a price is answered
+  ahead of the store's own judgment of who owns a draft. One function
+  prices the daemon's refusal and the price a client asks for before it
+  sends.
 
 State rides the kernel; span algebra comes from
 [skep-address](../skep-address).

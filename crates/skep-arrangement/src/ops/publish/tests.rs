@@ -1,11 +1,16 @@
 //! The publish shot's in-crate claims — its run budget at both sites, its
-//! re-insert budget, its empty member, and a refusal after its re-insert is
-//! staged — in a world whose three slices are seeded apart, so a head can
-//! arrange more runs than a test could build by transactions, and a draft can
-//! name values that were never stored.
+//! re-insert's two budgets, the count of its units against what its commit
+//! stages and against the stored pieces it walks, its empty member, and a
+//! refusal after its re-insert is staged — in a world whose three slices are
+//! seeded apart, so a head can arrange more runs than a test could build by
+//! transactions, a draft can name values that were never stored, and a draft
+//! can hold a million stored pieces no test could type; and whose records
+//! are counted by kind as they are staged.
+
+use std::cell::Cell;
 
 use serde::{Deserialize, Serialize};
-use skep_content::{stage_write, ContentStore, ContentStretch, Piece, Val};
+use skep_content::{stage_stretch, stage_write, ContentStore, ContentStretch, Piece, Val};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::PrincipalId;
 
@@ -14,7 +19,7 @@ use crate::deposit::Deposit;
 use crate::ops::AsOf;
 use crate::shot::{Base, ShotRun};
 use crate::state::M5State;
-use crate::testutil::{a, ca, doc1, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vp};
+use crate::testutil::{a, ca, doc1, doc2, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vp};
 
 /// A world carrying all three slices the SHOT touches — M3 (its member's
 /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
@@ -36,23 +41,66 @@ enum ShotRec {
     Stretch(ContentStretch),
 }
 
+/// The records this thread has staged since the last [`Staged::take`], by
+/// kind.
+///
+/// A staging lifts each record into the world's own exactly once, as it
+/// pushes it, so the lifts are the records staged — a refused transaction's
+/// among them, which is how a refusal ahead of every record is told from
+/// one after some. A thread's own, since each test runs on one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Staged {
+    /// M3's records: each content mint, each range mint, the member's mint.
+    mints: u64,
+    /// M4's values: one per atom.
+    writes: u64,
+    /// M4's stretches: one per run of single-byte values.
+    stretches: u64,
+    /// M5's records: the shot's one placement.
+    placements: u64,
+}
+
+thread_local! {
+    static STAGED: Cell<Staged> = const { Cell::new(Staged { mints: 0, writes: 0, stretches: 0, placements: 0 }) };
+}
+
+impl Staged {
+    /// Returns this thread's counts since the last call, and starts them
+    /// again from nothing.
+    fn take() -> Staged {
+        STAGED.with(|staged| staged.replace(Staged::default()))
+    }
+
+    fn note(count: impl FnOnce(&mut Staged)) {
+        STAGED.with(|staged| {
+            let mut now = staged.get();
+            count(&mut now);
+            staged.set(now);
+        });
+    }
+}
+
 impl From<M3Rec> for ShotRec {
     fn from(r: M3Rec) -> ShotRec {
+        Staged::note(|staged| staged.mints += 1);
         ShotRec::M3(r)
     }
 }
 impl From<ContentWrite> for ShotRec {
     fn from(r: ContentWrite) -> ShotRec {
+        Staged::note(|staged| staged.writes += 1);
         ShotRec::Content(r)
     }
 }
 impl From<ContentStretch> for ShotRec {
     fn from(r: ContentStretch) -> ShotRec {
+        Staged::note(|staged| staged.stretches += 1);
         ShotRec::Stretch(r)
     }
 }
 impl From<M5Rec> for ShotRec {
     fn from(r: M5Rec) -> ShotRec {
+        Staged::note(|staged| staged.placements += 1);
         ShotRec::M5(r)
     }
 }
@@ -450,4 +498,289 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
         frontier,
         "the re-insert lands where the refused one staged its mint"
     );
+}
+
+/// doc2's content element at `ordinal`.
+fn d2(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal])
+}
+
+/// `content` with `bytes` stored from `first` as one stretch.
+fn with_stretch(content: ContentStore, first: Address, bytes: &[u8]) -> ContentStore {
+    let stretch = stage_stretch(&content, first, Arc::from(bytes)).expect("a fresh stretch");
+    content.apply_stretch(&stretch)
+}
+
+/// `content` with `bytes` stored at `at` as one value.
+fn with_value(content: ContentStore, at: Address, bytes: &[u8]) -> ContentStore {
+    let write = stage_write(&content, at, Val::new(bytes)).expect("a fresh value");
+    content.apply_write(&write)
+}
+
+/// A kernel over `content`, pdoc published and memberless, no document
+/// arranging anything: a shot reads a draft's values at their addresses and
+/// never its arrangement.
+fn kernel_holding(content: ContentStore) -> Kernel<ShotWorld> {
+    mem_kernel_of(ShotWorld { m3: seeded_m3(), content, m5: M5State::genesis() })
+}
+
+/// The birth shot of pdoc from `runs`, each `(origin, start, width)`, the
+/// rendering draft doc1 and `also` beside it.
+fn birth_shot(also: Vec<Address>, runs: &[(Address, Address, u32)]) -> Shot {
+    Shot {
+        base: None,
+        draft: Some(doc1()),
+        also,
+        keep_base: false,
+        runs: runs.iter().map(|(origin, start, width)| ShotRun { origin: origin.clone(), run: run(start, *width) }).collect(),
+    }
+}
+
+/// Stages `shot` into pdoc in one transaction, its walk of the drafts'
+/// stored pieces counted: the staging's answer, and the pieces walked.
+fn staged_counting(k: &Kernel<ShotWorld>, shot: &Shot) -> (Result<(Address, Pairing), PublishError>, u64) {
+    let p1 = Caller::Principal(PrincipalId(1));
+    let anyone = |_: &ShotWorld, _: &Address| true;
+    let keys = [head_lock_key(&pdoc()), M3State::content_lock_key(&pdoc())];
+    let mut walked = 0u64;
+    let staged = k.transact(&keys, |stg| stage_publish_stepped(stg, p1, &pdoc(), shot, &anyone, &mut |pieces| walked += pieces));
+    let staged = match staged {
+        Ok((answer, _)) => Ok(answer),
+        Err(TxnError::Rejected(refused)) => Err(refused),
+        Err(other) => panic!("the kernel refused the transaction: {other:?}"),
+    };
+    (staged, walked)
+}
+
+/// The count of `shot`'s units over `k`'s world, with the pieces it walked.
+fn counted(k: &Kernel<ShotWorld>, shot: &Shot) -> (ReinsertedUnits, u64) {
+    let mut walked = 0u64;
+    let snapshot = k.snapshot();
+    let units = shot.reinserted_units(snapshot.world(), &mut |pieces| walked += pieces);
+    (units, walked)
+}
+
+/// EACH DRAFT IDENTITY ONCE PER SHOT, told position by position and
+/// knowing nothing of portions or units: in `runs`' order a position met
+/// for the first time takes the next fresh address of pdoc's content chain,
+/// from `pca(1)`, and a position met again the address it took. Each entry
+/// is the draft's position, the fresh one, whether this run minted it, and
+/// the run's index.
+fn position_by_position(shot: &Shot) -> Vec<(Address, Address, bool, usize)> {
+    let mut fresh: std::collections::BTreeMap<Address, Address> = std::collections::BTreeMap::new();
+    let mut out = Vec::new();
+    for (index, entry) in shot.runs.iter().enumerate() {
+        for from in entry.run.addrs() {
+            let next = pca(fresh.len() as u32 + 1);
+            let minted = !fresh.contains_key(&from);
+            let to = fresh.entry(from.clone()).or_insert(next).clone();
+            out.push((from, to, minted, index));
+        }
+    }
+    out
+}
+
+/// The pairing, position by position, in its own order.
+fn pairing_positions(pairing: &Pairing) -> Vec<(Address, Address, bool, usize)> {
+    pairing
+        .iter()
+        .flat_map(|piece| piece.from.addrs().zip(piece.to.addrs()).map(|(from, to)| (from, to, piece.minted, piece.index)))
+        .collect()
+}
+
+#[test]
+fn the_units_a_shot_counts_are_the_units_its_commit_stages() {
+    // THE COUNT IS THE STAGING's OWN SPLIT. Two named drafts, their runs
+    // interleaved: doc1 holds `abcd`, the atom `XY`, `ef`, an empty value,
+    // then `g` as a one-byte value, `h` as a one-byte stretch and `ij`;
+    // doc2 holds `xyz` and the atom `PQ`. The shot names doc1's [3, 6]
+    // (two byte-runs around an atom: three units), doc2's [1, 2] (one),
+    // doc1's [7] — I-adjacent to the first run's end, and a portion of its
+    // own: the byte `f` never joins the `e` before it (one) — then doc1
+    // whole, [1, 12], which an earlier run minted the middle of: its
+    // unminted portions are `ab` (one) and the empty value with `ghij`, a
+    // one-byte value and two stretches in one byte-run (two); doc1's
+    // [3, 6] again, minted whole already (none); and doc2's [2, 4], its
+    // first position minted, `z` and the atom left (two). Ten units: three
+    // atoms and seven byte-runs.
+    let mut content = ContentStore::default();
+    content = with_stretch(content, ca(1), b"abcd");
+    content = with_value(content, ca(5), b"XY");
+    content = with_stretch(content, ca(6), b"ef");
+    content = with_value(content, ca(8), b"");
+    content = with_value(content, ca(9), b"g");
+    content = with_stretch(content, ca(10), b"h");
+    content = with_stretch(content, ca(11), b"ij");
+    content = with_stretch(content, d2(1), b"xyz");
+    content = with_value(content, d2(4), b"PQ");
+    let k = kernel_holding(content);
+    let shot = birth_shot(
+        vec![doc2()],
+        &[(doc1(), ca(3), 4), (doc2(), d2(1), 2), (doc1(), ca(7), 1), (doc1(), ca(1), 12), (doc1(), ca(3), 4), (doc2(), d2(2), 3)],
+    );
+    // The count, over the snapshot the commit opens on: ten units holding
+    // seventeen bytes, read off the twelve stored pieces the six runs'
+    // unminted portions cut the drafts into — `cd`, `XY`, `e`; `xy`; `f`;
+    // `ab`; the empty value, `g`, `h`, `ij`; `z`, `PQ` — each read once.
+    let (units, walked) = counted(&k, &shot);
+    let ReinsertedUnits::Counted(parts) = units else { panic!("within both budgets, every value stored: {units:?}") };
+    assert_eq!(parts.tally(), UnitTally { units: 10, bytes: 17 });
+    assert_eq!(walked, 12, "one step a stored piece of an unminted portion");
+    assert_eq!(parts.atoms().map(Val::as_bytes).collect::<Vec<_>>(), [&b"XY"[..], b"", b"PQ"], "the atoms, in placement order");
+    // The commit: two records a unit — a mint and a write an atom, a range
+    // mint and a stretch a byte-run — beside the member's mint and its one
+    // placement; and it walks the pieces the count walked, no more.
+    Staged::take();
+    let (staged, walked) = staged_counting(&k, &shot);
+    let (member, pairing) = staged.expect("the shot commits");
+    let records = Staged::take();
+    assert_eq!(records, Staged { mints: 10 + 1, writes: 3, stretches: 7, placements: 1 }, "two records a unit, by kind");
+    assert_eq!(records.writes + records.stretches, parts.tally().units, "the units counted are the units staged");
+    assert_eq!(walked, 12, "the commit reads each stored piece once: the count's walk, and no second one");
+    // The fresh runs and the pairing: each draft identity minted once, in
+    // the order the runs meet it, every later occurrence the fresh address
+    // the first took — told position by position, with no portion in it.
+    assert_eq!(pairing_positions(&pairing), position_by_position(&shot));
+    for piece in &pairing {
+        let home = if piece.from.i_start() < &d2(1) { doc1() } else { doc2() };
+        assert_eq!(piece.home, home, "each piece homed in the draft its identity was: {piece:?}");
+    }
+    // A portion is one pairing entry, however many units it held.
+    let minted: Vec<(Run, Run)> = pairing.iter().filter(|piece| piece.minted).map(|piece| (piece.from.clone(), piece.to.clone())).collect();
+    assert_eq!(
+        minted,
+        vec![
+            (run(&ca(3), 4), run(&pca(1), 4)),
+            (run(&d2(1), 2), run(&pca(5), 2)),
+            (run(&ca(7), 1), run(&pca(7), 1)),
+            (run(&ca(1), 2), run(&pca(8), 2)),
+            (run(&ca(8), 5), run(&pca(10), 5)),
+            (run(&d2(3), 2), run(&pca(15), 2)),
+        ]
+    );
+    // And the member holds, at every position, the value its draft held.
+    let s = k.snapshot();
+    let (m5, content) = (s.world().m5(), s.world().content());
+    assert_eq!(m5.content_count(&member), n(4 + 2 + 1 + 12 + 4 + 3));
+    for (from, to, _, _) in pairing_positions(&pairing) {
+        let (drafted, published) = (content.value_at(from.tumbler()), content.value_at(to.tumbler()));
+        assert_eq!(drafted.map(|piece| piece.as_bytes()), published.map(|piece| piece.as_bytes()), "{from:?} became {to:?}");
+    }
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(17)), "sixteen positions minted, each draft identity once");
+}
+
+#[test]
+fn positions_named_one_by_one_and_then_together_are_counted_portion_by_portion() {
+    // WHERE THE UNION COMES SHORT. One stretch of seven bytes; the shot
+    // names its second, fourth and sixth positions, one run each, and then
+    // all seven. To the union of the runs' extents that is one stretch, one
+    // unit; the commit places each run apart, and the last run's unminted
+    // portions are the four positions between and around the three — so
+    // seven units, seven range mints and seven stretches, are what the shot
+    // stages, and seven are what the count answers.
+    let k = kernel_holding(with_stretch(ContentStore::default(), ca(1), b"abcdefg"));
+    let shot = birth_shot(vec![], &[(doc1(), ca(2), 1), (doc1(), ca(4), 1), (doc1(), ca(6), 1), (doc1(), ca(1), 7)]);
+    let (units, _) = counted(&k, &shot);
+    assert_eq!(units.tally(), UnitTally { units: 7, bytes: 7 }, "a unit a portion, never one for the union: {units:?}");
+    Staged::take();
+    let (staged, _) = staged_counting(&k, &shot);
+    staged.expect("the shot commits");
+    assert_eq!(Staged::take(), Staged { mints: 7 + 1, writes: 0, stretches: 7, placements: 1 });
+}
+
+#[test]
+fn a_portion_of_single_byte_pieces_is_one_unit_staged_as_two_records_and_walked_once() {
+    // THE UNIT IS THE BYTE-RUN, NOT THE PIECE. A draft written a byte an
+    // insert holds a stored piece a position: here the positions' budget of
+    // them, 2^20, alternately a one-byte stretch and a one-byte value. The
+    // shot naming them all re-inserts ONE unit — one range mint and one
+    // stretch of 2^20 bytes — after a walk of every piece, which the commit
+    // makes once: the count reads them, and the placement stages from what
+    // the count read.
+    let positions = MAX_REINSERTED_VALUES as u32;
+    let mut content = ContentStore::default();
+    for k in 1..=positions {
+        let byte = [b'a' + (k % 26) as u8];
+        content = if k % 2 == 1 { with_stretch(content, ca(k), &byte) } else { with_value(content, ca(k), &byte) };
+    }
+    let k = kernel_holding(content);
+    let stored = k.snapshot().world().content().len();
+    assert_eq!(stored, positions as usize, "premise: a stored piece a position");
+    let shot = birth_shot(vec![], &[(doc1(), ca(1), positions)]);
+    let (units, walked) = counted(&k, &shot);
+    assert_eq!(units.tally(), UnitTally { units: 1, bytes: u64::from(positions) }, "{units:?}");
+    assert_eq!(walked, u64::from(positions), "the count walks every piece: the budget on the units stops no walk");
+    Staged::take();
+    let (staged, walked) = staged_counting(&k, &shot);
+    let (member, pairing) = staged.expect("one unit is inside the units' budget");
+    assert_eq!(Staged::take(), Staged { mints: 1 + 1, writes: 0, stretches: 1, placements: 1 }, "two records for the unit");
+    assert_eq!(walked, u64::from(positions), "each stored piece read once in the commit");
+    assert_eq!(pairing.len(), 1, "one portion, one fresh run");
+    let s = k.snapshot();
+    assert_eq!(s.world().content().len() - stored, 1, "one stretch in the member");
+    assert_eq!(s.world().m5().content_count(&member), n(positions));
+    for at in [1, 2, positions / 2, positions] {
+        let (drafted, published) = (s.world().content().value_at(ca(at).tumbler()), s.world().content().value_at(pca(at).tumbler()));
+        assert_eq!(drafted.map(|piece| piece.as_bytes()), published.map(|piece| piece.as_bytes()), "position {at}");
+    }
+}
+
+#[test]
+fn a_shot_past_the_positions_is_refused_with_no_piece_walked_and_one_past_the_units_stages_nothing() {
+    // ARITHMETIC FIRST. doc1 holds one more position than the positions'
+    // budget, all of it stored: a shot naming them all is refused
+    // `TooManyValues` by the count's arithmetic, and neither the count nor
+    // the commit reads a stored piece to learn it; a shot naming exactly the
+    // budget is counted, one unit, off the one stored piece.
+    let positions = MAX_REINSERTED_VALUES as u32;
+    let k = kernel_holding(with_stretch(ContentStore::default(), ca(1), &vec![b'x'; positions as usize + 1]));
+    let before = k.current_seq();
+    let past = birth_shot(vec![], &[(doc1(), ca(1), positions + 1)]);
+    let (units, walked) = counted(&k, &past);
+    assert!(matches!(units, ReinsertedUnits::PastPositions), "{units:?}");
+    assert_eq!((units.tally(), walked), (UnitTally::default(), 0), "nothing counted, no piece walked");
+    Staged::take();
+    let (staged, walked) = staged_counting(&k, &past);
+    assert_eq!(staged.expect_err("past the positions' budget"), PublishError::TooManyValues);
+    assert_eq!((walked, Staged::take(), k.current_seq()), (0, Staged::default(), before), "no piece walked, no record staged");
+    let (units, walked) = counted(&k, &birth_shot(vec![], &[(doc1(), ca(1), positions)]));
+    assert_eq!((units.tally(), walked), (UnitTally { units: 1, bytes: u64::from(positions) }, 1), "{units:?}");
+    // THE UNITS, BEFORE ANY RECORD. doc2 holds one more atom than the
+    // units' budget — well inside the positions' — and a shot naming them
+    // all is refused `TooManyUnits`: the count stops at the atom that opens
+    // the unit past the budget, the commit stages no record, and nothing of
+    // the transaction stands. Naming exactly the budget, the count answers
+    // it whole.
+    let units_budget = MAX_REINSERTED_UNITS as u32;
+    let mut content = ContentStore::default();
+    for at in 1..=units_budget + 1 {
+        content = with_value(content, d2(at), b"at");
+    }
+    let k = kernel_holding(content);
+    let (before, stored, frontier) = (k.current_seq(), k.snapshot().world().content().len(), k.snapshot().world().m3().next_content_address(&pdoc()));
+    let atoms = |count: u32| Shot { draft: Some(doc2()), ..birth_shot(vec![], &[(doc2(), d2(1), count)]) };
+    let (units, walked) = counted(&k, &atoms(units_budget + 1));
+    let over = UnitTally { units: u64::from(units_budget) + 1, bytes: 2 * u64::from(units_budget) };
+    assert!(matches!(units, ReinsertedUnits::PastUnits(tally) if tally == over), "the budget plus one, a lower bound, and the bytes of the units inside it: {units:?}");
+    assert_eq!(walked, u64::from(units_budget) + 1, "the count stops at the piece that passed the budget");
+    Staged::take();
+    let (staged, _) = staged_counting(&k, &atoms(units_budget + 1));
+    assert_eq!(staged.expect_err("past the units' budget"), PublishError::TooManyUnits);
+    assert_eq!(Staged::take(), Staged::default(), "no record staged ahead of the refusal");
+    let s = k.snapshot();
+    assert_eq!((k.current_seq(), s.world().content().len(), s.world().m3().next_content_address(&pdoc())), (before, stored, frontier));
+    let (units, _) = counted(&k, &atoms(units_budget));
+    assert!(matches!(&units, ReinsertedUnits::Counted(parts) if parts.tally().units == u64::from(units_budget)), "{units:?}");
+    // A VALUE MISSING IS NO UNIT: past the atoms doc2 holds nothing, and a
+    // shot reaching one position past them inside the units' budget is told
+    // so, with what stands ahead of the hole — and refused as a dangling
+    // source, nothing staged.
+    let reaching = Shot { draft: Some(doc2()), ..birth_shot(vec![], &[(doc2(), d2(units_budget), 3)]) };
+    let (units, walked) = counted(&k, &reaching);
+    assert!(matches!(units, ReinsertedUnits::Missing(tally) if tally == UnitTally { units: 2, bytes: 4 }), "{units:?}");
+    assert_eq!(walked, 2);
+    Staged::take();
+    let (staged, _) = staged_counting(&k, &reaching);
+    assert_eq!(staged.expect_err("a position holding nothing"), PublishError::DanglingSource);
+    assert_eq!(Staged::take(), Staged::default());
 }

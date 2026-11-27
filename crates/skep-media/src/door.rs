@@ -132,14 +132,16 @@
 //! M5's own admission of the shot ([`shot_admission`], slots 1 through 6,
 //! the source gate included) passes it, the draft is readable to the caller
 //! (PATTERNS P31: no value the caller may not read is read on its behalf —
-//! a verdict here is answered to the caller) and the re-insert is within
-//! M5's budget; every other case answers nothing here and the store answers
-//! it as built. A refusal here commits nothing and gives the head writer its
+//! a verdict here is answered to the caller) and M5's own count of the
+//! re-insert (`Shot::reinserted_units`) finds it within both of M5's
+//! budgets — its positions, then its units — with every value it names
+//! stored; every other case answers nothing here and the store answers it
+//! as built. A refusal here commits nothing and gives the head writer its
 //! turn, as an admission refusal does.
 
-use skep_address::{Address, Nat};
+use skep_address::Address;
 use skep_arrangement::{
-    mint_admission, published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES,
+    mint_admission, published_target, shot_admission, Caller, ReinsertedUnits, Shot,
 };
 use skep_content::Val;
 use skep_febe::{Disposition, FebeWorld, Op, PublishTarget, ReadableWorld, RejectCode};
@@ -319,7 +321,9 @@ pub fn media_door<W: FebeWorld>(
         Op::Edit { doc, edit, .. } | Op::SetArrangement { doc, arrangement: edit, .. } => {
             insert_arm(world, doc, edit.values(), principal, media_gate)
         }
-        Op::Publish { target, shot, .. } => publish_arm(world, target, shot, principal, media_gate),
+        Op::Publish { target, shot, .. } => {
+            publish_arm(world, target, shot, principal, media_gate, &mut |_| {})
+        }
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
@@ -414,24 +418,32 @@ fn insert_arm<'v, W: FebeWorld>(
 /// They are read only where M5's own admission of the shot passes it
 /// through the source gate — each named draft's registration and ownership
 /// among its slots, so every draft here is the caller's own — the rendering
-/// draft is readable to the caller, and
-/// the re-insert is within M5's budget — so every refusal the store gives
-/// ahead of its existence walk stands ahead of this door, in the store's own
-/// words, and the door reads no value the caller may not read. The
-/// draft-native runs are walked as the commit re-mints them
-/// ([`Shot::reinserted_runs`], M5's own family rule, in the commit's order —
-/// a run named twice walked twice, the verdict the same either way), each
-/// position read by M4's point read — a one-byte piece inside a stretch
-/// names no kind and is passed over by the classification itself; every
-/// value naming the kind is judged (M-I1 (a)), each value's own verdict in
-/// placement order, the first refusal answering. Per address still, bounded
-/// by the re-insert's cap.
+/// draft is readable to the caller, and M5's own count of the re-insert
+/// ([`Shot::reinserted_units`]) answers it counted: within the positions'
+/// budget by arithmetic and then within the units', every value it names
+/// stored — so every refusal the store gives of the re-insert stands ahead
+/// of this door, in the store's own words (`too_many_values` past either
+/// budget, `dangling_source` for a value missing), and the door reads no
+/// value the caller may not read. The values judged are the ones that count
+/// read, as the commit re-mints them: each unminted portion of the
+/// draft-native runs ([`Shot::reinserted_runs`], M5's own family rule) in
+/// the commit's order, its stored pieces walked once — each draft identity
+/// once, a run named twice lending its values once, the verdict the same
+/// either way — and of them the atoms alone: a single byte, inside a
+/// stretch or stored as a value of its own, names no kind, and the count
+/// has folded each into its byte-run. Every value naming the kind is judged
+/// (M-I1 (a)), each value's own verdict in placement order, the first
+/// refusal answering. Per stored piece, and no second walk: at most the
+/// positions' budget of pieces, the count's own bound — `steps` is charged
+/// one for each the count reads, the count handed it, and nothing for a
+/// shot its arithmetic refuses.
 fn publish_arm<W: FebeWorld>(
     world: &W,
     target: &PublishTarget,
     shot: &Shot,
     principal: PrincipalId,
     media_gate: &MediaGate,
+    steps: &mut impl FnMut(u64),
 ) -> Option<MediaRefusal> {
     let caller = Caller::Principal(principal);
     // Slots 1 through 6 — registration and ω of `doc`, the arguments'
@@ -464,36 +476,25 @@ fn publish_arm<W: FebeWorld>(
     if !ReadableWorld::readable(world, Some(principal), &draft) {
         return None;
     }
-    // M5's re-insert budget — request arithmetic the store refuses
-    // `too_many_values` by before it probes an address: nothing past it is
-    // walked here either.
-    if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
+    // M5's two re-insert budgets and the values' presence, asked of M5's own
+    // count over this snapshot — the count the store asks again over the
+    // same base before it stages a record: past the positions, by request
+    // arithmetic that reads nothing, or past the units, the store refuses
+    // `too_many_values`; at a position holding no value it refuses
+    // `dangling_source`. Nothing of such a shot is judged here.
+    let ReinsertedUnits::Counted(parts) = shot.reinserted_units(world, steps) else {
         return None;
-    }
+    };
     // Every draft-native value naming the kind is judged (M-I1 (a)): each
     // value in placement order over every named draft, the first refusal
     // answering. The owner test the shot once took here is the admission's
     // above — ω of each named draft, asked of every drafted shot, cell or
-    // none.
-    let content = world.content();
-    // The runs the commit re-mints, in its order — M5's own family rule
-    // (PUB-2.40): a run of the trunk's own I-space is placed by reference
-    // and a window kept as one, and neither mints.
-    for run in shot.reinserted_runs() {
-        for a in run.addrs() {
-            // An address holding no value is the store's `dangling_source`;
-            // there is nothing to read.
-            let Some(named) =
-                content.value_at(a.tumbler()).and_then(|piece| names_the_kind(piece.as_bytes()))
-            else {
-                continue;
-            };
-            if let Some(refusal) = value_arm(named, media_gate, principal) {
-                return Some(refusal);
-            }
-        }
-    }
-    None
+    // none. The values are the ones the count read, as the commit re-mints
+    // them — M5's own family rule (PUB-2.40): a run of the trunk's own
+    // I-space is placed by reference and a window kept as one, and neither
+    // mints — and of them the atoms: a single byte names no kind.
+    let mut named = parts.atoms().filter_map(|value| names_the_kind(value.as_bytes()));
+    named.find_map(|named| value_arm(named, media_gate, principal))
 }
 
 /// Returns the visibility class a caller writes at, over the trait.

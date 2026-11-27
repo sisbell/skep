@@ -332,10 +332,13 @@ fn the_read_with_and_edition_types_are_the_commons_rows_and_the_test_is_by_prefi
 //
 // The merge bridge lane, brief A (skep #805): a publication's `supersede`
 // entries, planned over a world of M3, M7 and an empty M5 and no kernel —
-// the plan being a pure function of the world and the request.
+// the plan being a pure function of the world and the request. The world
+// lends an empty content store too, which the plan never reads: the price
+// asked beside the plan counts a shot's re-insert off it.
 
 use serde::{Deserialize, Serialize};
 use skep_arrangement::M5State;
+use skep_content::{ContentStore, HasContent};
 use skep_kernel::{RebuildError, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, PrincipalId};
 
@@ -351,12 +354,14 @@ use crate::state::LinkRec;
 /// The owner of the chain, principal 1 of the account `1.0.1`.
 const P1: Caller = Caller::Principal(PrincipalId(1));
 
-/// The plan's world: M3's registrations, M7's links, M5 at genesis.
+/// The plan's world: M3's registrations, M7's links, M5 at genesis, and
+/// no content.
 #[derive(Clone, Serialize, Deserialize)]
 struct World {
     m3: M3State,
     links: LinkState,
     m5: M5State,
+    content: ContentStore,
 }
 
 impl WorldState for World {
@@ -381,6 +386,11 @@ impl HasLinks for World {
 impl HasM5 for World {
     fn m5(&self) -> &M5State {
         &self.m5
+    }
+}
+impl HasContent for World {
+    fn content(&self) -> &ContentStore {
+        &self.content
     }
 }
 
@@ -434,7 +444,7 @@ fn chain_world() -> World {
         .apply_m3(at, &M3Rec::allocate(member(1), true))
         .apply_m3(at, &M3Rec::allocate(member(2), true))
         .apply_m3(at, &M3Rec::allocate(daughter(1, 1), true));
-    World { m3, links: LinkState::genesis(), m5: M5State::genesis() }
+    World { m3, links: LinkState::genesis(), m5: M5State::genesis(), content: ContentStore::default() }
 }
 
 /// `world` with the claim `old → new` deposited at link `k` of `home`.
@@ -479,7 +489,8 @@ fn a_supersede_entry_plans_the_daughters_claim_in_the_trunk_behind_the_other_kin
     assert!(matches!(plan.homes[0].deposits[0], PlannedDeposit::Copy { index: 0, .. }), "the copy first: {plan:?}");
     assert_eq!(plan.homes[0].deposits[1], PlannedDeposit::Supersede { index: 0, old: daughter(1, 1) });
     assert_eq!(plan.homes[0].deposits[2], PlannedDeposit::Supersede { index: 1, old: member(1) }, "a trunk member that is not the base");
-    let price = super::super::price_publication_reads(&world, P1, &target, &shot, &[], &[], &deposits);
+    let everything = |_: &World, _: &Address| true;
+    let price = super::super::price_publication_reads(&world, P1, &everything, &target, &shot, &[], &[], &deposits, &mut |_| {});
     assert_eq!(price.entries, 3, "one links entry and two supersede entries read over the caller's homes");
     assert!(plan_deposits(&world, P1, &target, &shot, &PublishDeposits::default()).expect("planned").is_empty(), "no entry: the plan as before");
 }

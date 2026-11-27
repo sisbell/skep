@@ -843,19 +843,22 @@ fn changes_since(port: u16, token: &str, since: u64) -> Vec<Value> {
 }
 
 /// THE PRICE READ's ANSWER. A publication of a draft's three bytes with
-/// their kept place answers `publish_cost`: eight members and the tag, each
+/// their kept place answers `publish_cost`: eleven members and the tag, each
 /// figure a JSON integer — the claimant's one link-holding home, its home
 /// page, where the claim ceremony left its credential links; no entry; the
 /// draft's one run and its one placed piece; one re-inserted run; the
-/// staged bytes from the table — beside the two budgets, read at the head.
+/// staged bytes from the table; the draft's three typed bytes as the one
+/// unit the commit would stage them as — beside the two budgets the refusal
+/// ahead of the lock holds the reads and the bytes to and the two the store
+/// holds the re-insert to, M5's own, read at the head.
 /// It moves no
 /// position and leaves no row in the feed. An `id` rides as on any frame;
 /// an `attest` is an unknown field; and a frame the codec refuses as a
 /// `publish` is refused the same.
 #[test]
-fn publish_cost_answers_the_five_figures_and_the_two_budgets_and_writes_nothing() {
+fn publish_cost_answers_the_six_figures_and_the_four_budgets_and_writes_nothing() {
     use skep_links::{
-        stored_tumbler_bytes, ReadPrice, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
+        stored_tumbler_bytes, ReadPrice, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
@@ -868,11 +871,15 @@ fn publish_cost_answers_the_five_figures_and_the_two_budgets_and_writes_nothing(
     let v = op(port, Some(&bare), &publish_cost(&e, &d, 3, json!({})));
     let cost = expect_resp(&v, "publish_cost");
     let keys: Vec<&str> = cost.as_object().expect("an object").keys().map(String::as_str).collect();
-    assert_eq!(keys, ["as_of", "byte_budget", "entries", "fence", "homes", "read_budget", "resp", "rewindow", "staged_bytes"], "{v}");
+    assert_eq!(
+        keys,
+        ["as_of", "byte_budget", "entries", "fence", "homes", "position_budget", "read_budget", "resp", "rewindow", "staged_bytes", "unit_budget", "units"],
+        "{v}"
+    );
     // The draft's address rides the placing record's slot and the
     // re-window's one record; both drafts of the claimant lie at one depth.
     let draft_addr = stored_tumbler_bytes(&skep_core::codec::wire_address(&d).expect("an address").tumbler().clone());
-    let staged = SHOT_BYTES + draft_addr + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 3 * REINSERTED_VALUE_BYTES + (REWINDOWED_DRAFT_BYTES + draft_addr) + KEPT_PLACE_BYTES;
+    let staged = SHOT_BYTES + draft_addr + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + (REINSERTED_UNIT_BYTES + 3) + (REWINDOWED_DRAFT_BYTES + draft_addr) + KEPT_PLACE_BYTES;
     assert_eq!(
         *cost,
         json!({
@@ -882,12 +889,16 @@ fn publish_cost_answers_the_five_figures_and_the_two_budgets_and_writes_nothing(
             "rewindow": 1 + 1,
             "fence": 1,
             "staged_bytes": staged,
+            "units": 1,
             "read_budget": ReadPrice::BUDGET,
             "byte_budget": ReadPrice::BYTE_BUDGET,
+            "unit_budget": skep_arrangement::MAX_REINSERTED_UNITS,
+            "position_budget": skep_arrangement::MAX_REINSERTED_VALUES,
             "as_of": before,
         }),
-        "the home page; the draft's one run and its one piece; one fence stab; the table's bytes"
+        "the home page; the draft's one run and its one piece; one fence stab; the table's bytes; the three typed bytes one unit; the store's own two budgets"
     );
+    assert_eq!((cost["unit_budget"].as_u64(), cost["position_budget"].as_u64()), (Some(1 << 17), Some(1 << 20)), "the two numbers, as the wire states them");
     assert_eq!(head(port), before, "a read moves no position");
     assert!(changes_since(port, &bare, before).is_empty(), "and leaves no row in the feed");
     // An `id` rides as on any frame, and the answer is the same.
@@ -985,8 +996,144 @@ fn publish_cost_counts_each_supersede_entry_and_the_claim_it_stages() {
         2 * skep_links::CLAIM_BYTES,
         "and a claim each: {daughters}"
     );
-    for member in ["homes", "rewindow", "fence", "read_budget", "byte_budget"] {
+    for member in ["homes", "rewindow", "fence", "units", "read_budget", "byte_budget", "unit_budget", "position_budget"] {
         assert_eq!(daughters[member], plain[member], "{member} stands");
     }
+    sd.shutdown();
+}
+
+/// THE UNITS THE READ ANSWERS ARE THE UNITS THE COMMIT STAGES. A draft
+/// holds `abc`, an atom, and `de`, typed in one insert: six positions the
+/// caller counts, three units the board counts off the stored values — two
+/// runs of typed bytes and the atom between them — and the staged bytes
+/// price each unit at the table's figure and its own bytes. The publication
+/// of the same members then lands the member as those three stored pieces:
+/// its delivery reads the first run, the atom, the second run, each one
+/// item.
+#[test]
+fn publish_cost_answers_the_units_the_publication_then_stages() {
+    use skep_links::{stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, SHOT_BYTES};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = published_edition(port, &signed);
+    let d = owner_draft(port, &bare);
+    let typed = format!(r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"1"}},"values":["abc",{{"atom":"XY"}},"de"]}}"#);
+    expect_resp(&op(port, Some(&bare), &typed), "ack_addr");
+    let runs = [run(&d, &format!("{d}.0.1.1"), 6)];
+    let asked = publish_frame(&e, None, Some(&d), &runs).replace(r#""op":"publish""#, r#""op":"publish_cost""#);
+    let v = op(port, Some(&bare), &asked);
+    let cost = expect_resp(&v, "publish_cost");
+    assert_eq!(cost["units"].as_u64(), Some(3), "two runs of typed bytes and the atom between them, where the positions are six: {v}");
+    let draft_addr = stored_tumbler_bytes(&skep_core::codec::wire_address(&d).expect("an address").tumbler().clone());
+    assert_eq!(
+        cost["staged_bytes"].as_u64(),
+        Some(SHOT_BYTES + draft_addr + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 3 * REINSERTED_UNIT_BYTES + (3 + 2 + 2)),
+        "a unit at the table's figure and its own bytes: {v}"
+    );
+    let member = shot(port, &signed, &e, None, Some(&d), &runs);
+    let delivered = op(port, None, &format!(r#"{{"op":"retrieve_v","specs":[{{"doc":"{member}","span":{{"start":"1.1","width":"0.6"}}}}]}}"#));
+    let items = expect_resp(&delivered, "delivery")["items"].as_array().expect("items").clone();
+    assert_eq!(items.len() as u64, cost["units"].as_u64().expect("units"), "the member's six positions are three stored pieces, one a unit: {delivered}");
+    assert_eq!((items[0]["content"].as_str(), items[2]["content"].as_str()), (Some("abc"), Some("de")), "{delivered}");
+    sd.shutdown();
+}
+
+/// NO COUNT FROM A DRAFT THE CALLER CANNOT READ. The claimant's private
+/// draft is published into its edition: its first three words as three
+/// runs, which leaves THREE correspondence records in the draft naming the
+/// edition's first three words, and its last four as one run, ONE record
+/// naming the next four; the first value of the claimant's home, a deposit,
+/// is published content NO record names. A frame placing a stray run of
+/// such words in a published document every caller reads is priced for
+/// each of them: the guest, another account, and a principal seated at no
+/// account, none of whom may read the draft, are each answered the SAME
+/// figures whichever words the run names — the stray one piece — where the
+/// claimant, who reads its draft, is priced one piece for the home's value
+/// and for the one record's words and three for the three records'. And a
+/// `publish` of the other account's past the transaction budget is refused
+/// with the same detail, byte for byte, whichever words its stray names —
+/// and, where it names the claimant's draft itself to re-insert from,
+/// whichever of that draft's positions it names, held or not: no unit of a
+/// draft it may not read is counted.
+#[test]
+fn publish_cost_and_the_refusal_count_no_record_homed_in_a_draft_the_caller_may_not_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (their_account, other) = stranger(port, 9);
+    let unseated = open_session(port, 4242);
+    let e = published_edition(port, &signed);
+    let d = private_draft(port, &bare, "abcdefg");
+    let word = |ordinal: u64, width: u64| run(&d, &format!("{d}.0.1.{ordinal}"), width);
+    shot(port, &signed, &e, None, Some(&d), &[word(1, 1), word(3, 1), word(2, 1), word(4, 4)]);
+    // A published document of the claimant's, empty, to place the stray in.
+    let p = published_edition(port, &signed);
+    // The stray runs, by how many records in the draft name their words.
+    let strays = [(0u64, run(CLAIMANT_DOC1, &format!("{CLAIMANT_DOC1}.0.1.1"), 1)), (1, run(&e, &format!("{e}.0.1.4"), 2)), (3, run(&e, &format!("{e}.0.1.1"), 3))];
+    let placing = |name: &str, doc: &str, draft: &str, stray: &str, extra: &str| {
+        format!(r#"{{"op":"{name}","doc":"{doc}","draft":"{draft}","runs":[{stray}{extra}],"places":[{{"subspace":"1","ordinal":"1"}}]}}"#)
+    };
+    let figures = |v: &Value| -> Vec<u64> {
+        let cost = expect_resp(v, "publish_cost");
+        ["homes", "entries", "rewindow", "fence", "staged_bytes", "units"].iter().map(|member| cost[member].as_u64().unwrap_or_else(|| panic!("{member}: {v}"))).collect()
+    };
+    let priced = |token: Option<&str>| -> Vec<Vec<u64>> { strays.iter().map(|(_, stray)| figures(&op(port, token, &placing("publish_cost", &p, &p, stray, "")))).collect() };
+    for (reader, token) in [("the guest", None), ("another account", Some(other.as_str())), ("a principal seated at no account", Some(unseated.as_str()))] {
+        let answers = priced(token);
+        assert_eq!(answers[1], answers[0], "{reader}: one record in a draft it may not read moves no figure");
+        assert_eq!(answers[2], answers[0], "{reader}: nor do three");
+        assert_eq!((answers[0][0], answers[0][2]), (0, 1), "{reader}: no home, and the stray's one piece in a document of no runs");
+    }
+    // The claimant reads its draft: a piece a record.
+    let mine = priced(Some(&bare));
+    assert_eq!(mine.iter().map(|answer| answer[2]).collect::<Vec<_>>(), [1, 1, 3], "the records the caller may read are its pieces");
+    assert_eq!(mine[2][4] - mine[1][4], 2 * skep_links::KEPT_PLACE_BYTES, "and a kept place's change a piece");
+    // The refusal ahead of the lock: the other account's own publication,
+    // past the transaction budget on a hundred wide `links` entries over a
+    // shot of 4,096 runs — the stray its first and its one placed run, then
+    // one run a byte of a burst typed into a draft of its own.
+    let create = format!(r#"{{"op":"create_new_document","account":"{their_account}"}}"#);
+    let (their_home, their_draft) = (acked_addr(&op(port, Some(&other), &create)), acked_addr(&op(port, Some(&other), &create)));
+    expect_resp(&op(port, Some(&other), &format!(r#"{{"op":"insert","doc":"{their_draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["{}"]}}"#, "x".repeat(4095))), "ack_addr");
+    let burst: String = (1..=4095).map(|k| format!(",{}", run(&their_draft, &format!("{their_draft}.0.1.{k}"), 1))).collect();
+    let wide = r#"{"home":"member","from":{"member":[{"ordinal":"1","width":"4096"}]},"to":{"addrs":[]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}"#;
+    let links = format!(r#","links":[{}]}}"#, vec![wide; 100].join(","));
+    let details: Vec<String> = strays
+        .iter()
+        .map(|(_, stray)| {
+            let frame = placing("publish", &their_home, &their_draft, stray, &burst);
+            let frame = format!("{}{links}", frame.strip_suffix('}').expect("an object"));
+            let v = op_as_written(port, Some(&other), &frame);
+            let rej = expect_resp(&v, "rejected");
+            assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{}", rej["detail"]);
+            rej["detail"].as_str().expect("the bound passed, with its figures").to_string()
+        })
+        .collect();
+    assert!(details[0].contains("bytes would be staged against the transaction budget"), "premise: the bytes speak: {}", details[0]);
+    assert_eq!(details[1], details[0], "one record it may not read moves no figure of the detail");
+    assert_eq!(details[2], details[0], "nor do three");
+    // NO UNIT EITHER. The same account names the claimant's private draft
+    // beside its own, among `also`, and re-inserts three of its positions
+    // ahead of the burst: the first three, which hold typed bytes, or three
+    // far past its end, which hold nothing. It may not read that draft, and
+    // this refusal stands ahead of the store's own judgment of who owns it,
+    // so no unit of either draft is counted: the detail is the same, byte
+    // for byte, whichever positions the run names.
+    let naming = |first: u64| {
+        let theirs = run(&d, &format!("{d}.0.1.{first}"), 3);
+        let frame = format!(r#"{{"op":"publish","doc":"{their_home}","draft":"{their_draft}","also":["{d}"],"runs":[{theirs}{burst}]{links}"#);
+        let v = op_as_written(port, Some(&other), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{}", rej["detail"]);
+        rej["detail"].as_str().expect("the bound passed, with its figures").to_string()
+    };
+    let (held, missing) = (naming(1), naming(5_000));
+    assert!(held.contains("bytes would be staged against the transaction budget"), "premise: the bytes speak: {held}");
+    assert_eq!(held, missing, "a draft it may not read moves no byte of the detail, whatever its positions hold");
     sd.shutdown();
 }

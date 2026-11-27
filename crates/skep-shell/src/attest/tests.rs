@@ -7,7 +7,8 @@
 //! BOARD's BUDGETS it keeps: each pinned to the board's own where the board
 //! exports it, and each held before the work it bounds, against a fake board
 //! that counts the reads the composer makes — a list past the wire's, a slot
-//! past its spans, a shot past its re-insert budget or its body, an origin
+//! past its spans, a shot past its body, or past either re-insert budget
+//! the board ANSWERS, the shell holding no number for those, an origin
 //! past one delivery, an `image` that maps more than its extent — and, the
 //! positive control beside them, a shot's body composed from the values it
 //! copies in, run for run, as the signer's own builder spells it. And THE
@@ -90,15 +91,16 @@ fn an_i_range_is_made_where_its_reach_is_spellable() {
 }
 
 /// THE BOARD's BUDGETS the board exports are the shell's: the frame cap the
-/// daemon's transport refuses a longer `/op` body by, M7's per-slot span
-/// budget and M5's re-insert budget. The codec's own three — a wire list, an
-/// insert's values, a tumbler's components — are private to the daemon, and
-/// pinned by its behaviour in the shell's suite.
+/// daemon's transport refuses a longer `/op` body by and M7's per-slot span
+/// budget. The codec's own three — a wire list, an insert's values, a
+/// tumbler's components — are private to the daemon, and pinned by its
+/// behaviour in the shell's suite. M5's two re-insert budgets are no
+/// constant here: the composer reads them off the board's price
+/// (`a_shots_reinsert_is_held_to_the_budgets_the_board_answers`).
 #[test]
 fn the_budgets_are_the_boards() {
     assert_eq!(MAX_FRAME_BYTES, skepd::body_cap("POST", "/op"));
     assert_eq!(MAX_SLOT_SPANS, skep_links::MAX_SLOT_SPANS);
-    assert_eq!(MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
     assert_eq!(MAX_COPIED_POSITIONS, (MAX_FRAME_BYTES / 4) as u64);
 }
 
@@ -142,7 +144,8 @@ struct Stored {
 /// A board under test for the composer's reads: each origin's positions,
 /// answered by `retrieve_doc_v_span_set`, `image` and `retrieve_v` — or,
 /// where armed, an extent or an `image` answer of its own, or the death
-/// signal on every answer — and every op dialed, recorded by its name.
+/// signal on every answer — a shot's price, answered by `publish_cost` as
+/// the test scripts it, and every op dialed, recorded by its name.
 #[derive(Default)]
 struct Fake {
     origins: HashMap<&'static str, Stored>,
@@ -160,6 +163,10 @@ struct Fake {
     /// at `old` answers each as a claim homed in `home`, whose owner
     /// `effective_owner` answers as the home's account prefix.
     claims: Vec<(&'static str, &'static str)>,
+    /// What `publish_cost` answers, as the test scripts it; where it
+    /// scripts none, [`Fake::priced`] at one unit and the budgets a board
+    /// of this build states.
+    cost: Mutex<Option<Value>>,
     closed: AtomicBool,
     dialed: Mutex<Vec<String>>,
 }
@@ -176,6 +183,17 @@ impl Fake {
     /// The ops dialed, in order.
     fn dialed(&self) -> Vec<String> {
         self.dialed.lock().unwrap().clone()
+    }
+
+    /// A `publish_cost` answer of `units` units at the two re-insert
+    /// budgets given, its other figures inside their own.
+    fn priced(units: u64, unit_budget: u64, position_budget: u64) -> Value {
+        json!({"resp": "publish_cost", "as_of": 1, "homes": 1, "entries": 0, "rewindow": 0, "fence": 1, "staged_bytes": 2_000, "units": units, "read_budget": 65_536, "byte_budget": 67_108_864, "unit_budget": unit_budget, "position_budget": position_budget})
+    }
+
+    /// Scripts the next `publish_cost` answers.
+    fn answer_price(&self, cost: Value) {
+        *self.cost.lock().unwrap() = Some(cost);
     }
 }
 
@@ -246,6 +264,10 @@ impl Dialer for Fake {
                 let y = frame["y"].as_str().unwrap_or("");
                 let claims: Vec<Value> = self.claims.iter().filter(|(old, _)| *old == y).map(|(old, home)| json!({"active": true, "claim": format!("{home}.0.2.3"), "home": home, "new": format!("{old}.1"), "old": old})).collect();
                 ok(json!({"resp": "claims", "as_of": 1, "claims": claims}))
+            }
+            "publish_cost" => {
+                let scripted = self.cost.lock().unwrap().clone();
+                ok(scripted.unwrap_or_else(|| Fake::priced(1, skep_arrangement::MAX_REINSERTED_UNITS as u64, skep_arrangement::MAX_REINSERTED_VALUES as u64)))
             }
             "effective_owner" => {
                 let a = frame["addr"].as_str().unwrap_or("");
@@ -367,24 +389,21 @@ fn run(origin: &str, i_start: &str, width: u64) -> Value {
 }
 
 /// A SHOT is held to its ARITHMETIC before any read: runs past the wire's
-/// list, the staging draft's DISTINCT positions past the store's re-insert
-/// budget (two disjoint runs past it together; the store mints each draft
-/// identity once per shot, so a run named twice counts once), the copied
-/// positions past what a body under the budget can carry, and a count past
-/// `be64` (a window of width 2^64 − 1 and a run after it — a panic in the
-/// signer's own builder) are each refused with nothing read; a draft at the
-/// re-insert budget passes it, named once or twice over, and is read.
+/// list, the copied positions past what a body under the budget can carry,
+/// and a count past `be64` (a window of width 2^64 − 1 and a run after it —
+/// a panic in the signer's own builder) are each refused with nothing read,
+/// the board's price among the reads not made; a shot that copies in none
+/// of its draft's words asks no price at all.
 #[test]
 fn a_shot_is_held_to_its_arithmetic_before_any_read() {
     let g = Ground::over(Fake::default());
     let c = g.composer();
     let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": runs});
     let draft_run = |width: u64| run("1.0.1.0.64", "1.0.1.0.64.0.1.1", width);
-    let past_the_draft = run("1.0.1.0.64", &format!("1.0.1.0.64.0.1.{}", MAX_REINSERTED_VALUES + 1), 1);
     let cells = [
         ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
-        ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), past_the_draft]), "re-inserts"),
         ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_COPIED_POSITIONS + 1)]), "copies in"),
+        ("the draft's positions past a body", shot(vec![draft_run(MAX_COPIED_POSITIONS + 1)]), "copies in"),
         ("a count past be64", shot(vec![run("1.0.9.0.1", "1.0.9.0.1.0.1.1", u64::MAX), run("1.0.9.0.1", "1.0.9.0.1.0.1.1", 1)]), "2^64"),
     ];
     for (cell, frame, says) in cells {
@@ -392,15 +411,80 @@ fn a_shot_is_held_to_its_arithmetic_before_any_read() {
         assert!(refused.to_string().contains(says), "{cell}: {refused}");
         assert!(g.fake.dialed().is_empty(), "{cell}: nothing is read: {:?}", g.fake.dialed());
     }
-    for (cell, runs) in [
-        ("the draft at the budget", vec![draft_run(MAX_REINSERTED_VALUES)]),
-        ("the draft at the budget, named twice — the distinct count", vec![draft_run(MAX_REINSERTED_VALUES), draft_run(1)]),
-    ] {
-        let refused = c.publish_body(&shot(runs), "1.0.1.0.1").unwrap_err();
-        assert!(!refused.to_string().contains("re-inserts"), "{cell} passes it: {refused}");
-        assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "{cell}: and is read");
+    // The trunk's own words alone, by reference: nothing of the draft's is
+    // re-inserted, so no price is asked — the first read is the values'.
+    let own = shot(vec![run("1.0.1.0.1", "1.0.1.0.1.0.1.1", 2)]);
+    let _ = c.publish_body(&own, "1.0.1.0.1");
+    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "a shot re-inserting nothing asks no price");
+}
+
+/// A SHOT's RE-INSERT IS HELD TO THE BUDGETS THE BOARD ANSWERS, and to no
+/// number of the shell's. A shot copying in its draft's words asks the
+/// board ONE `publish_cost` of its own members — no `id`, no `attest` —
+/// before it reads a value, and is held to that answer: its distinct draft
+/// positions (a run named twice counted once, two disjoint runs together)
+/// to the positions budget the board states, and the units the board counts
+/// them as to its units budget. A draft of 131,073 distinct positions — one
+/// past the positions budget as it once stood — in one unit is composed
+/// on, read for its values; the same shot at a board answering a smaller
+/// positions budget, or more units than its units budget, is refused with
+/// the price its only read. A board whose answer is no price, and one that
+/// refuses the read, halt the composer the same way: nothing is signed over
+/// a budget the shell guessed.
+#[test]
+fn a_shots_reinsert_is_held_to_the_budgets_the_board_answers() {
+    let (units, positions) = (skep_arrangement::MAX_REINSERTED_UNITS as u64, skep_arrangement::MAX_REINSERTED_VALUES as u64);
+    let g = Ground::over(Fake::default());
+    let c = g.composer();
+    let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "id": "k-1", "runs": runs});
+    let draft_run = |first: u64, width: u64| run("1.0.1.0.64", &format!("1.0.1.0.64.0.1.{first}"), width);
+    // What the composer answers the shot of `runs`, and the ops it dialed.
+    let composed = |runs: Vec<Value>| {
         g.fake.dialed.lock().unwrap().clear();
-    }
+        let refused = c.publish_body(&shot(runs), "1.0.1.0.1").unwrap_err().to_string();
+        (refused, g.fake.dialed())
+    };
+    let price_alone = vec!["publish_cost".to_string()];
+    let read_on = vec!["publish_cost".to_string(), "retrieve_doc_v_span_set".to_string()];
+    // At the budgets a board of this build states: 131,073 positions in one
+    // unit pass both, and the draft is read for its values (the fake holds
+    // none, which is where this composition ends).
+    let (refused, dialed) = composed(vec![draft_run(1, (1 << 17) + 1)]);
+    assert!(!refused.contains("re-inserts"), "inside both budgets: {refused}");
+    assert_eq!(dialed, read_on, "the price, then the values");
+    // The positions budget is the answer's: at it, and one past it.
+    let (refused, dialed) = composed(vec![draft_run(1, positions)]);
+    assert!(!refused.contains("re-inserts"), "at the positions budget: {refused}");
+    assert_eq!(dialed, read_on);
+    let (refused, dialed) = composed(vec![draft_run(1, positions), draft_run(positions + 1, 1)]);
+    assert!(refused.contains(&format!("re-inserts {} distinct values from its draft, past the board's {positions}", positions + 1)), "{refused}");
+    assert_eq!(dialed, price_alone, "refused with the price its only read");
+    let (refused, _) = composed(vec![draft_run(1, positions), draft_run(1, 1)]);
+    assert!(!refused.contains("re-inserts"), "a run named twice is counted once: {refused}");
+    // Another board, other budgets: the same shots, another verdict.
+    g.fake.answer_price(Fake::priced(3, units, 10));
+    let (refused, dialed) = composed(vec![draft_run(1, 11)]);
+    assert!(refused.contains("re-inserts 11 distinct values from its draft, past the board's 10"), "{refused}");
+    assert_eq!(dialed, price_alone);
+    let (refused, dialed) = composed(vec![draft_run(1, 10)]);
+    assert!(!refused.contains("re-inserts"), "{refused}");
+    assert_eq!(dialed, read_on);
+    // The units are the board's count, held to the board's budget.
+    g.fake.answer_price(Fake::priced(units + 1, units, positions));
+    let (refused, dialed) = composed(vec![draft_run(1, units + 1)]);
+    assert!(refused.contains(&format!("as {} units, past the board's {units}", units + 1)), "{refused}");
+    assert_eq!(dialed, price_alone);
+    g.fake.answer_price(Fake::priced(5, 4, positions));
+    assert!(composed(vec![draft_run(1, 5)]).0.contains("as 5 units, past the board's 4"));
+    // An answer that is no price, and a refusal of the read: the halt.
+    g.fake.answer_price(json!({"resp": "publish_cost", "as_of": 1, "homes": 1}));
+    let (refused, dialed) = composed(vec![draft_run(1, 5)]);
+    assert!(refused.contains("is no price"), "{refused}");
+    assert_eq!(dialed, price_alone);
+    g.fake.answer_price(json!({"resp": "rejected", "op": "publish_cost", "code": "withheld", "disposition": "permanent", "site": {"addr": "1.0.1.0.64"}}));
+    let (refused, dialed) = composed(vec![draft_run(1, 5)]);
+    assert!(refused.contains("withheld"), "the board's own verdict: {refused}");
+    assert_eq!(dialed, price_alone);
 }
 
 /// THE READ-BACK is held to what one delivery can carry and to the map the
@@ -776,8 +860,9 @@ fn a_member_position_end_is_asserted_canonical_before_the_signing() {
 }
 
 /// THE DEATH SIGNAL at a read the composer makes is the session's end and
-/// no refusal of its own: a V-spec slot's `image` and a copied run's
-/// read-back each answer [`Unattested::Died`], stopped at that first read
+/// no refusal of its own: a V-spec slot's `image` and the first read of a
+/// shot copying in its draft's words — the board's price of it — each
+/// answer [`Unattested::Died`], stopped at that first read
 /// (the mutant that reads the death as the composer's halt answers it
 /// `attest_not_composed`, and the page is told the shell could not sign).
 #[test]
@@ -789,7 +874,7 @@ fn a_death_signal_at_a_read_is_the_sessions_end() {
     assert!(matches!(c.slot(&json!([vspec("1.0.1.0.64")]), "from"), Err(Unattested::Died)));
     let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": [run("1.0.1.0.64", "1.0.1.0.64.0.1.1", 2)]});
     assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Died)));
-    assert_eq!(g.fake.dialed(), ["image", "retrieve_doc_v_span_set"], "each stopped at its first read");
+    assert_eq!(g.fake.dialed(), ["image", "publish_cost"], "each stopped at its first read");
 }
 
 /// A BOARD's REFUSAL AT A READ the composer makes is the board's verdict,

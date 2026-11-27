@@ -658,10 +658,11 @@ impl Request {
         homes.into_values().flatten().collect()
     }
 
-    /// Returns the request's own shape, as the price judges it with no
-    /// read: each list's length — the places counted where a place is
-    /// carried — the signed body's bytes, and the distinct positions of the
-    /// named drafts its runs re-insert.
+    /// Returns the request's own shape, what the price reads off the
+    /// request alone: each list's length — the places counted where a place
+    /// is carried — the signed body's bytes, and the distinct positions of
+    /// the named drafts its runs re-insert, which the price holds to the
+    /// budget the board answers.
     pub fn shape(&self) -> Shape {
         let drafts: Vec<Address> = self.draft.iter().chain(&self.also).cloned().collect();
         Shape {
@@ -910,8 +911,10 @@ pub fn build_unpriced(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel
 /// prices the request at — ONE read, `publish_cost`, of the request's own
 /// members ([`Request::price_frame`]).
 ///
-/// Where the shape is past a cap of its own — a list, the body, the values
-/// — the board is not asked, and the price names those terms alone.
+/// Where the shape is past a cap a frame must be inside to parse — a list,
+/// or the body — the board is not asked, and the price names those terms
+/// alone. The values and the units are judged by the board's answer, never
+/// ahead of it.
 ///
 /// # Errors
 ///

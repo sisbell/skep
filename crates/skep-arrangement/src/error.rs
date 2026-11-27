@@ -549,16 +549,29 @@ pub enum SubstituteError {
 /// * `TooManyRuns` — the member's placement exceeds
 ///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY, REINSTATE
 ///   and the shot share; a shot cannot be split to meet it.
-/// * `TooManyValues` — the values the shot re-inserts
+/// * `TooManyValues` — the positions the shot re-inserts
 ///   ([`Shot::reinserted_values`](crate::Shot::reinserted_values): the
 ///   distinct positions the draft-native runs name) exceed
-///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each such value
-///   is re-inserted as fresh identity, two staged records apiece where every
-///   value is an atom, and two for a whole run of single-byte values.
-///   Arithmetic on the request alone, it discloses nothing about what
-///   exists; a shot cannot be split to meet it. Its own verdict and not
-///   `TooManyRuns`'s, since the re-inserted values are I-adjacent and
-///   coalesce: a shot refused here may place a single run.
+///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each is
+///   re-inserted as fresh identity, and the walks of the draft's stored
+///   pieces are bounded by their count. Arithmetic on the request alone, it
+///   discloses nothing about what exists; a shot cannot be split to meet
+///   it. Its own verdict and not `TooManyRuns`'s, since the re-inserted
+///   values are I-adjacent and coalesce: a shot refused here may place a
+///   single run.
+/// * `TooManyUnits` — the units the shot re-inserts
+///   ([`Shot::reinserted_units`](crate::Shot::reinserted_units): the atoms
+///   and the maximal runs of single-byte values of its unminted portions,
+///   two staged records each) exceed
+///   [`MAX_REINSERTED_UNITS`](crate::MAX_REINSERTED_UNITS). The second cause
+///   of the one refusal a shot's re-insert can earn — the wire answers both
+///   under `TooManyValues`' code, and this message tells them apart. It is
+///   no arithmetic on the request: the count reads the stored pieces of the
+///   named drafts, which tell an atom from a byte, so it says of a draft's
+///   content that its positions are held as more units than the budget — to
+///   a caller the admission's ω has just found to own every named draft,
+///   and so one that may read them. Nothing is staged ahead of it, and a
+///   shot cannot be split to meet it.
 /// * `Mint` / `Content` — the identity mint, a content mint, or a content
 ///   write refused (M3/M4's own boundary refusals; defensive).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -591,8 +604,10 @@ pub enum PublishError {
     DanglingSource,
     /// The placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS).
     TooManyRuns,
-    /// The values the shot re-inserts exceed `MAX_REINSERTED_VALUES`.
+    /// The positions the shot re-inserts exceed `MAX_REINSERTED_VALUES`.
     TooManyValues,
+    /// The units the shot re-inserts exceed `MAX_REINSERTED_UNITS`.
+    TooManyUnits,
     /// The identity mint or a content mint was refused.
     Mint(MintError),
     /// A content write was refused.
@@ -713,7 +728,10 @@ impl fmt::Display for PublishError {
                 f.write_str("publish: the placement exceeds the per-transaction run budget")
             }
             PublishError::TooManyValues => f.write_str(
-                "publish: the values the shot re-inserts from its draft exceed the per-transaction re-insert budget",
+                "publish: the distinct positions the shot re-inserts from its drafts exceed the re-insert's position budget",
+            ),
+            PublishError::TooManyUnits => f.write_str(
+                "publish: the units the shot re-inserts from its drafts — atoms and whole runs of single bytes, two records each — exceed the re-insert's unit budget",
             ),
             // This layer only — the inner message is the `source`.
             PublishError::Mint(_) => f.write_str("publish: an identity or content mint failed"),

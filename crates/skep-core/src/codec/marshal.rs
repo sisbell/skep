@@ -853,12 +853,15 @@ pub(super) fn j_response(r: &Response) -> Value {
             ("universal_grants", vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))])
         }
         // The price of a publication (wire.md §The response envelope,
-        // `publish_cost`): the price's five figures, a member each, then
-        // the two budgets they are held to and the position read. This is
-        // the one place the answer is built, off `ReadPrice` alone: a
-        // figure the price gains is a member added here.
+        // `publish_cost`): the price's six figures, a member each, then
+        // the four budgets — the two the reads and the staged bytes are
+        // held to ahead of the lock, and the two the store holds the shot's
+        // re-insert to, its units and its distinct positions — and the
+        // position read. This is the one place the answer is built, off
+        // `ReadPrice` alone: a figure the price gains is a member added
+        // here.
         Response::PublishCost { price, as_of } => {
-            let ReadPrice { homes, entries, rewindow, fence, staged_bytes } = *price;
+            let ReadPrice { homes, entries, rewindow, fence, staged_bytes, units } = *price;
             (
                 "publish_cost",
                 vec![
@@ -867,8 +870,11 @@ pub(super) fn j_response(r: &Response) -> Value {
                     ("rewindow", j_usize(rewindow)),
                     ("fence", j_usize(fence)),
                     ("staged_bytes", j_u64(staged_bytes)),
+                    ("units", j_u64(units)),
                     ("read_budget", j_usize(ReadPrice::BUDGET)),
                     ("byte_budget", j_u64(ReadPrice::BYTE_BUDGET)),
+                    ("unit_budget", j_u64(ReadPrice::UNIT_BUDGET)),
+                    ("position_budget", j_u64(ReadPrice::POSITION_BUDGET)),
                     ("as_of", j_seq(*as_of)),
                 ],
             )
@@ -1744,8 +1750,10 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::NotOrdinalVSpan => "not_ordinal_vspan",
         RejectCode::DanglingSource => "dangling_source",
         RejectCode::TooManyRuns => "too_many_runs",
-        // The publish shot's re-insert budget (M5's `MAX_REINSERTED_VALUES`),
-        // beside the run budget it is not.
+        // The publish shot's two re-insert budgets (M5's
+        // `MAX_REINSERTED_VALUES`, its distinct positions, and
+        // `MAX_REINSERTED_UNITS`, the atoms and whole byte-runs it stages),
+        // one code for both, beside the run budget it is not.
         RejectCode::TooManyValues => "too_many_values",
         RejectCode::EmptyResult => "empty_result",
         RejectCode::NotArranged => "not_arranged",

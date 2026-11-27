@@ -50,7 +50,7 @@
 //! what is written here.
 //!
 //! **Layout.** This file is the handle and what its operations share — the
-//! three budgets, J0's two allocation steps ([`allocate_for_placement`] for an
+//! four budgets, J0's two allocation steps ([`allocate_for_placement`] for an
 //! atom, [`allocate_stretch_for_placement`] for a run of single-byte values)
 //! and the coalescing walk over them that INSERT and the edit share
 //! ([`allocate_values_for_placement`]), the head key ([`head_lock_key`]),
@@ -66,7 +66,10 @@
 //! [`stage_substitute`], the identity-checked substitution a publication
 //! stages for each draft it re-windows at its kept places.
 //! `ops/publish.rs` holds as well the shot's admission, the checks
-//! `publish` opens with, offered as a pure query ([`shot_admission`]); and
+//! `publish` opens with, offered as a pure query ([`shot_admission`]), and
+//! the count of the units its re-insert comes to
+//! ([`Shot::reinserted_units`](crate::Shot::reinserted_units)), a read of
+//! the draft's stored pieces under the one bound [`ReinsertWorld`]; and
 //! three of the modules hold their op's body as a function over a
 //! caller-opened staging — [`stage_publish`], [`stage_reinstate_at`],
 //! [`stage_delete_at`] — the public op a wrapper that opens the transaction,
@@ -80,8 +83,9 @@
 //! with those two slices too.
 //!
 //! Unit tests sit with what they test: `ops/tests.rs` tests this file — the
-//! handle, J0's atom step, the placement and re-insert budgets against M2's
-//! own accounting — and the bound claim above on `delete`, `rearrange` and the
+//! handle, J0's atom step, the placement budget and the re-insert's two
+//! against M2's own accounting and the signed body's rows — and the bound
+//! claim above on `delete`, `rearrange` and the
 //! shot's admission; `ops/copy/tests.rs`, `ops/reinstate/tests.rs`,
 //! `ops/publish/tests.rs`, `ops/edit/tests.rs` and
 //! `ops/set_arrangement/tests.rs` hold the four ops' own claims — COPY's
@@ -140,6 +144,7 @@ pub use delete::stage_delete_at;
 pub use edit::{Change, Edit, Edited, Placed};
 pub use publish::{
     mint_admission, shot_admission, stage_publish, MintedRun, Pairing, PublishWorld,
+    ReinsertWorld, ReinsertedUnits, UnitParts, UnitTally,
 };
 pub use reinstate::stage_reinstate_at;
 pub use set_arrangement::SetMerge;
@@ -204,53 +209,41 @@ pub use substitute::{stage_substitute, Replacement, Substitution};
 /// caller built before the call, so no accumulator here grows with them.
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
-/// The most values one publish shot may re-insert.
+/// The most distinct positions one publish shot may re-insert.
 ///
-/// They are the fresh identities it mints for its draft-native runs
-/// (PUB-2.40), each through one of J0's two steps — and so this is the
-/// ceiling on what one shot makes M5 stage before M2 has priced any of it.
+/// They are the positions its draft-native runs name
+/// ([`Shot::reinserted_values`](crate::Shot::reinserted_values)) — each
+/// draft identity is minted once per shot as fresh identity (PUB-2.40), a
+/// later occurrence placed by reference — and so this is the ceiling on the
+/// stored pieces one shot makes its readers walk before anything has priced
+/// them.
 ///
-/// **Why a count of its own.** M2 judges a transaction's size only once the
-/// closure has returned, and until then every staged value is live heap: a
-/// mint record and a content record per atom or run of single-byte values,
-/// each carrying an address, and the working world's new content entry. How
-/// many values a shot re-inserts is
-/// [`Shot::reinserted_values`](crate::Shot::reinserted_values), the distinct
-/// positions its draft-native runs name — each draft identity is minted once
-/// per shot, a later occurrence placed by reference — and that count is the
-/// request's to choose: a run may name any stored I-extent of the draft,
-/// while [`MAX_PLACED_RUNS`] does not see it, the fresh addresses being
-/// I-adjacent and so coalescing into one run. Without this count a request
-/// of a kilobyte stages the whole stored content its runs reach, before any
-/// refusal can arrive. The count is request arithmetic, taken before any
-/// address is probed, so it bounds the existence walk over the draft-native
-/// runs as well.
+/// **Why a count of its own.** The positions are the request's to choose: a
+/// run may name any stored I-extent of the draft, while [`MAX_PLACED_RUNS`]
+/// does not see it, the fresh addresses being I-adjacent and so coalescing
+/// into one run. Without this count a request of a kilobyte commands a walk
+/// of the whole stored content its runs reach, before any refusal can
+/// arrive. The count is request arithmetic, taken before any address is
+/// probed, so it bounds every walk of the draft-native runs' stored pieces:
+/// the count of the shot's units
+/// ([`Shot::reinserted_units`](crate::Shot::reinserted_units)), which is
+/// the shot's existence walk over those runs, the walk the entry frame's
+/// composer makes of them and the media door's reading of them. It is no
+/// bound on the records the shot stages — a megabyte of typed text is one
+/// unit where it lies in one run — which is [`MAX_REINSERTED_UNITS`]'s to
+/// bind.
 ///
-/// **The budget**, measured at the worst case that holds: every re-inserted
-/// value an atom — a `Piece::Value` of two bytes or more, which stages two
-/// records apiece, a mint and a content write, where a run of single-byte
-/// values re-inserts as one range mint and one stretch however wide it is
-/// (the re-insert coalesces consecutive bytes, so a draft typed byte by byte
-/// costs a few records, never two per value). M2 charges each record its
-/// encoded bytes plus forty of framing — about 290 journal bytes for a
-/// two-byte atom at the shallowest content address, so M2's `MAX_TXN_BYTES`
-/// (64 MiB) carries some 230,000 of them and no more. `2^17` is the largest
-/// power of two inside that ceiling, so a re-insert at the cap is a
-/// transaction M2 accepts (`the_reinsert_budget_is_a_transaction_m2_accepts`
-/// measures it against M2's own accounting, atom by atom), and the live heap
-/// one shot commands stays on the order of the budget M2 already prices, as
-/// [`MAX_PLACED_RUNS`] keeps it for a placement's runs at that depth. The
-/// heap does not grow with a value's length — a re-inserted atom's bytes are
-/// shared with the stored value they are read from, never copied, and a
-/// byte-run is copied into an owned buffer and from it into its stretch, one
-/// copy kept — but it grows with the address's depth, every staged record and
-/// the working world's new entry holding the fresh address whole; and the
-/// journal grows with both: a longer value, or a deeper document's addresses,
-/// makes every record longer, so there the ceiling holds fewer values and a
-/// re-insert under the cap can still meet M2's own refusal. The cap bounds
-/// the values a shot commands; it does not promise that every staging under
-/// it commits, nor that its heap stays on M2's order past the shallowest
-/// address.
+/// **The budget** is the signed body's. A shot's entry frame spells every
+/// value the shot re-inserts by its bytes behind a four-byte length
+/// (skep-identity's `PublishBody`), so a value of one byte costs the body
+/// five, and the frame routes hold a body to 8 MiB (skep-core's
+/// `MAX_REQUEST_BODY`): 8 MiB ÷ 5 = 1,677,721 one-byte values and no more.
+/// `2^20` is the largest power of two inside that, chosen as
+/// [`MAX_REINSERTED_UNITS`] is chosen inside the transaction's ceiling
+/// (`the_reinsert_budget_is_a_transaction_m2_accepts` holds the number to
+/// the body's rows). A shot at the cap is reachable at the mint form, or
+/// over a document whose own placed words are few: at the document form the
+/// body spells the document's own runs by value too.
 ///
 /// A shot cannot be split to meet it, any more than it can
 /// [`MAX_PLACED_RUNS`]: the member it produces is born whole, and a retry of
@@ -262,9 +255,60 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// published, the head its readers float to until the next lands, answering
 /// its own address forever — so this remedy publishes every interim
 /// arrangement as a version of the edition. It is also the only remedy for a
-/// shot M2 refuses `OverBudget`: for an act that cannot be split, M2's "split
-/// the transaction" means this and nothing else.
-pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
+/// shot past [`MAX_REINSERTED_UNITS`], and for one M2 refuses `OverBudget`:
+/// for an act that cannot be split, M2's "split the transaction" means this
+/// and nothing else.
+pub const MAX_REINSERTED_VALUES: usize = 1 << 20;
+
+/// The most units one publish shot may re-insert.
+///
+/// A unit is what the re-insert stages as one pair of records, a mint and a
+/// content write, through one of J0's two steps: an atom — a `Piece::Value`
+/// of two bytes or more, or an empty one — or a maximal run of single-byte
+/// values inside one unminted portion of a draft-native run, however wide
+/// it is. [`Shot::reinserted_units`](crate::Shot::reinserted_units) counts
+/// them, split exactly as the staging splits them, and so this is the
+/// ceiling on what one shot makes M5 stage before M2 has priced any of it.
+///
+/// **Why a count of its own**, beside [`MAX_REINSERTED_VALUES`]. M2 judges a
+/// transaction's size only once the closure has returned, and until then
+/// every staged record is live heap: a mint record and a content record a
+/// unit, each carrying an address, and the working world's new content
+/// entry. The positions do not tell the records — a run of single-byte
+/// values re-inserts as one range mint and one stretch however wide it is
+/// (the re-insert coalesces consecutive bytes, so a draft typed byte by
+/// byte costs a few records, never two per value), where every atom costs
+/// two — so the records are counted as what they are. The count reads the
+/// draft's stored pieces, which tell an atom from a byte: it is asked after
+/// the positions' arithmetic, which bounds its walk, and before the first
+/// record is staged.
+///
+/// **The budget**, measured at the worst case that holds: every unit an
+/// atom. M2 charges each record its encoded bytes plus forty of framing —
+/// about 290 journal bytes for a two-byte atom at the shallowest content
+/// address, so M2's `MAX_TXN_BYTES` (64 MiB) carries some 230,000 of them
+/// and no more. `2^17` is the largest power of two inside that ceiling, so a
+/// re-insert at the cap is a transaction M2 accepts
+/// (`the_reinsert_budget_is_a_transaction_m2_accepts` measures it against
+/// M2's own accounting, atom by atom), and the live heap one shot commands
+/// stays on the order of the budget M2 already prices, as
+/// [`MAX_PLACED_RUNS`] keeps it for a placement's runs at that depth. The
+/// heap does not grow with an atom's length — a re-inserted atom's bytes are
+/// shared with the stored value they are read from, never copied — and a
+/// byte-run is copied into an owned buffer and from it into its stretch, one
+/// copy kept, the runs' bytes together bounded by
+/// [`MAX_REINSERTED_VALUES`]; but it grows with the address's depth, every
+/// staged record and the working world's new entry holding the fresh address
+/// whole; and the journal grows with both: a longer value, or a deeper
+/// document's addresses, makes every record longer, so there the ceiling
+/// holds fewer units and a re-insert under the cap can still meet M2's own
+/// refusal. The cap bounds the units a shot commands; it does not promise
+/// that every staging under it commits, nor that its heap stays on M2's
+/// order past the shallowest address.
+///
+/// A shot cannot be split to meet it: the remedy is
+/// [`MAX_REINSERTED_VALUES`]'s, successive shots.
+pub const MAX_REINSERTED_UNITS: usize = 1 << 17;
 
 /// The most run-list steps one COPY's specs may command.
 ///

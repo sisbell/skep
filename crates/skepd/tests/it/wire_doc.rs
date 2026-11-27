@@ -495,10 +495,10 @@ fn fixture(name: &str) -> Response {
             as_of: Seq(9),
         },
         "universal_grants_empty" => Response::UniversalGrants { rows: Vec::new(), as_of: Seq(9) },
-        // The price of a publication: the five figures, a member each, the
-        // two budgets beside them.
+        // The price of a publication: the six figures, a member each, the
+        // four budgets beside them.
         "publish_cost" => Response::PublishCost {
-            price: skep_links::ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033 },
+            price: skep_links::ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033, units: 1_613 },
             as_of: Seq(9),
         },
         "rejected" => Response::Rejected(Rejection {
@@ -1482,6 +1482,68 @@ fn doc_states_the_staged_bytes_term_of_the_publication_price() {
     assert!(shot.contains("| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS`, or the bytes its commit would stage past the kernel's `MAX_TXN_BYTES`"), "the table row's second cause");
 }
 
+/// THE RE-INSERT's TWO BUDGETS UNDER ONE CODE: §Rejection codes' entry and
+/// the publish table state both causes of `too_many_values` — the positions,
+/// arithmetic on the request, and the units, counted off the drafts' stored
+/// values — each with M5's own figure, the order the two are asked in and
+/// where the count stops; the budget paragraph prices a shot's values by the
+/// unit and a stray place by the records the caller may read; and §Media
+/// states the budgets the door reads within and the cell index's read by
+/// stored piece. The daemon's answers are pinned in `signed_ops.rs` and
+/// `publication_reads.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_reinserts_two_budgets_under_one_code_and_what_is_read_by_the_unit() {
+    let positions = skep_arrangement::MAX_REINSERTED_VALUES;
+    let units = skep_arrangement::MAX_REINSERTED_UNITS;
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in [
+        "`too_many_values` (a shot's re-insert past either of M5's two budgets — one code for both causes, told apart by the store's message".to_string(),
+        format!("its draft-native runs name more than `MAX_REINSERTED_VALUES` = {positions} distinct positions"),
+        "arithmetic on the request, asked after the source gate and ahead of every stored value".to_string(),
+        format!("those positions come to more than `MAX_REINSERTED_UNITS` = {units} units"),
+        "a unit a value that is not one byte, or a whole run of one-byte values standing together in a stretch of positions the shot mints at one time, two staged records either way".to_string(),
+        "counted off the drafts' stored values as the commit will stage them, in the runs' order and ahead of anything staged".to_string(),
+        "the count stops at the first unit past the budget or at the first position that holds no value, whichever it meets first, and that one answers: this code, or `dangling_source`".to_string(),
+        "a shot cannot be split to meet either".to_string(),
+        "the shot's placement and its values by the unit, an atom or a whole run of single bytes".to_string(),
+    ] {
+        assert!(codes.contains(&fact), "§Rejection codes says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        format!(
+            "| `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the re-insert's position budget (M5's `MAX_REINSERTED_VALUES` = {positions} positions; a position two runs name counts once) — arithmetic on the request, asked ahead of every stored value |"
+        ),
+        format!("| `too_many_values` | permanent | — | the units those positions come to exceed the re-insert's unit budget (M5's `MAX_REINSERTED_UNITS` = {units} units:"),
+        "the count stops at the first unit past the budget or at the first position that holds no value, whichever it meets first; the code of the row above, told apart by the store's message |".to_string(),
+        "| `dangling_source` | permanent | — | an address a run names holds no value — a draft-native run's met by the count above where it stands ahead of a unit past the budget, any other run's asked after the count |".to_string(),
+        "its values BY THE UNIT: an atom, or a whole run of single bytes, each priced one fixed figure and its own bytes".to_string(),
+        "a long run of typed bytes is priced near its length and never a record a byte".to_string(),
+        "counted only where the caller may read every draft the request names".to_string(),
+        "of a draft the caller may not read it counts no unit and reads no value, whatever that draft holds".to_string(),
+        "a stray run's per record covering it that the caller may read, a record homed in a document the caller may not read counting for nothing".to_string(),
+        "a stray place's per record covering it that the caller may read".to_string(),
+    ] {
+        assert!(shot.contains(&fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "the re-insert is within the shot's two budgets, its positions and its units, by the store's own count",
+        "a shot past either, or one naming a position that holds no value (`dangling_source`), meets no arm here and is the store's to refuse",
+        "a run of single bytes, which names no kind, is passed whole",
+        "read off the last addresses of the document's own content chain by stored piece, a run of single bytes skipped whole",
+    ] {
+        assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    assert!(units < positions, "the units' budget is the tighter of the two");
+    let by_positions = skep_arrangement::PublishError::TooManyValues.to_string();
+    let by_units = skep_arrangement::PublishError::TooManyUnits.to_string();
+    assert!(
+        by_positions.contains("position budget") && by_units.contains("unit budget") && by_positions != by_units,
+        "the store's message tells the two causes apart: {by_positions:?}, {by_units:?}"
+    );
+}
+
 /// THE PRICE READ. §Arrangement's `publish_cost` row and §The response
 /// envelope's entry carry what a client builds on. The row: the members are
 /// a `publish`'s, each parsed as `publish` parses it; no `attest`; the
@@ -1489,13 +1551,16 @@ fn doc_states_the_staged_bytes_term_of_the_publication_price() {
 /// not a budget is passed; nothing is written and neither a permit nor a
 /// lock is taken; the named drafts are document arguments and an
 /// `originals` entry's home one by derivation; a guest is priced with no
-/// homes; and the rule a client admits a request by. The entry: the five
-/// figures with what each counts, the two budgets with what each is held
-/// to, and that the read never answers the refusal. The entry's example is
-/// a price a client admits by that rule, its two budgets the daemon's own
-/// and its re-window the budget paragraph's worked figure — a draft's runs
-/// and the pieces placed, summed — and the budget paragraph points a client
-/// at the read. The daemon's answers are pinned in `publication_reads.rs`;
+/// homes; the class the price is taken at, which counts no record of a
+/// document the caller may not read; and the rule a client admits a request
+/// by. The entry: the five figures the refusal names with what each counts,
+/// the two budgets they are held to, the units of the re-insert with the
+/// two budgets the store holds it to, and that the read never answers
+/// either refusal. The entry's example is a price a client admits by that
+/// rule, its four budgets the daemon's own, its units a unit a re-inserted
+/// run and its re-window the budget paragraph's worked figure — a draft's
+/// runs and the pieces placed, summed — and the budget paragraph points a
+/// client at the read. The daemon's answers are pinned in `publication_reads.rs`;
 /// this pins that the contract says so.
 #[test]
 fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() {
@@ -1514,8 +1579,12 @@ fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() 
         "one you may not read answers `withheld`, `site.addr` that draft",
         "by derivation, is the home of each `originals` entry",
         "a guest holds no account and is priced with none",
-        "A client admits a request where `homes × entries + rewindow + fence` is at most `read_budget` and `staged_bytes` at most `byte_budget`",
-        "keeps no copy of either budget",
+        "The price is taken at your own read rights, the ones a `publish` of the same members would be committed at",
+        "a record homed in a document you may not read counts for nothing, in any figure",
+        "nothing of a shot past `position_budget` is read at all",
+        "`homes`, `entries`, `rewindow`, `fence`, `staged_bytes`, `units`, the budgets `read_budget`, `byte_budget`, `unit_budget` and `position_budget`, and `as_of`",
+        "A client admits a request where `homes × entries + rewindow + fence` is at most `read_budget` and `staged_bytes` at most `byte_budget`, `units` at most `unit_budget` and the distinct positions its draft-native runs name — which it counts itself — at most `position_budget`",
+        "keeps no copy of any of the four budgets",
     ] {
         assert!(row.contains(fact), "the publish_cost row says {fact:?}: {row}");
     }
@@ -1528,8 +1597,15 @@ fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() 
         "`staged_bytes`, the bytes the commit would stage",
         "`read_budget`, which `homes × entries + rewindow + fence` is held to",
         "`byte_budget`, which `staged_bytes` is",
+        "`units`, the units the shot's draft-native runs would be staged as — an atom, or a whole run of single bytes, two records each",
+        "`unit_budget`, which `units` is held to",
+        "`position_budget`, which the distinct positions those runs name are held to",
+        "`0` for a shot naming no draft, and for one whose positions pass `position_budget`, where no stored value is read",
+        "`unit_budget` and one more where the units pass it",
+        "the units standing ahead of the first position that holds no value",
+        "A stray place counts the records you may read and no other, so no figure moves with what a document you may not read holds",
         "Each is a JSON integer",
-        "the read never answers `publication_over_budget`",
+        "the read never answers `publication_over_budget`, nor `too_many_values`",
     ] {
         assert!(entry.contains(fact), "§The response envelope's publish_cost entry says {fact:?}: {entry}");
     }
@@ -1537,13 +1613,21 @@ fn doc_states_the_price_read_whose_figures_it_answers_and_how_a_client_admits() 
     let example: serde_json::Value = serde_json::from_str(&example).expect("the example is JSON");
     let figure = |member: &str| example[member].as_u64().unwrap_or_else(|| panic!("`{member}` an integer: {example}"));
     assert_eq!((figure("read_budget"), figure("byte_budget")), (skep_links::ReadPrice::BUDGET as u64, skep_links::ReadPrice::BYTE_BUDGET), "the example's budgets are the daemon's");
+    assert_eq!(
+        (figure("unit_budget"), figure("position_budget")),
+        (skep_arrangement::MAX_REINSERTED_UNITS as u64, skep_arrangement::MAX_REINSERTED_VALUES as u64),
+        "and the two the store holds a re-insert to are M5's own"
+    );
     let reads = figure("homes") * figure("entries") + figure("rewindow") + figure("fence");
     assert!(reads <= figure("read_budget") && figure("staged_bytes") <= figure("byte_budget"), "the example is a price a client admits: {reads} reads");
+    assert!(figure("units") <= figure("unit_budget"), "its units among them");
+    assert_eq!(figure("units"), figure("fence"), "the example's units: a unit a re-inserted run");
     let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
     assert_eq!((figure("rewindow"), figure("fence")), (4_167 + 1_613, 1_613), "the example's re-window and fence are the budget paragraph's worked figure");
     for fact in [
         "1,613 placed pieces in a draft of 4,167 runs, at 5,780 steps and 1,613 fence stabs",
         "`publish_cost` (§Arrangement) answers a request's five figures and the two budgets, by the function this refusal reads, to a client that asks before it sends",
+        "the units its re-insert comes to and the two budgets the store holds that to",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }

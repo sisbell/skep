@@ -893,13 +893,20 @@ where
             // as the caller — the one function the transport's refusal ahead
             // of its lock calls — handed back whole, past a budget or inside
             // both. The named drafts and each original's home passed the
-            // consult above, so no figure describes a document this caller
-            // may not read. A guest holds no account: it is priced as the
-            // caller with no homes, an answer and never a refusal, as the
+            // consult above, and the price is taken AT THIS REQUEST's READ
+            // PREDICATE, the class its own commit would read at: a stray
+            // place counts the correspondence records this caller may read
+            // and no other, so no figure describes — or counts anything in
+            // — a document this caller may not read. A guest holds no
+            // account: it is priced as the caller with no homes, at the
+            // guest's class, an answer and never a refusal, as the
             // any-principal read answers it no rows.
             Op::PublishCost { target, shot, places, also_places, deposits } => {
                 let caller = principal.map_or(Caller::System, Caller::Principal);
-                let price = price_publication_reads(world, caller, &target, &shot, &places, &also_places, &deposits);
+                // The predicate is bound to this snapshot, the one world
+                // the price is handed.
+                let class = |_: &W, doc: &skep_address::Address| readable(doc);
+                let price = price_publication_reads(world, caller, &class, &target, &shot, &places, &also_places, &deposits, &mut |_| {});
                 Ok(Response::PublishCost { price, as_of })
             }
             // Complementary half — see dispatch_write's twin arm (§1).

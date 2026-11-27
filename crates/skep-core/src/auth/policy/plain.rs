@@ -370,18 +370,23 @@ impl PublicationReadRefusal {
 /// `publication_over_budget`, the daemon's own cell, asked AHEAD of the
 /// serialization lock.
 ///
-/// It is M7's [`price_publication_reads`] over `world` as the caller — the
-/// caller's link-holding homes × (`links` + `originals` + `read_with` +
-/// `supersede` entries), plus the re-window's steps per document it
+/// It is M7's [`price_publication_reads`] over `world` as the caller, at the
+/// caller's own visibility class — the caller's link-holding homes ×
+/// (`links` + `originals` + `read_with` + `supersede` entries), plus the
+/// re-window's steps per document it
 /// re-windows (its content runs and the pieces its lists place) and the
 /// twin fence's stab per re-inserted run,
 /// the work of the composite's in-lock reads counted before any is made,
 /// against M7's one reads budget; and the bytes the commit would stage,
-/// priced from M7's worst-case table off the request, against the kernel's
+/// priced from M7's worst-case table off the request and the units its
+/// re-insert comes to, against the kernel's
 /// transaction budget, so no request reaches the kernel's `txn_over_budget`
 /// with its records staged — [`ReadPrice::over_budget`], the one comparison,
 /// answered with every term where either bound is passed. `None` for an op
-/// that is no `publish`, or one inside both budgets.
+/// that is no `publish`, or one inside both budgets. The units themselves
+/// are no term of it: a shot past M5's units budget is inside both budgets
+/// here unless its bytes say otherwise, and is the store's own to refuse
+/// `too_many_values`.
 ///
 /// **Its place in the write order:** ahead of the plain sequence's permit
 /// and both of its locks — a read of a lock-free snapshot and the frame, so
@@ -394,7 +399,22 @@ impl PublicationReadRefusal {
 /// plan's reads and the kept-place checks stay where the composite makes
 /// them; this bounds them and reads nothing of theirs but one stab, per
 /// stray place in either list, of the correspondence records across every
-/// home — the records the caller may read, wherever homed, are among them.
+/// home, counting those the caller may read, wherever homed, and no other
+/// — and, for the units, the stored pieces of the named drafts' runs the
+/// shot re-inserts, by M5's one count, the positions' arithmetic first.
+///
+/// **The class** is the one the commit reads at: the write's own
+/// visibility class, the engine's mapping of the caller
+/// ([`World::visible_to`] at the principal — [`World::readable`] over it),
+/// which is what M10 lends the store for the write this prices; bound here
+/// once over the snapshot ([`World::reader_class`]), the same predicate
+/// with the principal's seat looked up once for the whole price and not
+/// once a consult. So the refusal's detail states no figure a record in a
+/// document the caller may not read has moved, and no byte counted off a
+/// draft the caller may not read: this refusal is answered ahead of the
+/// store's own judgment of who owns a named draft, and the units are
+/// counted only where the class admits every draft the shot names.
+///
 /// The read door answers the same price whole, inside the budgets or past
 /// them, to a client that asks before it sends (`publish_cost`; M10's
 /// `Op::PublishCost`): one function prices both.
@@ -404,19 +424,18 @@ pub fn publication_read_refusal(
     principal: PrincipalId,
 ) -> Option<PublicationReadRefusal> {
     let Op::Publish { target, shot, places, also_places, deposits } = op else { return None };
-    let price = price_publication_reads(
-        world,
-        Caller::Principal(principal),
-        target,
-        shot,
-        places,
-        also_places,
-        deposits,
-    );
+    let caller = Caller::Principal(principal);
+    // The caller's class, bound once over this snapshot — the one world the
+    // price is handed, so the world a consult passes is this one.
+    let reader = world.reader_class(Some(principal));
+    let class = |_: &World, doc: &Address| reader.readable(doc);
+    let price = price_publication_reads(world, caller, &class, target, shot, places, also_places, deposits, &mut |_| {});
     if !price.over_budget() {
         return None;
     }
-    let ReadPrice { homes, entries, rewindow, fence, staged_bytes } = price;
+    // Every field, by name: the units are no term of this refusal — past
+    // their budget the store answers its own `too_many_values`.
+    let ReadPrice { homes, entries, rewindow, fence, staged_bytes, units: _ } = price;
     Some(PublicationReadRefusal {
         homes,
         entries,

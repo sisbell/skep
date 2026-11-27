@@ -296,6 +296,7 @@ fn the_price_read_answers_the_figures_the_refusal_names_daughters_among_them() {
         (refusal.homes, refusal.entries, refusal.rewindow, refusal.fence, refusal.staged_bytes),
         "the read's five figures are the refusal's"
     );
+    assert_eq!(price.units, 1, "and the read's sixth, no term of the refusal: the draft's one typed byte, one unit");
     assert_eq!((price.total(), ReadPrice::BUDGET, ReadPrice::BYTE_BUDGET), (refusal.total, refusal.budget, refusal.byte_budget), "and its total and budgets");
     assert_eq!((price.homes, price.entries, price.rewindow, price.fence), (1, over, 1 + 1, 1), "each daughter an entry over the one home; the draft's run and its piece; its fence stab");
     assert_eq!(as_of, board.febe.log_position().0, "read at the head, and nothing written");
@@ -304,6 +305,157 @@ fn the_price_read_answers_the_figures_the_refusal_names_daughters_among_them() {
     let (few, _) = priced(2);
     assert_eq!((few.entries, price.staged_bytes - few.staged_bytes), (2, (over as u64 - 2) * CLAIM_BYTES), "a claim staged a daughter");
     assert!(!few.over_budget());
+}
+
+/// THE REFUSAL's DETAIL COUNTS NO RECORD THE CALLER MAY NOT READ. The
+/// maker's home holds three published words three ways: by a shot that
+/// left no correspondence record, by a publication of the maker's private
+/// draft as one run — ONE record homed in that draft — and by a publication
+/// of its three positions as three runs — THREE records homed there, naming
+/// the same three words. The other account, which may not read the maker's
+/// draft, sends a publication past the transaction budget that places a
+/// stray run of those words in a document of its own: the refusal ahead of
+/// the lock names every term, and names the SAME terms on all three boards
+/// — the stray one piece, whatever the maker's draft holds. The maker,
+/// refused for the same request, is priced with the records it may read:
+/// one piece where one record or none names the words, three where three
+/// do, and a kept place's change more for each.
+#[test]
+fn the_refusal_ahead_of_the_lock_prices_a_stray_place_at_the_callers_class() {
+    use serde_json::json;
+    use skep_address::Nat;
+    use skep_arrangement::{Caller, VPos};
+    use skep_febe::{EndArg, LinkEntry, NamedAddress, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_links::KEPT_PLACE_BYTES;
+
+    use crate::auth::policy::publication_read_refusal;
+
+    // The board after the maker's three words are published into its home,
+    // `records` correspondence records left in its draft for them.
+    let published = |records: usize| -> TwoAccounts {
+        let board = TwoAccounts::open();
+        let (maker_id, maker) = board.maker;
+        exec(&board.febe, maker, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": board.febe.log_position().0}));
+        let (draft, home) = (crate::codec::wire_address(&board.draft).expect("the draft"), crate::codec::wire_address(&board.home).expect("the home"));
+        let word = |ordinal: u32, width: u32| ShotRun {
+            origin: draft.clone(),
+            run: Run::new(crate::codec::wire_address(&format!("{}.0.1.{ordinal}", board.draft)).expect("a content address"), Nat::from(width)).expect("a run"),
+        };
+        let shot = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs };
+        match records {
+            // M5's shot alone: the words minted, no record written.
+            0 => {
+                let class = World::visible_to(Caller::Principal(maker_id));
+                board.engine.vstream().publish(Caller::Principal(maker_id), &home, &shot(vec![word(1, 3)]), &class).expect("the shot commits");
+            }
+            // The publication: a record a draft-native piece.
+            1 | 3 => {
+                let runs = if records == 1 { vec![word(1, 3)] } else { vec![word(1, 1), word(3, 1), word(2, 1)] };
+                let op = Op::Publish { target: PublishTarget::Document(home.clone()), shot: shot(runs), places: Vec::new(), also_places: Vec::new(), deposits: PublishDeposits::default() };
+                assert!(matches!(board.febe.execute(maker, skep_febe::Request::from(op)), skep_febe::Response::AckAddr { .. }), "the publication commits");
+            }
+            _ => unreachable!("three boards"),
+        }
+        board
+    };
+    let boards = [published(0), published(1), published(3)];
+    // The request: a stray run of the home's three published words, placed
+    // at the first position of a document of the caller's, beside a hundred
+    // `links` entries whose slots spell enough spans to pass the
+    // transaction budget — so the refusal speaks, and names every term.
+    let request = |board: &TwoAccounts, into: &str| {
+        let (home, into) = (crate::codec::wire_address(&board.home).expect("the home"), crate::codec::wire_address(into).expect("the caller's document"));
+        let words = Run::new(crate::codec::wire_address(&format!("{}.0.1.1", board.home)).expect("the home's first word"), Nat::from(3u32)).expect("a run");
+        let spans: Vec<_> = (1..=4096u32).map(|k| skep_address::subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, k]).tumbler())).collect();
+        let wide = LinkEntry { home: NamedAddress::Member, from: EndArg::Spans(spans.clone()), to: EndArg::Spans(spans), ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]), old: None };
+        Op::Publish {
+            target: PublishTarget::Document(into.clone()),
+            shot: Shot { base: None, draft: Some(into), also: vec![], keep_base: false, runs: vec![ShotRun { origin: home, run: words }] },
+            places: vec![Some(VPos::content(Nat::from(1u32)))],
+            also_places: Vec::new(),
+            deposits: PublishDeposits { links: vec![wide; 100], ..PublishDeposits::default() },
+        }
+    };
+    let refused = |board: &TwoAccounts, caller: PrincipalId, into: &str| {
+        let snap = board.engine.kernel().snapshot();
+        publication_read_refusal(snap.world(), &request(board, into), caller).expect("past the transaction budget: refused, every term named")
+    };
+    // The other account: its figures do not move with the maker's draft.
+    let unread: Vec<_> = boards.iter().map(|board| refused(board, board.other.0, &board.other_home)).collect();
+    assert!(unread[0].bytes_over() && !unread[0].reads_over(), "premise: the bytes speak: {:?}", unread[0]);
+    assert_eq!(unread[1], unread[0], "one record in a draft the caller may not read moves no term of the detail");
+    assert_eq!(unread[2], unread[0], "nor do three");
+    assert_eq!(unread[0].rewindow, 1, "the stray's one piece, in a document of no runs");
+    // The maker, who reads its own draft, is priced with its records.
+    let read: Vec<_> = boards.iter().map(|board| refused(board, board.maker.0, &board.other_home)).collect();
+    assert_eq!(read.iter().map(|refusal| refusal.rewindow).collect::<Vec<_>>(), [1, 1, 3], "a piece a record the caller may read");
+    assert_eq!(read[2].staged_bytes - read[1].staged_bytes, 2 * KEPT_PLACE_BYTES, "and a kept place's change a piece");
+}
+
+/// THE REFUSAL's DETAIL COUNTS NO UNIT OF A DRAFT THE CALLER MAY NOT READ.
+/// The maker's private draft holds its first three positions three ways —
+/// one typed run of three bytes, three atoms, and one byte with nothing
+/// after it. The other account, which may not read that draft, sends a
+/// publication past the transaction budget that NAMES it as its draft and
+/// re-inserts those three positions: the refusal is answered ahead of the
+/// lock, before the store has asked who owns the draft, and it names the
+/// SAME terms on all three boards — no byte of a re-insert in them, however
+/// the draft holds its content. The maker, refused for the same request,
+/// is priced the units it may read: the three boards three ways.
+#[test]
+fn the_refusal_ahead_of_the_lock_counts_no_unit_of_a_draft_the_caller_may_not_read() {
+    use skep_address::Nat;
+    use skep_arrangement::{AsOf, Caller, Deposit, VPos};
+    use skep_content::Val;
+    use skep_febe::{EndArg, LinkEntry, NamedAddress, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_links::REINSERTED_UNIT_BYTES;
+
+    use crate::auth::policy::publication_read_refusal;
+
+    // The board whose maker's draft holds `values` from its first position.
+    let holding = |values: Vec<Val>| -> TwoAccounts {
+        let board = TwoAccounts::open();
+        let draft = crate::codec::wire_address(&board.draft).expect("the draft");
+        let at = AsOf::Typed(board.engine.kernel().current_seq());
+        board.engine.vstream().insert(Caller::Principal(board.maker.0), &draft, VPos::content(Nat::from(1u32)), values, Deposit::Undeclared, at).expect("the insert commits");
+        board
+    };
+    let boards = [
+        holding(vec![Val::new(*b"a"), Val::new(*b"b"), Val::new(*b"c")]),
+        holding(vec![Val::new(&b"AA"[..]), Val::new(&b"BBB"[..]), Val::new(&b"CCCC"[..])]),
+        holding(vec![Val::new(*b"a")]),
+    ];
+    // The request: the maker's draft named, its first three positions
+    // re-inserted into a document of the caller's, beside a hundred `links`
+    // entries whose slots spell enough spans to pass the transaction budget
+    // — so the refusal speaks, and its bytes are stated.
+    let request = |board: &TwoAccounts, into: &str| {
+        let (draft, into) = (crate::codec::wire_address(&board.draft).expect("the draft"), crate::codec::wire_address(into).expect("the caller's document"));
+        let words = Run::new(crate::codec::wire_address(&format!("{}.0.1.1", board.draft)).expect("the draft's first position"), Nat::from(3u32)).expect("a run");
+        let spans: Vec<_> = (1..=4096u32).map(|k| skep_address::subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, k]).tumbler())).collect();
+        let wide = LinkEntry { home: NamedAddress::Member, from: EndArg::Spans(spans.clone()), to: EndArg::Spans(spans), ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]), old: None };
+        Op::Publish {
+            target: PublishTarget::Document(into),
+            shot: Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft, run: words }] },
+            places: Vec::new(),
+            also_places: Vec::new(),
+            deposits: PublishDeposits { links: vec![wide; 100], ..PublishDeposits::default() },
+        }
+    };
+    let refused = |board: &TwoAccounts, caller: PrincipalId| {
+        let snap = board.engine.kernel().snapshot();
+        publication_read_refusal(snap.world(), &request(board, &board.other_home), caller).expect("past the transaction budget: refused, its bytes stated")
+    };
+    // The other account: its figures do not move with the maker's draft.
+    let unread: Vec<_> = boards.iter().map(|board| refused(board, board.other.0)).collect();
+    assert!(unread[0].bytes_over(), "premise: the bytes speak: {:?}", unread[0]);
+    assert_eq!(unread[1], unread[0], "three atoms in a draft the caller may not read move no term of the detail");
+    assert_eq!(unread[2], unread[0], "nor does a position holding nothing");
+    // The maker, who reads its own draft, is priced what the draft holds.
+    let read: Vec<_> = boards.iter().map(|board| refused(board, board.maker.0)).collect();
+    assert_eq!(read[0].staged_bytes - unread[0].staged_bytes, REINSERTED_UNIT_BYTES + 3, "one run of three typed bytes: a unit and its bytes, the whole of what the class withholds");
+    assert_eq!(read[1].staged_bytes - unread[1].staged_bytes, 3 * REINSERTED_UNIT_BYTES + (2 + 3 + 4), "three atoms: a unit each, at its own bytes");
+    assert_eq!(read[2].staged_bytes - unread[2].staged_bytes, REINSERTED_UNIT_BYTES + 1, "the one byte ahead of the hole");
 }
 
 /// Executes `frame` through M10 as `sid`, answering the ack's address.

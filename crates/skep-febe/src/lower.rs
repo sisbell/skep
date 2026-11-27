@@ -507,6 +507,10 @@ impl Lower for PublishError {
             PublishError::DanglingSource => (RejectCode::DanglingSource, None),
             PublishError::TooManyRuns => (RejectCode::TooManyRuns, None),
             PublishError::TooManyValues => (RejectCode::TooManyValues, None),
+            // The re-insert's second cause, the units past their budget:
+            // one code with the positions' (the wire tells the two apart by
+            // nothing; the store's own message does).
+            PublishError::TooManyUnits => (RejectCode::TooManyValues, None),
             PublishError::Mint(m) => m.lower(),
             PublishError::Content(c) => c.lower(),
         }

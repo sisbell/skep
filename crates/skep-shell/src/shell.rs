@@ -2101,7 +2101,9 @@ impl Shell {
     ///
     /// A write meets the shell's one write door ([`Shell::write_door`]) — a
     /// follower as one its burst's hold answers for (`Write::follower`), and
-    /// an `edit` as a write over the draft it names, so one sent behind a
+    /// an `edit`, under either of its frame's two names — `edit`, which
+    /// mints values, and `set_arrangement`, which places runs by identity —
+    /// as a write over the draft it names, so one sent behind a
     /// held line of the principal's on that draft is refused `held_lines`
     /// and never lands ahead of the line —
     /// and a `publish` frame is refused: a publication crosses as
@@ -2118,9 +2120,12 @@ impl Shell {
             // (`not_followed`): the standing hold is asked of it where it
             // dials, never ahead of its burst.
             let write = if follower { Write::follower(op) } else { Write::frame(op) };
-            // An `edit` lands whatever lines stand held on its draft: the
-            // held-lines gate is asked of the draft the frame names.
-            let over = frame["doc"].as_str().filter(|_| op == "edit" && !follower).map(str::to_string);
+            // An `edit` lands whatever lines stand held on its draft, and so
+            // does the same operation under its other name, placing runs by
+            // identity: the held-lines gate is asked of the draft the frame
+            // names, whichever name carries it.
+            let edits = op == "edit" || op == "set_arrangement";
+            let over = frame["doc"].as_str().filter(|_| edits && !follower).map(str::to_string);
             self.write_door(Writer::Session(session), &write.over(over))?;
         }
         if op == "publish" {

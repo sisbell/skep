@@ -192,7 +192,7 @@ struct World {
     /// `/health` names a claimant and `H.1` answers its record.
     claim_at_publish: bool,
     key: Option<PublicKey>,
-    /// What `publish_cost` answers: the price's seven figures as the test
+    /// What `publish_cost` answers: the price's ten figures as the test
     /// scripts them, or [`World::admitted`]'s where it scripts none.
     cost: Option<Value>,
     /// Every `publish_cost` answers `503 history_busy`, past every reissue:
@@ -201,9 +201,14 @@ struct World {
 }
 
 impl World {
-    /// A price inside both budgets, for the cells that script none.
+    /// A price inside every budget, for the cells that script none: the
+    /// budgets a board of this build answers, the re-insert's two M5's own.
     fn admitted() -> Value {
-        json!({"homes": 3, "entries": 2, "rewindow": 40, "fence": 1, "staged_bytes": 9_000, "read_budget": 65_536, "byte_budget": 67_108_864})
+        json!({
+            "homes": 3, "entries": 2, "rewindow": 40, "fence": 1, "staged_bytes": 9_000, "units": 1,
+            "read_budget": 65_536, "byte_budget": 67_108_864,
+            "unit_budget": skep_arrangement::MAX_REINSERTED_UNITS, "position_budget": skep_arrangement::MAX_REINSERTED_VALUES,
+        })
     }
 
     fn doc(&mut self, text: &str, published: bool, owner: &str, runs: Vec<Run>) {
@@ -2376,31 +2381,33 @@ fn each_supersede_refusal_is_typed_and_head_moved_carries_the_head() {
 
 // ── THE PRICE ────────────────────────────────────────────────────────────
 
-/// THE THREE CAPS THE SHAPE IS JUDGED BY ARE THE DAEMON's: the wire-list
-/// cap, the request-body cap and the re-insert budget equal `skep-links`'
-/// and `skep-arrangement`'s own — a figure that moves there is a red cell
-/// here, not a drift. The reads' and the bytes' budgets are no constant of
-/// this library: they are read off the board's answer.
+/// THE TWO CAPS THE SHAPE IS JUDGED BY ARE THE DAEMON's: the wire-list cap
+/// and the request-body cap equal `skep-links`' own — a figure that moves
+/// there is a red cell here, not a drift. They are the two a frame must be
+/// inside to parse, so the board cannot be asked about a frame past
+/// either. The re-insert's two budgets, the reads' and the bytes' are no
+/// constant of this library: each is read off the board's answer.
 #[test]
-fn the_shapes_three_caps_are_the_daemons() {
+fn the_shapes_two_caps_are_the_daemons() {
     assert_eq!(MAX_WIRE_LIST, skep_links::MAX_SLOT_SPANS, "the codec reuses the slot cap for its lists");
     assert_eq!(price::REQUEST_BODY_BYTES as u64, skep_links::REQUEST_BODY_BYTES);
-    assert_eq!(price::MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
 }
 
 /// THE PRICE IS THE BOARD's ANSWER, ASKED IN ONE FRAME. The build sends one
 /// `publish_cost` — the publication's own members under that name, no `id`
 /// and no `attest` — and the request's price is that answer: the reads the
 /// four terms the board counted, summed as the board sums them, the bytes
-/// its staged bytes, each held to the budget the board answered with it,
-/// whatever number that is. The request's own shape is beside them, judged
-/// here.
+/// its staged bytes, the units its count of the re-insert, each held to the
+/// budget the board answered with it, whatever number that is — and the
+/// request's own distinct draft positions, counted here, held to the
+/// positions budget the board answered. The request's lists and body are
+/// beside them, judged here.
 #[test]
 fn the_build_asks_the_board_its_price_once_and_takes_the_answers_figures() {
     let (mut world, _) = World::base();
     // Figures no sum of this library's could reach, and budgets that are
     // no constant of it.
-    world.cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "read_budget": 2_000, "byte_budget": 5_000}));
+    world.cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "units": 77, "read_budget": 2_000, "byte_budget": 5_000, "unit_budget": 100, "position_budget": 10}));
     let (dialer, board, signer) = open(world);
     let tok = token();
     let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
@@ -2412,15 +2419,62 @@ fn the_build_asks_the_board_its_price_once_and_takes_the_answers_figures() {
     assert_eq!(asked[0], sent, "the publication's own members, under the read's name, with no id");
     assert!(asked[0].get("attest").is_none() && asked[0].get("id").is_none());
     assert_eq!((request.price.reads, request.price.bytes), (7 * 3 + 1_234 + 5, 4_242), "the board's figures, the reads summed as the board sums them");
-    assert!(request.price.admits(), "inside both budgets as answered: {:?}", request.price);
+    assert_eq!(request.price.units, 77, "the units are the board's count, taken as answered");
+    assert!(request.price.admits(), "inside every budget as answered — its ten positions at a positions budget of ten: {:?}", request.price);
     assert_eq!(request.price.lists[0], request.runs.len(), "the shape beside them");
     assert!(request.price.body > 0 && request.price.values == 10, "{:?}", request.price);
-    // Past the budgets the board answers, by the answer's own numbers.
-    dialer.world().cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "read_budget": 1_000, "byte_budget": 4_000}));
+    // Past the budgets the board answers, by the answer's own numbers: the
+    // same request, the same figures, four other budgets.
+    dialer.world().cost = Some(json!({"homes": 7, "entries": 3, "rewindow": 1_234, "fence": 5, "staged_bytes": 4_242, "units": 77, "read_budget": 1_000, "byte_budget": 4_000, "unit_budget": 70, "position_budget": 9}));
     let p = publisher(&board, &tok, &signer);
     let over = price(&p, &request).unwrap();
-    assert_eq!(over.over, vec![(Term::Reads, 260), (Term::Bytes, 242)], "{over:?}");
+    assert_eq!(over.over, vec![(Term::Values, 1), (Term::Units, 7), (Term::Reads, 260), (Term::Bytes, 242)], "{over:?}");
     assert_eq!(dialer.frames("publish_cost").len(), 2, "a price is one read");
+}
+
+/// THE RE-INSERT's TWO BUDGETS ARE THE BOARD's, AND NO NUMBER OF THIS
+/// LIBRARY's. A request whose runs name 131,073 distinct draft positions —
+/// one more than the positions budget once was — is no shape this library
+/// refuses: it asks the board, in one frame, and admits the request where
+/// the board's answer does, the positions inside the positions budget the
+/// board states and the board's count of them, a few units, inside its
+/// units budget. Whatever the positions, the shape's own verdict has no
+/// term for them; and a board answering a smaller positions budget, or
+/// more units than its units budget, refuses the same request by its own
+/// numbers.
+#[test]
+fn the_reinsert_is_held_to_the_budgets_the_board_answers_and_to_no_number_of_this_librarys() {
+    let positions = (1u64 << 17) + 1;
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let mut wide = request.clone();
+    wide.runs = vec![run(D, 1, positions)];
+    wide.pieces = vec![Piece::Values(vec![vec![b'x']])];
+    assert_eq!(wide.shape().values, positions, "premise: the request's distinct draft positions");
+    assert!(wide.shape().over().is_empty(), "no term of the shape's own");
+    assert!(price::Shape { values: u64::MAX, ..wide.shape() }.over().is_empty(), "whatever the positions");
+    let p = publisher(&board, &tok, &signer);
+    let asked = |cost: Value| {
+        dialer.world().cost = Some(cost);
+        dialer.clear();
+        let priced = price(&p, &wide).unwrap();
+        assert_eq!(dialer.frames("publish_cost").len(), 1, "the board is asked, in one frame: {:?}", dialer.ops());
+        priced
+    };
+    let answering = |units: u64, unit_budget: u64, position_budget: u64| {
+        json!({"homes": 1, "entries": 0, "rewindow": 2, "fence": 1, "staged_bytes": 132_000, "units": units, "read_budget": 65_536, "byte_budget": 67_108_864, "unit_budget": unit_budget, "position_budget": position_budget})
+    };
+    // The budgets a board of this build answers: admitted.
+    let admitted = asked(World::admitted());
+    assert!(admitted.admits(), "{admitted:?}");
+    assert_eq!((admitted.values, admitted.units), (positions, 1));
+    // The same request at other budgets: each term moves with the answer.
+    assert_eq!(asked(answering(3, 131_072, positions)).over, vec![], "at the positions budget answered");
+    assert_eq!(asked(answering(3, 131_072, positions - 1)).over, vec![(Term::Values, 1)], "one past the positions budget answered");
+    assert_eq!(asked(answering(131_073, 131_072, 1 << 20)).over, vec![(Term::Units, 1)], "one unit past the units budget answered");
+    assert_eq!(asked(answering(5, 4, 100)).over, vec![(Term::Values, positions - 100), (Term::Units, 1)], "both, by the answer's own numbers");
 }
 
 /// A REQUEST WITH DAUGHTERS IS PRICED WITH THEM. The frame the board prices
@@ -2432,7 +2486,7 @@ fn a_request_naming_daughters_is_priced_by_the_board_with_its_supersede_list() {
     let (mut world, _) = World::base();
     let e11 = format!("{E}.1.1");
     world.doc(&e11, true, ACCOUNT, vec![run(E, 1, 19)]);
-    world.cost = Some(json!({"homes": 4, "entries": 1, "rewindow": 0, "fence": 1, "staged_bytes": 3_000, "read_budget": 65_536, "byte_budget": 67_108_864}));
+    world.cost = Some(json!({"homes": 4, "entries": 1, "rewindow": 0, "fence": 1, "staged_bytes": 3_000, "units": 1, "read_budget": 65_536, "byte_budget": 67_108_864, "unit_budget": 131_072, "position_budget": 1_048_576}));
     let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
@@ -2449,20 +2503,21 @@ fn a_request_naming_daughters_is_priced_by_the_board_with_its_supersede_list() {
 }
 
 /// THE SHAPE PAST ITS OWN CAP IS REFUSED HERE, WITH NO FRAME: a list past
-/// 4,096, the body past 8 MiB, the values past the re-insert budget — the
-/// board is not asked, a frame past the list cap or the body cap parsing
-/// nowhere — and the price names those terms with no reads and no bytes
-/// beside them.
+/// 4,096 or the body past 8 MiB — the board is not asked, a frame past the
+/// list cap or the body cap parsing nowhere — and the price names those
+/// terms with no units, no reads and no bytes beside them, its positions
+/// judged against nothing, the budget they are held to being the board's
+/// to state.
 #[test]
 fn a_shape_past_its_own_cap_is_refused_before_any_frame() {
-    let within = price::Shape { lists: [4_096, 4_096, 4_096, 4_096, 4_096, 4_096], body: price::REQUEST_BODY_BYTES, values: price::MAX_REINSERTED_VALUES };
+    let within = price::Shape { lists: [4_096, 4_096, 4_096, 4_096, 4_096, 4_096], body: price::REQUEST_BODY_BYTES, values: 1 << 30 };
     assert!(within.over().is_empty(), "at every cap is inside it");
     let lists = price::Shape { lists: [4_097, 0, 4_100, 0, 0, 4_098], ..within.clone() };
     assert_eq!(lists.over(), vec![(Term::Runs, 1), (Term::Links, 4), (Term::Originals, 2)]);
-    let wide = price::Shape { body: price::REQUEST_BODY_BYTES + 7, values: price::MAX_REINSERTED_VALUES + 1, ..within.clone() };
-    assert_eq!(wide.over(), vec![(Term::Body, 7), (Term::Values, 1)]);
+    let wide = price::Shape { body: price::REQUEST_BODY_BYTES + 7, ..within.clone() };
+    assert_eq!(wide.over(), vec![(Term::Body, 7)]);
     let unasked = Price::of(&wide, None);
-    assert_eq!((unasked.reads, unasked.bytes, unasked.over.clone()), (0, 0, wide.over()), "no figure of the board's beside the terms passed");
+    assert_eq!((unasked.units, unasked.reads, unasked.bytes, unasked.over.clone()), (0, 0, 0, wide.over()), "no figure of the board's beside the terms passed, and the positions held to no budget");
     // Through the door: a request whose runs pass the list cap sends no
     // price read.
     let (world, _) = World::base();

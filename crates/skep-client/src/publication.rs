@@ -78,11 +78,12 @@
 //!    (PUB-3.8). Its reads are made once, at the open, over every candidate
 //!    of every identity, and the panel is re-decided at each answer from
 //!    them alone (`Panel::composed`).
-//! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body and the
-//!    values, the request's own shape, each against its cap; and the
-//!    in-lock reads and the staged bytes as THE BOARD prices them, asked of
-//!    the board in one read (`publish_cost`) and held to the budgets it
-//!    answers with them — summed nowhere here, and no table copied.
+//! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists and the body, the
+//!    two caps a frame must be inside to parse, judged here; and the
+//!    distinct draft positions, the units the board counts them as, the
+//!    in-lock reads and the staged bytes, each held to the budget THE BOARD
+//!    answers for it in one read (`publish_cost`) — summed nowhere here, no
+//!    table copied, and no budget of the board's kept.
 //! 4. [`request`](mod@request) — THE RE-READ (§5.6, §5.7) and THE REQUEST (§5.7): the
 //!    enumeration read again over the same held selection and composed
 //!    under the answers carried onto its windows, every test over what the

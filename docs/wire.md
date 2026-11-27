@@ -1787,12 +1787,27 @@ runs and the pieces its lists place, summed; `fence`, one per
 re-inserted run; `staged_bytes`, the bytes the commit would stage — and
 the two budgets they are held to: `read_budget`, which `homes × entries
 + rewindow + fence` is held to, and `byte_budget`, which `staged_bytes`
-is. Each is a JSON integer. The answer is the same shape inside the
-budgets and past them: the read never answers `publication_over_budget`.
+is. Beside them, the re-insert the store itself refuses `too_many_values`
+on: `units`, the units the shot's draft-native runs would be staged as —
+an atom, or a whole run of single bytes, two records each, counted off
+the drafts' stored values as the commit will stage them — with
+`unit_budget`, which `units` is held to, and `position_budget`, which
+the distinct positions those runs name are held to; the positions are
+the request's own arithmetic, a position two runs name counted once, and
+no figure here. `units` is the count as far as the store would take it:
+`0` for a shot naming no draft, and for one whose positions pass
+`position_budget`, where no stored value is read; `unit_budget` and one
+more where the units pass it, the count stopping there; and the units
+standing ahead of the first position that holds no value, where one
+does not. A stray place counts the records you may read and no other, so
+no figure moves with what a document you may not read holds. Each is a
+JSON integer. The answer is the same shape inside the
+budgets and past them: the read never answers `publication_over_budget`,
+nor `too_many_values`.
 
 <!-- wire: response publish_cost -->
 ```json
-{"as_of":9,"byte_budget":67108864,"entries":4,"fence":1613,"homes":3,"read_budget":65536,"resp":"publish_cost","rewindow":5780,"staged_bytes":2471033}
+{"as_of":9,"byte_budget":67108864,"entries":4,"fence":1613,"homes":3,"position_budget":1048576,"read_budget":65536,"resp":"publish_cost","rewindow":5780,"staged_bytes":2471033,"unit_budget":131072,"units":1613}
 ```
 
 **`key_set`** — key_set: an account's credential table (§Identity
@@ -2126,6 +2141,7 @@ request — a record per piece a run mints, a copy at its slots' spans and
 its claim per links entry, a retraction, a read-with, a claim per
 supersede entry, the re-window's two
 records per piece at a kept place, the shot's placement and its values
+by the unit, an atom or a whole run of single bytes
 — past the kernel's `MAX_TXN_BYTES` = 67108864, so the kernel's own
 `txn_over_budget` is met only by a bug or a race; permanent,
 no site, `detail` naming the bound passed with its figures;
@@ -2144,12 +2160,22 @@ nothing — one code for both causes, told apart by the store's message;
 permanent, a copy or a reinstate past it is split by its caller, a
 set_arrangement composed into fewer runs — its frame's own cap, 4096
 runs over all its changes, is the parse's, ahead of this one; the
-publish table below carries the first) and `too_many_values` (a shot whose draft-native runs
-name more than M5's `MAX_REINSERTED_VALUES` = 131072 distinct positions —
-a position two runs name counted once, each draft identity being minted
+publish table below carries the first) and `too_many_values` (a shot's
+re-insert past either of M5's two budgets — one code for both causes,
+told apart by the store's message. THE POSITIONS: its draft-native runs
+name more than `MAX_REINSERTED_VALUES` = 1048576 distinct positions — a
+position two runs name counted once, each draft identity being minted
 once per shot — arithmetic on the request, asked after the source gate
-and ahead of existence; permanent, a shot cannot be split to meet it;
-the publish table carries it too).
+and ahead of every stored value. THE UNITS: those positions come to more
+than `MAX_REINSERTED_UNITS` = 131072 units — a unit a value that is not
+one byte, or a whole run of one-byte values standing together in a
+stretch of positions the shot mints at one time, two staged records
+either way — counted off the drafts' stored values as the commit will
+stage them, in the runs' order and ahead of anything staged; the count
+stops at the first unit past the budget or at the first position that
+holds no value, whichever it meets first, and that one answers: this
+code, or `dangling_source`. Permanent, a shot cannot be split to meet
+either; the publish table carries both).
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class` (make-link and emit: the type resolves into the
@@ -2733,15 +2759,25 @@ the draft adds nothing: the draft's run-list is walked once, whatever
 its places number), plus one per re-inserted run, against
 `MAX_PUBLICATION_READS` = 65536 (16 × `MAX_SLOT_SPANS`) — a run no list
 places costs the re-window nothing, and a piece is a run's share of the
-pairing, or a stray run's per record covering it — AND THE STAGED
+pairing, or a stray run's per record covering it that the caller may
+read, a record homed in a document the caller may not read counting for
+nothing — AND THE STAGED
 BYTES, the price's fifth term (the link-sets design §5.6, M6): the
 bytes the one commit
 would stage, priced from the worst-case table off the request — per
 draft-native run its placement and its correspondence record, per piece
-the pairing cuts it into, and its values; per draft the commit
+the pairing cuts it into, and its values BY THE UNIT: an atom, or a
+whole run of single bytes, each priced one fixed figure and its own
+bytes, the units being the ones M5's count answers (`too_many_values`,
+below), so a long run of typed bytes is priced near its length and
+never a record a byte, and counted only where the caller may read every
+draft the request names — the price is taken ahead of the store's own
+judgment of who owns a draft, so of a draft the caller may not read it
+counts no unit and reads no value, whatever that draft holds; per draft
+the commit
 re-windows its one record of kept places, and per kept place that
 record's change per piece, a stray place's per record covering
-it; per `links` entry its copy at the spans its slots spell (an address
+it that the caller may read; per `links` entry its copy at the spans its slots spell (an address
 as its unit span, an I-span as itself, a member-position span as up to
 the fewer of its width and the request's runs) and its claim; a
 retraction per `retract` entry, a read-with per `read_with` entry, a
@@ -2777,7 +2813,9 @@ same board prices the same request the same, so the act that exists is
 a narrower request — fewer entries, narrower slots, or fewer places —
 which the ceremony prices before the act: `publish_cost` (§Arrangement)
 answers a request's five figures and the two budgets, by the function
-this refusal reads, to a client that asks before it sends. Off the same
+this refusal reads, to a client that asks before it sends — and, beside
+them, the units its re-insert comes to and the two budgets the store
+holds that to, the shot's own refusal (`too_many_values`, below). Off the same
 snapshot, a request whose `links` name an `old` has its BASE read too:
 the runs the member its `base` names arranges over its positions
 1..`base_extent`, which (3) leaves out of what a successor must cover. A
@@ -2892,8 +2930,9 @@ commits nothing:
 | `base_extent_too_large` | permanent | — | `base_extent` exceeds the base's arranged content count |
 | `withheld` | reorder | `addr` = the origin's document | a run's origin is not readable to the session principal |
 | `already_published` | permanent | `addr` = the member the words were published into | a draft-native run overlaps the `from` of a correspondence record homed in the draft (the twin fence, above) — read inside the transaction, after the shot's own table through the source gate and ahead of the count and the existence walk |
-| `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
-| `dangling_source` | permanent | — | an address a run names holds no value |
+| `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the re-insert's position budget (M5's `MAX_REINSERTED_VALUES` = 1048576 positions; a position two runs name counts once) — arithmetic on the request, asked ahead of every stored value |
+| `too_many_values` | permanent | — | the units those positions come to exceed the re-insert's unit budget (M5's `MAX_REINSERTED_UNITS` = 131072 units: a value that is not one byte, or a whole run of one-byte values standing together in a stretch of positions the shot mints at one time, two staged records either way) — counted off the drafts' stored values as the commit will stage them, in the runs' order, ahead of anything staged; the count stops at the first unit past the budget or at the first position that holds no value, whichever it meets first; the code of the row above, told apart by the store's message |
+| `dangling_source` | permanent | — | an address a run names holds no value — a draft-native run's met by the count above where it stands ahead of a unit past the budget, any other run's asked after the count |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
 | `kept_place_moved` | permanent | `index` = the `runs` entry, `addr` = the draft | the draft `addr` names — the rendering `draft`, or a draft `also` names — no longer arranges the entry's draft words at the kept place the request carries for it in that draft's list (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, draft by draft (the rendering draft first, then each `also` draft in `also`'s order), the earliest failing entry in `runs`' order answering; a published document named as the `draft` answers `published_target` instead, ahead of every entry's check |
 | `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft | a kept place in the draft `addr` names stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at that draft's re-window, ahead of the entry's check |
@@ -4705,12 +4744,22 @@ count, so one you may not read answers `withheld`, `site.addr` that
 draft; and so, by derivation, is the home of each `originals` entry,
 whose stored type the bytes are priced from. The `homes` are the
 session's principal's; a guest holds no account and is priced with none.
+The price is taken at your own read rights, the ones a `publish` of the
+same members would be committed at: a kept place beside a run of
+published words counts the correspondence records you may read that name
+them, and a record homed in a document you may not read counts for
+nothing, in any figure. The named drafts' stored values are read for
+`units`, by the count the store refuses a shot on, and nothing of a
+shot past `position_budget` is read at all.
 → `publish_cost` (§The response envelope): `homes`, `entries`,
-`rewindow`, `fence`, `staged_bytes`, the budgets `read_budget` and
-`byte_budget`, and `as_of`. A client admits a request where `homes ×
+`rewindow`, `fence`, `staged_bytes`, `units`, the budgets `read_budget`,
+`byte_budget`, `unit_budget` and `position_budget`, and `as_of`. A
+client admits a request where `homes ×
 entries + rewindow + fence` is at most `read_budget` and `staged_bytes`
-at most `byte_budget`, by the answer's own numbers, and keeps no copy of
-either budget. This example prices the publication above:
+at most `byte_budget`, `units` at most `unit_budget` and the distinct
+positions its draft-native runs name — which it counts itself — at most
+`position_budget`, by the answer's own numbers, and keeps no copy of
+any of the four budgets. This example prices the publication above:
 
 <!-- wire: request publish_cost -->
 ```json
@@ -4819,7 +4868,12 @@ one interval. It reads the op's values — an `insert`'s, and for a
 `publish` the values of the staging draft's own runs, the ones the shot
 would re-insert as fresh identity, read only where the shot passes the
 store's own admission through its source gate, the draft is readable to
-the caller, and the re-insert is within the shot's budget — and answers
+the caller, and the re-insert is within the shot's two budgets, its
+positions and its units, by the store's own count (`too_many_values`,
+§The publish shot and head-float) — a shot past either, or one naming a
+position that holds no value (`dangling_source`), meets no arm here and
+is the store's to refuse, and a run of single bytes, which names no
+kind, is passed whole — and answers
 every value naming the kind, in this order:
 
 | code | op | disposition | when |
@@ -5072,7 +5126,9 @@ every mirror, a published picture's original and the cell its edition
 re-inserts counting once, a transclusion counting nothing. Held in the
 daemon's memory and in no store. ENTERED AT EVERY COMMIT THAT MINTS A
 CELL, whichever op minted it — an `insert`'s values, the values a
-`publish` re-inserts as fresh identity (`copy` and `version` mint none)
+`publish` re-inserts as fresh identity (`copy` and `version` mint none),
+read off the last addresses of the document's own content chain by
+stored piece, a run of single bytes skipped whole
 — under the commit's own serialization guard, before it drops, off the
 post-commit snapshot. REBUILT WHOLE AT EVERY OPEN from the world replayed
 there — every value, a checkpoint's below the retained journal among them

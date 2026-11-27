@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use skep_arrangement::{AsOf, Deposit, Run, ShotRun, VPos};
+use skep_address::Nat;
+use skep_arrangement::{AsOf, Deposit, Run, ShotRun, VPos, MAX_REINSERTED_UNITS, MAX_REINSERTED_VALUES};
 use skep_febe::{PublishDeposits, PublishTarget};
 use skep_blobs::HashFunction;
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
@@ -348,5 +349,88 @@ fn an_edits_values_take_the_inserts_arms_whichever_change_holds_them() {
     stream.append(bytes, now).unwrap();
     stream.finish(interval, now).unwrap();
     assert_eq!(door(edit(&draft, real()), SYSTEM_PRINCIPAL), None, "admitted under its own live lease");
+    assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
+}
+
+/// A shot past either of the store's re-insert budgets meets no arm, and no
+/// value of it is judged; one past the positions is told so with no stored
+/// piece read.
+///
+/// The draft holds an unbound cell — a value the door refuses at any shot it
+/// judges — ahead of two-byte atoms, one more value than the store's units
+/// budget in all. The owner's shot of the units' budget of them, the cell
+/// among them, is refused `unbound_cell`: the door judged the cell. The shot
+/// of them all, one unit past the budget and far inside the positions', is a
+/// shot the store refuses `too_many_values` by its own count, and the door
+/// answers nothing — the cell never judged, the count stopped at the value
+/// that passed the budget. A second draft holds the cell ahead of the
+/// positions' budget of typed bytes: the shot of it whole is past the
+/// positions by arithmetic, and the door answers nothing with NO stored
+/// piece read; the shot of the budget's own number of positions, the cell
+/// its first, reads the two stored pieces and is refused for the cell.
+#[test]
+fn a_shot_past_either_reinsert_budget_meets_no_arm_and_past_the_positions_reads_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), crate::MediaOptions::default()).expect("the store opens");
+    gate.index().complete(crate::index::Rebuild { values: 0, cells: 0, halts: 0, walk: Duration::ZERO, parse: Duration::ZERO });
+    let engine = skep_engine::Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    let draft_holding = |values: Vec<Val>| {
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the system principal mints a private draft in its own account");
+        let first = engine
+            .vstream()
+            .insert(Caller::Principal(SYSTEM_PRINCIPAL), &draft, VPos::content(Nat::from(1u32)), values, Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
+            .expect("the engine, below the door, writes any bytes")
+            .0;
+        (draft, first)
+    };
+    let cell_then = |value: &[u8], count: usize| -> Vec<Val> {
+        std::iter::once(Val::new(canonical())).chain(std::iter::repeat_n(Val::new(value), count)).collect()
+    };
+    let (atoms, first_atom) = draft_holding(cell_then(b"at", MAX_REINSERTED_UNITS));
+    let (text, first_byte) = draft_holding(cell_then(b"x", MAX_REINSERTED_VALUES));
+    let snap = engine.kernel().snapshot();
+    let world = snap.world();
+    let h = head_document();
+    // The shot of `width` positions of `draft` from `first`, asked of the
+    // door's publish arm: its answer, and the stored pieces the count read.
+    let asked = |draft: &Address, first: &Address, width: usize| {
+        let shot = Shot {
+            base: None,
+            draft: Some(draft.clone()),
+            also: vec![],
+            keep_base: false,
+            runs: vec![ShotRun { origin: draft.clone(), run: Run::new(first.clone(), Nat::from(width)).expect("one position or more") }],
+        };
+        let mut walked = 0u64;
+        let answer = publish_arm(world, &PublishTarget::Document(h.clone()), &shot, SYSTEM_PRINCIPAL, &gate, &mut |pieces| walked += pieces);
+        (answer, walked)
+    };
+    // The units: at the budget the cell is judged, past it nothing is.
+    let at_the_units = MAX_REINSERTED_UNITS;
+    assert_eq!(asked(&atoms, &first_atom, at_the_units), (Some(MediaRefusal::UnboundCell), at_the_units as u64));
+    assert_eq!(asked(&atoms, &first_atom, at_the_units + 1), (None, at_the_units as u64 + 1), "past the units: the store's `too_many_values` stands, the cell unjudged");
+    // The positions: past the budget by arithmetic, no stored piece read.
+    assert_eq!(asked(&text, &first_byte, MAX_REINSERTED_VALUES + 1), (None, 0), "past the positions: nothing read");
+    assert_eq!(asked(&text, &first_byte, MAX_REINSERTED_VALUES), (Some(MediaRefusal::UnboundCell), 2), "the cell and the one stretch");
+    // A position holding no value is the store's `dangling_source`: nothing
+    // of the shot is judged, though the cell stands ahead of the hole.
+    let (short, first_short) = draft_holding(cell_then(b"x", 1));
+    let snap = engine.kernel().snapshot();
+    let shot = Shot {
+        base: None,
+        draft: Some(short.clone()),
+        also: vec![],
+        keep_base: false,
+        runs: vec![ShotRun { origin: short.clone(), run: Run::new(first_short, Nat::from(3u32)).expect("three positions") }],
+    };
+    assert_eq!(publish_arm(snap.world(), &PublishTarget::Document(h), &shot, SYSTEM_PRINCIPAL, &gate, &mut |_| {}), None);
     assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");
 }

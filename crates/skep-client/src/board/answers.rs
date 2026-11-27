@@ -272,11 +272,17 @@ pub fn link_value(v: &Value) -> Option<Option<LinkValue>> {
 /// The board's price of a publication: a `publish_cost` answer (wire.md
 /// §The response envelope).
 ///
-/// The five figures are the terms of the price the board refuses a
-/// `publish` on, each as the board counted it, and the two budgets are the
-/// ones the board holds them to. They are read here and summed nowhere but
-/// in [`PublishCost::reads`], the one total the answer leaves to its
-/// reader.
+/// The first five figures are the terms of the price the board refuses a
+/// `publish` on ahead of its lock, each as the board counted it, and
+/// `read_budget` and `byte_budget` the two budgets it holds them to. The
+/// sixth, `units`, is the shot's re-insert as the store would stage it,
+/// with the two budgets the store itself refuses a shot past
+/// (`too_many_values`): `unit_budget` for the units and `position_budget`
+/// for the distinct positions the draft-native runs name, which the board
+/// does not answer and a reader counts off its own request. They are read
+/// here and summed nowhere but in [`PublishCost::reads`], the one total the
+/// answer leaves to its reader; no budget is known to this library but by
+/// this answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublishCost {
     /// The caller's link-holding homes.
@@ -289,10 +295,21 @@ pub struct PublishCost {
     pub fence: u64,
     /// The bytes the commit would stage.
     pub staged_bytes: u64,
+    /// The units the shot's re-insert would be staged as: an atom, or a
+    /// whole run of single bytes, each two records — as far as the board
+    /// counted them (wire.md, the `publish_cost` entry: nothing past the
+    /// positions' budget, one past the units' budget, and what stands ahead
+    /// of a position holding no value).
+    pub units: u64,
     /// The budget the reads are held to.
     pub read_budget: u64,
     /// The budget the staged bytes are held to.
     pub byte_budget: u64,
+    /// The budget the store holds the units to.
+    pub unit_budget: u64,
+    /// The budget the store holds the distinct positions a shot's
+    /// draft-native runs name to.
+    pub position_budget: u64,
 }
 
 impl PublishCost {
@@ -304,7 +321,7 @@ impl PublishCost {
 }
 
 /// Decodes a `publish_cost` answer; `None` for a document that is no
-/// `publish_cost` answer or lacks one of its seven figures as a
+/// `publish_cost` answer or lacks one of its ten figures as a
 /// non-negative integer.
 pub fn publish_cost(v: &Value) -> Option<PublishCost> {
     if v["resp"].as_str() != Some("publish_cost") {
@@ -317,8 +334,11 @@ pub fn publish_cost(v: &Value) -> Option<PublishCost> {
         rewindow: figure("rewindow")?,
         fence: figure("fence")?,
         staged_bytes: figure("staged_bytes")?,
+        units: figure("units")?,
         read_budget: figure("read_budget")?,
         byte_budget: figure("byte_budget")?,
+        unit_budget: figure("unit_budget")?,
+        position_budget: figure("position_budget")?,
     })
 }
 

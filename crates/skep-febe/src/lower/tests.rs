@@ -495,6 +495,11 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublishError::DanglingSource);
     same_name(PublishError::TooManyRuns);
     same_name(PublishError::TooManyValues);
+    // The re-insert's second cause, the units past their budget: the one
+    // wire code a shot's re-insert is refused under, whichever budget it
+    // passes; the store's own message tells the two apart.
+    deviates("TooManyUnits", PublishError::TooManyUnits, RejectCode::TooManyValues);
+    assert_ne!(PublishError::TooManyUnits.to_string(), PublishError::TooManyValues.to_string(), "two causes, two messages");
     // The edition claim's refusal (skep #692), threading the edition.
     same_name(PublishError::ClaimRefused(doc()));
     // The edit, under either of its wire names (the landing lane, skep #764,
@@ -798,6 +803,7 @@ fn the_door_lowers_the_head_writer_s_two_errors_as_the_table_does() {
     // The head's publish: the shot's withheld origin and a budget refusal.
     as_the_table_does(OpKind::Publish, PublishError::Withheld(doc()));
     as_the_table_does(OpKind::Publish, PublishError::TooManyValues);
+    as_the_table_does(OpKind::Publish, PublishError::TooManyUnits);
 
     // A full volume at either commit: the code, the OS text as the detail
     // — never `Custom { kind: StorageFull, … }` — and the kind.

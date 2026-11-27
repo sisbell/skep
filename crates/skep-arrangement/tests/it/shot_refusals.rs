@@ -54,6 +54,7 @@ fn agreed_refusal(
             Ok(()),
             Err(TxnError::Rejected(
                 PublishError::TooManyValues
+                | PublishError::TooManyUnits
                 | PublishError::DanglingSource
                 | PublishError::TooManyRuns,
             )),
@@ -598,25 +599,28 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
 fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once() {
     // The re-insert's size is the DISTINCT draft-native positions a shot
     // renders, and a small request can render a draft's stored content many
-    // times over: here 4096 runs, each naming the same forty stored values —
-    // 163,840 positions placed, commanded by a request of a few hundred
-    // kilobytes. Under the old sum that was a refusal; under EACH DRAFT
-    // IDENTITY ONCE PER SHOT (the link-sets design §5.7) it is forty mints:
-    // the first run re-inserts the forty, one stretch, and every later run
+    // times over: here 4096 runs, each naming the same 257 stored values —
+    // 1,052,672 positions placed, past the positions' budget were they
+    // summed, commanded by a request of a few hundred kilobytes. Under a sum
+    // of the widths that is a refusal; under EACH DRAFT
+    // IDENTITY ONCE PER SHOT (the link-sets design §5.7) it is 257 mints:
+    // the first run re-inserts the 257, one stretch, and every later run
     // places the fresh run it became by reference, writing nothing — so the
-    // count is forty, inside the budget, the commit stages two records for
-    // the content however many times the request repeats it, and the member
-    // holds 163,840 positions over 4096 runs. Rendered once after the
-    // edition's own three, the fresh identities continue the edition's
-    // content chain from where the deposits left it. The budget binds the
-    // distinct count, which `ops/publish/tests.rs` pins without a world.
+    // count is 257 positions in one unit, inside both budgets, the commit
+    // stages two records for the content however many times the request
+    // repeats it, and the member holds 1,052,672 positions over 4096 runs.
+    // Rendered once after the edition's own three, the fresh identities
+    // continue the edition's content chain from where the deposits left it.
+    // The budgets bind the distinct count and its units, which
+    // `ops/publish/tests.rs` pins without a world.
+    const EACH: u32 = 257;
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: pca(1..3), memberless
-    let forty: Vec<Val> = (0..40u8).map(|b| val(&[b'a' + b % 26])).collect();
-    vs.insert(P1, &doc1(), vp(1, 1), forty, Deposit::Undeclared, now(&k))
-        .expect("the draft holds forty values");
+    let values: Vec<Val> = (0..EACH).map(|b| val(&[b'a' + (b % 26) as u8])).collect();
+    vs.insert(P1, &doc1(), vp(1, 1), values, Deposit::Undeclared, now(&k))
+        .expect("the draft holds the values");
     let repeats = 4096;
-    assert!(repeats * 40 > MAX_REINSERTED_VALUES, "the fixture renders past the old sum");
+    assert!(repeats * EACH as usize > MAX_REINSERTED_VALUES, "the fixture renders past the sum of its widths");
     let readable = readable_by(PrincipalId(1));
     let rendered = |runs: Vec<ShotRun>| Shot {
         base: Some(base(&pdoc(), 3)),
@@ -625,35 +629,35 @@ fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once(
         keep_base: false,
         runs,
     };
-    let repeated = rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), 40)).collect());
-    assert_eq!(repeated.reinserted_values(), n(40), "forty distinct positions, named 4096 times");
+    let repeated = rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), EACH)).collect());
+    assert_eq!(repeated.reinserted_values(), n(EACH), "257 distinct positions, named 4096 times");
     let stored = k.snapshot().world().content().len();
     let (member, _) = vs
         .publish(P1, &pdoc(), &repeated, &readable)
-        .expect("forty distinct positions are inside the budget");
+        .expect("257 distinct positions are inside the budget");
     let s = k.snapshot();
-    assert_eq!(s.world().content().len() - stored, 1, "one stretch: the forty, minted once");
-    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(44)));
+    assert_eq!(s.world().content().len() - stored, 1, "one stretch: the 257, minted once");
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(4 + EACH)));
     let runs: Vec<Run> = s.world().m5().content_runs(&member).cloned().collect();
     assert_eq!(runs.len(), repeats, "one run per repeat, each the fresh run by reference");
     assert!(
-        runs.iter().all(|run| *run == Run::new(pca(4), n(40)).expect("a run")),
+        runs.iter().all(|run| *run == Run::new(pca(4), n(EACH)).expect("a run")),
         "every repeat is the one fresh run"
     );
-    assert_eq!(s.world().m5().content_count(&member), n(40 * repeats as u32));
+    assert_eq!(s.world().m5().content_count(&member), n(EACH * repeats as u32));
     // The control: the draft rendered once, after the edition's own three,
-    // into the next member — its forty already the edition's own, placed by
+    // into the next member — its values already the edition's own, placed by
     // reference as the edition's I-space is, nothing minted.
     let (member2, _) = vs
         .publish(
             P1,
             &pdoc(),
             &Shot {
-                base: Some(base(&member, 40 * repeats as u32)),
+                base: Some(base(&member, EACH * repeats as u32)),
                 draft: Some(doc1()),
                 also: vec![],
                 keep_base: false,
-                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 40)],
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), EACH)],
             },
             &readable,
         )
@@ -661,8 +665,8 @@ fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once(
     let s = k.snapshot();
     assert_eq!(
         s.world().m5().content_runs(&member2).cloned().collect::<Vec<_>>(),
-        vec![Run::new(pca(1), n(3)).expect("a content run"), Run::new(pca(44), n(40)).expect("a content run")],
-        "the edition's own three, then forty fresh identities from pca(44): the draft is minted again at a later shot"
+        vec![Run::new(pca(1), n(3)).expect("a content run"), Run::new(pca(4 + EACH), n(EACH)).expect("a content run")],
+        "the edition's own three, then 257 fresh identities past the first shot's: the draft is minted again at a later shot"
     );
 }
 

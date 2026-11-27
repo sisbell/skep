@@ -6,10 +6,14 @@
 //! drafts `also` names — THE NAMED DRAFTS, [`Shot::named_drafts`], the family
 //! rule's one spelling with [`Shot::is_draft_native`]), and the whole shot,
 //! the composite's arrangement input, taken from the client and never read
-//! off any draft's arrangement at commit — the runs it re-inserts, their
-//! count and their grouping by named draft ([`Shot::reinserted_runs`],
-//! [`Shot::reinserted_values`], [`Shot::reinserted_runs_by_draft`]), and its
-//! address form on both sides of the commit: [`Shot::address_form`] for the
+//! off any draft's arrangement at commit — the runs it re-inserts, the
+//! count of their distinct positions and their grouping by named draft
+//! ([`Shot::reinserted_runs`], [`Shot::reinserted_values`],
+//! [`Shot::reinserted_runs_by_draft`]; the count of the units those
+//! positions are staged as reads the content store and sits with the
+//! staging it splits like, `ops/publish.rs`'s `Shot::reinserted_units`), and
+//! its address form on both sides of the commit: [`Shot::address_form`] for
+//! the
 //! request, [`M5State::address_form_of`] for the member it minted, and
 //! [`run_origin_document`], the classifier each of them asks. The two sides
 //! of the address form must agree as the signed body spells them — window for
@@ -162,7 +166,8 @@ pub struct Base {
 /// this. It takes the statement at its word, and the statement decides each
 /// run's family. A named draft inside the chain makes the document's own runs
 /// draft-native: they are re-inserted as fresh identity and counted against
-/// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES), where they would
+/// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES) and
+/// [`MAX_REINSERTED_UNITS`](crate::MAX_REINSERTED_UNITS), where they would
 /// otherwise be placed by reference. The member then holds, at those
 /// positions, fresh addresses that no earlier member of the chain arranges,
 /// and a link made on the edition's text does not reach them.
@@ -339,7 +344,7 @@ impl Shot {
         groups
     }
 
-    /// Returns how many values this shot re-inserts.
+    /// Returns how many values this shot re-inserts: its positions.
     ///
     /// It is the DISTINCT positions [`reinserted_runs`](Shot::reinserted_runs)
     /// name — the runs' I-extents merged (the run union, the carried-run
@@ -348,16 +353,18 @@ impl Shot {
     /// each draft identity once per shot and places every later occurrence
     /// by reference (the link-sets design §5.7;
     /// [`Vstream::publish`](crate::Vstream::publish) states where the fresh
-    /// identity lands) — two staged records apiece where
-    /// every value is an atom, and two for a whole run of single-byte
-    /// values; zero with no draft. Over every named draft: the positions of
-    /// two drafts are distinct addresses, so each counts. It is the count
-    /// [`Vstream::publish`](crate::Vstream::publish) holds to
+    /// identity lands); zero with no draft. Over every named draft: the
+    /// positions of two drafts are distinct addresses, so each counts. It is
+    /// the count [`Vstream::publish`](crate::Vstream::publish) holds to
     /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
     /// (`TooManyValues`), and its one spelling: request arithmetic, reading
-    /// nothing — so a caller pricing a shot ahead of its transaction asks
-    /// this, and its refusal and the store's cannot part. `O(n log n)` in
-    /// the draft-native runs, the merge's sort.
+    /// nothing — so a caller judging a shot's positions ahead of its
+    /// transaction asks this, and its refusal and the store's cannot part.
+    /// It does not tell the records the shot stages — two for an atom, and
+    /// two for a whole run of single-byte values however many positions it
+    /// holds: those are the units, counted off the stored pieces by
+    /// [`reinserted_units`](Shot::reinserted_units), which asks this first.
+    /// `O(n log n)` in the draft-native runs, the merge's sort.
     pub fn reinserted_values(&self) -> Nat {
         RunUnion::of(self.reinserted_runs()).runs().map(|run| run.width().clone()).sum()
     }

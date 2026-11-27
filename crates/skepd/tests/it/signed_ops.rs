@@ -1526,9 +1526,10 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
     assert_eq!(head_position(port), before, "nothing committed");
 }
 
-/// A SHOT PAST THE STORE'S RE-INSERT BUDGET IS NEVER WALKED (the check's doc
+/// A SHOT PAST THE STORE'S POSITIONS BUDGET IS NEVER WALKED (the check's doc
 /// item 6; `ComposeFault::PastReinsertBudget`): M5 refuses a shot whose
-/// staging-draft runs re-insert more than `MAX_REINSERTED_VALUES` values by
+/// staging-draft runs name more than `MAX_REINSERTED_VALUES` distinct
+/// positions by
 /// request arithmetic before it probes an address, so the check reads none
 /// of them and an ATTESTED shot passes UNATTESTED to the store's own
 /// `too_many_values`, whatever its signature was made over, nothing
@@ -1540,8 +1541,8 @@ fn a_term_past_the_frames_eight_bytes_passes_unattested_to_the_stores_refusal() 
 /// signature no frame verifies; a check that refused it at the budget would
 /// pass it through UNATTESTED, and the store would commit it with its marker
 /// slot empty. The runs repeat one stretch of the draft, as a run list may,
-/// so a draft of a thousand values carries a shot of a hundred and thirty
-/// thousand.
+/// so one stretch of a thousand values carries a shot of more than a
+/// million positions.
 #[test]
 fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let budget = skep_arrangement::MAX_REINSERTED_VALUES as u64;
@@ -1554,8 +1555,13 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     // The draft holds the budget's worth of values, so a shot at the budget
     // names stored values alone and is walked; one past it names a position
     // the draft does not hold, which the count — request arithmetic, asked
-    // ahead of existence — never learns.
-    let d = draft_with(port, &signed, &"x".repeat(budget as usize));
+    // ahead of existence — never learns. Typed in four inserts, each of as
+    // many values as one insert's frame carries.
+    let d = owner_draft(port, &signed);
+    let an_insert = budget / 4;
+    for k in 0..4 {
+        expect_resp(&insert_text(port, &signed, &d, 1 + k * an_insert, &"x".repeat(an_insert as usize)), "ack_addr");
+    }
     // `count` DISTINCT draft-native positions: the stretch, then the next
     // stretch of the draft's content chain, and so on, then a tail — each
     // run at its own offset, since the store counts a position once however
@@ -1607,6 +1613,60 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
         refusal(&op_as_written(port, Some(&signed), &repeated)),
         ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
         "one stretch named many times over is one stretch to the count"
+    );
+    assert_eq!(head_position(port), before, "nothing committed");
+}
+
+/// A SHOT PAST THE STORE'S UNITS BUDGET PASSES UNATTESTED TOO, NO ROW OF ITS
+/// BODY BUILT. The draft holds one more two-byte atom than
+/// `MAX_REINSERTED_UNITS` — far inside the positions budget, and a body the
+/// frame budget would hold many times over. M5 refuses the shot naming them
+/// all `too_many_values` on its units, by its own count of the draft's
+/// stored values before it stages a record, and the check asks that same
+/// count before it builds a row: the attested shot passes UNATTESTED to the
+/// store's refusal, whatever its signature was made over, nothing
+/// committed; unattested, it meets (1) first. A check asking the positions
+/// alone would build the body — every value exists — and answer the
+/// unverifiable signature `attestation_invalid:signature`. AT the units
+/// budget the shot is one the store admits: its rows are built and its
+/// attest judged.
+#[test]
+fn a_shot_past_the_stores_units_budget_passes_unattested_to_its_refusal() {
+    let budget = skep_arrangement::MAX_REINSERTED_UNITS as u64;
+    assert!(budget + 1 < skep_arrangement::MAX_REINSERTED_VALUES as u64, "premise: inside the positions budget");
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let d = owner_draft(port, &signed);
+    // One insert of the budget's atoms and one more: a position an atom.
+    let atoms = vec![r#"{"atom":"at"}"#; budget as usize + 1].join(",");
+    let typed = format!(r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"1"}},"values":[{atoms}]}}"#);
+    expect_resp(&op(port, Some(&signed), &typed), "ack_addr");
+    let shot_frame = |count: u64| publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&d), &[run(&d, &format!("{d}.0.1.1"), count)]);
+    let store = ("too_many_values".to_string(), "permanent".to_string());
+    let before = head_position(port);
+    let past = shot_frame(budget + 1);
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &past)),
+        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
+        "unattested: (1) first"
+    );
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &with_unverifiable_attest(&past))),
+        store,
+        "past the units: no row built, passed through to the store, whatever is attached"
+    );
+    let values = vec![&b"at"[..]; budget as usize + 1];
+    assert_eq!(
+        refusal(&op_with_publish_values(port, &signed, &past, &values)),
+        store,
+        "attested over the true bytes: no signature changes the store's answer"
+    );
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &with_unverifiable_attest(&shot_frame(budget)))),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "at the units budget the rows are built and the attest judged"
     );
     assert_eq!(head_position(port), before, "nothing committed");
 }

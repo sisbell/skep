@@ -509,12 +509,16 @@ pub enum Response {
     /// caller's link-holding homes, the entries read per home, the
     /// re-window's steps, the twin fence's stabs and the bytes the commit
     /// would stage — inside the budgets or past them: an answer, where the
-    /// write past a budget is refused `publication_over_budget`. It is the
-    /// answer's whole content beside the position: the wire writes the
-    /// price's five figures and, off the same type, the two budgets they are
-    /// held to ([`ReadPrice::BUDGET`], [`ReadPrice::BYTE_BUDGET`]), so a
-    /// figure added to the price is added to the answer in the one place the
-    /// codec marshals it.
+    /// write past a budget is refused `publication_over_budget`; and the
+    /// units the shot's re-insert comes to, M5's own count of them, which
+    /// the store refuses a shot `too_many_values` past. It is the answer's
+    /// whole content beside the position: the wire writes the price's six
+    /// figures and, off the same type, the four budgets — the two the
+    /// first five are held to ([`ReadPrice::BUDGET`],
+    /// [`ReadPrice::BYTE_BUDGET`]) and the two the store holds a re-insert
+    /// to ([`ReadPrice::UNIT_BUDGET`], [`ReadPrice::POSITION_BUDGET`]) — so
+    /// a figure added to the price is added to the answer in the one place
+    /// the codec marshals it.
     PublishCost { price: ReadPrice, as_of: Seq },
     /// The never-silent surface: every failure of a parsed `Op` (Invariants).
     Rejected(Rejection),

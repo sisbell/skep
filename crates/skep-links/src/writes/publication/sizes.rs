@@ -40,20 +40,20 @@
 //! the draft's one record) and once for each draft it re-windows
 //! ([`REWINDOWED_DRAFT_BYTES`], that record past its changes, the draft's
 //! address at its own bytes beside it), the shot's own
-//! placement per run ([`PLACED_RUN_BYTES`]) and its re-insert per value
-//! ([`REINSERTED_VALUE_BYTES`], the value's own bytes on top), the shot's
+//! placement per run ([`PLACED_RUN_BYTES`]) and its re-insert per unit — an
+//! atom, or a whole run of single bytes ([`REINSERTED_UNIT_BYTES`], the
+//! unit's own bytes on top) — the shot's
 //! fixed records ([`SHOT_BYTES`]), at the mint form the edition's mint
 //! ([`EDITION_MINT_BYTES`]) and, where the deposits claim at either form,
 //! the edition claim ([`EDITION_CLAIM_BYTES`]).
 
 use skep_address::{document_of, subtree_of, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Run, Shot, VPos};
+use skep_arrangement::{trunk_of, ReinsertWorld, Run, Shot, UnitTally, VPos};
 
 use super::plan::{EndArg, NamedAddress, PublishDeposits, PublishTarget};
-use super::{also_places_by_draft, correspondence_type, rewindows, AlsoPlaces, Rewindow};
+use super::{also_places_by_draft, rewindows, stray, AlsoPlaces, Rewindow};
 use crate::budget::MAX_SLOT_SPANS;
-use crate::endset::{enc, Endset};
-use crate::state::{View, TO, TYPE};
+use crate::writes::Visibility;
 use crate::LinkWorld;
 
 /// The bytes one correspondence record stages: the link's mint, its deposit
@@ -115,13 +115,18 @@ pub const REWINDOWED_DRAFT_BYTES: u64 = 56;
 /// `ShotPlace` record: a run's start and width.
 pub const PLACED_RUN_BYTES: u64 = 104;
 
-/// The bytes the re-insert stages per value at the worst case — a value
-/// that is an atom, two bytes or more, its own mint and its own content
-/// write, measured at a two-byte atom — the value's bytes past two on top
-/// of this figure. A run of single-byte values stages one range mint and
-/// one stretch for the whole run instead, 301 bytes for a run of one byte
-/// and one more per byte, so a byte of prose costs a fraction of this.
-pub const REINSERTED_VALUE_BYTES: u64 = 287;
+/// The bytes the re-insert stages per UNIT, past the unit's own bytes: a
+/// unit is what the commit stages as one mint and one content write
+/// (M5's `Shot::reinserted_units` counts them) — a maximal run of
+/// single-byte values, its range mint and its stretch, or an atom, its mint
+/// and its write. The figure is measured at a shot's one unit, a run of
+/// single bytes — of one byte and of four, a byte a position on top — and
+/// bounds every other: an atom stages eleven bytes fewer, its mint carrying
+/// no count, and each unit after a shot's first four fewer again. So a unit
+/// holding `n` bytes is priced `this + n`: exact for a shot of one run of
+/// typed text, an upper bound within a few bytes a unit for every other,
+/// and a megabyte of typed text in one run costs this once.
+pub const REINSERTED_UNIT_BYTES: u64 = 300;
 
 /// The bytes the shot stages whatever it places: the member's mint and the
 /// `ShotPlace` record holding no run, its terms carrying a base extent and
@@ -196,7 +201,8 @@ pub(super) enum RunPieces {
     Native(u64),
     /// A run of no named draft's identity that some list places — a STRAY,
     /// re-windowed through the records: one piece per correspondence record
-    /// overlapping it, wherever homed, at least one.
+    /// overlapping it that the caller may read, wherever homed, at least
+    /// one.
     Stray(u64),
     /// A run of no named draft's identity that no list places: placed by
     /// reference, cut nowhere and re-windowed nowhere.
@@ -225,8 +231,8 @@ pub(super) fn placed_in(places: &[Option<VPos>], also_places: &[AlsoPlaces], ind
 
 /// Returns each run of `shot`, in `runs`' order, as [`RunPieces`]: a
 /// draft-native run's pieces bounded off the request, a stray's counted by
-/// one stab — `placed` answering whether any list carries a place at an
-/// index.
+/// one stab at the caller's visibility class — `placed` answering whether
+/// any list carries a place at an index.
 ///
 /// A draft-native run is one whose origin is a named draft's
 /// ([`Shot::is_draft_native`] of its origin, the one test the commit's
@@ -234,10 +240,19 @@ pub(super) fn placed_in(places: &[Option<VPos>], also_places: &[AlsoPlaces], ind
 /// endpoints, sorted — `O(n log n)` in them. A run of any other origin that
 /// a list places is a stray, re-windowed through the records: one stab of
 /// the TO slot by its span across every home, the correspondence records
-/// overlapping it wherever homed, at least one; the stab asks no visibility
-/// class, since a record the commit will not read only raises the bound.
-/// Every other run is [`RunPieces::Unplaced`], and is read no further.
-pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(usize) -> bool) -> Vec<RunPieces> {
+/// overlapping it wherever homed that `readable` admits the home of
+/// (`stray::readable_record_count` — the stab and the filter the commit's
+/// own stray read makes), at least one. THE CLASS IS THE COMMIT's: a record
+/// homed in a document the caller may not read is one the commit will not
+/// read, so it is no piece — and counted, it would tell the caller how many
+/// records in drafts it cannot read name a published span. Every other run
+/// is [`RunPieces::Unplaced`], and is read no further.
+pub(super) fn run_pieces<W: LinkWorld>(
+    world: &W,
+    readable: &Visibility<'_, W>,
+    shot: &Shot,
+    placed: impl Fn(usize) -> bool,
+) -> Vec<RunPieces> {
     // The draft-native runs' endpoints, sorted: the pieces bound reads them.
     let mut ends: Vec<Tumbler> = shot.reinserted_runs().flat_map(|run| [run.i_start().tumbler().clone(), run.reach()]).collect();
     ends.sort();
@@ -247,7 +262,6 @@ pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(u
         let past = ends.partition_point(|end| *end < reach);
         1 + past.saturating_sub(first) as u64
     };
-    let ty = enc([correspondence_type()]);
     shot.runs
         .iter()
         .enumerate()
@@ -256,11 +270,10 @@ pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(u
             if origin.is_some_and(|origin| shot.is_draft_native(&origin)) {
                 RunPieces::Native(pieces_bound(&entry.run))
             } else if placed(index) {
-                // The stray stab, across every home and at no visibility
-                // class: the records the commit may read are among these.
-                let span = Endset::from_spans([entry.run.iextent()]);
-                let records = world.links().match_links(&[(TO, &span), (TYPE, &ty)], View::Active).len() as u64;
-                RunPieces::Stray(records.max(1))
+                // The stray stab, across every home and at the caller's
+                // visibility class: the records the commit may read, and
+                // none it may not.
+                RunPieces::Stray(stray::readable_record_count(world, readable, &entry.run).max(1))
             } else {
                 RunPieces::Unplaced
             }
@@ -268,9 +281,42 @@ pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(u
         .collect()
 }
 
+/// Returns the units of `shot`'s re-insert as a price counts them: M5's
+/// one count ([`Shot::reinserted_units`]) over `world`'s stored content
+/// where `readable` admits EVERY draft the shot names, and nothing — no
+/// unit, no byte, no stored piece read — where it does not admit one.
+///
+/// THE CLASS, for the count's reads. The count walks the stored pieces of
+/// the named drafts' runs, and what it answers says how each draft's
+/// content is held: how many atoms, how many bytes, where a position holds
+/// no value. A price is answered ahead of every other judgment of the
+/// request — a transport's refusal ahead of its lock states its bytes before
+/// the store has asked who owns a draft — so the count is asked only at the
+/// caller's own class: of a draft the caller may not read it is told
+/// nothing, whatever that draft holds. Nothing where one draft of several
+/// is not admitted, the readable ones included, since the count is one walk
+/// over all of them and such a shot stages nothing: the store refuses it at
+/// its admission, ω of every named draft — an owner reads its own — ahead
+/// of its count. So the price stays a bound on what the commit stages.
+/// `steps` is the count's.
+pub(super) fn reinsert_tally<W: ReinsertWorld>(
+    world: &W,
+    readable: &Visibility<'_, W>,
+    shot: &Shot,
+    steps: &mut impl FnMut(u64),
+) -> UnitTally {
+    if !shot.named_drafts().all(|draft| readable(world, &draft)) {
+        return UnitTally::default();
+    }
+    shot.reinserted_units(world, steps).tally()
+}
+
 /// Prices the bytes a publication would stage, from the table: an UPPER
-/// bound on what the kernel charges the transaction, read off the request
-/// and one stab of every home's records per stray place.
+/// bound on what the kernel charges the transaction, read off the request,
+/// one stab of every home's records per stray place, at the caller's
+/// visibility class `readable`, and one walk of the stored pieces its
+/// re-insert reads (M5's count of its units), made only where that class
+/// admits every draft the shot names.
 ///
 /// The terms, each at the table's figure:
 ///
@@ -293,15 +339,25 @@ pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(u
 ///   `also_places` entry whose list carries a place at the entry, every such
 ///   list re-windowing its own draft at the run; a run overlapping no other
 ///   is one piece;
-/// * the re-inserted values, the DISTINCT positions the draft-native runs
-///   name ([`Shot::reinserted_values`]) × [`REINSERTED_VALUE_BYTES`] — an
-///   atom's bytes past two ride the draft's content, which the price does
-///   not read;
+/// * the re-insert, per UNIT the commit would stage
+///   ([`Shot::reinserted_units`], M5's one count of them over this world's
+///   stored content — an atom, or a maximal run of single-byte values of an
+///   unminted portion) [`REINSERTED_UNIT_BYTES`] and the unit's own bytes: a
+///   byte-run's its width, an atom's its length. A megabyte of typed text
+///   in one run is one unit and its bytes; an atom of any length is priced
+///   at its own. Where the store would refuse the re-insert the term prices
+///   what the count counted to there, and the shot stages nothing: no unit
+///   past the positions' budget, which the count reads nothing for; the
+///   units' budget plus one, and the bytes of the units inside it, past the
+///   units'; the units ahead of a position holding no value; and no unit
+///   where `readable` does not admit a draft the shot names
+///   (`reinsert_tally`), no stored piece of any draft read;
 /// * per run of any other origin [`PLACED_RUN_BYTES`], and per list that
 ///   places it — a STRAY run of published identity, the document's own or
 ///   another document's, re-windowed through the records in each draft
 ///   whose list carries a place at it — its pieces, one per record
-///   overlapping it (`RunPieces::Stray`, one stab), × [`KEPT_PLACE_BYTES`];
+///   overlapping it that the caller may read (`RunPieces::Stray`, one
+///   stab), × [`KEPT_PLACE_BYTES`];
 /// * per `links` entry [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of
 ///   every span its three slots spell — an `addrs` element as its unit
 ///   span, a tag as a unit span at the member's depth, a `spans` element as
@@ -324,32 +380,38 @@ pub(super) fn run_pieces<W: LinkWorld>(world: &W, shot: &Shot, placed: impl Fn(u
 /// already claimed, an original already retracted) stage less, a
 /// run named twice stages its identity once, a member-position end's
 /// pieces merge where the member's runs are I-adjacent, a place's pieces
-/// past its first share its one change, and a byte of prose
-/// costs a fraction of an atom. Request arithmetic — `run_pieces`'s, and
-/// linear in the lists — plus the stray stabs and one `readlink` per rest;
+/// past its first share its one change, and a unit past a shot's first, or
+/// an atom, stages a few bytes under the unit's figure. Request arithmetic — `run_pieces`'s,
+/// and linear in the lists — plus the stray stabs, one `readlink` per rest
+/// and the count's walk of the draft-native runs' stored pieces, at most
+/// M5's `MAX_REINSERTED_VALUES` of them and none past that budget;
 /// saturating, so an absurd request prices at `u64::MAX`.
 ///
 /// The caps alone do not bound these bytes — every list at its cap, and a
 /// request well inside the body cap, can ask more than one transaction
 /// holds — so this price, read ahead of the lock, and no sum of caps, is
 /// what keeps a publication inside the transaction budget.
-pub fn price_staged_bytes<W: LinkWorld>(
+pub fn price_staged_bytes<W: LinkWorld + ReinsertWorld>(
     world: &W,
+    readable: &Visibility<'_, W>,
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
     also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
 ) -> u64 {
-    let pieces = run_pieces(world, shot, |index| placed_in(places, also_places, index) > 0);
+    let pieces = run_pieces(world, readable, shot, |index| placed_in(places, also_places, index) > 0);
     let by_draft = also_places_by_draft(also_places);
-    staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows(shot, places, &by_draft))
+    let units = reinsert_tally(world, readable, shot, &mut |_| {});
+    staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows(shot, places, &by_draft), units)
 }
 
 /// Returns [`price_staged_bytes`]'s figure over `pieces`, the shot's runs
-/// as [`run_pieces`] read them, and `rewindows`, the documents the commit
-/// re-windows — the one body both prices share, so the reads' price stabs
-/// each stray once and groups the lists once for its two terms.
+/// as [`run_pieces`] read them, `rewindows`, the documents the commit
+/// re-windows, and `units`, the re-insert as M5's count tallied it — the
+/// one body both prices share, so the reads' price stabs each stray once,
+/// groups the lists once for its two terms and walks the draft's stored
+/// pieces once for its units figure and these bytes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn staged_bytes<W: LinkWorld>(
     world: &W,
@@ -360,6 +422,7 @@ pub(super) fn staged_bytes<W: LinkWorld>(
     deposits: &PublishDeposits,
     pieces: &[RunPieces],
     rewindows: &[Rewindow<'_>],
+    units: UnitTally,
 ) -> u64 {
     let mut bytes = SHOT_BYTES;
     if let Some(base) = &shot.base {
@@ -394,8 +457,8 @@ pub(super) fn staged_bytes<W: LinkWorld>(
             RunPieces::Unplaced => bytes = bytes.saturating_add(PLACED_RUN_BYTES),
         }
     }
-    let values = u64::try_from(shot.reinserted_values()).unwrap_or(u64::MAX);
-    bytes = bytes.saturating_add(values.saturating_mul(REINSERTED_VALUE_BYTES));
+    // The re-insert: each unit's two records, and its own bytes.
+    bytes = bytes.saturating_add(units.units.saturating_mul(REINSERTED_UNIT_BYTES)).saturating_add(units.bytes);
     // The copies: their spans at the depth the request spells them at.
     let content_span = stored_span_bytes(&content_span_of(target));
     let tag_span = stored_span_bytes(&subtree_of(&tag_depth_of(target)));

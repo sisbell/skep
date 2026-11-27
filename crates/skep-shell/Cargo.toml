@@ -76,9 +76,11 @@ skepd = { path = "../skepd", features = ["test-hooks"] }
 # (`CheckpointCreate`) past a burst's commit and watch it held, read and kept
 # (§3c.4).
 skep-kernel = { path = "../skep-kernel" }
-# The two store budgets the attest's composer keeps as the store keeps them —
-# M7's `MAX_SLOT_SPANS` and M5's `MAX_REINSERTED_VALUES` — pinned equal by the
-# composer's suite.
+# The store budget the attest's composer keeps as the store keeps it — M7's
+# `MAX_SLOT_SPANS`, pinned equal by the composer's suite — and M5's two
+# re-insert budgets (`MAX_REINSERTED_VALUES`, `MAX_REINSERTED_UNITS`), which
+# the composer keeps no copy of: its suite reads them only to script a board
+# that answers them.
 skep-links = { path = "../skep-links" }
 skep-arrangement = { path = "../skep-arrangement" }
 tempfile.workspace = true

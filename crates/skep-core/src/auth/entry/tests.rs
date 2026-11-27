@@ -289,7 +289,7 @@ fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
     let shot = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() };
     let body_of = |engine: &skep_engine::Engine| {
         let snap = engine.kernel().snapshot();
-        publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())])
+        publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())], &mut |_| {})
             .expect("the body composes")
             .as_bytes()
             .to_vec()
@@ -315,10 +315,10 @@ fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
     // one past them is the missing value.
     let snap = stretch.kernel().snapshot();
     let short = Run::new(run.i_start().clone(), Nat::from(2u32)).expect("a two-position run");
-    assert!(publish_body(snap.world(), &shot, &[SegmentRun::Value(short)]).is_ok());
+    assert!(publish_body(snap.world(), &shot, &[SegmentRun::Value(short)], &mut |_| {}).is_ok());
     let long = Run::new(run.i_start().clone(), Nat::from(4u32)).expect("a four-position run");
     assert!(matches!(
-        publish_body(snap.world(), &shot, &[SegmentRun::Value(long)]),
+        publish_body(snap.world(), &shot, &[SegmentRun::Value(long)], &mut |_| {}),
         Err(ComposeFault::MissingValue)
     ));
 }
@@ -370,4 +370,120 @@ fn the_supersession_claims_rows_are_the_class_the_daughter_and_the_member_by_tag
         vec![sup],
         "the type row is the stored claim's own type slot"
     );
+}
+
+/// An in-memory engine at genesis, for the shot's body over a real world.
+fn genesis() -> skep_engine::Engine {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    skep_engine::Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail")
+}
+
+/// A private draft of the system principal's holding `values`, typed in by
+/// one insert: the draft, and the address of its first value.
+fn draft_holding(engine: &skep_engine::Engine, values: Vec<skep_content::Val>) -> (Address, Address) {
+    use skep_arrangement::{AsOf, VPos};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+    let (draft, _) = engine
+        .namespace()
+        .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+        .expect("the system principal mints a private draft in its own account");
+    let first = engine
+        .vstream()
+        .insert(Caller::Principal(SYSTEM_PRINCIPAL), &draft, VPos::content(Nat::from(1u32)), values, Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
+        .expect("the insert commits")
+        .0;
+    (draft, first)
+}
+
+/// The birth shot of the head document from `width` positions of `draft`
+/// from `first`: its body as the composer builds it, and the stored pieces
+/// the store's count read ahead of its rows.
+fn body_counting(engine: &skep_engine::Engine, draft: &Address, first: &Address, width: usize) -> (Result<EntryBody, ComposeFault>, u64) {
+    use skep_arrangement::{Run, ShotRun};
+    let run = Run::new(first.clone(), Nat::from(width)).expect("a run of one position or more");
+    let shot = Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run }] };
+    let snap = engine.kernel().snapshot();
+    let mut walked = 0u64;
+    let body = publish_body(snap.world(), &shot, &shot.address_form(&skep_namespace::head_document()), &mut |pieces| walked += pieces);
+    (body, walked)
+}
+
+/// [`body_counting`]'s body alone.
+fn body_over(engine: &skep_engine::Engine, draft: &Address, first: &Address, width: usize) -> Result<EntryBody, ComposeFault> {
+    body_counting(engine, draft, first, width).0
+}
+
+/// Checks that the composer asks the store's count of a shot's units before
+/// it builds a row.
+///
+/// A draft of two-byte atoms, one more than the store's units budget and
+/// far inside its positions budget: the shot naming them all is one the
+/// store refuses `too_many_values` on its units before it stages a record,
+/// and the composer answers it [`ComposeFault::PastReinsertBudget`] — the
+/// fault the check passes through unattested — where a composer asking the
+/// positions alone would build every row, a body well inside its budget,
+/// and hand the check a frame to verify for a shot nothing commits. Naming
+/// exactly the budget, the body composes, a row an atom.
+#[test]
+fn a_shot_past_the_stores_units_is_refused_before_a_row_is_built() {
+    use skep_arrangement::{MAX_REINSERTED_UNITS, MAX_REINSERTED_VALUES};
+    use skep_content::Val;
+    let engine = genesis();
+    let atoms = MAX_REINSERTED_UNITS + 1;
+    assert!(atoms < MAX_REINSERTED_VALUES, "premise: inside the positions' budget");
+    let (draft, first) = draft_holding(&engine, vec![Val::new(&b"at"[..]); atoms]);
+    let (refused, walked) = body_counting(&engine, &draft, &first, atoms);
+    assert!(matches!(refused, Err(ComposeFault::PastReinsertBudget)), "past the units: no row built");
+    assert_eq!(walked, atoms as u64, "the count stopped at the atom that passed the budget");
+    let at_the_budget = body_over(&engine, &draft, &first, MAX_REINSERTED_UNITS).expect("the units' budget of atoms composes");
+    let one_atom = body_over(&engine, &draft, &first, 1).expect("one atom composes");
+    assert_eq!(at_the_budget.as_bytes().len() - one_atom.as_bytes().len(), (MAX_REINSERTED_UNITS - 1) * (4 + 2), "a row an atom: its length and its two bytes");
+}
+
+/// Checks that the positions' arithmetic answers ahead of every stored piece,
+/// and that text of the positions' budget composes, one row a byte.
+///
+/// A draft holding nothing where the shot points: one position past the
+/// store's positions budget is [`ComposeFault::PastReinsertBudget`] — the
+/// count's arithmetic, which reads nothing — where a count that walked
+/// first would have met the first address holding no value and answered
+/// [`ComposeFault::MissingValue`], as the shot naming exactly the budget
+/// does; and over a draft holding one more typed byte than the budget the
+/// same refusal is answered with no stored piece read, where the budget's
+/// own number of them is read as one piece. And a draft holding the
+/// budget's own number of typed bytes, one
+/// stretch and so one unit: its shot is inside both budgets, and the body
+/// spells it in as many rows as it has bytes — the walk the positions'
+/// budget bounds — within the body budget, the next power of two of
+/// one-byte rows being past it.
+#[test]
+fn the_positions_budget_is_asked_by_arithmetic_and_its_text_composes_one_row_a_byte() {
+    use skep_arrangement::MAX_REINSERTED_VALUES;
+    use skep_content::Val;
+    let engine = genesis();
+    let (draft, first) = draft_holding(&engine, vec![Val::new(&b"x"[..])]);
+    let past_the_draft = skep_address::validate(skep_address::shift(first.tumbler(), &Nat::from(1u32))).expect("the next content address");
+    assert!(matches!(body_over(&engine, &draft, &past_the_draft, MAX_REINSERTED_VALUES + 1), Err(ComposeFault::PastReinsertBudget)));
+    assert!(matches!(body_over(&engine, &draft, &past_the_draft, MAX_REINSERTED_VALUES), Err(ComposeFault::MissingValue)));
+    // One typed byte more than the budget, all of it stored — one insert,
+    // one stretch: refused by the arithmetic, no stored piece read.
+    let (text, first) = draft_holding(&engine, vec![Val::new(&b"x"[..]); MAX_REINSERTED_VALUES + 1]);
+    let (refused, walked) = body_counting(&engine, &text, &first, MAX_REINSERTED_VALUES + 1);
+    assert!(matches!(refused, Err(ComposeFault::PastReinsertBudget)));
+    assert_eq!(walked, 0, "a shot the arithmetic refuses reads no stored piece");
+    // The budget's own number of them: one unit, read as one stored piece.
+    let (body, walked) = body_counting(&engine, &text, &first, MAX_REINSERTED_VALUES);
+    let body = body.expect("text of the positions' budget composes");
+    assert_eq!(walked, 1, "the count's walk: the one stretch");
+    let rows = |count: usize| body_over(&engine, &text, &first, count).expect("a prefix of the text composes").as_bytes().len();
+    let row = rows(2) - rows(1);
+    assert_eq!(row, 4 + 1, "a one-byte row: its four-byte length and the byte");
+    assert_eq!(body.as_bytes().len() - rows(1), (MAX_REINSERTED_VALUES - 1) * row, "one row a byte");
+    let fits = |positions: usize| positions * row <= MAX_SHOT_BODY_BYTES;
+    assert!(fits(MAX_REINSERTED_VALUES) && !fits(2 * MAX_REINSERTED_VALUES), "the positions' budget is the largest power of two whose one-byte rows fit the body");
 }

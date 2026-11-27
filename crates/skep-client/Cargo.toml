@@ -148,14 +148,15 @@ skep-signature = { path = "../skep-signature", features = ["sign"] }
 # vector set holds the daemon's grammar (P5). Already in the graph through
 # skepd.
 skep-namespace = { path = "../skep-namespace" }
-# The three caps of a request's own shape the publication's price keeps a
-# copy of — M7's `MAX_SLOT_SPANS`, the wire-list cap, and
-# `REQUEST_BODY_BYTES`, and M5's `MAX_REINSERTED_VALUES`: the price's suite
-# holds its copies equal, as the shell's composer pins its three. The reads
-# and the staged bytes it asks the board for and copies nothing of; the
-# real-daemon suite reads `CLAIM_BYTES` to say what one daughter moves the
-# board's answer by. Already in the graph through skepd; linked by no
-# shipped build.
+# The caps of a request's own shape the publication's price keeps a copy
+# of — M7's `MAX_SLOT_SPANS`, the wire-list cap, and `REQUEST_BODY_BYTES`:
+# the price's suite holds its copies equal, as the shell's composer pins
+# its own. The re-insert's two budgets, the reads and the staged bytes it
+# asks the board for and copies nothing of — its suite reads M5's
+# `MAX_REINSERTED_VALUES` and `MAX_REINSERTED_UNITS` only to script a board
+# that answers them; the real-daemon suite reads `CLAIM_BYTES` to say what
+# one daughter moves the board's answer by. Already in the graph through
+# skepd; linked by no shipped build.
 skep-links = { path = "../skep-links" }
 skep-arrangement = { path = "../skep-arrangement" }
 # M10's idempotency-id cap, `MAX_REQ_ID_BYTES`, which the merge suite's

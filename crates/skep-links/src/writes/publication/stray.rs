@@ -16,6 +16,9 @@
 //! draft's, an `also` draft's, a granted draft's — one stab of the TO slot
 //! across every home, the twin fence's read turned around and widened, each
 //! hit kept where the caller's visibility class admits the record's home
+//! (`readable_hits`, the stab and its one filter, which the publication's
+//! price counts a stray's pieces by too — [`readable_record_count`] — so
+//! what is priced is what the commit may read and no record beyond it)
 //! and by the stored type slot's exact test, each cut to the overlap and
 //! mapped onto the same piece of its `from` (the two slots are of one
 //! width, so an offset into one is the offset into the other), the pieces
@@ -28,7 +31,7 @@
 
 use std::cmp::{max, min};
 
-use skep_address::{document_of, ordinal, shift, validate, Nat, Span, Tumbler};
+use skep_address::{document_of, ordinal, shift, validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::Run;
 
 use super::{correspondence_type, is_correspondence_class};
@@ -73,17 +76,49 @@ pub(super) struct Piece {
 /// [`match_links`]: crate::LinkState::match_links
 pub(super) fn record_pieces<W: LinkWorld>(world: &W, readable: &Visibility<'_, W>, run: &Run) -> Option<Vec<Piece>> {
     let links = world.links();
-    let ty = enc([correspondence_type()]);
-    let span = Endset::from_spans([run.iextent()]);
-    let records: Vec<(&Span, &Span)> = links
-        .match_links(&[(TO, &span), (TYPE, &ty)], View::Active)
+    let hits = readable_hits(world, readable, run);
+    let records: Vec<(&Span, &Span)> = hits
         .iter()
-        .filter(|hit| document_of(hit).is_some_and(|home| readable(world, &home)))
         .filter_map(|hit| links.readlink(hit))
         .filter(|record| is_correspondence_class(record.type_slot()))
         .filter_map(|record| Some((one_span(record.from_slot())?, one_span(record.to_slot())?)))
         .collect();
     pieces_of(run, records)
+}
+
+/// Returns the hits of the stray read's one stab that the caller may read:
+/// the active links whose stored `to` overlaps `run`'s I-span under the
+/// correspondence type's slot, wherever homed, each kept where `readable`
+/// admits its home — the home read off the hit's address by
+/// [`document_of`], the link element's document.
+///
+/// The stab and its visibility filter, in one place: [`record_pieces`]
+/// reads these hits and no other, and the price counts them
+/// ([`readable_record_count`]), so a record homed in a document the caller
+/// may not read is neither used nor counted, and nothing the caller is
+/// answered turns on it.
+fn readable_hits<W: LinkWorld>(world: &W, readable: &Visibility<'_, W>, run: &Run) -> Vec<Address> {
+    let ty = enc([correspondence_type()]);
+    let span = Endset::from_spans([run.iextent()]);
+    world
+        .links()
+        .match_links(&[(TO, &span), (TYPE, &ty)], View::Active)
+        .into_iter()
+        .filter(|hit| document_of(hit).is_some_and(|home| readable(world, &home)))
+        .collect()
+}
+
+/// Returns how many records the stray read of `run` may read at the
+/// caller's visibility class: the hits [`record_pieces`] goes on to read,
+/// counted and not read.
+///
+/// It is the price's bound on the pieces a stray run can be cut into — at
+/// or above them, since the read keeps a hit only by the exact type test
+/// and a piece only where the record overlaps the run on its chain — taken
+/// at the class the commit reads at, so the figure a caller is answered
+/// counts no record of a document it may not read.
+pub(super) fn readable_record_count<W: LinkWorld>(world: &W, readable: &Visibility<'_, W>, run: &Run) -> u64 {
+    readable_hits(world, readable, run).len() as u64
 }
 
 /// Returns the one span of a record's slot, or `None` for a slot that is

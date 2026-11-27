@@ -1996,6 +1996,7 @@ fn term_json(t: Term) -> &'static str {
         Term::Originals => "originals",
         Term::Body => "body",
         Term::Values => "values",
+        Term::Units => "units",
         Term::Reads => "reads",
         Term::Bytes => "bytes",
     }
@@ -2006,7 +2007,7 @@ fn over_json(p: &lib::Price) -> Value {
 }
 
 fn price_json(p: &lib::Price) -> Value {
-    json!({"lists": p.lists, "body": p.body, "values": p.values, "reads": p.reads, "bytes": p.bytes, "over": over_json(p)})
+    json!({"lists": p.lists, "body": p.body, "values": p.values, "units": p.units, "reads": p.reads, "bytes": p.bytes, "over": over_json(p)})
 }
 
 /// Returns an answer as the page spells it.

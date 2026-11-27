@@ -229,15 +229,17 @@ fn the_placement_budget_stays_inside_the_transaction_budget() {
 
 #[test]
 fn the_reinsert_budget_is_a_transaction_m2_accepts() {
-    // MAX_REINSERTED_VALUES has an argument behind it as MAX_PLACED_RUNS
-    // does, and the argument is M2's accounting — two records a value,
-    // each charged its encoded bytes and its framing — so it is measured
-    // against that accounting and not against a restatement of it. A
-    // re-insert of exactly the budget, one byte a value at the shallowest
-    // content address, staged through J0's own step — the one the shot's
-    // re-insert calls — in one transaction, commits: the cap refuses no
-    // shot M2 could have accepted at that depth, which is what keeps it a
-    // bound on the staging rather than a second, tighter journal budget.
+    // The re-insert's two budgets each have an argument behind them, as
+    // MAX_PLACED_RUNS does, and each is measured against what it is argued
+    // from and not against a restatement of it.
+    //
+    // THE UNITS: M2's accounting — two records a unit, each charged its
+    // encoded bytes and its framing. A re-insert of exactly the budget,
+    // every unit an atom at the shallowest content address, staged through
+    // J0's own step — the one the shot's re-insert calls — in one
+    // transaction, commits: the cap refuses no shot M2 could have accepted
+    // at that depth, which is what keeps it a bound on the staging rather
+    // than a second, tighter journal budget.
     let k = mem_kernel_of(AllocWorld {
         m3: seeded_m3(),
         content: ContentStore::default(),
@@ -245,15 +247,49 @@ fn the_reinsert_budget_is_a_transaction_m2_accepts() {
     let (runs, _) = k
         .transact(&[M3State::content_lock_key(&doc1())], |stg| {
             let mut runs: Vec<Run> = Vec::new();
-            for _ in 0..MAX_REINSERTED_VALUES {
+            for _ in 0..MAX_REINSERTED_UNITS {
                 allocate_for_placement::<_, InsertError>(stg, &doc1(), Val::new(&b"x"[..]), &mut runs)?;
             }
             Ok::<_, InsertError>(runs)
         })
-        .expect("a re-insert of exactly the budget is a transaction M2 accepts");
+        .expect("a re-insert of exactly the units' budget is a transaction M2 accepts");
     // One run: the fresh addresses are I-adjacent, which is why the run
     // budget alone could never have seen this many values.
-    assert_eq!(runs, vec![run(&ca(1), MAX_REINSERTED_VALUES as u32)]);
+    assert_eq!(runs, vec![run(&ca(1), MAX_REINSERTED_UNITS as u32)]);
+    // THE POSITIONS, at their own budget, as ONE unit: a run of single-byte
+    // values of exactly the positions' budget, staged through J0's stretch
+    // step — one range mint and one stretch, two records however wide the
+    // run — in one transaction, commits, and lands as one run.
+    let stored = k.snapshot().world().content().len();
+    let before = k.current_seq();
+    let (runs, _) = k
+        .transact(&[M3State::content_lock_key(&doc2())], |stg| {
+            let mut runs: Vec<Run> = Vec::new();
+            let bytes: Arc<[u8]> = Arc::from(vec![b'x'; MAX_REINSERTED_VALUES]);
+            allocate_stretch_for_placement::<_, InsertError>(stg, &doc2(), bytes, &mut runs)?;
+            Ok::<_, InsertError>(runs)
+        })
+        .expect("the positions' budget of single bytes, one unit, is a transaction M2 accepts");
+    let doc2_first = a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 1]);
+    assert_eq!(runs, vec![run(&doc2_first, MAX_REINSERTED_VALUES as u32)]);
+    assert_eq!(k.current_seq().0 - before.0, 2, "two records: the range mint and the stretch");
+    assert_eq!(k.snapshot().world().content().len() - stored, 1, "one entry: the stretch");
+    // …and the positions' budget is the signed body's: a shot's entry frame
+    // spells a re-inserted single byte as a four-byte length and the byte,
+    // and the frame routes hold a body to 8 MiB (skep-core's
+    // `MAX_REQUEST_BODY`; its composer's suite holds this budget to that
+    // constant in turn). The budget is the largest power of two whose
+    // one-byte rows fit.
+    const SIGNED_BODY_BYTES: usize = 8 * 1024 * 1024;
+    const ONE_BYTE_ROW: usize = 4 + 1;
+    let fits = |positions: usize| positions * ONE_BYTE_ROW <= SIGNED_BODY_BYTES;
+    let budget = MAX_REINSERTED_VALUES;
+    assert!(budget.is_power_of_two(), "{budget} is a power of two");
+    assert!(fits(budget), "the budget's one-byte rows are past the signed body's {SIGNED_BODY_BYTES} bytes");
+    assert!(!fits(2 * budget), "the next power of two fits too: {budget} is not the largest inside the body");
+    // The units' budget lies inside the positions': a shot's units are never
+    // more than its positions, each unit holding one at least.
+    assert!(budget.checked_sub(MAX_REINSERTED_UNITS).is_some(), "the units' budget is past the positions'");
 }
 
 #[test]

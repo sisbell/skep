@@ -128,11 +128,15 @@ use skep_engine::World;
 ///    the budget; a term the frame cannot spell — a width, an extent or a
 ///    count past 2^64 − 1 — passes unattested to the store's refusal of the
 ///    shot (`base_extent_too_large`, `too_many_values`, `dangling_source`); a
-///    shot whose staging-draft runs re-insert more values than M5's
-///    `MAX_REINSERTED_VALUES` passes unattested to the store's
-///    `too_many_values`, its values never walked; a `make_link` or an `emit`
-///    whose slot is over either of M7's per-slot budgets passes unattested
-///    to M7's own `slot_too_large`, the slot never resolved past the budget;
+///    shot whose staging-draft runs re-insert more distinct positions than
+///    M5's `MAX_REINSERTED_VALUES`, or more units than its
+///    `MAX_REINSERTED_UNITS`, passes unattested to the store's
+///    `too_many_values`, no row of its body built — the positions told by
+///    request arithmetic, the units by M5's own count of the draft's stored
+///    pieces, which the store asks again over the same base; a `make_link`
+///    or an `emit` whose slot is over either of M7's per-slot budgets passes
+///    unattested to M7's own `slot_too_large`, the slot never resolved past
+///    the budget;
 ///    a `make_link` or `edit_link` whose V-spec names a source the principal
 ///    may not read is never resolved and passes unattested to the write
 ///    door's own `withheld`, naming the source — the door judges every write

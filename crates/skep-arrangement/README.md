@@ -133,7 +133,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   windows by address). What the shot re-inserts is answered too —
   `Shot::reinserted_runs`, its count, and the same runs grouped by the
   named draft whose identity they are (`Shot::reinserted_runs_by_draft`,
-  one pass for every draft) — and `publish` states where
+  one pass for every draft) — and held to TWO BUDGETS BY ONE COUNT,
+  `Shot::reinserted_units`: the distinct positions those runs name,
+  arithmetic on the request, against `MAX_REINSERTED_VALUES`; then the
+  units they come to — an atom, or a whole run of single bytes within a
+  portion the shot mints at one time, two staged records each — counted
+  off the drafts' stored pieces against `MAX_REINSERTED_UNITS`, each
+  portion split exactly as the commit stages it. The count answers the
+  parts it counted and `publish` stages from them, a portion's pieces
+  walked once; the composer, the media door and the price ask the same
+  count, so the store's refusal and every reader's figure are one
+  comparison. `publish` states where
   that fresh identity lands: the last addresses of the document's own
   content chain, which a reader the ack does not tell (the media cell
   index) reads it back from. Everything `publish` checks before it probes an

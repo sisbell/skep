@@ -272,6 +272,47 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
     assert_eq!(frame("insert", json!({"from_": "1.1", "op": "delete"})), json!({"op": "insert", "from_": "1.1"}));
 }
 
+/// An `edit` call is one of the board's two frames, by what its changes
+/// carry.
+///
+/// Changes that mint `values` are the frame its own name spells, as every
+/// wire op's is. Changes that place `runs` by identity are the board's same
+/// operation under its other name, and the frame's `op` is
+/// `set_arrangement`: the arguments are the frame as they stand — `doc`,
+/// the changes, `as_of`, `head` — a removal alone, an empty `runs`, among
+/// the changes. A call of no change, or whose changes carry neither
+/// member, is sent as `edit`, for the board's parse to answer; no other
+/// op's frame turns on a `runs` member, `reinstate`'s least of all. The
+/// form is read off the two members' presence, never off what they hold.
+#[test]
+fn an_edit_whose_changes_place_runs_is_sent_as_set_arrangement() {
+    let frame = |op: &str, args: Value| -> Value {
+        let Value::Object(args) = args else { panic!("arguments are an object") };
+        wire_frame(op, args)
+    };
+    let at = |ordinal: u64| json!({"subspace": "1", "ordinal": ordinal.to_string()});
+    let run = json!({"origin": "1.0.1.0.64", "i_start": "1.0.1.0.64.0.1.3", "width": "2"});
+    let minting = json!({"doc": "1.0.1.0.64", "as_of": 9, "changes": [{"at": at(1), "width": "0", "values": ["x"]}, {"at": at(4), "width": "2", "values": []}]});
+    let mut sent = minting.clone();
+    sent["op"] = json!("edit");
+    assert_eq!(frame("edit", minting), sent, "values: the frame its own name spells");
+    let placing = json!({"doc": "1.0.1.0.64", "as_of": 9, "head": {"at": "1.0.1.0.65.1", "extent": "6"}, "changes": [{"at": at(1), "width": "0", "runs": [run.clone()]}, {"at": at(4), "width": "2", "runs": []}]});
+    let mut sent = placing.clone();
+    sent["op"] = json!("set_arrangement");
+    assert_eq!(frame("edit", placing.clone()), sent, "runs: the same operation's other name, the arguments the frame as they stand");
+    assert_eq!(EditForm::of(placing.as_object().unwrap()), Ok(EditForm::Placed));
+    for (cell, args) in [
+        ("no change", json!({"doc": "1.0.1.0.64", "as_of": 9, "changes": []})),
+        ("no `changes`", json!({"doc": "1.0.1.0.64", "as_of": 9})),
+        ("changes of neither member", json!({"doc": "1.0.1.0.64", "as_of": 9, "changes": [{"at": at(1), "width": "1"}]})),
+        ("`changes` no list", json!({"doc": "1.0.1.0.64", "as_of": 9, "changes": {"runs": []}})),
+    ] {
+        assert_eq!(frame("edit", args.clone())["op"], "edit", "{cell}: sent as edit, the board's parse its judge");
+        assert_eq!(EditForm::of(args.as_object().unwrap()), Ok(EditForm::Values), "{cell}");
+    }
+    assert_eq!(frame("reinstate", json!({"doc": "1.0.1.0.64", "runs": [run.clone()], "changes": [{"runs": [run]}]}))["op"], "reinstate", "no other op's frame turns on its members");
+}
+
 /// The dispatch has two kinds of tool, and is counted.
 ///
 /// Fifty-two wire ops — every op of wire.md §Operations but `publish`, the
@@ -354,7 +395,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     for not_a_tool in ["publish", "publication.open", "merge.compose"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool: the shell runs a publication and a merge as its call families, each tool named with `_` for `.`");
     }
-    assert_eq!(Tool::named("set_arrangement"), None, "the landing's frame is no tool: a merge's landing and its take-backs send it, and an agent's positional changes are `edit`'s");
+    assert_eq!(Tool::named("set_arrangement"), None, "the frame's other name is no tool: a merge's landing and its take-backs send it with a landing's terms, and an agent's positional changes — values minted, or runs placed by identity — are `edit`'s, which sends that frame for the placed form");
 }
 
 /// The dispatch's door admits a call or refuses it, naming the culprit.
@@ -391,6 +432,28 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert_eq!(Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.64", "doc": "1.0.1.0.65"}))), Ok(Tool::PublicationOpen));
     let err = Tool::admit("doc_metadata", &args(json!({"at": 5, "frame": {"op": "retrieve_v"}}))).expect_err("the /op-at shape");
     assert!(err.contains("'at'") && err.contains("'frame'"), "{err}");
+    // `edit`'s two forms, one a call: a call mixing them is no one frame,
+    // and the placed form carries no landing.
+    let (minted, placed) = (json!({"at": {"subspace": "1", "ordinal": "1"}, "width": "0", "values": ["x"]}), json!({"at": {"subspace": "1", "ordinal": "3"}, "width": "1", "runs": []}));
+    let edit = |changes: Value, extra: Value| {
+        let mut call = json!({"doc": "1.0.1.0.64", "as_of": 9, "changes": changes});
+        for (member, value) in extra.as_object().expect("members") {
+            call[member] = value.clone();
+        }
+        Tool::admit("edit", &args(call))
+    };
+    assert_eq!(edit(json!([minted, minted]), json!({})), Ok(Tool::Op("edit")), "the values form");
+    assert_eq!(edit(json!([placed, placed]), json!({"head": {"at": "1.0.1.0.65.1", "extent": "6"}})), Ok(Tool::Op("edit")), "the placed form, `head` beside it");
+    let err = edit(json!([placed, placed, minted]), json!({})).expect_err("values in one change, runs in another");
+    assert!(err.contains("one form a call") && err.contains("changes[2] carries 'values'") && err.contains("changes[0] carries 'runs'"), "the first change of each form named: {err}");
+    let both = json!({"at": {"subspace": "1", "ordinal": "1"}, "width": "0", "values": ["x"], "runs": []});
+    let err = edit(json!([both]), json!({})).expect_err("both members in one change");
+    assert!(err.contains("changes[0] carries 'values'") && err.contains("changes[0] carries 'runs'"), "{err}");
+    for term in ["base", "merge"] {
+        let err = edit(json!([placed]), json!({term: {"at": "1.0.1.0.65.1", "extent": "6"}})).expect_err("a landing's term beside placed runs");
+        assert!(err.contains(&format!("takes no '{term}'")) && err.contains("merge_compose"), "the placed form carries no landing: {err}");
+        assert_eq!(edit(json!([minted]), json!({term: {}})), Ok(Tool::Op("edit")), "the values form's `{term}` goes to the board's parse, which refuses the edit frame's unknown field");
+    }
     for plain in [json!({"at": {"subspace": "1", "ordinal": "1"}, "frame": {}}), json!({"at": "5", "frame": {}}), json!({"at": -1, "frame": {}}), json!({"at": 5, "frame": "f"}), json!({"at": 5})] {
         assert_eq!(Tool::admit("insert", &args(plain.clone())), Ok(Tool::Op("insert")), "{plain}: no /op-at shape, so the frame goes to the daemon's parse");
     }
@@ -719,8 +782,12 @@ fn every_topic_the_catalog_names_is_a_help_topic() {
 ///
 /// The `edit` tool names `doc`, `changes`, `as_of` and `head` and nothing
 /// else, its schema closed: a landing's `base` and `merge` are no member of
-/// it, so the adapter's door refuses one before the board does, and its
-/// card and reference say a landing is `set_arrangement`'s. The `image`
+/// it, and its card and reference say so of both forms — refused, the
+/// reference telling by whom in each: the board's parse for a call minting
+/// values, the adapter's door for one placing runs, whose frame is the one
+/// a landing rides — and that a landing is `merge_compose`'s. A change is
+/// `at`, `width` and exactly one of `values` and `runs`, the schema closed
+/// to any other member. The `image`
 /// tool takes the continuation, `cur`, an object of the go-on's three
 /// members, and its card names the page, the go-on and the refusal of a
 /// moved draft's. No text of the catalog names `too_fragmented`, and none
@@ -734,9 +801,16 @@ fn the_catalog_spells_an_edit_with_no_landing_and_an_image_with_its_page() {
     assert_eq!(members(edit), BTreeSet::from(["doc", "changes", "as_of", "head"].map(String::from)), "no `base`, no `merge`");
     assert_eq!(edit["additionalProperties"], false, "closed: a landing's member is refused at the adapter's door");
     for said in [card(&catalog, "edit"), reference(&catalog, "edit")] {
-        assert!(said.contains("set_arrangement") && said.contains("base or merge") && said.contains("refused malformed"), "a landing is set_arrangement's: {said}");
+        assert!(said.contains("set_arrangement") && said.contains("base or merge") && said.contains("merge_compose"), "a landing is merge_compose's, and no edit's: {said}");
         assert!(!said.contains("beside base or merge"), "an edit is never empty beside a landing's terms: {said}");
     }
+    assert!(card(&catalog, "edit").contains("base or merge here is refused"), "the card says both forms refuse one");
+    let whole = reference(&catalog, "edit");
+    assert!(whole.contains("in the values form refused malformed by the board") && whole.contains("in the placed form refused by the adapter before any frame"), "the reference says by whom: {whole}");
+    let change = &edit["properties"]["changes"]["items"];
+    assert_eq!(members(change), BTreeSet::from(["at", "width", "values", "runs"].map(String::from)), "a change's four members");
+    assert_eq!((&change["required"], &change["oneOf"], &change["additionalProperties"]), (&json!(["at", "width"]), &json!([{"required": ["values"]}, {"required": ["runs"]}]), &json!(false)), "exactly one of the two forms' members");
+    assert_eq!(change["properties"]["runs"]["items"], entry("reinstate")["inputSchema"]["properties"]["runs"]["items"], "a placed run is spelled as reinstate spells one");
     let changes = edit["properties"]["changes"]["description"].as_str().expect("the changes' description");
     assert!(changes.contains("empty_result") && !changes.contains("base"), "{changes}");
     let head = edit["properties"]["head"]["description"].as_str().expect("the head's description");
@@ -931,7 +1005,7 @@ fn each_short_card_says_what_an_agent_needs_first() {
         ("changes_since", &["next", "log_position", "history_reclaimed"]),
         ("make_link", &["from_", "addrs", "spans", "empty_type_resolution"]),
         ("create_well_known_document", &["slot", "already", "mint_home_first", "committed: false"]),
-        ("edit", &["ONE commit", "ascending and apart", "ack_addr", "arrangement_moved", "site.index", "published_target", "held_lines", "merge_compose"]),
+        ("edit", &["ONE commit", "ascending and apart", "ONE FORM A CALL", "runs", "ack_addr", "set_arrangement", "arrangement_moved", "site.index", "published_target", "held_lines", "merge_compose"]),
         ("line_numbers", &["masked", "range_not_present"]),
         ("doc_metadata", &["base", "withheld", "arranged_at"]),
         ("fetch", &[&mib, "not_a_cell"]),
@@ -1540,7 +1614,7 @@ fn the_catalog_tells_an_agent_the_edits_figures_as_the_code_holds_them() {
     let frame = entry("edit");
     assert_eq!(frame["inputSchema"]["required"], json!(["doc", "changes", "as_of"]));
     assert_eq!(frame["inputSchema"]["properties"]["changes"]["maxItems"], json!(MAX_WIRE_LIST), "one wire list of changes");
-    assert_eq!(frame["inputSchema"]["properties"]["changes"]["items"]["required"], json!(["at", "width", "values"]));
+    assert_eq!(frame["inputSchema"]["properties"]["changes"]["items"]["required"], json!(["at", "width"]), "and one of `values` and `runs`, the catalog's edit cell holds");
     let listed = frame["inputSchema"]["properties"]["changes"]["description"].as_str().expect("the changes' description");
     assert!(listed.contains(&format!("at most {MAX_WIRE_LIST} entries")) && listed.contains(&format!("at most {MAX_NEW_BYTES} values")), "the schema names the frame's two caps: {listed}");
     let whole = reference(&catalog, "edit");

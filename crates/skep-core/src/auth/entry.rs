@@ -112,9 +112,12 @@
 //!   — a width, an extent or a placed count past 2^64 − 1
 //!   ([`ComposeFault::Unspellable`]): a shot naming positions or a base
 //!   extent no store holds.
-//! * a `publish` body whose staging-draft runs re-insert more values than
-//!   the store's own re-insert budget ([`ComposeFault::PastReinsertBudget`]),
-//!   answered off the runs' widths before a value is read.
+//! * a `publish` body whose staging-draft runs pass either of the store's
+//!   own re-insert budgets ([`ComposeFault::PastReinsertBudget`]): its
+//!   distinct positions, answered off the runs' widths before a value is
+//!   read, or its units — the atoms and whole byte-runs the store would
+//!   stage — counted by M5's own count off the stored pieces before a row is
+//!   built.
 //! * a `make_link`'s or an `emit`'s slot over either of M7's per-slot
 //!   budgets — the spans a slot keeps, the run-list steps its resolution
 //!   walks ([`ComposeFault::SlotTooLarge`]): the same two budgets M7 charges
@@ -146,9 +149,7 @@
 use std::num::NonZeroU64;
 
 use skep_address::{document_of, Address, Nat, Span};
-use skep_arrangement::{
-    trunk_of, Caller, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES,
-};
+use skep_arrangement::{trunk_of, Caller, Deposit, HasM5, ReinsertedUnits, SegmentRun, Shot};
 use skep_content::{HasContent, Piece};
 use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
@@ -191,9 +192,12 @@ use skep_engine::World;
 /// past the budget, and the walk over the copied runs' Σ width stops at it:
 /// every value costs at least its four-byte length prefix, so the walk
 /// visits at most a quarter of the budget in positions, whatever the values
-/// hold. Over the staging draft's runs the store's own re-insert budget stops
-/// the walk first ([`ComposeFault::PastReinsertBudget`]): a quarter of this
-/// budget is sixteen times the most the store ever re-inserts.
+/// hold. Over the staging draft's runs the store's own re-insert budgets
+/// stop the walk first ([`ComposeFault::PastReinsertBudget`]): a quarter of
+/// this budget is twice the most positions the store ever re-inserts
+/// (`skep_arrangement::MAX_REINSERTED_VALUES`, itself the largest power of
+/// two whose one-byte rows, five bytes each, fit this budget — the suite
+/// holds the two numbers to that).
 const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 /// Why the daemon could not compose the entry frame for a write.
@@ -233,13 +237,18 @@ pub(super) enum ComposeFault {
     /// the store refuses (`base_extent_too_large`, `too_many_values`,
     /// `dangling_source`).
     Unspellable,
-    /// A `publish` whose staging-draft runs pass M5's re-insert budget.
+    /// A `publish` whose staging-draft runs pass either of M5's re-insert
+    /// budgets.
     ///
-    /// The commit re-inserts those runs value by value
-    /// (`Shot::reinserted_values` past
-    /// `skep_arrangement::MAX_REINSERTED_VALUES`): a shot the store refuses
-    /// `too_many_values` by request arithmetic before it probes an address,
-    /// so one whose values this composer never walks.
+    /// The commit re-inserts those runs as fresh identity, and M5's one
+    /// count of that (`Shot::reinserted_units`) answers it past a budget:
+    /// the distinct positions past
+    /// `skep_arrangement::MAX_REINSERTED_VALUES`, by request arithmetic
+    /// before an address is probed, or the units past
+    /// `skep_arrangement::MAX_REINSERTED_UNITS`, counted off the stored
+    /// pieces. Either is a shot the store refuses `too_many_values` by the
+    /// same count before it stages a record, so one this composer builds no
+    /// row for.
     PastReinsertBudget,
     /// A `make_link`'s or `emit`'s slot over either of M7's per-slot budgets.
     ///
@@ -498,7 +507,7 @@ pub(super) fn compose(
             if !every_copied_run_origin_readable(world, &term, &segments, principal) {
                 return Err(ComposeFault::UnreadableCopiedRunOrigin);
             }
-            let shot_body = publish_body(world, shot, &segments)?;
+            let shot_body = publish_body(world, shot, &segments, &mut |_| {})?;
             let body = publication_body(world, principal, target, shot, deposits, shot_body)?;
             (FrameDocTerm::One(term), body)
         }
@@ -560,6 +569,10 @@ fn every_copied_run_origin_readable(
 /// **Precondition.** The principal may read every value the shot copies in
 /// ([`every_copied_run_origin_readable`]).
 ///
+/// `steps` is charged one for every stored piece the store's count of the
+/// re-insert reads ahead of the rows (`Shot::reinserted_units`, handed this
+/// same count): nothing for a shot its arithmetic refuses.
+///
 /// # Errors
 ///
 /// Why the body cannot be built: an address M4 holds no value at
@@ -567,7 +580,8 @@ fn every_copied_run_origin_readable(
 /// carry the body past the budget ([`ComposeFault::PastBodyBudget`]), a
 /// term the frame's fixed-width rows cannot spell
 /// ([`ComposeFault::Unspellable`]), or staging-draft runs re-inserting more
-/// values than the store will ([`ComposeFault::PastReinsertBudget`]).
+/// positions or more units than the store will
+/// ([`ComposeFault::PastReinsertBudget`]).
 ///
 /// # Panics
 ///
@@ -576,6 +590,7 @@ fn publish_body(
     world: &World,
     shot: &Shot,
     segments: &[SegmentRun],
+    steps: &mut impl FnMut(u64),
 ) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
@@ -594,18 +609,29 @@ fn publish_body(
     segments.iter().try_fold(0u64, |placed, segment| {
         placed.checked_add(spelled(segment.run().width())?).ok_or(ComposeFault::Unspellable)
     })?;
-    // The store's re-insert budget, asked of the store's own count before a
-    // value is read. The staging draft's runs are re-inserted value by value,
-    // and M5 refuses a shot re-inserting more than `MAX_REINSERTED_VALUES` by
-    // request arithmetic before it probes an address: walked here past it,
-    // they would cost the check up to the body budget's worth of positions
-    // under the serialization lock, for a shot nothing commits. The check
-    // passes this answer through unattested, which is safe only because every
-    // shot refused here is one the store refuses too — and it is: the count
-    // is M5's own (`Shot::reinserted_values`, the one `publish` holds to the
-    // same constant with the same `>`).
-    if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
-        return Err(ComposeFault::PastReinsertBudget);
+    // The store's two re-insert budgets, asked of the store's own count
+    // before a row is built. The staging draft's runs are re-inserted as
+    // fresh identity, and M5 refuses a shot whose distinct positions pass
+    // `MAX_REINSERTED_VALUES` by request arithmetic before it probes an
+    // address, and one whose units — atoms and whole byte-runs, two records
+    // each — pass `MAX_REINSERTED_UNITS` before it stages a record: walked
+    // here past either, they would cost the check up to the body budget's
+    // worth of rows under the serialization lock, for a shot nothing
+    // commits. The check passes this answer through unattested, which is
+    // safe only because every shot refused here is one the store refuses
+    // too — and it is: the count is M5's own (`Shot::reinserted_units`, the
+    // one `publish` asks over this same base and refuses by), positions
+    // first and nothing read past them, then the units over the stored
+    // pieces of runs whose origins the caller of this function found
+    // readable. A position it finds holding no value is the store's
+    // `dangling_source` by the same count, the answer the walk below gives
+    // a missing value.
+    match shot.reinserted_units(world, steps) {
+        ReinsertedUnits::Counted(_) => {}
+        ReinsertedUnits::PastPositions | ReinsertedUnits::PastUnits(_) => {
+            return Err(ComposeFault::PastReinsertBudget);
+        }
+        ReinsertedUnits::Missing(_) => return Err(ComposeFault::MissingValue),
     }
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base).map_err(refused)?;
     for segment in segments {

@@ -1044,8 +1044,11 @@ fn the_price_read_answers_the_price_the_one_function_computes_and_writes_nothing
         assert!(op.is_read() && op.kind() == OpKind::PublishCost);
         let Response::PublishCost { price, as_of } = ex(&fx.febe, fx.user, op) else { panic!("no price answered") };
         let snap = k.snapshot();
-        let direct = skep_links::price_publication_reads(snap.world(), Caller::Principal(USER), &target, &shot, &places, &[], &deposits);
+        // The class the door prices at: this request's own read predicate.
+        let class = |world: &World, doc: &Address| skep_febe::ReadableWorld::readable(world, Some(USER), doc);
+        let direct = skep_links::price_publication_reads(snap.world(), Caller::Principal(USER), &class, &target, &shot, &places, &[], &deposits, &mut |_| {});
         assert_eq!(price, direct, "the read answers the one function's price, whole");
+        assert_eq!(price.units, 1, "the draft's three typed bytes: one unit, counted off the snapshot the read pins");
         assert_eq!(as_of, before, "read at the head");
         assert_eq!((price.rewindow, price.fence, price.entries), (1 + 1, 1, deposits.supersede.len()), "the draft's run and its piece; the fence's stab; an entry a daughter");
         staged.push(price.staged_bytes);

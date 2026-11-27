@@ -258,6 +258,19 @@ pub enum OwnFault {
     },
     /// The shot's own table refused the frame's substance — `base_superseded`
     /// aside, [`Refusal::BaseSuperseded`].
+    ///
+    /// `too_many_values` is among them, and is this arm whatever the
+    /// request's price said: it is no race. The board refuses it for the
+    /// distinct positions the draft-native runs name, which are the
+    /// request's own arithmetic, or for the units they are staged as, which
+    /// are counted off stored values — and a stored value never changes, so
+    /// the runs of a request built from the draft's image, each position
+    /// holding its value, come to the same figures at the price and at the
+    /// send. After a price that admitted the request it means the frame
+    /// sent was not the frame priced, or the board's budgets changed
+    /// between the two (another build behind the same address); after one
+    /// that did not, that the request was sent past the board's own
+    /// figures. Either way the fault is on this side of the wire.
     Shot {
         /// The code.
         code: String,
@@ -429,7 +442,9 @@ pub enum Sent {
 }
 
 /// The shot's own table's codes, each the library's own fault —
-/// `base_superseded` aside, its own arm ([`Refusal::BaseSuperseded`]).
+/// `base_superseded` aside, its own arm ([`Refusal::BaseSuperseded`]);
+/// `too_many_values` for either of its causes, the positions or the units,
+/// which no race can raise ([`OwnFault::Shot`]).
 const SHOT_CODES: [&str; 8] = ["base_not_in_chain", "base_extent_too_large", "bad_run", "dangling_source", "source_not_registered", "too_many_runs", "too_many_values", "private_source_versionless"];
 
 /// The seven deposit tokens: the six lists' and the rider's — `old_refused`

@@ -1034,7 +1034,7 @@ fn two_editions_world() -> World {
 #[test]
 fn a_window_onto_words_published_into_another_document_is_re_windowed_through_that_drafts_record() {
     use skep_links::{
-        price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES,
+        price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, REWINDOWED_DRAFT_BYTES,
         SHOT_BYTES,
     };
     let k = kernel_over(two_editions_world());
@@ -1075,13 +1075,26 @@ fn a_window_onto_words_published_into_another_document_is_re_windowed_through_th
     // run of F's words — two pieces, not one.
     let drafted = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler());
     assert_eq!(
-        price_staged_bytes(before.world(), &into_e, &the_shot, &the_places, &[], &none),
+        price_staged_bytes(before.world(), &ALL_VISIBLE, &into_e, &the_shot, &the_places, &[], &none),
         drafted
             + (REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler()))
             + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES)
             + (PLACED_RUN_BYTES + 2 * KEPT_PLACE_BYTES)
-            + 2 * REINSERTED_VALUE_BYTES,
-        "doc1's one record of its kept places; the draft-native run as one piece; the placed run of F's words at its two records"
+            + (REINSERTED_UNIT_BYTES + 2),
+        "doc1's one record of its kept places; the draft-native run as one piece, its two typed bytes one unit; the placed run of F's words at its two records"
+    );
+    // …and at the class the commit above was refused at, doc2 unreadable,
+    // the same stab counts no record of doc2's: the run is priced as the
+    // one piece every placed stray is at least, where it is two for a
+    // caller who reads doc2.
+    assert_eq!(
+        price_staged_bytes(before.world(), all_but_doc2, &into_e, &the_shot, &the_places, &[], &none),
+        drafted
+            + (REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler()))
+            + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES)
+            + (PLACED_RUN_BYTES + KEPT_PLACE_BYTES)
+            + (REINSERTED_UNIT_BYTES + 2),
+        "a record homed in a draft the caller may not read is no piece of the price"
     );
     let (m1, _) = w.publication(P1, &into_e, &the_shot, &the_places, &[], &none).expect("re-windowed onto F's identity through doc2's records");
     assert_eq!(m1, pmember(1));
@@ -1426,7 +1439,7 @@ fn a_first_version_into_an_empty_edition_carries_its_claim_homed_in_it() {
     assert_eq!(plan.homes[0].home, NamedAddress::Address(pdoc()), "the edition by address, never the tag");
     assert_eq!(plan.homes[0].deposits, vec![PlannedDeposit::EditionClaim { origin: doc1() }]);
     assert_eq!(
-        price_staged_bytes(before.world(), &target, &the_shot, &[], &[], &claimed) - price_staged_bytes(before.world(), &target, &the_shot, &[], &[], &PublishDeposits::default()),
+        price_staged_bytes(before.world(), &ALL_VISIBLE, &target, &the_shot, &[], &[], &claimed) - price_staged_bytes(before.world(), &ALL_VISIBLE, &target, &the_shot, &[], &[], &PublishDeposits::default()),
         EDITION_CLAIM_BYTES,
         "the claim's bytes priced at the document form"
     );
@@ -1795,7 +1808,7 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() {
     use skep_links::{
         price_publication_reads, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
-        KEPT_PLACE_BYTES, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES,
+        KEPT_PLACE_BYTES, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_UNIT_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES,
         SHOT_BYTES,
     };
 
@@ -1815,11 +1828,11 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         base_runs: vec![],
     };
     // No place: nothing is re-windowed, and the re-window's term is nothing.
-    let unplaced = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &deposits);
+    let unplaced = price_publication_reads(world, P1, &ALL_VISIBLE, &target, &the_shot, &[], &[], &deposits, &mut |_| {});
     assert_eq!(unplaced.rewindow, 0, "no place carried: the re-window places no piece");
     assert_eq!(unplaced.fence, 1, "the draft-native run's fence stab, placed or not");
     // A place beside the draft-native run: the draft's one run, and one piece.
-    let price = price_publication_reads(world, P1, &target, &the_shot, &places(2, &[(1, 1)]), &[], &deposits);
+    let price = price_publication_reads(world, P1, &ALL_VISIBLE, &target, &the_shot, &places(2, &[(1, 1)]), &[], &deposits, &mut |_| {});
     // The fifth term, from the table: the member-position `from` of width 3
     // over a shot of two runs is at most two content spans of the edition's
     // chain; `to` and `ty` one unit span each.
@@ -1836,7 +1849,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         + rendering_draft
         + PLACED_RUN_BYTES
         + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES)
-        + 3 * REINSERTED_VALUE_BYTES
+        + (REINSERTED_UNIT_BYTES + 3)
         + COPY_FIXED_BYTES
         + 2 * content_span
         + unit(&doc2())
@@ -1849,36 +1862,39 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
     let rewindowed = REWINDOWED_DRAFT_BYTES + rendering_draft + KEPT_PLACE_BYTES;
     assert_eq!(
         price,
-        ReadPrice { homes: 3, entries: 3, rewindow: 1 + 1, fence: 1, staged_bytes: staged + rewindowed },
-        "three link-holding homes under the account; one links entry and two read-withs; doc1's one run and the one piece placed in it; one re-inserted run; the staged bytes from the table with the draft's one record and its one kept place"
+        ReadPrice { homes: 3, entries: 3, rewindow: 1 + 1, fence: 1, staged_bytes: staged + rewindowed, units: 1 },
+        "three link-holding homes under the account; one links entry and two read-withs; doc1's one run and the one piece placed in it; one re-inserted run; the staged bytes from the table with the draft's one record and its one kept place; the draft's three typed bytes one unit"
     );
     assert_eq!(unplaced, ReadPrice { rewindow: 0, staged_bytes: staged, ..price }, "unplaced: no re-window term, no record of kept places staged");
-    assert_eq!((staged, rewindowed), (7_279, 252), "the figures, at the shallow depth");
+    assert_eq!((staged, rewindowed), (6_721, 252), "the figures, at the shallow depth");
     assert_eq!(price.total(), 3 * 3 + 2 + 1, "homes × entries + the re-window's steps + the fence's stabs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
     assert_eq!(ReadPrice::BYTE_BUDGET, skep_kernel::MAX_TXN_BYTES);
-    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET };
+    assert_eq!((ReadPrice::UNIT_BUDGET, ReadPrice::POSITION_BUDGET), (skep_arrangement::MAX_REINSERTED_UNITS as u64, skep_arrangement::MAX_REINSERTED_VALUES as u64), "the store's own two");
+    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET, units: 0 };
     assert!(!at_budget.over_budget(), "at both budgets is inside them");
-    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 1, fence: 0, staged_bytes: 0 };
+    let many_units = ReadPrice { units: ReadPrice::UNIT_BUDGET + 1, ..at_budget };
+    assert!(!many_units.over_budget(), "the units are no term of this refusal: past their budget the store refuses the shot itself");
+    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, rewindow: 1, fence: 0, staged_bytes: 0, units: 0 };
     assert!(past.over_budget() && past.reads_over_budget() && !past.bytes_over_budget(), "one read past the budget is over");
     let stabbed = ReadPrice { rewindow: 0, fence: 1, ..past };
     assert!(stabbed.reads_over_budget(), "one fence stab past the budget is over");
-    let heavy = ReadPrice { homes: 0, entries: 0, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET + 1 };
+    let heavy = ReadPrice { homes: 0, entries: 0, rewindow: 0, fence: 0, staged_bytes: ReadPrice::BYTE_BUDGET + 1, units: 0 };
     assert!(heavy.over_budget() && heavy.bytes_over_budget() && !heavy.reads_over_budget(), "one byte past the transaction budget is over");
-    let huge = ReadPrice { homes: usize::MAX, entries: 2, rewindow: usize::MAX, fence: 2, staged_bytes: 0 };
+    let huge = ReadPrice { homes: usize::MAX, entries: 2, rewindow: usize::MAX, fence: 2, staged_bytes: 0, units: 0 };
     assert_eq!(huge.total(), usize::MAX, "the price saturates");
-    assert_eq!(price_publication_reads(world, Caller::System, &target, &the_shot, &[], &[], &deposits).homes, 0, "no account, no homes");
+    assert_eq!(price_publication_reads(world, Caller::System, &ALL_VISIBLE, &target, &the_shot, &[], &[], &deposits, &mut |_| {}).homes, 0, "no account, no homes");
     let draftless = Shot { draft: None, ..the_shot.clone() };
-    let undrafted = price_publication_reads(world, P1, &target, &draftless, &places(2, &[(1, 1)]), &[], &deposits);
+    let undrafted = price_publication_reads(world, P1, &ALL_VISIBLE, &target, &draftless, &places(2, &[(1, 1)]), &[], &deposits, &mut |_| {});
     assert_eq!((undrafted.rewindow, undrafted.fence), (0, 0), "no draft: nothing re-windowed, no run re-inserted");
     // The fence's term at the edge: 3 × 21,845 read-with entries is 65,535.
     let read_withs = PublishDeposits { read_with: vec![set_s(); 21_845], ..PublishDeposits::default() };
-    let one_run = price_publication_reads(world, P1, &target, &the_shot, &[], &[], &read_withs);
+    let one_run = price_publication_reads(world, P1, &ALL_VISIBLE, &target, &the_shot, &[], &[], &read_withs, &mut |_| {});
     assert_eq!((one_run.homes * one_run.entries, one_run.rewindow, one_run.fence), (MAX_PUBLICATION_READS - 1, 0, 1));
     assert!(!one_run.reads_over_budget(), "one re-inserted run: at the budget");
     let two_runs = shot_off_head(&k, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
-    let over = price_publication_reads(world, P1, &target, &two_runs, &[], &[], &read_withs);
+    let over = price_publication_reads(world, P1, &ALL_VISIBLE, &target, &two_runs, &[], &[], &read_withs, &mut |_| {});
     assert_eq!((over.rewindow, over.fence, over.total()), (0, 2, MAX_PUBLICATION_READS + 1));
     assert!(over.reads_over_budget() && !over.bytes_over_budget(), "a second re-inserted run, placed nowhere, is past the budget on the fence's stab");
 }
@@ -1899,7 +1915,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
 fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spells() {
     use skep_links::{
         price_staged_bytes, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
-        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
+        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
 
     let k = kernel_over(deposits_world());
@@ -1920,43 +1936,43 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     let nested = birth(vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
     let per_piece = PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES;
     assert_eq!(
-        price_staged_bytes(world, &target, &nested, &[], &[], &none),
-        drafted + (3 + 1) * per_piece + 3 * REINSERTED_VALUE_BYTES,
-        "three pieces and one, the values the distinct positions"
+        price_staged_bytes(world, &ALL_VISIBLE, &target, &nested, &[], &[], &none),
+        drafted + (3 + 1) * per_piece + (REINSERTED_UNIT_BYTES + 3),
+        "three pieces and one; the re-insert one unit — the three typed bytes, the second run's position minted by the first — and its bytes"
     );
     assert_eq!(
-        price_staged_bytes(world, &target, &nested, &places(2, &[(0, 1), (1, 2)]), &[], &none),
-        drafted + rewindowed + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
+        price_staged_bytes(world, &ALL_VISIBLE, &target, &nested, &places(2, &[(0, 1), (1, 2)]), &[], &none),
+        drafted + rewindowed + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + (REINSERTED_UNIT_BYTES + 3),
         "a kept place per piece, and the draft's one record once"
     );
     // Stray: the head's identity, which the board's one record names, with
     // a place — one record; identity no record names — priced as one piece,
     // the arm refusing it.
     let stray = birth(vec![shot_run(&pdoc(), &pca(1), 3)]);
-    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &ALL_VISIBLE, &target, &stray, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     let unrecorded = birth(vec![shot_run(&pdoc(), &pca(9), 1)]);
-    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &ALL_VISIBLE, &target, &unrecorded, &places(1, &[(0, 1)]), &[], &none), drafted + rewindowed + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     // The mint form's two, and a copy in the I-span form at its own spans.
     let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
     let spans = EndArg::Spans(vec![run(&pca(1), 2).iextent(), run(&pca(5), 1).iextent()]);
     let copy = PublishDeposits { claim: true, links: vec![entry(NamedAddress::Edition, spans.clone(), spans, addrs(&[&citation()]), None)], ..PublishDeposits::default() };
     let span_bytes: u64 = [run(&pca(1), 2), run(&pca(5), 1)].iter().map(|r| stored_span_bytes(&r.iextent())).sum();
     assert_eq!(
-        price_staged_bytes(world, &mint, &birth(vec![]), &[], &[], &copy),
+        price_staged_bytes(world, &ALL_VISIBLE, &mint, &birth(vec![]), &[], &[], &copy),
         drafted + EDITION_MINT_BYTES + EDITION_CLAIM_BYTES + COPY_FIXED_BYTES + 2 * span_bytes + stored_span_bytes(&skep_address::subtree_of(citation().tumbler())),
         "the mint and the claim, the copy at its four spans and its type, no claim without an original"
     );
     // A shot naming no draft prices the fixed records alone, and one naming
     // a base beside them the base's address, at its own bytes.
     let undrafted = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
-    assert_eq!(price_staged_bytes(world, &target, &undrafted, &[], &[], &none), SHOT_BYTES, "no draft named, no address priced");
+    assert_eq!(price_staged_bytes(world, &ALL_VISIBLE, &target, &undrafted, &[], &[], &none), SHOT_BYTES, "no draft named, no address priced");
     let head = trunk_head(world.m3(), &pdoc()).expect("a head");
     let based = Shot {
         base: Some(skep_arrangement::Base { member: head.clone(), extent: n(0) }),
         ..undrafted.clone()
     };
     assert_eq!(
-        price_staged_bytes(world, &target, &based, &[], &[], &none),
+        price_staged_bytes(world, &ALL_VISIBLE, &target, &based, &[], &[], &none),
         SHOT_BYTES + skep_links::stored_tumbler_bytes(head.tumbler()),
         "the base named, its address priced in the terms' slot"
     );
@@ -1967,8 +1983,8 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
         ..PublishDeposits::default()
     };
     let many = birth((0..4096).map(|_| shot_run(&doc1(), &ca(1), 1)).collect());
-    let one = price_staged_bytes(world, &target, &many, &[], &[], &wide(1));
-    let hundred = price_staged_bytes(world, &target, &many, &[], &[], &wide(100));
+    let one = price_staged_bytes(world, &ALL_VISIBLE, &target, &many, &[], &[], &wide(1));
+    let hundred = price_staged_bytes(world, &ALL_VISIBLE, &target, &many, &[], &[], &wide(100));
     let content_span = stored_span_bytes(&run(&pca(1), 1).iextent());
     assert_eq!(hundred - one, 99 * (COPY_FIXED_BYTES + 4096 * content_span + stored_span_bytes(&skep_address::subtree_of(citation().tumbler()))));
     assert!(one < ReadPrice::BYTE_BUDGET, "one wide entry over the many-run shot is inside the budget: {one}");
@@ -1988,7 +2004,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     use skep_address::subtree_of;
     use skep_links::{
         stored_span_bytes, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
-        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_UNIT_BYTES,
         RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
 
@@ -2087,12 +2103,16 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let read_with = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![], vec![set_s()]))) - shot_bytes_at_an_empty_head;
     // The re-insert: an atom at ca(4), a byte at ca(5), a byte at ca(6)
     // re-windowed at its place — each shot placing its one fresh run, and
-    // minting its one record.
+    // minting its one record. The atom's shot is made off the empty head
+    // the shots above left, and is measured against the shot of that shape
+    // (against the first it reads four bytes low, a zero base extent being
+    // one digit shorter); every shot after it is off a head holding a
+    // position, as the first was.
     let vs = Vstream::new(&k);
     vs.insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'x', b'y'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("an atom at ca(4)");
     vs.insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(5)");
     vs.insert(P1, &doc1(), vp(1, 6), vec![Val::new([b'e'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("e at ca(6)");
-    let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
+    let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes_at_an_empty_head - drafted - placed_run - record;
     let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
     let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - drafted - placed_run - record;
     assert_eq!(bytes_of(&k, &doc1()), "abcxyde", "doc1 reads as it did, its last byte re-windowed");
@@ -2114,6 +2134,14 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let kept_place = (two_placed - two_runs) - rewindowed_once;
     let rewindowed_draft = rewindowed_once - kept_place - drafted;
     assert_eq!(bytes_of(&k, &doc1()), "abcxydefghijkl", "doc1 reads as it did through both re-windows");
+    // The unit's own bytes on top of its fixed part: four bytes typed
+    // together, one stretch, re-inserted as one unit — and an atom of five
+    // bytes beside the atom of two.
+    let typed = b"mnop".iter().map(|byte| Val::new([*byte])).collect();
+    vs.insert(P1, &doc1(), vp(1, 14), typed, Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("four bytes at ca(14..=17)");
+    vs.insert(P1, &doc1(), vp(1, 18), vec![Val::new(&b"vwxyz"[..])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("an atom at ca(18)");
+    let run_of_four = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(14), 4)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
+    let atom_of_five = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(18), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
     // The mint form: the edition's mint over a birth shot into `S`, the
     // claim over the mint form without one.
     let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] };
@@ -2154,7 +2182,8 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ("KEPT_PLACE_BYTES", kept_place, KEPT_PLACE_BYTES),
         ("REWINDOWED_DRAFT_BYTES", rewindowed_draft, REWINDOWED_DRAFT_BYTES),
         ("PLACED_RUN_BYTES", placed_run, PLACED_RUN_BYTES),
-        ("REINSERTED_VALUE_BYTES", atom, REINSERTED_VALUE_BYTES),
+        ("REINSERTED_UNIT_BYTES, a run of one byte past its byte", byte - 1, REINSERTED_UNIT_BYTES),
+        ("REINSERTED_UNIT_BYTES, a run of four bytes past its bytes", run_of_four - 4, REINSERTED_UNIT_BYTES),
         ("SHOT_BYTES", shot_bytes - based, SHOT_BYTES),
         ("EDITION_MINT_BYTES", edition_mint, EDITION_MINT_BYTES),
         ("EDITION_CLAIM_BYTES", edition_claim, EDITION_CLAIM_BYTES),
@@ -2170,6 +2199,14 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     for (name, measured, pinned) in table {
         assert_eq!(measured, pinned, "{name} moved: the kernel prices the kind at {measured} bytes, the table says {pinned}");
     }
+    // An atom is a unit priced at the same figure and its own length: as a
+    // shot's one unit its two records are eleven bytes under a byte-run's —
+    // its mint carries no count — so the figure bounds it, whatever its
+    // length. (Each unit after a shot's first stages four bytes fewer still;
+    // `a_reinsert_of_atoms_or_of_long_byte_runs_is_priced_at_or_above_what_it_stages`
+    // counts that.)
+    println!("an atom of two bytes: {atom}; of five: {atom_of_five}");
+    assert_eq!((atom - 2, atom_of_five - 5), (REINSERTED_UNIT_BYTES - 11, REINSERTED_UNIT_BYTES - 11), "an atom past its bytes, at either length");
     // The figures the module's cards quote beside the table: the marker the
     // kernel's own card states, the birth shape's shot, a byte run's stretch
     // and the one-span copy the arithmetic's second verdict reads — the
@@ -2363,14 +2400,14 @@ fn a_cut_copys_rest_keeps_a_fresh_mark_written_ahead_of_the_originals_retraction
     let plan = plan_deposits(snap.world(), P1, &target, &the_shot, &deposits).expect("planned");
     let fresh = Link::triple(Endset::from_spans([rest.clone()]), Endset::empty(), enc([&ty]));
     assert_eq!(plan.originals[0].rest, Some(fresh.clone()), "the fresh mark: B's type over exactly the rest, in the end B holds it in");
-    let base = price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..PublishDeposits::default() });
+    let base = price_staged_bytes(snap.world(), &ALL_VISIBLE, &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..PublishDeposits::default() });
     assert_eq!(
-        price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &deposits) - base,
+        price_staged_bytes(snap.world(), &ALL_VISIBLE, &target, &the_shot, &[], &[], &deposits) - base,
         RETRACTION_BYTES + COPY_FIXED_BYTES + stored_span_bytes(&rest) + stored_span_bytes(&skep_address::subtree_of(ty.tumbler())),
         "the rider's price: the retraction, and the fresh mark at its spans"
     );
     assert_eq!(
-        price_staged_bytes(snap.world(), &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(b.clone(), vec![])]) }) - base,
+        price_staged_bytes(snap.world(), &ALL_VISIBLE, &target, &the_shot, &[], &[], &PublishDeposits { retract: vec![copy.clone()], ..originals(vec![(b.clone(), vec![])]) }) - base,
         RETRACTION_BYTES,
         "no rest: the retraction alone"
     );
@@ -2669,7 +2706,7 @@ fn a_family_shot_re_windows_every_named_draft_at_its_own_places_in_one_commit_an
 #[test]
 fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list_places() {
     use skep_links::{
-        price_publication_reads, price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES,
+        price_publication_reads, price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES,
         REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
     };
     let k = kernel_over(edition_world());
@@ -2685,7 +2722,7 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     let none = PublishDeposits::default();
     let with = family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)]);
     let doc2_places = vec![AlsoPlaces { draft: doc2(), places: vec![None, Some(vp(1, 2))] }];
-    let price = |places: &[Option<VPos>], also: &[AlsoPlaces]| price_publication_reads(world, P1, &into, &with, places, also, &none);
+    let price = |places: &[Option<VPos>], also: &[AlsoPlaces]| price_publication_reads(world, P1, &ALL_VISIBLE, &into, &with, places, also, &none, &mut |_| {});
     let unplaced = price(&[], &[]);
     assert_eq!(unplaced.rewindow, 0, "no list places anything: nothing is re-windowed, no re-window term");
     assert_eq!(unplaced.fence, 2, "one stab per re-inserted run, of whichever named draft");
@@ -2695,17 +2732,19 @@ fn the_price_of_a_family_publication_sums_the_draft_term_over_every_draft_a_list
     assert_eq!(price(&[], &[AlsoPlaces { draft: doc2(), places: vec![None, None] }]).rewindow, 0, "an entry with no place places nothing");
     let (homes, entries) = (unplaced.homes, unplaced.entries);
     assert_eq!((price(&places(2, &[(0, 1)]), &doc2_places).homes, price(&places(2, &[(0, 1)]), &doc2_places).entries), (homes, entries), "the other terms stand");
-    // The staged bytes: each named draft's run with its record, the five
-    // re-inserted values, and a kept place per list that places a run —
+    // The staged bytes: each named draft's run with its record, the two
+    // units re-inserted — each draft's typed bytes one run — with their five
+    // bytes, and a kept place per list that places a run —
     // doc1's two (its own run and doc2's, which it holds by identity) and
     // doc2's one.
     let drafted = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler());
-    let runs_and_records = 2 * (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 5 * REINSERTED_VALUE_BYTES;
-    assert_eq!(price_staged_bytes(world, &into, &with, &[], &[], &none), drafted + runs_and_records, "the `also` draft's run priced as any draft-native run's, its record beside it");
+    let runs_and_records = 2 * (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + (2 * REINSERTED_UNIT_BYTES + 5);
+    assert_eq!(unplaced.units, 2, "a unit a draft: a run of typed bytes each");
+    assert_eq!(price_staged_bytes(world, &ALL_VISIBLE, &into, &with, &[], &[], &none), drafted + runs_and_records, "the `also` draft's run priced as any draft-native run's, its record beside it");
     let a_draft = REWINDOWED_DRAFT_BYTES + stored_tumbler_bytes(doc1().tumbler());
     assert_eq!(stored_tumbler_bytes(doc2().tumbler()), stored_tumbler_bytes(doc1().tumbler()), "the two drafts lie at one depth");
     assert_eq!(
-        price_staged_bytes(world, &into, &with, &places(2, &[(0, 1), (1, 4)]), &doc2_places, &none),
+        price_staged_bytes(world, &ALL_VISIBLE, &into, &with, &places(2, &[(0, 1), (1, 4)]), &doc2_places, &none),
         drafted + runs_and_records + 3 * KEPT_PLACE_BYTES + 2 * a_draft,
         "a kept place per list that places a run, and one record a draft re-windowed"
     );
@@ -2758,14 +2797,14 @@ fn the_re_window_is_priced_at_its_drafts_runs_and_the_pieces_its_lists_place() {
     let (first, every) = whole_image(&k);
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&doc1()), 200, "the premise: two hundred runs");
-    let published = price_publication_reads(s.world(), P1, &into, &first, &every, &[], &none);
+    let published = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &first, &every, &[], &none, &mut |_| {});
     assert_eq!((published.rewindow, published.fence), (200 + 200, 200), "200 runs and 200 pieces; one stab per run");
     assert!(!published.reads_over_budget(), "a first publication of 200 runs, placed run for run, is inside the budget");
     fragment(&k, 100);
     let (whole, every) = whole_image(&k);
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&doc1()), 300, "the premise: three hundred runs");
-    let price = |places: &[Option<VPos>]| price_publication_reads(s.world(), P1, &into, &whole, places, &[], &none);
+    let price = |places: &[Option<VPos>]| price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &whole, places, &[], &none, &mut |_| {});
     let word = price(&places(300, &[(0, 1)]));
     assert_eq!((word.rewindow, word.fence), (300 + 1, 300), "300 runs and one piece; 300 fence stabs");
     let all = price(&every);
@@ -2794,9 +2833,9 @@ fn the_re_window_is_priced_per_piece_and_nothing_for_the_runs_its_places_cut() {
     draft_holding(&k, "abc");
     let s = k.snapshot();
     let after_b = shot(None, vec![shot_run(&doc1(), &ca(2), 1), shot_run(&doc1(), &ca(1), 3)]);
-    let cut = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(1, 1)]), &[], &none);
+    let cut = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &after_b, &places(2, &[(1, 1)]), &[], &none, &mut |_| {});
     assert_eq!((cut.rewindow, cut.fence), (1 + 3, 2), "one run, three pieces");
-    let inside = price_publication_reads(s.world(), P1, &into, &after_b, &places(2, &[(0, 2)]), &[], &none);
+    let inside = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &after_b, &places(2, &[(0, 2)]), &[], &none, &mut |_| {});
     assert_eq!(inside.rewindow, 1 + 1, "`b` placed inside `a b c`: one run, one piece, its two cuts uncounted");
     let k = kernel_over(edition_world());
     draft_holding(&k, &"x".repeat(512));
@@ -2804,7 +2843,7 @@ fn the_re_window_is_priced_per_piece_and_nothing_for_the_runs_its_places_cut() {
     let runs: Vec<ShotRun> = (1..=512).map(|j| shot_run(&doc1(), &ca(j), 1)).collect();
     let placed: Vec<(usize, u32)> = (0..512).step_by(2).map(|index| (index, index as u32 + 1)).collect();
     let (alternating, kept) = (shot(None, runs), places(512, &placed));
-    let wide = price_publication_reads(k.snapshot().world(), P1, &into, &alternating, &kept, &[], &none);
+    let wide = price_publication_reads(k.snapshot().world(), P1, &ALL_VISIBLE, &into, &alternating, &kept, &[], &none, &mut |_| {});
     assert_eq!((wide.rewindow, wide.fence), (1 + 256, 512), "one run and 256 pieces, whatever they cut");
     assert!(!wide.reads_over_budget(), "inside the budget: {wide:?}");
     writer(&k).publication(P1, &into, &alternating, &kept, &[], &none).expect("the alternating shape lands");
@@ -3003,11 +3042,11 @@ fn the_re_windows_term_is_exactly_the_drafts_runs_and_the_pieces_placed() {
     let into = PublishTarget::Document(pdoc());
     let none = PublishDeposits::default();
     let s = k.snapshot();
-    let price = price_publication_reads(s.world(), P1, &into, &the_shot, &in_doc1, &[], &none);
+    let price = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &the_shot, &in_doc1, &[], &none, &mut |_| {});
     assert_eq!(price.rewindow, (RUNS + PIECES) as usize, "the draft's runs and the pieces placed, summed");
     assert_eq!(price.fence, PIECES as usize);
     assert!(!price.over_budget() && (RUNS * PIECES) as usize > 100 * MAX_PUBLICATION_READS, "{price:?}");
-    let both = price_publication_reads(s.world(), P1, &into, &the_shot, &in_doc1, &in_doc2, &none);
+    let both = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &the_shot, &in_doc1, &in_doc2, &none, &mut |_| {});
     assert_eq!(both.rewindow, (RUNS + PIECES) as usize + (1 + PIECES) as usize, "doc2's one run and its pieces beside doc1's");
     let counts = |k: &Kernel<World>| (k.snapshot().world().m5().content_count(&doc1()), k.snapshot().world().m5().content_count(&doc2()));
     let counts_before = counts(&k);
@@ -3062,7 +3101,7 @@ fn a_publications_kept_places_are_one_record_a_draft_whatever_the_pieces() {
     assert_eq!(records - unplaced, 1, "two lists, one document: one record");
     assert_eq!((of(&log, "edit", &doc1()), log.len()), (2, 2));
     let k = kernel_over(world.clone());
-    let price = skep_links::price_publication_reads(k.snapshot().world(), P1, &into, &named_twice, &split(0), &second_list, &none);
+    let price = skep_links::price_publication_reads(k.snapshot().world(), P1, &ALL_VISIBLE, &into, &named_twice, &split(0), &second_list, &none, &mut |_| {});
     assert_eq!(price.rewindow, (RUNS + 16) as usize, "and priced once: its runs, and the pieces of both lists");
 }
 
@@ -3088,7 +3127,7 @@ fn the_re_windows_share_of_the_price_is_at_or_above_what_it_stages() {
             writer(&k).publication(P1, &into, the_shot, kept, also, &none).expect("the publication lands");
             k.journal_bytes() - before
         };
-        let priced = |kept: &[Option<VPos>], also: &[AlsoPlaces]| price_staged_bytes(world, &into, the_shot, kept, also, &none);
+        let priced = |kept: &[Option<VPos>], also: &[AlsoPlaces]| price_staged_bytes(world, &ALL_VISIBLE, &into, the_shot, kept, also, &none);
         (priced(kept, also) - priced(&[], &[]), staged(kept, also) - staged(&[], &[]))
     };
     let after = |build: &dyn Fn(&Kernel<World>)| -> World {
@@ -3134,4 +3173,301 @@ fn the_re_windows_share_of_the_price_is_at_or_above_what_it_stages() {
     assert_eq!(priced, a_draft + 3 * KEPT_PLACE_BYTES);
     assert_eq!(staged, a_draft + KEPT_PLACE_BYTES + 2 * PLACED_RUN_BYTES, "the place's one change, a run a piece");
     assert!(priced >= staged);
+}
+
+// ─────────────────── the re-insert's units, and its price ───────────────────
+
+/// A world built by `build` over the edition world, as one value.
+fn world_after(build: &dyn Fn(&Kernel<World>)) -> World {
+    let k = kernel_over(edition_world());
+    build(&k);
+    let world = k.snapshot().world().clone();
+    world
+}
+
+/// One insert of `values` into `doc` at content ordinal `at`.
+fn typed_at(k: &Kernel<World>, doc: &Address, at: u32, values: Vec<Val>) {
+    Vstream::new(k).insert(P1, doc, vp(1, at), values, Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("the insert commits");
+}
+
+/// THE UNITS THE PRICE ANSWERS ARE THE UNITS THE COUNT COUNTS AND THE COMMIT
+/// STAGES. doc1 holds `abc`, the atom `XY` and `de`, typed in one insert:
+/// six positions, three stored pieces. The price of the shot naming them
+/// all answers three units — never its six positions — off one walk of the
+/// three pieces; M5's count over the same snapshot answers the same three
+/// and their seven bytes; the staged bytes price each unit at the table's
+/// figure and its own bytes; and the commit stages three content entries,
+/// one a unit, the fresh run their six positions.
+#[test]
+fn the_price_answers_the_units_the_count_counts_and_the_commit_stages() {
+    use skep_arrangement::{ReinsertedUnits, UnitTally};
+    use skep_links::{price_publication_reads, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, SHOT_BYTES};
+    let k = kernel_over(edition_world());
+    let values: Vec<Val> = [&b"a"[..], b"b", b"c", b"XY", b"d", b"e"].into_iter().map(Val::new).collect();
+    typed_at(&k, &doc1(), 1, values);
+    let (into, none) = (PublishTarget::Document(pdoc()), PublishDeposits::default());
+    let the_shot = shot(None, vec![shot_run(&doc1(), &ca(1), 6)]);
+    assert_eq!(the_shot.reinserted_values(), n(6), "premise: six positions");
+    let s = k.snapshot();
+    let mut walked = 0u64;
+    let price = price_publication_reads(s.world(), P1, &ALL_VISIBLE, &into, &the_shot, &[], &[], &none, &mut |pieces| walked += pieces);
+    assert_eq!((price.units, walked), (3, 3), "three units, off one walk of the three stored pieces");
+    let counted = the_shot.reinserted_units(s.world(), &mut |_| {});
+    assert!(matches!(counted, ReinsertedUnits::Counted(_)), "{counted:?}");
+    assert_eq!(counted.tally(), UnitTally { units: price.units, bytes: 7 }, "the price's figure is the count's");
+    assert_eq!(
+        price.staged_bytes,
+        SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler()) + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + 3 * REINSERTED_UNIT_BYTES + 7,
+        "each unit at the table's figure and its own bytes"
+    );
+    let stored = s.world().content().len();
+    let (member, _) = writer(&k).publication(P1, &into, &the_shot, &[], &[], &none).expect("the publication lands");
+    let after = k.snapshot();
+    assert_eq!((after.world().content().len() - stored) as u64, price.units, "a stored entry a unit: the units priced are the units staged");
+    assert_eq!(runs_of(&k, &member), vec![run(&pca(1), 6)]);
+}
+
+/// A RE-INSERT IS PRICED AT OR ABOVE WHAT IT STAGES, whatever its units
+/// hold. doc1 holds a typed byte, fifty atoms of sixty-four bytes, and three
+/// runs of a thousand typed bytes with a two-byte atom between each. Against
+/// the shot of the one byte — one unit, one run, one record, the same shape —
+/// the shot of the fifty atoms adds to the price fifty units at the table's
+/// figure and their own sixty-four bytes each, and to the journal a little
+/// less; a thousand typed bytes, one unit as the byte is, add to both
+/// exactly the unit and its thousand; and the three runs around their two
+/// atoms, five units, add to the price what they stage and a little more.
+/// The little is counted: the table's figure is what a shot's FIRST unit
+/// stages past its bytes where it is a run of single bytes — every unit
+/// after a shot's first stages four bytes fewer, and an atom eleven fewer
+/// than a run, its mint carrying no count — so the price is an upper bound,
+/// tight to a few bytes a unit. A price read off the positions alone, a
+/// byte a position, comes short at the atoms.
+#[test]
+fn a_reinsert_of_atoms_or_of_long_byte_runs_is_priced_at_or_above_what_it_stages() {
+    use skep_links::{price_staged_bytes, REINSERTED_UNIT_BYTES};
+    let (into, none) = (PublishTarget::Document(pdoc()), PublishDeposits::default());
+    let world = world_after(&|k| {
+        typed_at(k, &doc1(), 1, vec![Val::new(*b"z")]);
+        typed_at(k, &doc1(), 2, vec![Val::new([b'A'; 64]); 50]);
+        let run = || std::iter::repeat_n(Val::new(*b"r"), 1_000);
+        let between = || [Val::new(&b"--"[..])];
+        typed_at(k, &doc1(), 52, run().chain(between()).chain(run()).chain(between()).chain(run()).collect());
+    });
+    // What the shot of doc1's `width` positions from `first` is priced at,
+    // and what its one commit adds to the journal, each over `world`.
+    let of = |first: u32, width: u32| -> (u64, u64) {
+        let the_shot = shot(None, vec![shot_run(&doc1(), &ca(first), width)]);
+        let k = journaled_over(world.clone());
+        let before = k.journal_bytes();
+        writer(&k).publication(P1, &into, &the_shot, &[], &[], &none).expect("the publication lands");
+        (price_staged_bytes(&world, &ALL_VISIBLE, &into, &the_shot, &[], &[], &none), k.journal_bytes() - before)
+    };
+    let (priced_byte, staged_byte) = of(1, 1);
+    let share = |first: u32, width: u32| {
+        let (priced, staged) = of(first, width);
+        (priced - priced_byte, staged - staged_byte)
+    };
+    let one_byte = REINSERTED_UNIT_BYTES + 1;
+    // What the price is over what is staged, for a re-insert of `units`
+    // units, `atoms` of them atoms.
+    let over = |units: u64, atoms: u64| 4 * (units - 1) + 11 * atoms;
+    // Fifty atoms of sixty-four bytes.
+    let (priced, staged) = share(2, 50);
+    assert_eq!(priced, 50 * (REINSERTED_UNIT_BYTES + 64) - one_byte, "a unit an atom, each at its own length");
+    assert!(priced >= staged, "the atoms are priced {priced} and stage {staged}");
+    assert_eq!(priced - staged, over(50, 50), "over by a few bytes a unit, never under");
+    // One run of a thousand typed bytes: priced exactly.
+    assert_eq!(share(52, 1_000), (REINSERTED_UNIT_BYTES + 1_000 - one_byte, REINSERTED_UNIT_BYTES + 1_000 - one_byte));
+    // The three runs around their two atoms: five units.
+    let (priced, staged) = share(52, 3_002);
+    assert_eq!(priced, 5 * REINSERTED_UNIT_BYTES + 3_004 - one_byte);
+    assert!(priced >= staged, "the runs and their atoms are priced {priced} and stage {staged}");
+    assert_eq!(priced - staged, over(5, 2));
+}
+
+/// A PORTION OF SINGLE-BYTE PIECES IS PRICED AS THE ONE UNIT IT IS. doc1
+/// holds the positions' budget of typed bytes, a stored piece a byte — a
+/// draft written a byte an insert. The price of the shot naming them all
+/// walks every piece once, answers ONE unit, and prices the re-insert at the
+/// table's figure and the bytes themselves: inside the transaction budget,
+/// where a price of a position an atom was four times past it.
+#[test]
+fn a_portion_of_single_byte_pieces_is_priced_at_one_unit_and_its_bytes() {
+    use std::sync::Arc;
+
+    use skep_content::stage_stretch;
+    use skep_links::{price_publication_reads, stored_tumbler_bytes, ReadPrice, CORRESPONDENCE_RECORD_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, SHOT_BYTES};
+    let positions = ReadPrice::POSITION_BUDGET as u32;
+    let mut world = edition_world();
+    for at in 1..=positions {
+        let stretch = stage_stretch(&world.content, ca(at), Arc::from(&[b'a' + (at % 26) as u8][..])).expect("a fresh one-byte stretch");
+        world.content = world.content.apply_stretch(&stretch);
+    }
+    assert_eq!(world.content.len(), positions as usize, "premise: a stored piece a position");
+    let (into, none) = (PublishTarget::Document(pdoc()), PublishDeposits::default());
+    let the_shot = shot(None, vec![shot_run(&doc1(), &ca(1), positions)]);
+    let mut walked = 0u64;
+    let price = price_publication_reads(&world, P1, &ALL_VISIBLE, &into, &the_shot, &[], &[], &none, &mut |pieces| walked += pieces);
+    assert_eq!((price.units, walked), (1, u64::from(positions)), "one unit, after one walk of every piece");
+    assert_eq!(
+        price.staged_bytes,
+        SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler()) + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES) + REINSERTED_UNIT_BYTES + u64::from(positions),
+        "the unit's fixed figure and a byte a position"
+    );
+    assert!(!price.over_budget(), "inside both budgets: {price:?}");
+    assert!(u64::from(positions) * 287 > 4 * ReadPrice::BYTE_BUDGET, "priced a position an atom, the same shot was past the bytes' budget four times over");
+}
+
+/// THE POSITIONS' ARITHMETIC ANSWERS AHEAD OF EVERY STORED PIECE. doc1 holds
+/// an atom and then the positions' budget of typed bytes, one position more
+/// than the budget in all. The price of the shot naming them all reads NO
+/// stored piece: its units figure is nothing and its bytes carry no
+/// re-insert at all — the shot is the store's to refuse, and the positions
+/// a caller counts itself against the budget the price states. The shot of
+/// exactly the budget is counted off its two stored pieces, two units. And a
+/// shot reaching past what the draft holds is priced at the units standing
+/// ahead of the first position holding nothing: a missing value is no unit.
+#[test]
+fn a_shot_past_the_positions_is_priced_with_no_stored_piece_read() {
+    use skep_links::{price_publication_reads, stored_tumbler_bytes, ReadPrice, CORRESPONDENCE_RECORD_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, SHOT_BYTES};
+    let budget = ReadPrice::POSITION_BUDGET as u32;
+    let world = world_after(&|k| {
+        typed_at(k, &doc1(), 1, std::iter::once(Val::new(&b"XY"[..])).chain(std::iter::repeat_n(Val::new(*b"x"), budget as usize)).collect());
+    });
+    let (into, none) = (PublishTarget::Document(pdoc()), PublishDeposits::default());
+    let priced = |width: u32| {
+        let the_shot = shot(None, vec![shot_run(&doc1(), &ca(1), width)]);
+        let mut walked = 0u64;
+        let price = price_publication_reads(&world, P1, &ALL_VISIBLE, &into, &the_shot, &[], &[], &none, &mut |pieces| walked += pieces);
+        (price, walked)
+    };
+    let fixed = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler()) + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES);
+    let (past, walked) = priced(budget + 1);
+    assert_eq!((past.units, walked), (0, 0), "past the positions: nothing counted, no stored piece read");
+    assert_eq!(past.staged_bytes, fixed, "and no re-insert priced: the store refuses the shot before it stages a record");
+    let (at, walked) = priced(budget);
+    assert_eq!((at.units, walked), (2, 2), "at the budget: the atom and the one run of typed bytes");
+    assert_eq!(at.staged_bytes, fixed + 2 * REINSERTED_UNIT_BYTES + 2 + u64::from(budget - 1));
+    // A draft of two stored values, and a shot of three positions from them.
+    let short = world_after(&|k| typed_at(k, &doc1(), 1, vec![Val::new(&b"XY"[..]), Val::new(*b"x")]));
+    let reaching = shot(None, vec![shot_run(&doc1(), &ca(1), 3)]);
+    let price = price_publication_reads(&short, P1, &ALL_VISIBLE, &into, &reaching, &[], &[], &none, &mut |_| {});
+    assert_eq!(price.units, 2, "the units ahead of the hole: the store refuses the shot `dangling_source`");
+}
+
+/// NO UNIT FROM A DRAFT THE CALLER CANNOT READ. doc1 holds the same three
+/// positions three ways — one typed run of three bytes, three atoms, and
+/// one byte with nothing after it — and a shot of its own re-inserts the
+/// three. At a class that reads doc1 the three worlds answer three prices:
+/// one unit and its bytes, three units and theirs, and the one unit ahead
+/// of the hole. At a class that does NOT read doc1 they answer ONE, figure
+/// for figure: no unit, no byte of a re-insert, and NO stored piece read —
+/// the price is taken ahead of every judgment of who owns the draft, so it
+/// says nothing of how a draft the caller may not read holds its content.
+/// The staged-bytes price alone answers the same. And a second named draft
+/// the class does not admit silences the count of the first, which it
+/// does: the store refuses that shot before it counts anything.
+#[test]
+fn a_named_draft_the_class_does_not_admit_is_counted_no_unit_and_read_no_piece() {
+    use skep_links::{price_publication_reads, price_staged_bytes, REINSERTED_UNIT_BYTES};
+    let (into, none) = (PublishTarget::Document(pdoc()), PublishDeposits::default());
+    let worlds = [
+        world_after(&|k| typed_at(k, &doc1(), 1, vec![Val::new(*b"a"), Val::new(*b"b"), Val::new(*b"c")])),
+        world_after(&|k| typed_at(k, &doc1(), 1, vec![Val::new(&b"AA"[..]), Val::new(&b"BBB"[..]), Val::new(&b"CCCC"[..])])),
+        world_after(&|k| typed_at(k, &doc1(), 1, vec![Val::new(*b"a")])),
+    ];
+    let the_shot = shot(None, vec![shot_run(&doc1(), &ca(1), 3)]);
+    let all_but_doc1: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc1();
+    let priced = |world: &World, class: &Visibility<'_, World>| {
+        let mut walked = 0u64;
+        let price = price_publication_reads(world, P1, class, &into, &the_shot, &[], &[], &none, &mut |pieces| walked += pieces);
+        (price, walked)
+    };
+    // The class that reads the draft: the count, as the store would make it.
+    let read: Vec<_> = worlds.iter().map(|world| priced(world, &ALL_VISIBLE)).collect();
+    assert_eq!(read.iter().map(|(price, walked)| (price.units, *walked)).collect::<Vec<_>>(), [(1, 1), (3, 3), (1, 1)], "premise: one stretch, three atoms, one byte ahead of a hole");
+    assert_eq!(read[1].0.staged_bytes - read[0].0.staged_bytes, 2 * REINSERTED_UNIT_BYTES + (2 + 3 + 4) - 3, "premise: and the three are priced apart");
+    assert_eq!(read[0].0.staged_bytes - read[2].0.staged_bytes, 2, "premise: the hole's two missing bytes too");
+    // The class that does not: one answer, whatever the draft holds.
+    let unread: Vec<_> = worlds.iter().map(|world| priced(world, all_but_doc1)).collect();
+    for (price, walked) in &unread {
+        assert_eq!((price.units, *walked), (0, 0), "no unit counted, no stored piece read: {price:?}");
+        assert_eq!(*price, unread[0].0, "the one price, figure for figure, whatever the draft holds");
+    }
+    assert_eq!(read[0].0.staged_bytes - unread[0].0.staged_bytes, REINSERTED_UNIT_BYTES + 3, "the re-insert is the whole of what the class withholds");
+    for world in &worlds {
+        assert_eq!(price_staged_bytes(world, all_but_doc1, &into, &the_shot, &[], &[], &none), unread[0].0.staged_bytes, "the bytes' own price, the same");
+    }
+    // Two named drafts, one of them unread: nothing of either is counted.
+    let both = Shot { base: None, draft: Some(doc2()), also: vec![doc1()], keep_base: false, runs: vec![shot_run(&doc2(), &ca2(1), 1), shot_run(&doc1(), &ca(1), 3)] };
+    let two = world_after(&|k| {
+        typed_at(k, &doc1(), 1, vec![Val::new(&b"AA"[..]), Val::new(&b"BBB"[..]), Val::new(&b"CCCC"[..])]);
+        typed_at(k, &doc2(), 1, vec![Val::new(&b"ZZ"[..])]);
+    });
+    let count = |class: &Visibility<'_, World>| {
+        let mut walked = 0u64;
+        let price = price_publication_reads(&two, P1, class, &into, &both, &[], &[], &none, &mut |pieces| walked += pieces);
+        (price.units, walked)
+    };
+    assert_eq!(count(&ALL_VISIBLE), (4, 4), "premise: both read, four atoms");
+    assert_eq!(count(all_but_doc1), (0, 0), "one named draft unread: no unit of the other either, and no piece read");
+}
+
+/// NO COUNT FROM A DRAFT THE CALLER CANNOT READ. F's words `x y z` stand
+/// published three ways: by M5's shot alone, no record naming them; by a
+/// publication of doc2's one run, ONE record homed in doc2; and by a
+/// publication of doc2's three positions as three runs, THREE records homed
+/// in doc2, tiling the same three words. Principal 2, who may not read
+/// doc2, prices a shot of its own that places a stray run of those words in
+/// its draft: at its class the three worlds answer ONE price, figure for
+/// figure — the stray is the one piece every placed stray is at least,
+/// whatever doc2 holds. The owner, who reads doc2, is priced with the
+/// records it may read: one piece where one record names the words or
+/// none, three where three do — the pieces its own commit's stray read
+/// would be handed.
+#[test]
+fn a_stray_place_is_priced_at_the_callers_class_and_counts_no_record_it_may_not_read() {
+    use skep_links::{price_publication_reads, KEPT_PLACE_BYTES};
+    let into_f = PublishTarget::Document(fdoc());
+    let none = PublishDeposits::default();
+    let from_doc2 = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(doc2()), also: vec![], keep_base: false, runs };
+    // F.1 holding `x y z`, by a shot that leaves `records` records in doc2.
+    let published = |records: usize| -> World {
+        let k = kernel_over(two_editions_world());
+        other_draft_holding(&k, "xyz");
+        match records {
+            0 => {
+                let readable = |_: &World, _: &Address| true;
+                Vstream::new(&k).publish(P1, &fdoc(), &from_doc2(vec![shot_run(&doc2(), &ca2(1), 3)]), &readable).expect("F.1, by the shot alone");
+            }
+            1 => {
+                writer(&k).publication(P1, &into_f, &from_doc2(vec![shot_run(&doc2(), &ca2(1), 3)]), &[], &[], &none).expect("F.1, one record");
+            }
+            _ => {
+                let apart = vec![shot_run(&doc2(), &ca2(1), 1), shot_run(&doc2(), &ca2(3), 1), shot_run(&doc2(), &ca2(2), 1)];
+                writer(&k).publication(P1, &into_f, &from_doc2(apart), &[], &[], &none).expect("F.1, three records");
+            }
+        }
+        assert_eq!(runs_of(&k, &a(&[1, 0, 1, 0, nth_doc(4), 1])), vec![run(&fca(1), 3)], "premise: F.1 holds three positions of F's own identity");
+        assert_eq!(records_in_doc2(&k).len(), records, "premise: the records homed in doc2");
+        let world = k.snapshot().world().clone();
+        world
+    };
+    let worlds = [published(0), published(1), published(3)];
+    // Principal 2's shot: a stray run of F's three words, placed in its own
+    // document.
+    let stray = Shot { base: None, draft: Some(sib_doc()), also: vec![], keep_base: false, runs: vec![shot_run(&fdoc(), &fca(1), 3)] };
+    let into_theirs = PublishTarget::Document(sib_doc());
+    let the_places = places(1, &[(0, 1)]);
+    let all_but_doc2: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc2();
+    let priced = |world: &World, caller: Caller, class: &Visibility<'_, World>| price_publication_reads(world, caller, class, &into_theirs, &stray, &the_places, &[], &none, &mut |_| {});
+    let unread: Vec<_> = worlds.iter().map(|world| priced(world, P2, all_but_doc2)).collect();
+    assert_eq!(unread[1], unread[0], "one record in a draft the caller may not read moves no figure");
+    assert_eq!(unread[2], unread[0], "nor do three");
+    assert_eq!(unread[0].rewindow, 1, "the stray's one piece, in a draft of no runs");
+    // The owner's class reads doc2: its records are its pieces.
+    let read: Vec<_> = worlds.iter().map(|world| priced(world, P2, &ALL_VISIBLE)).collect();
+    assert_eq!(read.iter().map(|price| price.rewindow).collect::<Vec<_>>(), [1, 1, 3], "a piece a record the caller may read, one at least");
+    assert_eq!(read[2].staged_bytes - read[0].staged_bytes, 2 * KEPT_PLACE_BYTES, "and a kept place's change a piece");
+    assert_eq!((read[0], read[1]), (unread[0], unread[1]), "where at most one record names the words the two classes are priced alike");
 }

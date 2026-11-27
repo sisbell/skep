@@ -2200,11 +2200,11 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 io_kind: None,
             }),
         ),
-        // The price of a publication: the five figures, whole.
+        // The price of a publication: the six figures, whole.
         (
             "publish_cost",
             Response::PublishCost {
-                price: ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033 },
+                price: ReadPrice { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033, units: 1_613 },
                 as_of: Seq(9),
             },
         ),
@@ -2922,7 +2922,7 @@ fn reject_code_names_are_pinned() {
     const NOT_TABLE_ROWS: [&str; 3] = ["credential_refused", "detail", "permanent"];
     // Every other code the document lists must be pinned here. The reverse
     // is deliberately NOT asserted: a name `code_name` can emit before
-    // wire.md tables it — `too_many_values`, M5's publish re-insert budget,
+    // wire.md tables it — `too_many_values`, M5's publish re-insert budgets,
     // was one until the small-fixes lane tabled it (2026-09-25) — is a
     // documentation debt for the document's owner, not a table error.
     let documented = documented_reject_codes();

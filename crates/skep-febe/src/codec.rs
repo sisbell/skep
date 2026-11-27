@@ -63,9 +63,10 @@ pub trait Codec {
     /// bounds how many extents that union merges, not how far each reaches,
     /// and a per-number digit cap bounds how many digits a `width` is written
     /// with, not how far it walks — one run of eighteen digits outruns any
-    /// content a store will ever hold. Neither of M5's own budgets caps it
-    /// either: `TooManyValues` sums the draft-native widths and `TooManyRuns`
-    /// counts placed runs, so the by-reference walk falls between them. M5
+    /// content a store will ever hold. None of M5's own budgets caps it
+    /// either: `TooManyValues` holds the draft-native runs' distinct
+    /// positions and the units they are staged as, and `TooManyRuns` counts
+    /// placed runs, so the by-reference walk falls between them. M5
     /// prices the walk and names this layer as the owner of the number:
     /// `Vstream::publish`'s cost paragraph ends by calling the size of the
     /// union the by-reference runs name one of "the numbers a route that

@@ -838,8 +838,9 @@ each ceremony:
   window's parts that this family and the merge library's shot both call;
   `publication/panel.rs` the panel's data and the count;
   `publication/price.rs` the price — the request's own shape against its
-  caps, and the reads and the staged bytes as the board prices them, asked
-  of the board (`publish_cost`) and summed nowhere here;
+  two caps, and the re-insert, the reads and the staged bytes against the
+  budgets the board answers, asked of the board (`publish_cost`), summed
+  nowhere here and no budget of the board's copied here;
   `publication/request.rs` the re-read and the request, the windows taken
   as given; `publication/send.rs` the send and the refusal family;
   `publication/landed.rs` the twin pre-check and the landed test — its unit
@@ -1432,6 +1433,15 @@ Rules that hold across its files:
   written by `ops::allocate_for_placement` or, for a run of single-byte
   values, `ops::allocate_stretch_for_placement`, inside the transaction
   whose placement record places it.
+- **One count of a shot's re-insert.** `ops/publish.rs` holds
+  `Shot::reinserted_units`, the one place a shot's re-insert is held to
+  its two budgets — its positions, then its units — and split into the
+  parts the commit stages; `stage_publish` stages from what it answers.
+  Every other reader asks it through the exported `ReinsertWorld` bound
+  and keeps no arithmetic of its own: `skep-links`' price, `skep-core`'s
+  composer and `skep-media`'s door. The crates that reach the board over
+  the wire hold no copy of either budget: `skep-client` and `skep-shell`
+  read both off the board's `publish_cost` answer.
 - **The version chain is asked, never spelled.** Every trunk, head,
   publication and surface question in this crate goes through `chain.rs`,
   the one reader of M3's version frontier; the floating readers of
@@ -1477,10 +1487,14 @@ it, `writes/publication/plan.rs` holds the request members and the
 deposit plan, the one function the composite stages from and the
 daemon's composer signs from, `writes/publication/sizes.rs` the
 worst-case table, the staged bytes per entry kind as the kernel prices
-them, and the price of a request's staged bytes from it, and
+them, and the price of a request's staged bytes from it — a shot's
+re-inserted values by the units `skep-arrangement`'s count answers,
+asked through its exported re-insert bound, so this crate names no
+content store — and
 `writes/publication/stray.rs` the
 stray places' record read, which turns a run of the document's own
-identity back into the draft words the re-window checks and replaces.
+identity back into the draft words the re-window checks and replaces,
+and counts for the price the records a caller may read.
 
 Rules that hold across its files:
 
@@ -1747,9 +1761,9 @@ Rules that hold across its files:
   crate's own. `tests/it/tidy.rs` checks it.
 
 Its unit suites sit beside their code: `cell/tests.rs`, `door/tests.rs`
-(which opens a real engine), `gate/tests.rs`, `pruner/tests.rs`, and the
-inline suites of `cell/blind.rs`, `index.rs` (whose walk-catch test opens
-one too), `pools.rs` and `serve.rs`. Its integration suites — the
+(which opens a real engine), `gate/tests.rs`, `index/tests.rs` (whose
+walk-catch test opens one too), `pruner/tests.rs`, and the inline suites
+of `cell/blind.rs`, `pools.rs` and `serve.rs`. Its integration suites — the
 upload, the fetch, the door and the pruner over a served daemon — are
 `skepd`'s (`tests/it`: `blob_routes`, `blob_fetch`, `media`, `pruner`,
 `deposit_class`, and `hazard`'s media share), which spawn the daemon they

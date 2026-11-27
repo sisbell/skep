@@ -61,7 +61,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   clock.
 - **The index**, `index` — `CellIndex`: `new`; the entries at commit,
   `enter_insert`, an insert's and an edit's minted cells alike, and
-  `enter_publish`; the reads `base`, `referenced`,
+  `enter_publish`, which reads a shot's fresh identity by stored piece — a
+  re-minted stretch skipped whole — and answers the pieces it read; the
+  reads `base`, `referenced`,
   `references` (`Reference`), `accounts` and `halts` (`HaltMark`); `walk`
   over a snapshot and `start_walk` on a thread of its own, or at the open
   where the OS refuses the thread, answering a `Rebuild` — or, where the

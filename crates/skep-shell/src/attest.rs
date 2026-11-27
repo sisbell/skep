@@ -46,10 +46,16 @@
 //! board's own parse, store or composer holds the same frame to — an array's
 //! length ([`MAX_WIRE_LIST`]), a tumbler's components
 //! ([`MAX_TUMBLER_COMPONENTS`]), an insert's values ([`MAX_INSERT_VALUES`]),
-//! a slot's resolved spans ([`MAX_SLOT_SPANS`]), a shot's re-inserted values
-//! ([`MAX_REINSERTED_VALUES`]) and its body ([`MAX_FRAME_BYTES`]) — each
-//! counted before the work it bounds, a shot's whole arithmetic before its
-//! first read. A frame past one is a frame the board refuses whatever it
+//! a slot's resolved spans ([`MAX_SLOT_SPANS`]), a shot's body
+//! ([`MAX_FRAME_BYTES`]) — each counted before the work it bounds, a shot's
+//! whole arithmetic before its first read. A shot's RE-INSERT is held to
+//! the board's two budgets too — the distinct positions its draft's runs
+//! name, and the units the store would stage them as — and of those the
+//! shell holds no number: the board states both, and counts the units,
+//! which only its stored values tell, in the answer to ONE read of the
+//! shot's own members (`publish_cost`, wire.md §Arrangement), the first
+//! read a shot that re-inserts anything costs, made once its arithmetic has
+//! passed. A frame past a budget is a frame the board refuses whatever it
 //! carries, so the composer halts on it as on any frame it cannot make; no
 //! budget here is one the board does not keep, so no frame the board takes
 //! is refused for one.
@@ -62,7 +68,7 @@ use std::ops::Range;
 use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::{document_of, well_known_of, WELL_KNOWN_SLOTS};
-use skep_client::board::{frames, whole_image_read, Answer, Board, Rejection, Token, T_SUPERSEDES};
+use skep_client::board::{frames, publish_cost, whole_image_read, Answer, Board, PublishCost, Rejection, Token, T_SUPERSEDES};
 use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::halt::Halt;
 use skep_client::sign::{sig_hex, Signer};
@@ -159,15 +165,6 @@ pub const MAX_WIRE_LIST: usize = 4096;
 /// number the frame does not show, so the composer stops at the first span
 /// past it. Pinned equal to M7's by the suite.
 const MAX_SLOT_SPANS: usize = 4096;
-
-/// The most values a shot may re-insert: M5's `MAX_REINSERTED_VALUES`.
-///
-/// It bounds the DISTINCT positions the staging draft's runs name — the
-/// store mints each draft identity once per shot and places a later
-/// occurrence by reference (the link-sets design §5.7) — refused by the
-/// store as `too_many_values` by its request's arithmetic before a value is
-/// read (wire.md §The publish shot). Pinned equal to M5's by the suite.
-const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 
 /// The most positions a shot may copy in by value.
 ///
@@ -897,19 +894,24 @@ impl Composer<'_> {
     /// # Errors
     ///
     /// The request's arithmetic comes first, every run classed and counted
-    /// before a value is read: the runs within [`MAX_WIRE_LIST`], the
-    /// positions placed within the body's eight-byte count, the staging
-    /// draft's within the store's re-insert budget, and the copied ones
-    /// within what a body under the budget can carry — a halt past each, and
-    /// for a shot that names no `runs` or a run whose member, count or
-    /// I-address does not read, a run's count a natural in either of the
-    /// wire's spellings ([`natural`]). Then `base` and `base_extent` are
-    /// read, both or neither — a halt for a `base_extent` that is no natural,
-    /// and for one of the two without the other. Then each origin's values
-    /// are read back ([`Composer::read_back`]), keeping the positions the
-    /// shot copies in, and the body is built — a halt for a copied position
-    /// its origin's arrangement does not hold, and for a body past the
-    /// budget.
+    /// before anything is read: the runs within [`MAX_WIRE_LIST`], the
+    /// positions placed within the body's eight-byte count, and the copied
+    /// ones within what a body under the budget can carry — a halt past
+    /// each, and for a shot that names no `runs` or a run whose member,
+    /// count or I-address does not read, a run's count a natural in either
+    /// of the wire's spellings ([`natural`]). Then `base` and `base_extent`
+    /// are read, both or neither — a halt for a `base_extent` that is no
+    /// natural, and for one of the two without the other. Then, where the
+    /// shot re-inserts anything of its draft, THE BOARD's TWO RE-INSERT
+    /// BUDGETS, asked of the board ([`Composer::reinsert_budgets`], the
+    /// shot's first read): a halt where the distinct positions the draft's
+    /// runs name pass the positions budget the board states, and where the
+    /// units the board counts them as pass its units budget — each a shot
+    /// the board refuses `too_many_values` — and whatever that read itself
+    /// answers. Then each origin's values are read back
+    /// ([`Composer::read_back`]), keeping the positions the shot copies in,
+    /// and the body is built — a halt for a copied position its origin's
+    /// arrangement does not hold, and for a body past the budget.
     fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Unattested> {
         let draft = frame["draft"].as_str();
         let draft_trunk = draft.and_then(trunk_text);
@@ -951,15 +953,9 @@ impl Composer<'_> {
         }
         // The distinct positions the draft-native runs name, as the store
         // counts them: the ranges of each prefix merged, each position once
-        // however many runs name it.
+        // however many runs name it. Held, below, to the budget the board
+        // states for them.
         let reinserted = distinct_positions(&mut draft_ranges);
-        if reinserted > MAX_REINSERTED_VALUES {
-            return Err(fault(
-                format!("the shot re-inserts {reinserted} distinct values from its draft, past the store's {MAX_REINSERTED_VALUES}"),
-                "the board refuses such a shot `too_many_values`, by its request's arithmetic",
-            )
-            .into());
-        }
         if copied > MAX_COPIED_POSITIONS {
             return Err(fault(
                 format!("the shot copies in {copied} positions, more than a body of {MAX_FRAME_BYTES} bytes can carry"),
@@ -979,6 +975,27 @@ impl Composer<'_> {
             (None, None) => None,
             _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)").into()),
         };
+        // The re-insert's two budgets are the board's, and so is the count
+        // of its units: asked once, of this shot's own members, where the
+        // shot re-inserts anything — the first read it costs, ahead of
+        // every value's.
+        if reinserted > 0 {
+            let cost = self.reinsert_budgets(frame)?;
+            if reinserted > cost.position_budget {
+                return Err(fault(
+                    format!("the shot re-inserts {reinserted} distinct values from its draft, past the board's {}", cost.position_budget),
+                    "the board refuses such a shot `too_many_values`, by its request's arithmetic",
+                )
+                .into());
+            }
+            if cost.units > cost.unit_budget {
+                return Err(fault(
+                    format!("the shot re-inserts its draft's values as {} units, past the board's {}", cost.units, cost.unit_budget),
+                    "a unit is an atom or a whole run of single bytes, two records each; the board refuses such a shot `too_many_values`, by its own count of them",
+                )
+                .into());
+            }
+        }
         let mut spent = 0usize;
         let read_backs: Vec<ReadBack<'_>> = wants.into_iter().map(|wanted| self.read_back(wanted, &mut spent)).collect::<Result<_, _>>()?;
         let mut body = PublishBody::within(MAX_FRAME_BYTES, base).map_err(body_refused)?;
@@ -1000,6 +1017,28 @@ impl Composer<'_> {
             }
         }
         Ok(body.finish())
+    }
+
+    /// Asks the board what it holds a shot's re-insert to, and what it
+    /// counts this shot's as: ONE `publish_cost` read of `frame`'s own
+    /// members, its `id` and `attest` left out (wire.md §Arrangement).
+    ///
+    /// The answer's `position_budget` and `unit_budget` are the two budgets
+    /// the board's store refuses a shot `too_many_values` past, and `units`
+    /// its own count of what this shot's draft-native runs would be staged
+    /// as, read off the stored values the shell never sees whole. The
+    /// shell keeps no copy of either number: a board that states others is
+    /// the board this shot is composed for.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the read refuses ([`Composer::read`]) — the board's
+    /// own verdict on these members, which it parses as it parses the
+    /// `publish` — and the composer's halt where the answer is no price.
+    fn reinsert_budgets(&self, frame: &Value) -> Result<PublishCost, Unattested> {
+        let asked = frames::publish_cost(frame.clone());
+        let v = self.read(&asked)?;
+        publish_cost(&v).ok_or_else(|| fault("the board's answer to the shot's price is no price", v.to_string()).into())
     }
 
     /// Returns whether a retraction of `target` stands on the board — the

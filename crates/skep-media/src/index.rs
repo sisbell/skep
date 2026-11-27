@@ -492,33 +492,49 @@ impl CellIndex {
     /// that chain in the post-commit `world`, where
     /// `skep_arrangement::Vstream::publish` states a shot's fresh identity
     /// lands, read off its frontier (M3's content mint, asked and not staged,
-    /// is the chain's peek) — each put through the prefix test and the one
-    /// entry path.
-    pub fn enter_publish<W: FebeWorld>(&self, world: &W, member: &Address, reinserted: u64) {
+    /// is the chain's peek) — each atom among them put through the prefix
+    /// test and the one entry path.
+    ///
+    /// **By stored piece.** The fresh addresses are read by M4's run read,
+    /// one predecessor lookup and then piece by piece, as the walk at open
+    /// reads the whole store: a stretch — a run of single-byte values, none
+    /// of which can be a cell — is skipped whole by its arm, and a value is
+    /// put through the test. So a shot that re-minted a megabyte of typed
+    /// text as one stretch costs this entry one step, where a point read a
+    /// position would cost it a lookup a byte, under the commit's
+    /// serialization guard. Returns the stored pieces it read — the entry's
+    /// cost, a figure and no part of the index — at most `reinserted`,
+    /// itself held to M5's positions budget.
+    pub fn enter_publish<W: FebeWorld>(&self, world: &W, member: &Address, reinserted: u64) -> u64 {
         let trunk = trunk_of(member);
-        let Ok((next, _)) = world.m3().mint_content(&trunk) else { return };
+        let Ok((next, _)) = world.m3().mint_content(&trunk) else { return 0 };
         let next_ordinal = ordinal(next.tumbler()).clone();
-        let content = world.content();
-        let bounded = reinserted.min(MAX_REINSERTED_VALUES as u64);
-        for k in 1..=bounded {
-            let back = Nat::from(k);
-            if back >= next_ordinal {
-                break;
-            }
-            let position = ElemPos {
-                doc: trunk.clone(),
-                subspace: content_subspace(),
-                ordinal: &next_ordinal - back,
-            };
-            let Ok(at) = elem_addr(position) else { continue };
-            // As at an insert: a one-byte piece inside a re-minted stretch
-            // fails the prefix test by itself.
-            if let Some(piece) = content.value_at(at.tumbler()) {
-                if names_kind_by_prefix(piece.as_bytes()) {
-                    self.enter_value(world, &at, piece.as_bytes());
+        // The fresh identity: the chain's last `reinserted` addresses, no
+        // further back than its first and no more than a shot re-inserts.
+        let minted = Nat::from(reinserted.min(MAX_REINSERTED_VALUES as u64));
+        let first_ordinal = Nat::from(1u32);
+        let width = if next_ordinal > minted { minted } else { &next_ordinal - &first_ordinal };
+        let position = ElemPos { doc: trunk, subspace: content_subspace(), ordinal: &next_ordinal - &width };
+        let Ok(mut at) = elem_addr(position) else { return 0 };
+        let mut read = 0u64;
+        for piece in world.content().pieces(at.tumbler(), &width) {
+            read += 1;
+            let taken = match piece {
+                // A re-minted stretch: single-byte values, none a cell.
+                Piece::Bytes(bytes) => bytes.len(),
+                Piece::Value(v) => {
+                    if names_kind_by_prefix(v.as_bytes()) {
+                        self.enter_value(world, &at, v.as_bytes());
+                    }
+                    1
                 }
-            }
+            };
+            // The next piece begins where this one reached; an address the
+            // chain cannot spell ends the walk, as it ends the store's.
+            let Ok(next) = validate(shift(at.tumbler(), &Nat::from(taken as u64))) else { break };
+            at = next;
         }
+        read
     }
 }
 
@@ -804,194 +820,4 @@ impl WalkFault {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
-
-    use super::*;
-
-    /// Returns a test address from its dotted form, T4-validated.
-    ///
-    /// # Panics
-    ///
-    /// Panics where `s` spells no T4-valid address.
-    fn addr(s: &str) -> Address {
-        let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u32>().unwrap())).collect();
-        validate(Tumbler::new(comps).expect("a tumbler")).expect("a test address")
-    }
-
-    /// Checks the two maps and the base.
-    ///
-    /// An entry is idempotent per address; two cells of one account over one
-    /// hash count once; a second account's cell over the same hash counts in
-    /// its own base; a halt mark counts in no base and is the first halt;
-    /// readiness flips once.
-    #[test]
-    fn entries_are_idempotent_per_cell_and_the_base_counts_distinct_hashes_once() {
-        let index = CellIndex::new();
-        assert!(!index.is_ready());
-        let hash = [7u8; 32];
-        let cell = Cell { hash, size: 10 };
-        let hex = hex_string(&hash);
-        let (a, b) = (PrincipalId(1), PrincipalId(2));
-        assert!(index.enter(&addr("1.0.1.0.64.0.1.1"), Some(a), &cell));
-        assert!(!index.enter(&addr("1.0.1.0.64.0.1.1"), Some(a), &cell), "idempotent per address");
-        assert!(index.enter(&addr("1.0.1.0.65.0.1.1"), Some(a), &cell), "a second cell of a's");
-        assert_eq!(index.base(a), 10, "one hash, counted once");
-        assert!(index.enter(&addr("1.0.2.0.1.0.1.1"), Some(b), &Cell { hash, size: 10 }));
-        assert_eq!(index.base(b), 10);
-        assert_eq!(index.total_base(), 20);
-        assert!(index.names(a, DESIGNATION, &hex));
-        assert!(index.names(b, DESIGNATION, &hex));
-        assert!(!index.names(PrincipalId(3), DESIGNATION, &hex));
-        assert!(index.referenced(DESIGNATION, &hex));
-        assert!(!index.referenced("sha256-tree", &hex), "the designation is part of the key");
-        assert_eq!(index.counts(), (3, 1, 0));
-        // A cell under no seat: named for the pruner, counted for nobody.
-        let other = Cell { hash: [9u8; 32], size: 4 };
-        assert!(index.enter(&addr("1.0.9.0.1.0.1.1"), None, &other));
-        assert!(index.referenced(DESIGNATION, &hex_string(&other.hash)));
-        assert_eq!(index.total_base(), 20);
-        // The larger size wins per hash per account, whatever the order.
-        assert!(index.enter(&addr("1.0.1.0.66.0.1.1"), Some(a), &Cell { hash, size: 12 }));
-        assert_eq!(index.base(a), 12);
-        assert!(index.enter(&addr("1.0.1.0.67.0.1.1"), Some(a), &Cell { hash, size: 11 }));
-        assert_eq!(index.base(a), 12);
-        assert_eq!(index.first_halt(), None);
-        assert!(index.halt(&addr("1.0.1.0.68.0.1.1")));
-        assert!(!index.halt(&addr("1.0.1.0.68.0.1.1")));
-        let mark = index.first_halt().expect("a halt mark");
-        assert_eq!(mark.fault, "unknown_cell_schema");
-        assert_eq!(mark.kind, cell::KIND);
-        assert_eq!(index.counts(), (6, 2, 1));
-        assert_eq!(index.total_base(), 22, "a halt mark counts in no base");
-        // The inventory's reads: every reference at the largest size named,
-        // its cells in address order; every account's base; the halt marks.
-        let refs = index.references();
-        assert_eq!(refs.len(), 2);
-        assert_eq!((refs[0].hex.as_str(), refs[0].size, refs[0].cells.len()), (hex.as_str(), 12, 5));
-        assert_eq!((refs[1].size, refs[1].cells.len()), (4, 1), "a cell under no seat: named, sized");
-        assert_eq!(index.accounts(), vec![(a, 12), (b, 10)]);
-        assert_eq!(index.halts().len(), 1);
-        index.complete(Rebuild { values: 0, cells: 0, halts: 0, walk: Duration::ZERO, parse: Duration::ZERO });
-        assert!(index.is_ready());
-        assert!(!index.is_failed(), "a walk that completed never fails");
-        assert_eq!(index.rebuild_report().map(|r| r.values), Some(0));
-    }
-
-    /// Polls until `done`, bounded, naming what never came.
-    ///
-    /// # Panics
-    ///
-    /// Panics, naming `what`, where `done` has not come within 30 seconds.
-    fn wait_until(what: &str, done: impl Fn() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
-            thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    /// Checks that a walk that panics marks the index failed, on either arm.
-    ///
-    /// **The catch** (`operations.md` §4 row 26; §1.1 row 41). The walk's
-    /// thread dies under the seam's fault — the index failed, never ready, no
-    /// report, the fault spent as it fired — and a second walk over the same
-    /// kernel, meeting no fault, completes an index that is ready and not
-    /// failed: the two states are the walk's own, each set by one door. Then
-    /// the arm where the OS refuses the walk's thread: the walk runs on this
-    /// one before `start_walk` returns, completing its index where it meets
-    /// no fault, and where it meets one it is caught here as on its own
-    /// thread — the index failed, and no unwind reaching the caller, whose
-    /// open goes on. Then the line's words, verbatim, for a panic caught at
-    /// a site its hook noted, with a literal payload.
-    #[test]
-    fn a_walk_that_panics_marks_the_index_failed_and_never_ready() {
-        let engine = skep_engine::Engine::open(KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-            salt: SaltSource::Seeded(0),
-        })
-        .expect("in-memory genesis cannot fail");
-        let index = Arc::new(CellIndex::new());
-        WALK_FAULT.arm();
-        start_walk(engine.kernel(), Arc::clone(&index));
-        wait_until("the catch to mark the index FAILED", || index.is_failed());
-        assert!(!index.is_ready(), "a walk that failed never completes");
-        assert_eq!(index.rebuild_report(), None, "no report: the walk never returned");
-        assert!(!WALK_FAULT.armed.load(Ordering::Acquire), "taken once: disarmed as it fired");
-        let fresh = Arc::new(CellIndex::new());
-        start_walk(engine.kernel(), Arc::clone(&fresh));
-        wait_until("the second walk to complete", || fresh.is_ready());
-        assert!(!fresh.is_failed(), "the fault was spent on the first walk");
-        assert!(index.is_failed() && !index.is_ready(), "the first index stays FAILED");
-        // The refused arm: the walk runs on this thread, so its state stands
-        // as `start_walk` returns, with no wait.
-        REFUSE_THE_WALKS_THREAD.store(true, Ordering::Release);
-        let inline = Arc::new(CellIndex::new());
-        start_walk(engine.kernel(), Arc::clone(&inline));
-        assert!(!REFUSE_THE_WALKS_THREAD.load(Ordering::Acquire), "taken once, as it fired");
-        assert!(inline.is_ready() && !inline.is_failed(), "walked at the open, and completed");
-        assert!(inline.rebuild_report().is_some(), "its report kept");
-        // …and a walk that panics there is caught there: the index failed,
-        // and `start_walk` returns rather than unwinding into its caller.
-        REFUSE_THE_WALKS_THREAD.store(true, Ordering::Release);
-        WALK_FAULT.arm();
-        let caught = Arc::new(CellIndex::new());
-        start_walk(engine.kernel(), Arc::clone(&caught));
-        assert!(caught.is_failed() && !caught.is_ready(), "caught here: failed, never ready");
-        assert_eq!(caught.rebuild_report(), None, "no report: the walk never returned");
-        assert!(!WALK_FAULT.armed.load(Ordering::Acquire), "the fault spent at the open");
-        assert!(!REFUSE_THE_WALKS_THREAD.load(Ordering::Acquire), "the refusal spent with it");
-        // The hook's part, played by the body: this suite's process runs
-        // std's own hook, which notes no site.
-        let at = std::panic::Location::caller();
-        let died = caught::catch(|| {
-            caught::note_site(Some(at));
-            panic!("the test seam's walk fault");
-        });
-        let died = died.expect_err("the body panics");
-        assert_eq!(
-            WalkFailedLine { caught: &died }.to_string(),
-            format!(
-                "cell index: the walk failed (a panic at {at}: the test seam's walk fault); the \
-                 upload family and the door's index arm refuse for the uptime; the act: a \
-                 restart, or the build's fix where it recurs"
-            )
-        );
-        // The door by hand, as the gate's suite takes it: failed set, ready
-        // not, nothing entered.
-        let by_hand = CellIndex::new();
-        by_hand.fail(&died);
-        assert!(by_hand.is_failed() && !by_hand.is_ready());
-    }
-
-    /// Checks the walk's landing and its refused thread's line in their words.
-    ///
-    /// The landing (`operations.md` §1.1 row 13) says the walk's two durations
-    /// in whole milliseconds, the stream's one spelling of a duration (§1),
-    /// truncated as every other duration on it is: 23,456,789 µs reads `23456
-    /// ms`, and 152 µs reads `0 ms`. The refused thread's line (row 15)
-    /// carries the OS's own words for the limit the spawn met, as the
-    /// pruner's and the checkpoint thread's lines do (rows 21, 22).
-    #[test]
-    fn the_walks_landing_says_milliseconds_and_its_refused_thread_the_oss_words() {
-        let report = Rebuild {
-            values: 1_000_000,
-            cells: 3,
-            halts: 1,
-            walk: Duration::from_micros(23_456_789),
-            parse: Duration::from_micros(152),
-        };
-        assert_eq!(
-            RebuiltLine { report: &report }.to_string(),
-            "cell index rebuilt at open: 1000000 values walked, 3 cells, 1 halt marks, 23456 ms \
-             (0 ms past the prefix test)"
-        );
-        let error = io::Error::other("Resource temporarily unavailable");
-        assert_eq!(
-            ThreadRefusedLine { error: &error }.to_string(),
-            "cell index: the OS refused the rebuild's thread (Resource temporarily unavailable); \
-             the walk runs at open"
-        );
-    }
-}
+mod tests;

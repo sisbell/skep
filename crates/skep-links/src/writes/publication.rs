@@ -56,18 +56,22 @@
 //! it would stage, priced from the child module `sizes` — the worst-case
 //! bytes per entry kind as the kernel prices them, the table a panel prices
 //! a request's records from before the act, over the pieces each run is cut
-//! into, which both terms read — which a transport asks of a snapshot ahead
+//! into, which both terms read, and over the UNITS its re-insert comes to,
+//! M5's own count of them, which the price carries as a figure of its own —
+//! which a transport asks of a snapshot ahead
 //! of its lock and refuses past [`MAX_PUBLICATION_READS`] or past the
-//! kernel's transaction budget. The composite reads and stages as it did;
-//! the price merely bounds it.
+//! kernel's transaction budget. Everything it counts of a document is
+//! counted at the caller's visibility class, the class the commit reads at.
+//! The composite reads and stages as it did; the price merely bounds it.
 
 use std::collections::BTreeMap;
 
 use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
     head_lock_key, shot_admission, stage_publish, stage_seat_link, stage_substitute, trunk_head,
-    trunk_of, Caller, HasM5, M5State, Pairing, PublishWorld, ReinstateError, Replacement, Run,
-    Shot, ShotRun, SubstituteError, Substitution, VPos,
+    trunk_of, Caller, HasM5, M5State, Pairing, PublishWorld, ReinsertWorld, ReinstateError,
+    Replacement, Run, Shot, ShotRun, SubstituteError, Substitution, VPos, MAX_REINSERTED_UNITS,
+    MAX_REINSERTED_VALUES,
 };
 use skep_kernel::{LockKey, Seq, Staging, TxnError, MAX_TXN_BYTES};
 use skep_namespace::{first_version_address, HasM3, M3State};
@@ -107,7 +111,7 @@ pub use plan::{
 pub use sizes::{
     price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
     COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES,
-    KEPT_PLACE_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+    KEPT_PLACE_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_UNIT_BYTES,
     REQUEST_BODY_BYTES, RETRACTION_BYTES, REWINDOWED_DRAFT_BYTES, SHOT_BYTES,
 };
 
@@ -207,14 +211,19 @@ fn rewindows<'a>(
 
 /// The price of a publication: the four in-lock reads the design names,
 /// read off one snapshot (the link-sets design §5.7, EVERY IN-LOCK READ IS
-/// BOUNDED BY A REFUSAL AHEAD OF THE LOCK), and its fifth term, the bytes
-/// the commit would stage, priced from the worst-case table (§5.6, M6).
+/// BOUNDED BY A REFUSAL AHEAD OF THE LOCK), its fifth term, the bytes
+/// the commit would stage, priced from the worst-case table (§5.6, M6), and
+/// the units its re-insert comes to, which those bytes are priced over.
 ///
 /// It is what [`price_publication_reads`] answers and a transport refuses
 /// on ([`ReadPrice::over_budget`]), carried whole so the refusal can name
 /// each term: the caller's link-holding home count, the entries that read
 /// per home, the re-window's steps, the twin fence's stabs, and the staged
-/// bytes against the transaction budget.
+/// bytes against the transaction budget. The units are no term of that
+/// refusal: a shot past their budget is the store's own to refuse, and the
+/// figure rides here so a caller pricing a request ahead of the act reads
+/// it, and the two budgets the store holds a re-insert to, off the price
+/// ([`ReadPrice::UNIT_BUDGET`], [`ReadPrice::POSITION_BUDGET`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPrice {
     /// The caller's link-holding homes: `homes_under` of the caller's
@@ -246,6 +255,20 @@ pub struct ReadPrice {
     /// them from the worst-case table: an upper bound on what the kernel
     /// charges the transaction, held to [`ReadPrice::BYTE_BUDGET`].
     pub staged_bytes: u64,
+    /// The units the shot's re-insert comes to, as M5 counts them
+    /// ([`Shot::reinserted_units`]) over the snapshot priced: the atoms and
+    /// the maximal runs of single-byte values of the draft-native runs'
+    /// unminted portions, two staged records each — what the store holds to
+    /// [`ReadPrice::UNIT_BUDGET`] and refuses past it, where the reads and
+    /// the bytes are refused ahead of the lock. `0` for a shot naming no
+    /// draft; and where the store would refuse the re-insert, the count as
+    /// far as it went: `0` past the positions' budget
+    /// ([`ReadPrice::POSITION_BUDGET`]), which is arithmetic the count reads
+    /// nothing after; the units' budget plus one past the units'; the units
+    /// standing ahead of a position that holds no value. And `0` where the
+    /// class the price is taken at does not admit a draft the shot names:
+    /// nothing of a draft the caller may not read is counted, or read.
+    pub units: u64,
 }
 
 impl ReadPrice {
@@ -257,6 +280,19 @@ impl ReadPrice {
     /// [`MAX_TXN_BYTES`], so a request priced past it never reaches the
     /// kernel's `txn_over_budget` (M6: "met only by a bug or a race").
     pub const BYTE_BUDGET: u64 = MAX_TXN_BYTES;
+
+    /// The budget the store holds a shot's units to: M5's own
+    /// [`MAX_REINSERTED_UNITS`]. No comparison here reads it — the shot's
+    /// refusal past it is the store's — it stands beside the figure so an
+    /// answer built off the price states the number the store refuses at.
+    pub const UNIT_BUDGET: u64 = MAX_REINSERTED_UNITS as u64;
+
+    /// The budget the store holds the distinct positions a shot re-inserts
+    /// to: M5's own [`MAX_REINSERTED_VALUES`]. The price carries no count of
+    /// the positions — they are request arithmetic a caller does itself
+    /// ([`Shot::reinserted_values`]) — and states the budget they are held
+    /// to, for the reason [`ReadPrice::UNIT_BUDGET`] is stated.
+    pub const POSITION_BUDGET: u64 = MAX_REINSERTED_VALUES as u64;
 
     /// Returns the reads' price: `homes × entries + rewindow + fence`,
     /// saturating.
@@ -280,15 +316,18 @@ impl ReadPrice {
     /// The one comparison against the budgets (PATTERNS SP-23): a transport
     /// refuses where this answers `true` and reads the terms off the price
     /// — and which bound was passed, [`ReadPrice::reads_over_budget`] and
-    /// [`ReadPrice::bytes_over_budget`] — for its refusal's detail.
+    /// [`ReadPrice::bytes_over_budget`] — for its refusal's detail. The
+    /// units are not judged here: past their budget the shot is refused by
+    /// the store under its own code, before it stages a record, and a
+    /// refusal ahead of the lock would answer another.
     pub fn over_budget(&self) -> bool {
         self.reads_over_budget() || self.bytes_over_budget()
     }
 }
 
-/// Prices a publication over `world`: [`ReadPrice`]'s four read terms and
-/// its staged bytes, read off the snapshot a transport admits on, ahead of
-/// its lock.
+/// Prices a publication over `world`: [`ReadPrice`]'s four read terms, its
+/// staged bytes and its units, read off the snapshot a transport admits on,
+/// ahead of its lock, as `caller` at the visibility class `readable`.
 ///
 /// The caller's link-holding homes are [`homes_under`] of the caller's
 /// account (one seek per home found, the account's prefix read off M3's
@@ -298,12 +337,39 @@ impl ReadPrice {
 /// one grouping the fence walks ([`Shot::reinserted_runs_by_draft`]). The
 /// re-window is priced per document the commit re-windows, in two reads:
 /// THE PIECES each placed run is cut into — the pairing's bound for a
-/// draft-native run, one stab of every home's records for a stray — read
+/// draft-native run, one stab of every home's records for a stray, the
+/// records `readable` admits the home of — read
 /// once beside the staged bytes, which [`price_staged_bytes`] prices off
 /// the same pieces from the table; and THE RUNS, each re-windowed
 /// document's content run count by M5's one map lookup. No run-list is
 /// walked for the price: a place that cuts a run costs the commit nothing a
-/// step a piece does not cover.
+/// step a piece does not cover. THE UNITS are M5's own count of the shot's
+/// re-insert over `world`'s stored content ([`Shot::reinserted_units`]):
+/// the positions asked first, by arithmetic, and past their budget nothing
+/// read; then one walk of the stored pieces of the draft-native runs'
+/// unminted portions, at most [`ReadPrice::POSITION_BUDGET`] pieces, which
+/// answers the units figure and the bytes the re-insert is priced at —
+/// each unit at its own bytes — so the figure answered and the bytes
+/// priced are one count's. `steps` is charged one for every stored piece
+/// that count reads; a caller that counts nothing hands it a count that
+/// compiles away.
+///
+/// **The class.** `readable(world, doc)` answers whether the caller reads
+/// `doc`, and is the class the commit of the same request would read at —
+/// the write's own visibility class for the transport's refusal ahead of
+/// its lock, the request's read predicate for a price asked as a read. A
+/// stray place is counted at it and at no other: a correspondence record
+/// homed in a document the caller may not read is no piece and adds
+/// nothing to any figure, so the answer is the same whatever such a
+/// document holds. THE UNITS are counted at it too
+/// (`sizes::reinsert_tally`): the named drafts' stored pieces are read only
+/// where `readable` admits every draft the shot names, and where it does
+/// not admit one the re-insert is priced no unit and no byte and no piece
+/// is read — a transport's refusal ahead of its lock is answered before the
+/// store has asked who owns a draft, so without the class its bytes would
+/// tell a caller how a draft it may not read holds its content. Such a shot
+/// stages nothing: the store's ω of every named draft refuses it ahead of
+/// its count.
 ///
 /// The counts may move between this read and the composite's own, where
 /// the transport takes its lock after it (the survey's C8): the budget is
@@ -311,14 +377,17 @@ impl ReadPrice {
 /// as it did before it was priced.
 ///
 /// [`homes_under`]: crate::LinkState::homes_under
-pub fn price_publication_reads<W: LinkWorld + HasM5>(
+#[allow(clippy::too_many_arguments)]
+pub fn price_publication_reads<W: LinkWorld + HasM5 + ReinsertWorld>(
     world: &W,
     caller: Caller,
+    readable: &Visibility<'_, W>,
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
     also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
+    steps: &mut impl FnMut(u64),
 ) -> ReadPrice {
     let homes = match caller {
         Caller::Principal(p) => world
@@ -327,9 +396,13 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .map_or(0, |account| world.links().homes_under(&enc([account])).len()),
         Caller::System => 0,
     };
-    let pieces = sizes::run_pieces(world, shot, |index| sizes::placed_in(places, also_places, index) > 0);
+    let pieces = sizes::run_pieces(world, readable, shot, |index| sizes::placed_in(places, also_places, index) > 0);
     let by_draft = also_places_by_draft(also_places);
     let rewindows = rewindows(shot, places, &by_draft);
+    // The re-insert, counted once and at the caller's class: its units are
+    // the figure, and they and their bytes what the staged bytes price it
+    // at — nothing, where the class does not admit a named draft.
+    let units = sizes::reinsert_tally(world, readable, shot, steps);
     ReadPrice {
         homes,
         entries: deposits
@@ -343,7 +416,8 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .map(|rewindow| rewindow_steps(world.m5(), shot, rewindow, &pieces))
             .fold(0usize, usize::saturating_add),
         fence: shot.reinserted_runs_by_draft().iter().map(|(_, runs)| runs.len()).fold(0usize, usize::saturating_add),
-        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows),
+        staged_bytes: sizes::staged_bytes(world, target, shot, places, also_places, deposits, &pieces, &rewindows, units),
+        units: units.units,
     }
 }
 

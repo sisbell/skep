@@ -835,13 +835,19 @@ pub enum Op {
     /// `price_publication_reads`, the one function the transport's refusal
     /// ahead of its lock calls, so the figures are the ones
     /// `publication_over_budget` would name — answered whether or not
-    /// either budget is passed, with both budgets beside them
-    /// ([`Response::PublishCost`]). The price is read off a snapshot no
-    /// write lock covers, as the refusal's is: the board may move before a
-    /// `publish` of the same members is priced again.
+    /// either budget is passed, with both budgets beside them — and, beside
+    /// those, the units the shot's re-insert comes to with the two budgets
+    /// the store holds a re-insert to ([`Response::PublishCost`]). The
+    /// price is read off a snapshot no write lock covers, as the refusal's
+    /// is: the board may move before a `publish` of the same members is
+    /// priced again.
     ///
     /// The caller's link-holding homes are the session's principal's; a
-    /// guest holds no account and is priced with none.
+    /// guest holds no account and is priced with none. THE CLASS the price
+    /// is taken at is this request's read predicate — the principal's, or
+    /// the guest's — which is the class a `publish` of the same members
+    /// would be committed at: nothing is counted in a document the caller
+    /// may not read.
     ///
     /// **The documents consulted.** The named drafts — the rendering
     /// `draft`, then each `also` draft, in the request's order — are
@@ -849,10 +855,14 @@ pub enum Op {
     /// count of each one a list re-windows, so an unreadable one answers
     /// `withheld`. The home of each `originals` entry is a derived one
     /// ([`Op::derived_doc_arguments`]): the price reads that original's
-    /// stored type. Every other member is priced by request arithmetic,
-    /// the caller's own home count and one stab of the correspondence
-    /// records, wherever homed, per stray place — a count the refusal's
-    /// detail states of the same request.
+    /// stored type. The named drafts' stored values are read too, for the
+    /// units, by M5's one count of them — nothing past its positions
+    /// budget, which is arithmetic. Every other member is priced by request
+    /// arithmetic, the caller's own home count and one stab of the
+    /// correspondence records per stray place, wherever homed, counting
+    /// those the read predicate admits the home of and no other — the
+    /// count the refusal's detail states of the same request at the same
+    /// class.
     ///
     /// [`Response::PublishCost`]: crate::Response::PublishCost
     PublishCost {

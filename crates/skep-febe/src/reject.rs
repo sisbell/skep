@@ -312,14 +312,23 @@ pub enum RejectCode {
     ///
     /// An edit's runs are counted over all its changes together.
     TooManyRuns,
-    /// A publish shot exceeds its re-insert budget.
+    /// A publish shot exceeds one of its two re-insert budgets.
     ///
-    /// The draft-native runs' widths, summed, exceed M5's
-    /// `MAX_REINSERTED_VALUES` (arithmetic on the request; discloses nothing
-    /// about what exists). Its own leaf rather than a ride on `TooManyRuns`:
-    /// the re-inserted values are I-adjacent and coalesce, so a shot refused
-    /// here may place a single run. Permanent by the catch-all, for
-    /// `TooManyRuns`'s reason: a shot cannot be split to meet it.
+    /// Two causes, one code. The distinct positions the draft-native runs
+    /// name exceed M5's `MAX_REINSERTED_VALUES` — arithmetic on the request,
+    /// asked first, which discloses nothing about what exists. Or, inside
+    /// that budget, the units those positions would be staged as — an atom,
+    /// or a whole run of single bytes, two records each — exceed M5's
+    /// `MAX_REINSERTED_UNITS`: counted off the stored values of the named
+    /// drafts, which M5's ω has found the caller's own, so it tells the
+    /// caller of content it may read and of nothing else. Neither stages a
+    /// record. The store's own message says which (M5's `TooManyValues` and
+    /// `TooManyUnits`); the wire carries the code alone, and a client tells
+    /// them apart by the figures the price read answers. Its own leaf
+    /// rather than a ride on `TooManyRuns`: the re-inserted values are
+    /// I-adjacent and coalesce, so a shot refused here may place a single
+    /// run. Permanent by the catch-all, for `TooManyRuns`'s reason: a shot
+    /// cannot be split to meet it.
     TooManyValues,
     /// The net placement is empty, or a reinstate names no run.
     ///

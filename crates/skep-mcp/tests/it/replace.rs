@@ -715,6 +715,118 @@ fn an_edit_behind_a_held_line_is_refused_held_lines_and_lands_once_it_is_resolve
     assert!(mcp.finish().success());
 }
 
+/// An `edit` whose changes place runs lands them by identity in one commit.
+///
+/// The agent sends ONE `edit` call of three changes in the placed form:
+/// another draft's line placed ahead of the first position, a word removed
+/// with nothing put in its place, and the draft's own first line placed
+/// again past its end. The adapter sends ONE write, a `set_arrangement`
+/// frame carrying the three changes, and the board acknowledges it, minting
+/// nothing; the draft's feed shows one entry for it, a `set_arrangement`;
+/// and the draft's image reads, position for position, the I-addresses the
+/// call named — the other draft's own, then the draft's with the word's
+/// gone, then its first line's again (the mutant that sends the placed form
+/// as a `delete` and a `reinstate` a change relays two writes or more, none
+/// of that name, and leaves as many rows). A call minting values is still
+/// one `edit` frame and one `edit` row. A call mixing the two forms, and a
+/// placed call carrying a landing's `base`, are refused as invalid
+/// arguments with no frame sent. And behind a held line of the agent's on
+/// the draft the placed call is refused `held_lines`, nothing relayed and
+/// the draft as it was (the mutant that asks the held-lines gate of an
+/// `edit` frame alone lands it ahead of the line); once the line is
+/// resolved it lands.
+#[test]
+fn an_edit_placing_runs_lands_them_by_identity_as_one_set_arrangement_commit() {
+    let fixture = Fixture::relayed("replace-placed");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, CODE);
+    let other_line = "// from the other draft\n";
+    let other = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, other_line);
+    let (own, theirs) = (addresses(&mut mcp, &doc), addresses(&mut mcp, &other));
+    let first_line = CODE.find('\n').expect("a first line") + 1;
+    let (word_at, word) = (ordinal_of(CODE, "let "), "let ".len());
+    let run = |origin: &str, first: &str, width: usize| json!({"origin": origin, "i_start": first, "width": width.to_string()});
+    let at = |ordinal: usize| json!({"subspace": "1", "ordinal": ordinal.to_string()});
+    let placed = |as_of: u64| {
+        json!({"as_of": as_of, "doc": doc, "changes": [
+            {"at": at(1), "width": "0", "runs": [run(&other, &theirs[0], theirs.len())]},
+            {"at": at(word_at), "width": word.to_string(), "runs": []},
+            {"at": at(CODE.len() + 1), "width": "0", "runs": [run(&doc, &own[0], first_line)]},
+        ]})
+    };
+    // The writes the relay passed for the draft, by op and the board's
+    // answer.
+    let writes = |fixture: &Fixture| -> Vec<(String, String)> {
+        fixture
+            .relay()
+            .passed()
+            .iter()
+            .filter(|passed| ["insert", "delete", "reinstate", "copy", "rearrange", "edit", "set_arrangement"].contains(&passed.op.as_str()) && passed.frame["doc"] == doc.as_str())
+            .map(|passed| (passed.op.clone(), passed.answer["resp"].as_str().unwrap_or_default().to_string()))
+            .collect()
+    };
+    let rows = |mcp: &mut Mcp, since: u64| -> Vec<(String, u64)> {
+        let page = mcp.call_json("changes_since", json!({"since": since, "under": doc, "class": "drafts"}));
+        page["entries"].as_array().expect("entries").iter().map(|entry| (entry["op"].as_str().unwrap_or_default().to_string(), entry["at"].as_u64().unwrap_or_default())).collect()
+    };
+    let minted_before = minted(&mut mcp, &doc);
+    fixture.relay().forget();
+    let typed = mcp.position();
+    let landed = mcp.acked("edit", placed(typed));
+    assert_eq!(landed["resp"], "ack", "runs placed by identity mint nothing: {landed}\n{}", mcp.log());
+    let at_commit = landed["at"].as_u64().expect("the commit's position");
+    assert_eq!(writes(&fixture), [("set_arrangement".to_string(), "ack".to_string())], "one write relayed, the placed form's frame");
+    let sent = fixture.relay().passed().into_iter().find(|passed| passed.op == "set_arrangement").expect("the frame");
+    assert_eq!(sent.frame["changes"], placed(typed)["changes"], "the call's changes are the frame's, as they stood");
+    assert!(sent.frame.get("base").is_none() && sent.frame.get("merge").is_none(), "no landing rides it: {}", sent.frame);
+    assert_eq!(rows(&mut mcp, typed), [("set_arrangement".to_string(), at_commit)], "one commit on the feed, under the name a frame placing runs is sent as");
+    // The draft's image, position for position: the identities named.
+    let mut expected: Vec<String> = theirs.clone();
+    expected.extend_from_slice(&own[..word_at - 1]);
+    expected.extend_from_slice(&own[word_at - 1 + word..]);
+    expected.extend_from_slice(&own[..first_line]);
+    assert_eq!(addresses(&mut mcp, &doc), expected, "every position holds the I-address the call named for it");
+    assert_eq!(minted(&mut mcp, &doc), minted_before, "nothing minted in the draft");
+    assert_eq!(addresses(&mut mcp, &other), theirs, "the other draft stands as it was: its words are shared, not moved");
+    // The values form, as ever: one `edit` frame, one `edit` row.
+    fixture.relay().forget();
+    let typed = mcp.position();
+    let minted_values = mcp.acked("edit", json!({"as_of": typed, "doc": doc, "changes": [{"at": at(1), "width": "0", "values": ["// "]}]}));
+    assert_eq!(writes(&fixture), [("edit".to_string(), "ack_addr".to_string())]);
+    assert_eq!(rows(&mut mcp, typed), [("edit".to_string(), minted_values["at"].as_u64().expect("the commit"))]);
+    // One form a call, and no landing on this tool: refused at the
+    // adapter's door, no frame sent.
+    fixture.relay().forget();
+    let typed = mcp.position();
+    let mut mixed = placed(typed);
+    mixed["changes"][1] = json!({"at": at(word_at), "width": "0", "values": ["x"]});
+    let mut landing = placed(typed);
+    landing["base"] = json!({"at": doc, "extent": "0"});
+    for (call, says) in [(mixed, "one form a call"), (landing, "takes no 'base'")] {
+        let refused = mcp.request("tools/call", json!({"name": "edit", "arguments": call}));
+        assert_eq!(refused["error"]["code"], json!(-32602), "invalid arguments: {refused}");
+        assert!(refused["error"]["message"].as_str().is_some_and(|message| message.contains(says)), "{refused}");
+    }
+    assert_eq!(writes(&fixture), [], "neither reached the board");
+    // Behind a held line of the agent's on the draft: refused, nothing sent.
+    let stale = typed - 1;
+    let held = mcp.call_json("insert", json!({"as_of": stale, "doc": doc, "at": at(1), "values": ["x"]}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "premise: a stale raw insert is held: {held}");
+    let standing = addresses(&mut mcp, &doc);
+    fixture.relay().forget();
+    let behind = json!({"as_of": mcp.position(), "doc": doc, "changes": [{"at": at(1), "width": "0", "runs": [run(&other, &theirs[0], 2)]}]});
+    assert_eq!(mcp.call_error("edit", behind.clone()), json!({"kind": "shell", "name": "held_lines", "doc": doc, "held": 1}), "the placed form behind a held line");
+    assert_eq!(writes(&fixture), [], "nothing relayed");
+    assert_eq!(addresses(&mut mcp, &doc), standing, "the draft as it was");
+    assert_eq!(mcp.call_json("resolve", json!({"held": held["held"], "act": "drop"})), json!({}));
+    let mut after = behind;
+    after["as_of"] = json!(mcp.position());
+    assert_eq!(mcp.acked("edit", after)["resp"], "ack", "the line resolved, the placed call lands");
+    assert_eq!(addresses(&mut mcp, &doc)[..2], theirs[..2], "its two positions the other draft's own");
+    assert!(mcp.finish().success());
+}
+
 /// A draft the session does not own is refused by the board, nothing held.
 ///
 /// The agent space's principal reads the claimant's draft, which lies above

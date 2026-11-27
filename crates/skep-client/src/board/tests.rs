@@ -911,15 +911,16 @@ fn the_whole_image_read_answers_as_op_does_and_names_a_positions_refusal() {
 ///
 /// The frame is the `publish` frame under the read's own name, its `id` and
 /// its `attest` left out and every other member as it stood, so what is
-/// priced is what is sent. The answer is decoded by its seven figures — the
-/// wire's own example among them — and its reads are the one sum it leaves
+/// priced is what is sent. The answer is decoded by its ten figures — the
+/// six the board counted and the four budgets, the wire's own example
+/// among them — and its reads are the one sum it leaves
 /// to its reader, `homes × entries + rewindow + fence`, saturating. A
 /// document that is no `publish_cost` answer, one lacking a figure, and one
 /// whose figure is no non-negative integer are no answer at all (the mutant
 /// that reads a missing figure as zero prices an unanswered request at
 /// nothing, which admits it).
 #[test]
-fn the_price_read_carries_the_publications_members_and_its_answer_is_seven_figures() {
+fn the_price_read_carries_the_publications_members_and_its_answer_is_ten_figures() {
     let runs = json!([{"i_start": "1.0.1.0.69.0.1.1", "origin": "1.0.1.0.69", "width": "3"}]);
     let publication = json!({"attest": {"sig": "00"}, "base": "1.0.1.0.1.2", "base_extent": "3", "doc": "1.0.1.0.1", "draft": "1.0.1.0.69", "id": "k", "op": "publish", "places": [{"ordinal": "1", "subspace": "1"}], "runs": runs, "supersede": ["1.0.1.0.1.2.1"]});
     assert_eq!(
@@ -927,12 +928,15 @@ fn the_price_read_carries_the_publications_members_and_its_answer_is_seven_figur
         json!({"base": "1.0.1.0.1.2", "base_extent": "3", "doc": "1.0.1.0.1", "draft": "1.0.1.0.69", "op": "publish_cost", "places": [{"ordinal": "1", "subspace": "1"}], "runs": runs, "supersede": ["1.0.1.0.1.2.1"]})
     );
     // `<!-- wire: response publish_cost -->`.
-    let example = json!({"as_of":9,"byte_budget":67108864,"entries":4,"fence":1613,"homes":3,"read_budget":65536,"resp":"publish_cost","rewindow":5780,"staged_bytes":2471033});
+    let example = json!({"as_of":9,"byte_budget":67108864,"entries":4,"fence":1613,"homes":3,"position_budget":1048576,"read_budget":65536,"resp":"publish_cost","rewindow":5780,"staged_bytes":2471033,"unit_budget":131072,"units":1613});
     let cost = answers::publish_cost(&example).expect("a price");
-    assert_eq!(cost, answers::PublishCost { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033, read_budget: 65_536, byte_budget: 67_108_864 });
+    assert_eq!(
+        cost,
+        answers::PublishCost { homes: 3, entries: 4, rewindow: 5_780, fence: 1_613, staged_bytes: 2_471_033, units: 1_613, read_budget: 65_536, byte_budget: 67_108_864, unit_budget: 131_072, position_budget: 1_048_576 }
+    );
     assert_eq!(cost.reads(), 3 * 4 + 5_780 + 1_613, "the home term beside the two the board counted whole");
     assert_eq!(answers::PublishCost { homes: u64::MAX, entries: 2, ..cost }.reads(), u64::MAX, "a sum past the integer saturates, never wraps");
-    for figure in ["homes", "entries", "rewindow", "fence", "staged_bytes", "read_budget", "byte_budget"] {
+    for figure in ["homes", "entries", "rewindow", "fence", "staged_bytes", "units", "read_budget", "byte_budget", "unit_budget", "position_budget"] {
         let mut lacking = example.clone();
         lacking.as_object_mut().expect("an object").remove(figure);
         assert_eq!(answers::publish_cost(&lacking), None, "no {figure}: no price");

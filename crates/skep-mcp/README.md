@@ -66,14 +66,25 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   edit landed whole or not at all, and the agent reads the draft before
   editing it again. A published document is refused before any write; the
   raw `insert`, `delete` and `edit` stay offered.
-- **Several positional changes in one commit.** `edit {doc, changes:
-  [{at, width, values}, …], as_of}` is the wire's `edit`, passed through:
-  each change removes `width` positions from `at` and mints `values` there,
-  every position counted in the draft as it stands at `as_of`, and the board
-  lands all of them or none. It is no burst and is never held. The wire's
-  `set_arrangement`, the same operation under the name a merge's landing
-  and its take-backs send, is no tool: `merge_compose`, `merge_undo`,
-  `merge_withdraw` and `restore_text` send it.
+- **Several positional changes in one commit.** `edit {doc, changes, as_of}`
+  is the board's one operation of positional changes, in either of its two
+  forms, one a call: each change removes `width` positions from `at` and
+  puts in their place `values` it mints (`{at, width, values}`, the wire's
+  `edit`, passed through) or `runs` it places by identity (`{at, width,
+  runs}`, each run `{origin, i_start, width}` — existing content, nothing
+  minted), every position counted in the draft as it stands at `as_of`, and
+  the board lands all of them or none. A call whose changes place runs is
+  sent as the wire's `set_arrangement`, the same operation under the name a
+  frame placing runs is sent as — one frame, one commit, one
+  `set_arrangement` row on the feed — so an agent moves, restores or
+  transcludes several stretches at once. A call mixing the two forms is
+  refused at the adapter's door, and so is `base` or `merge` on the placed
+  form: a merge's landing, which sends that frame with those terms, stays
+  `merge_compose`'s, as its take-backs stay `merge_undo`'s,
+  `merge_withdraw`'s and `restore_text`'s. Neither form is a burst, neither
+  is held, and each is refused `held_lines` behind a held line of the
+  agent's on the draft. No `set_arrangement` tool is offered: the placed
+  form is its one way in.
 - **Several edits in one call, answered with the lines changed.**
   `edit_text {doc, edits: [{old, new}, …]}` is the shell's `text.edit`:
   every pair's `old` must stand exactly once in the draft as the pairs

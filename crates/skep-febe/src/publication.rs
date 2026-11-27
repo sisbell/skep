@@ -26,7 +26,8 @@
 //!
 //! The price read (`Op::PublishCost`) is none of them: M7 computes its whole
 //! answer (`skep_links::price_publication_reads`), so its arm forwards the
-//! request's members and nothing of it sits here.
+//! request's members with this request's read predicate, the visibility
+//! class the price is taken at, and nothing of it sits here.
 //!
 //! The dispatch arms stay in `dispatch_read`, beside the one snapshot and the
 //! one read predicate every read answers from, and each says there what it

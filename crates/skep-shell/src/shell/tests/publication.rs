@@ -653,6 +653,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!(panel["read_with"], json!({set.clone(): true}), "the set the edition is read with");
     assert_eq!(panel["price"]["over"], json!([]), "under every cap: {}", panel["price"]);
     assert!(panel["price"]["bytes"].as_u64().unwrap() > 0 && panel.get("hold").is_none(), "{panel}");
+    assert_eq!((panel["price"]["values"].as_u64(), panel["price"]["units"].as_u64()), (Some(19), Some(1)), "the draft's nineteen typed bytes: nineteen positions the shell counts, ONE unit the board counts: {}", panel["price"]);
     // The count with the notes ON: ⟨l⟩ up by one, and one op dialed — the
     // board asked what it prices the request at.
     let (entries, ops) = (but_health(&g.shell).len(), op_dials(&g.shell));
@@ -661,6 +662,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!((counted["rows"][0]["fold"].clone(), counted["p3_stands"].clone()), (json!({"unchanged": 0, "changed": 1}), json!(true)), "the fold and P3's standing re-keyed by the count: {counted}");
     crate::shapes::assert_declared("Price", &counted["price"]);
     assert!(counted["price"]["bytes"].as_u64().unwrap() > panel["price"]["bytes"].as_u64().unwrap(), "the price moves with the switches: {counted}");
+    assert_eq!(counted["price"]["units"], panel["price"]["units"], "and the units stand: the switches move no word of the draft's: {counted}");
     assert_eq!((but_health(&g.shell).len(), op_dials(&g.shell)), (entries + 2, ops + 1), "the count dials once, for the board's price: its own call logged beside the one read");
     assert_eq!(last_dial(&g.shell), ("POST".to_string(), "/op".to_string(), Some(200)), "the one dial a read the board answered");
     let bad_home = g.call("publication.count", json!({"session": g.session, "switches": {"on": [edition]}})).unwrap_err();

@@ -39,7 +39,10 @@
 //! that takes the forms of a row of two takes their members together, each
 //! form's own as the row reads them (`merge_undo`'s none, or `draft` and
 //! `withdrawal`). `Tool::admit` is the dispatch's door, admitting a call or
-//! refusing it; `wire_frame` maps a wire op's call onto its frame, and
+//! refusing it; `wire_frame` maps a wire op's call onto its frame — the
+//! name the frame's `op`, save `edit`'s PLACED FORM, a call whose changes
+//! place runs by identity, which is the board's same operation under its
+//! other name and is sent as `set_arrangement` (`EditForm`) — and
 //! `Catalog::append_commons` fills the commons template in beside the check
 //! on its placeholder.
 
@@ -58,7 +61,9 @@ pub const EMBEDDED: &str = include_str!("../tools.json");
 /// refuses a `publish` frame through its `op` row (`publish_is_a_call`) and
 /// runs a publication itself, composing the one request from the panel it
 /// holds: its `publication` family's four rows are adapter tools (`client.md`
-/// §4b.1's `op` row).
+/// §4b.1's `op` row). `set_arrangement` has none either: it is `edit`'s
+/// operation under the name a frame placing runs by identity is sent as, and
+/// `edit` takes that form (`EditForm`), so one tool is the one operation.
 const DISPATCH_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
@@ -319,7 +324,12 @@ impl Tool {
     /// or holds, then the daemon's strict parse, their validators (*every tool
     /// is one call of the shell*) — save one shape: a non-negative integer
     /// `at` beside an object `frame`, which skep-shell's `op` row reads as its
-    /// `/op-at` form and would send as another frame. An adapter tool's every
+    /// `/op-at` form and would send as another frame; and save `edit`, whose
+    /// changes say which of the board's two names its frame is sent under
+    /// (`EditForm`): a call whose changes carry both members is no one
+    /// frame, and a call placing runs carries no landing — `base` and
+    /// `merge` are terms the frame's other name takes on the wire, and a
+    /// landing is the merge tools' to send. An adapter tool's every
     /// member must be one its row takes, and every member of its `opts` one of
     /// the row's options the door takes (`OPTS_MEMBERS`), and every member of
     /// a pair of `edit_text`'s `edits` one a pair takes (`PAIR_MEMBERS`) —
@@ -331,7 +341,10 @@ impl Tool {
     /// `Server::respond` answers -32602, in this order:
     ///
     /// 1. a name the dispatch does not answer;
-    /// 2. for a wire op, arguments of the `/op-at` shape;
+    /// 2. for a wire op, arguments of the `/op-at` shape; then, for `edit`,
+    ///    changes carrying `values` in one place and `runs` in another, named
+    ///    by the first change of each, and a `base` or a `merge` beside
+    ///    changes that place runs;
     /// 3. for an adapter tool, a member its row does not take, then a member
     ///    of its `opts` outside `OPTS_MEMBERS`, `search`'s withheld `reindex`
     ///    among them;
@@ -348,6 +361,15 @@ impl Tool {
                 return Err(format!(
                     "{name}'s arguments carry a numeric 'at' beside an object 'frame', which the shell would send as another frame to the board's history: no wire op takes a 'frame', and history reads are not offered here"
                 ));
+            }
+            if tool == Tool::Op("edit") && EditForm::of(args)? == EditForm::Placed {
+                // Sent as `set_arrangement`, which takes a landing's terms
+                // on the wire: none rides this tool.
+                if let Some(term) = LANDING_TERMS.iter().find(|term| args.contains_key(**term)) {
+                    return Err(format!(
+                        "{name}'s changes place runs, and a call placing runs takes no '{term}': a merge's landing is merge_compose's, which sends the frame with its terms"
+                    ));
+                }
             }
             return Ok(tool);
         };
@@ -427,17 +449,83 @@ fn listed(members: &[&str]) -> String {
 /// argument, the source staged from, is the wire's `from` too.
 const RENAMES_FROM: &[&str] = &["make_link", "emit", "stage"];
 
+/// The members of a landing: the terms `set_arrangement` takes on the wire
+/// beside its changes, which no call of the `edit` tool carries.
+const LANDING_TERMS: &[&str] = &["base", "merge"];
+
+/// Which of its two forms an `edit` call's changes are in.
+///
+/// The board has ONE operation here under two frame names (wire.md
+/// §Arrangement): `edit`, whose changes each mint `values`, and
+/// `set_arrangement`, whose changes each place `runs` by identity; the
+/// name picks the row the commit writes on the change feed. The tool takes
+/// both, and the member its changes carry says which frame the call is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditForm {
+    /// Every change that places anything mints `values`: sent as `edit`.
+    Values,
+    /// The changes place `runs` by identity, minting nothing: sent as
+    /// `set_arrangement`, one frame and one commit.
+    Placed,
+}
+
+impl EditForm {
+    /// Reads the form of an `edit` call off its `changes`.
+    ///
+    /// Placed where a change carries `runs` and none carries `values`;
+    /// else the values form — a call of no change, or of changes carrying
+    /// neither member, among them, which the board's parse answers as it
+    /// answers any `edit` frame. Only the two members' presence is read:
+    /// what a member holds is the board's to judge.
+    ///
+    /// # Errors
+    ///
+    /// A call whose changes carry both members — `values` in one change and
+    /// `runs` in another, or both in one — named by the first change
+    /// carrying each: it is no one frame, and two frames would be two
+    /// commits, the second typed against a draft the first has moved.
+    pub(crate) fn of(args: &Map<String, Value>) -> Result<EditForm, String> {
+        let changes = args.get("changes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        let first = |member: &str| changes.iter().position(|change| change.get(member).is_some());
+        match (first("values"), first("runs")) {
+            (Some(minting), Some(placing)) => Err(format!(
+                "edit's changes carry 'values' or 'runs', one form a call: changes[{minting}] carries 'values' and changes[{placing}] carries 'runs'; a call is one frame and one commit, so send the two forms as two calls, the second typed at the first's ack"
+            )),
+            (None, Some(_)) => Ok(EditForm::Placed),
+            _ => Ok(EditForm::Values),
+        }
+    }
+
+    /// Returns the frame name the form is sent under.
+    fn op(self) -> &'static str {
+        match self {
+            EditForm::Values => "edit",
+            EditForm::Placed => "set_arrangement",
+        }
+    }
+}
+
 /// Returns a wire op's frame (*every tool is one call of the shell*).
 ///
 /// The rule's mapping, in one place: the name is the frame's `op`, the
 /// arguments are the frame, and on the `RENAMES_FROM` ops a top-level `from_`
-/// rides back as `from` where no `from` is already there.
+/// rides back as `from` where no `from` is already there. One name is two
+/// frames: an `edit` call whose changes place runs by identity
+/// ([`EditForm::Placed`]) is the board's same operation under its other
+/// name, and its frame's `op` is `set_arrangement` — the arguments the
+/// frame as they stand, since the two frames differ in nothing else a call
+/// of this tool carries. A call [`Tool::admit`] refused never reaches here;
+/// one whose form does not read is sent as `edit`, as any other call is.
 pub fn wire_frame(op: &str, mut args: Map<String, Value>) -> Value {
     if RENAMES_FROM.contains(&op) && !args.contains_key("from") {
         if let Some(v) = args.remove("from_") {
             args.insert("from".to_string(), v);
         }
     }
+    let op = match (op, EditForm::of(&args)) {
+        ("edit", Ok(form)) => form.op(),
+        _ => op,
+    };
     args.insert("op".to_string(), Value::String(op.to_string()));
     Value::Object(args)
 }

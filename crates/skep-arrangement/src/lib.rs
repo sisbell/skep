@@ -281,8 +281,9 @@ pub use error::{
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
     stage_reinstate_at, stage_substitute, AsOf, Change, Edit, Edited, MintedRun, Pairing, Placed,
-    PublishWorld, Replacement, SetMerge, Substitution, Vstream, MAX_COPY_RESOLVE_STEPS,
-    MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    PublishWorld, ReinsertWorld, ReinsertedUnits, Replacement, SetMerge, Substitution, UnitParts,
+    UnitTally, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_UNITS,
+    MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

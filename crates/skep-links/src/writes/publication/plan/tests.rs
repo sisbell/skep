@@ -609,6 +609,100 @@ fn a_daughter_a_claim_of_the_callers_own_names_is_skipped_and_anothers_or_a_retr
     );
 }
 
+/// The node's principal: seated at the node, above every account.
+const NODE: Caller = Caller::Principal(skep_namespace::BOOTSTRAP_PRINCIPAL);
+
+/// The sibling account's principal.
+const P2: Caller = Caller::Principal(PrincipalId(2));
+
+/// The sub-account under the owner's account, and its one document.
+fn sub_account() -> Address {
+    a(&[1, 0, 1, 1])
+}
+fn sub_doc() -> Address {
+    a(&[1, 0, 1, 1, 0, 1])
+}
+
+/// The sibling account's `k`-th document, private.
+fn sibling_doc(k: u32) -> Address {
+    a(&[1, 0, 2, 0, nth_doc(k)])
+}
+
+/// The chain's world, plus a sub-account under the owner's account (its
+/// own principal, one private document) and `n` private documents of the
+/// sibling account; one citation link homed in the owner's draft, in the
+/// trunk, in the sub-account's document and in each of the sibling's `n`.
+/// So `n + 3` homes hold a link, `n` of them the sibling's.
+fn homes_world(n: u32) -> World {
+    let at = Seq(0);
+    let mut world = chain_world();
+    world.m3 = world
+        .m3
+        .apply_m3(at, &M3Rec::allocate(sub_account(), false))
+        .apply_m3(at, &M3Rec::register_principal(sub_account(), PrincipalId(3)))
+        .apply_m3(at, &M3Rec::allocate(sub_doc(), false));
+    for k in 2..n + 2 {
+        world.m3 = world.m3.apply_m3(at, &M3Rec::allocate(sibling_doc(k), false));
+    }
+    let homes: Vec<Address> =
+        [a(&[1, 0, 1, 0, 1]), trunk(), sub_doc()].into_iter().chain((2..n + 2).map(sibling_doc)).collect();
+    for home in &homes {
+        world = with_link(world, home, 1, Link::triple(enc([home]), Endset::empty(), enc([&citation()])));
+    }
+    world
+}
+
+/// The caller's own homes and the homes its walk visited.
+fn walked(world: &World, caller: Caller) -> (Vec<Address>, u64) {
+    let mut visited = 0;
+    let homes = own_homes_counted(world.m3(), world.links(), caller, &mut |k| visited += k);
+    (homes, visited)
+}
+
+/// A caller seated at no account walks no home: the node's principal owns
+/// no link home, so its walk is skipped whatever the board holds, where the
+/// walk would visit every link-holding home on the board. An account's
+/// principal walks its account's homes as before, the sub-account's
+/// visited and not kept; the system caller visits none.
+#[test]
+fn a_caller_seated_at_no_account_walks_no_home() {
+    for n in [0, 2, 16] {
+        let world = homes_world(n);
+        let seat = world.m3().principal_prefix(skep_namespace::BOOTSTRAP_PRINCIPAL).expect("the node's principal is seated");
+        assert_eq!(*seat, a(&[1]), "seated at the node");
+        assert_eq!(world.links().homes_under(&enc([seat])).len(), n as usize + 3, "n = {n}: every link home lies under the node");
+        assert_eq!(walked(&world, NODE), (vec![], 0), "n = {n}: the node's principal walks nothing and owns nothing");
+        assert_eq!(walked(&world, Caller::System), (vec![], 0), "n = {n}: the system caller walks nothing");
+        assert_eq!(
+            walked(&world, P1),
+            (vec![a(&[1, 0, 1, 0, 1]), trunk()], 3),
+            "n = {n}: the account's three homes visited, the sub-account's not kept"
+        );
+        let (theirs_homes, theirs_visited) = walked(&world, P2);
+        assert_eq!((theirs_homes.len(), theirs_visited), (n as usize, u64::from(n)), "n = {n}: the sibling walks its own");
+    }
+}
+
+/// The node's principal plans as it did: an original of another's is
+/// refused as not its own, and a supersede entry plans as the owner's does.
+#[test]
+fn the_node_principals_plan_answers_as_before_the_walk_was_skipped() {
+    let world = homes_world(16);
+    let (target, shot) = (PublishTarget::Document(trunk()), off(&member(2)));
+    let draft = a(&[1, 0, 1, 0, 1]);
+    let original =
+        PublishDeposits { originals: vec![OriginalEntry { old: link_in(&draft, 1), rest: vec![] }], ..PublishDeposits::default() };
+    assert_eq!(
+        plan_deposits(&world, NODE, &target, &shot, &original).expect_err("refused"),
+        PlanFault::Original { index: 0, cause: OriginalCause::NotOwner },
+        "an original in another's home: not the caller's"
+    );
+    let node = plan_deposits(&world, NODE, &target, &shot, &supersede(vec![daughter(1, 1)])).expect("planned");
+    let owner = plan_deposits(&world, P1, &target, &shot, &supersede(vec![daughter(1, 1)])).expect("planned");
+    assert_eq!(node.homes[0].deposits, vec![PlannedDeposit::Supersede { index: 0, old: daughter(1, 1) }]);
+    assert_eq!(format!("{node:?}"), format!("{owner:?}"), "the supersede entry plans as the owner's does");
+}
+
 /// THE FEED ROW's TEST: `supersession_claim_in` finds the claim `old → new`
 /// homed in `home` — exactly that pair, in that home — and no other.
 #[test]

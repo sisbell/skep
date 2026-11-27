@@ -1233,12 +1233,33 @@ fn share_a_position(a: &Span, b: &Span) -> bool {
 
 /// Returns the homes under the caller's account holding links, the caller's
 /// own: `homes_under` of the account, each kept where ω answers the caller.
+///
+/// The walk costs one seek and one ω a link-holding home under the seat. A
+/// caller seated at no account walks nothing and owns no home: a link's
+/// home is a registered document (the deposit's home gate refuses any
+/// other), and a registered document's owner is its own account's seat,
+/// which a node-tier seat is not. So the node's principal, seated above
+/// every account, is answered no homes without visiting the board's.
 fn own_homes(m3: &M3State, links: &LinkState, caller: Caller) -> Vec<Address> {
+    own_homes_counted(m3, links, caller, &mut |_| {})
+}
+
+/// [`own_homes`], calling `steps(1)` for each home the walk visits.
+fn own_homes_counted(
+    m3: &M3State,
+    links: &LinkState,
+    caller: Caller,
+    steps: &mut impl FnMut(u64),
+) -> Vec<Address> {
     let Caller::Principal(p) = caller else { return Vec::new() };
     let Some(account) = m3.principal_prefix(p) else { return Vec::new() };
+    if account.level() != Level::Account {
+        return Vec::new();
+    }
     links
         .homes_under(&enc([account]))
         .into_iter()
+        .inspect(|_| steps(1))
         .filter(|home| caller.is_owner(m3, home))
         .collect()
 }

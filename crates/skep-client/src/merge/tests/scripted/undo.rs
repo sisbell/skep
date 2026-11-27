@@ -389,6 +389,42 @@ fn an_undo_after_a_put_back_is_typed_at_it_where_another_accounts_words_were_re_
     assert_eq!(w.standing(S), (Some((format!("{D}.1"), 11)), None), "the base restored, the marker cleared");
 }
 
+/// AN UNDO THAT PLACES 5,000 RUNS IS ONE WRITE. C, the draft before the
+/// landing, holds 5,000 runs — `S·1–3` and 4,999 of `S`'s positions apart —
+/// and the landing replaced them with the merged list's four. The undo puts
+/// C back in ONE `set_arrangement` frame, the runs of its changes together
+/// past what one wire list holds, in one row: the draft holds C again, the
+/// base restored and the marker cleared (the mutant that holds a write to
+/// 4,096 runs refuses it `OverCap`). A second undo, of nothing standing, is
+/// refused and writes nothing.
+#[test]
+fn an_undo_that_places_5_000_runs_lands_in_one_write() {
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let mut c = vec![run(S, 1, 3)];
+    c.extend((0..4_999u64).map(|k| run(S, 5 + 2 * k, 1)));
+    dialer.world().text(S, 4, &"x".repeat(10_000));
+    dialer.world().change(S, c.clone());
+    // The landing by hand, over C.
+    let head = format!("{D}.2");
+    let typed = dialer.world().position;
+    let frame = frames::set_arrangement(S, &whole_of(&dialer, S, &draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some((&[], None)), None);
+    let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
+    assert_eq!(ack["resp"], "ack", "{ack}");
+    assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "the premise: the merged list landed over C");
+    let rows = dialer.world().rows.iter().filter(|r| r.op == "set_arrangement").count();
+    dialer.clear();
+    undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("the undo lands");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "one frame: {:?}", dialer.names());
+    let placed: usize = sent[0]["changes"].as_array().expect("changes").iter().map(|change| change["runs"].as_array().map_or(0, Vec::len)).sum();
+    assert!(placed > 4_096 && placed <= 5_000, "the runs of its changes together, past one wire list: {placed}");
+    let w = dialer.world();
+    assert_eq!(w.rows.iter().filter(|r| r.op == "set_arrangement").count(), rows + 1, "one row");
+    assert_eq!(w.docs.get(S).unwrap().runs, c, "C again, run for run");
+    assert!(w.standing(S).1.is_none(), "the marker cleared");
+}
+
 /// A C MAPPED PAST THE CAP: C in `SHOT_RUN_CAP` runs, its first split in
 /// two by a record covering its head, maps to one run more than one
 /// write may name — refused `OverCap` with the count, after the records'
@@ -520,8 +556,9 @@ fn a_baseless_landing_is_not_taken_back_where_the_trunks_word_stands_for_a_membe
 /// An undo is refused at the cap counted on the runs it would write.
 ///
 /// C holds the trunk's words and a member's by turns at adjoining ordinals:
-/// 4,097 runs as the board serves them, read in two pages past its run
-/// budget, and one run of `D` as the core joins them. The undo answers `OverCap`
+/// one run more than a write may place as the board serves them, read in
+/// pages past its run budget, and one run of `D` as the core joins them. The
+/// undo answers `OverCap`
 /// with the written count after the records' read and before any frame:
 /// nothing sent, nothing committed, the marker standing (the mutant that
 /// counts the core's runs sends the frame).
@@ -534,7 +571,7 @@ fn an_undo_is_refused_over_cap_on_the_runs_it_would_write_however_few_the_core_j
     let rows = dialer.world().rows.len();
     dialer.clear();
     assert_eq!(undo(&board, merger(&session, &signer), &a(S), &a(K), None, None), Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }));
-    assert_eq!(dialer.frames("image").len(), 2, "the premise: C read in two pages past the board's run budget: {:?}", dialer.names());
+    assert_eq!(dialer.frames("image").len(), (SHOT_RUN_CAP + 1).div_ceil(1 << 12), "the premise: C read in pages past the board's run budget, 4,096 runs a page: {:?}", dialer.names());
     let query = &dialer.frames("find_links_ftt")[0]["q"];
     assert_eq!(query["from"], json!([frames::i_span(&format!("{D}.0.1.1"), SHOT_RUN_CAP as u64 + 1)]), "the premise: one run of D as the core joins them, the records read first");
     assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "nothing sent");

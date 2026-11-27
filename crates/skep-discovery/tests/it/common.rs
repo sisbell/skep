@@ -583,6 +583,7 @@ pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
             };
             run_count
         ],
+        stretches: Vec::new(),
     };
     let (head, _) = skep_arrangement::Vstream::new(&k)
         .publish(SYS, &pdoc(), &birth, &EVERYONE)

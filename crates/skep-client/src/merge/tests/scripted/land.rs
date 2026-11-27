@@ -32,7 +32,7 @@ use super::*;
 /// `entry_body_publish` spells from the same pieces.
 #[test]
 fn the_shot_frame_and_its_body_are_byte_checked() {
-    let (dialer, board, signer) = open(World::window_and_draft());
+    let (dialer, board, signer) = open(World::window_and_draft().whole_form_due());
     let session = sign_in(&board, &signer);
     let inputs = Inputs {
         sides: vec![Side::Draft { at: a(S), position: None }],
@@ -234,7 +234,7 @@ fn a_value_read_too_large_is_asked_again_in_halves() {
     let landed = |refusing: &dyn Fn(&mut World)| {
         let mut w = World::window_and_draft();
         refusing(&mut w);
-        let (dialer, board, signer) = open(w);
+        let (dialer, board, signer) = open(w.whole_form_due());
         let session = sign_in(&board, &signer);
         let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
         let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
@@ -889,7 +889,7 @@ fn the_shot_names_the_member_sides_as_supersede_and_never_a_draft_side() {
         skep_signature::verify(Signer::tag(signer), Signer::public_key(signer), &expected, &sig)
     };
     // The member side: the group, byte-checked through the attest.
-    let (dialer, board, signer) = open(World::race());
+    let (dialer, board, signer) = open(World::race().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     dialer.clear();
@@ -922,7 +922,7 @@ fn the_shot_names_the_member_sides_as_supersede_and_never_a_draft_side() {
     );
     // THE SKIP: an own claim already names the daughter, its `new` a side
     // version — dropped from the list and the body, no second claim.
-    let (dialer, board, signer) = open(World::race());
+    let (dialer, board, signer) = open(World::race().whole_form_due());
     let session = sign_in(&board, &signer);
     dialer.world().claims.push(ClaimRow {
         claim: format!("{DOC1}.0.2.7"),
@@ -966,7 +966,7 @@ fn the_shot_names_the_member_sides_as_supersede_and_never_a_draft_side() {
         (json!([format!("{D}.1.1")]), Some(S))
     );
     // A draft side alone names none.
-    let (dialer, board, signer) = open(draft_landing_world());
+    let (dialer, board, signer) = open(draft_landing_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     dialer.clear();
@@ -1077,25 +1077,301 @@ fn the_record_is_written_after_the_mergers_own_publication_and_never_a_second_sh
     assert!(dialer.ops().is_empty(), "{:?}", dialer.ops());
 }
 
-/// OVER THE CAP: a merged list past the shot's run cap is refused with
-/// the count before ANY frame — no read, no write.
+/// A LANDING IS FOUND BY ITS MEMBER'S ARRANGEMENT, whatever stretches its
+/// shot spelled. The draft landing world's merge places "!!!" past the
+/// head's fifteen positions. A member standing as the trunk's next, born of
+/// the head, holding that arrangement, is this merge's landing however it
+/// was born — by the stretch this lander cuts; by a wider one that replaces
+/// the head's last run with itself and the new words; by two stretches, one
+/// replacing a word with itself; or by the whole arrangement and no list —
+/// and `resume` answers it with no shot sent (the mutant that reads a
+/// stretch member's first `placed` positions finds none of the three, and a
+/// second member is minted). A member of the same stretches born of another
+/// base, and one of this base whose new words stand a position early, are
+/// no landing of the merge.
 #[test]
-fn over_the_cap_refuses_with_the_count_before_any_frame() {
+fn a_landing_is_found_by_its_arrangement_whatever_stretches_its_shot_spelled() {
+    let third = format!("{D}.3");
+    let landed_as = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 16, 3)];
+    // The member planted as a lost landing left it, then `resume`.
+    let resumed = |runs: Vec<Run>, placed: u64, stretches: Vec<(u64, u64, u64)>, base: Option<String>| {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        {
+            let mut w = dialer.world();
+            w.text(D, 16, "!!!");
+            w.member(&third, runs, Some(15));
+            let d = w.docs.get_mut(&third).unwrap();
+            d.placed = Some(placed);
+            d.chain_depth = u64::from(!stretches.is_empty());
+            d.stretches = stretches;
+            if let Some(base) = base {
+                d.shot_base = Some(base);
+            }
+            w.trunk_head.insert(D.to_string(), third.clone());
+        }
+        dialer.clear();
+        let found = resume(&board, &merged, shot(&session, &signer)).expect("resumed");
+        assert!(dialer.frames("publish").is_empty(), "no shot sent: {:?}", dialer.ops());
+        found.map(|landed| match landed {
+            Landed::Member { address, .. } => address.to_string(),
+            other => panic!("{other:?}"),
+        })
+    };
+    for (what, placed, stretches) in [
+        ("the stretch this lander cuts", 3, vec![(16, 0, 3)]),
+        ("the head's last run replaced with itself and the new words", 10, vec![(9, 7, 10)]),
+        ("two stretches, one replacing a word with itself", 4, vec![(1, 1, 1), (16, 0, 3)]),
+        ("the whole arrangement, no list", 18, vec![]),
+    ] {
+        assert_eq!(resumed(landed_as.clone(), placed, stretches, None), Some(third.clone()), "{what}");
+    }
+    assert_eq!(resumed(landed_as.clone(), 3, vec![(16, 0, 3)], Some(format!("{D}.1"))), None, "the same stretches over another base");
+    let early = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 6), run(D, 16, 3), run(D, 11, 1)];
+    assert_eq!(resumed(early, 3, vec![(15, 0, 3)], None), None, "the new words a position early: another arrangement of this base");
+}
+
+/// The world of a file of 5,000 runs: the base `D.1` holds the trunk's
+/// words at every second address, no run I-adjacent to the next; the head
+/// `D.2` holds them and one word more at its end; the daughter `D.1.1` holds
+/// the base with one word placed before its position 2,500.
+fn fragmented_file_world() -> World {
+    let mut w = World::new();
+    w.text(D, 1, &"x".repeat(10_010));
+    let base: Vec<Run> = (1..=5_000u64).map(|k| run(D, 2 * k, 1)).collect();
+    let mut head = base.clone();
+    head.push(run(D, 10_003, 1));
+    let mut daughter = base.clone();
+    daughter.insert(2_499, run(D, 1, 1));
+    w.doc(D, true, ACCOUNT, head.clone());
+    w.member(&format!("{D}.1"), base, None);
+    w.member(&format!("{D}.2"), head, Some(5_000));
+    w.member(&format!("{D}.1.1"), daughter, Some(5_000));
+    w.trunk_head.insert(D.to_string(), format!("{D}.2"));
+    w
+}
+
+/// A FILE PAST 4,096 RUNS LANDS. A one-word merge into a file of 5,000 runs
+/// — more runs than one wire list holds, and than a shot could name whole
+/// before a shot named its change — lands as ONE `publish` frame whose
+/// `runs` is the one run of the change and whose `stretches` says where: no
+/// run of the file is sent, and the member the board mints from the head
+/// is the merged list, position for position. Its count binds nothing: with
+/// the cap set under it — at the old wire-list number — the shot still lands
+/// by the one run it carries (the mutant that judges the merged list's count
+/// refuses it `OverCap` with 5,002 runs), while a landing into a draft, which
+/// writes the list whole, is refused there with the count.
+#[test]
+fn a_one_word_merge_lands_into_a_file_of_5_000_runs_as_one_frame_of_its_change() {
+    let positions = |runs: &[Run]| -> Vec<(Address, u64)> { runs.iter().flat_map(|r| (0..r.width).map(move |k| (r.origin.clone(), r.i_start + k))).collect() };
+    for lowered in [None, Some(4_096)] {
+        let (dialer, board, signer) = open(fragmented_file_world());
+        let session = sign_in(&board, &signer);
+        let mut merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        assert_eq!(merged.composed.counts.m, 5_002, "the merged list: the file, the daughter's word and the head's");
+        assert!(merged.composed.counts.m > 4_096 && merged.composed.counts.m <= merged.cap);
+        if let Some(cap) = lowered {
+            merged.cap = cap;
+            assert_eq!(
+                land(&board, &merged, draft_landing(&session, &signer, None)),
+                Err(Refusal::OverCap { runs: 5_002, cap }),
+                "a draft landing writes the list whole, and is held to its count"
+            );
+        }
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("the file lands by its change");
+        let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(address.to_string(), format!("{D}.3"));
+        let frames = dialer.frames("publish");
+        assert_eq!(frames.len(), 1, "one shot frame: {:?}", dialer.ops());
+        let (runs, stretches) = (frames[0]["runs"].as_array().expect("runs"), &frames[0]["stretches"]);
+        assert_eq!(runs.len(), 1, "the change's one run, and none of the file's 5,001");
+        assert_eq!(runs[0], json!({"origin": D, "i_start": format!("{D}.0.1.1"), "width": "1"}));
+        assert_eq!(*stretches, json!([{"start": "2500", "width": "0", "count": "1"}]), "placed before the head's position 2,500");
+        let member = dialer.world().docs.get(&address.to_string()).unwrap().clone();
+        assert_eq!(positions(&member.runs), positions(&m_runs(&merged)), "the member is the merged list, position for position");
+        assert_eq!((member.placed, member.stretches.clone(), member.chain_depth), (Some(1), vec![(2_500, 0, 1)], 1));
+        assert_eq!(member.runs.len(), 5_002);
+    }
+}
+
+/// THE LANDER BOUNDS THE CHAIN OF BASES. A shot that names its change is
+/// signed against its head, so a member's whole arrangement is attested by
+/// its own change and then its base's, back to one spelled whole; the board
+/// serves how far that is, and the shot keeps it under the bound: on a head
+/// at depth 0, 1 and two short of the bound it names its stretches and the
+/// member stands one deeper; on a head ONE short of the bound it sends the
+/// merged list whole, with the head as its base and no `stretches`, and the
+/// member stands at depth 0 again (the mutant that never sends the whole
+/// form mints a member at the bound). The depth is read off the head's own
+/// `doc_metadata`, before the shot.
+#[test]
+fn the_shot_sends_its_whole_arrangement_where_the_head_stands_one_short_of_the_bound() {
+    let bound = crate::publication::WHOLE_FORM_EVERY;
+    for depth in [0, 1, bound - 2, bound - 1] {
+        let mut world = World::race();
+        world.docs.get_mut(&format!("{D}.2")).unwrap().chain_depth = depth;
+        let (dialer, board, signer) = open(world);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
+        let frame = dialer.frames("publish")[0].clone();
+        let member = dialer.world().docs.get(&address.to_string()).unwrap().clone();
+        assert_eq!(member.runs, m_runs(&merged), "depth {depth}: the member is M under either form");
+        assert_eq!(frame["base"].as_str(), Some(format!("{D}.2").as_str()), "depth {depth}: the head is the base under either form");
+        if depth == bound - 1 {
+            assert!(frame.get("stretches").is_none(), "one short of the bound: the whole form: {frame}");
+            assert_eq!(frame["runs"].as_array().map(Vec::len), Some(3), "the merged list whole");
+            assert_eq!((member.chain_depth, member.stretches.len()), (0, 0), "the chain starts again from it");
+        } else {
+            assert_eq!(frame["stretches"], json!([{"start": "12", "width": "4", "count": "0"}]), "depth {depth}: the change");
+            assert_eq!(member.chain_depth, depth + 1, "depth {depth}: one deeper than its head");
+        }
+        assert!(member.chain_depth < bound, "depth {depth}: no member this lander mints stands at the bound");
+        let ops = dialer.ops();
+        let read = ops.iter().position(|o| o == "doc_metadata").expect("the head's depth is read");
+        assert!(read < ops.iter().position(|o| o == "publish").expect("the shot"), "the depth read before the shot: {ops:?}");
+    }
+}
+
+/// A LANDING INTO A DRAFT PAST 4,096 RUNS IS ONE WRITE. The merge of the
+/// 5,000-run file is landed in a draft that is no side of it — `T`, staged
+/// from the base — so every position the draft holds is replaced by the
+/// merged list: ONE `set_arrangement` frame whose one change places all
+/// 5,002 runs, more than one wire list holds, and one row (the mutant that
+/// holds a write to 4,096 runs refuses it `OverCap` at 5,002). The same
+/// write typed against an older state — another hand's edit of `T` after
+/// the composition — is refused `arrangement_moved`, nothing written and
+/// the edit kept.
+#[test]
+fn a_draft_landing_of_a_list_past_4_096_runs_is_one_write() {
+    let t = "1.0.1.0.67";
+    let world = || {
+        let mut w = fragmented_file_world();
+        let base = w.docs.get(&format!("{D}.1")).unwrap().runs.clone();
+        w.doc(t, false, ACCOUNT, base);
+        w.staged(t, &format!("{D}.1"), 5_000);
+        w
+    };
+    let positions = |runs: &[Run]| -> Vec<(Address, u64)> { runs.iter().flat_map(|r| (0..r.width).map(move |k| (r.origin.clone(), r.i_start + k))).collect() };
+    let (dialer, board, signer) = open(world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let rows = dialer.world().rows.iter().filter(|r| r.op == "set_arrangement").count();
+    dialer.clear();
+    let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(t)))).expect("landed in one write");
+    assert!(matches!(&landed, Landed::Draft { into, .. } if into.to_string() == t), "{landed:?}");
+    let frames = dialer.frames("set_arrangement");
+    assert_eq!(frames.len(), 1, "one frame: {:?}", dialer.ops());
+    let changes = frames[0]["changes"].as_array().expect("changes");
+    let placed: usize = changes.iter().map(|change| change["runs"].as_array().map_or(0, Vec::len)).sum();
+    assert_eq!((changes.len(), placed), (1, 5_002), "one change placing the merged list whole");
+    let w = dialer.world();
+    assert_eq!(w.rows.iter().filter(|r| r.op == "set_arrangement").count(), rows + 1, "one row");
+    assert_eq!(positions(&w.docs.get(t).unwrap().runs), positions(&m_runs(&merged)), "the draft holds the merged list");
+    drop(w);
+    // Typed against an older state.
+    let (dialer, board, signer) = open(world());
+    let session = sign_in(&board, &signer);
+    let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    let edited: Vec<Run> = (1..=4_999u64).map(|k| run(D, 2 * k, 1)).collect();
+    dialer.world().change(t, edited.clone());
+    let rows = dialer.world().rows.len();
+    dialer.clear();
+    let err = land(&board, &merged, draft_landing(&session, &signer, Some(a(t)))).expect_err("another hand's edit");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    let w = dialer.world();
+    assert_eq!((w.rows.len(), &w.docs.get(t).unwrap().runs), (rows, &edited), "nothing written, the edit kept");
+}
+
+/// THE CAP BINDS WHAT ONE WRITE SENDS, never the merged list's count. The
+/// cap is the board's own number for what one request places. The race's
+/// merge is three runs, and what it changes in the head is one removal: the
+/// shot names one stretch and no run. With the cap set under the merged
+/// list's count the shot still lands — its frame is judged by the runs it
+/// carries (the mutant that judges the merged list's count refuses it
+/// `OverCap` with three runs) — while a landing into a draft, which writes
+/// the list whole in one frame, is refused with the list's count before any
+/// frame; and a shot that must send the list whole, its head one short of
+/// the bound on its chain, is refused with the count of what it would send,
+/// nothing sent.
+#[test]
+fn the_cap_binds_the_runs_one_write_sends_and_never_the_merged_lists_count() {
     let (dialer, board, signer) = open(World::race());
     let session = sign_in(&board, &signer);
     let mut merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
-    assert_eq!(merged.cap, 1 << 12);
+    assert_eq!((merged.cap, SHOT_RUN_CAP), (1 << 16, skep_arrangement::MAX_PLACED_RUNS), "the store's number for what one request places");
+    assert_eq!(merged.composed.counts.m, 3);
     merged.cap = 2;
     dialer.clear();
-    assert_eq!(
-        land(&board, &merged, shot(&session, &signer)),
-        Err(Refusal::OverCap { runs: 3, cap: 2 })
-    );
-    assert_eq!(
-        resume(&board, &merged, shot(&session, &signer)),
-        Err(Refusal::OverCap { runs: 3, cap: 2 })
-    );
+    // The draft landing writes the list whole: refused by its count, before
+    // any frame.
+    assert_eq!(land(&board, &merged, draft_landing(&session, &signer, None)), Err(Refusal::OverCap { runs: 3, cap: 2 }));
+    assert_eq!(resume(&board, &merged, draft_landing(&session, &signer, None)), Err(Refusal::OverCap { runs: 3, cap: 2 }));
     assert!(dialer.ops().is_empty(), "{:?}", dialer.ops());
+    // The shot sends its change: one stretch, no run.
+    let landed = land(&board, &merged, shot(&session, &signer)).expect("a list past the cap lands where its change fits one write");
+    let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 1, "{:?}", dialer.ops());
+    assert_eq!((frames[0]["runs"].clone(), frames[0]["stretches"].clone()), (json!([]), json!([{"start": "12", "width": "4", "count": "0"}])), "the head's last four positions removed, nothing placed");
+    assert_eq!(dialer.world().docs.get(&address.to_string()).unwrap().runs, m_runs(&merged), "the member is M");
+    // The whole list, where the whole is sent: held to the cap by its count.
+    let (dialer, board, signer) = open(World::race().whole_form_due());
+    let session = sign_in(&board, &signer);
+    let mut merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+    merged.cap = 2;
+    dialer.clear();
+    assert_eq!(land(&board, &merged, shot(&session, &signer)), Err(Refusal::OverCap { runs: 3, cap: 2 }));
+    assert!(dialer.frames("publish").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+}
+
+/// THE SHOT NAMES ITS CHANGE AGAINST THE HEAD, byte-checked. The merge of
+/// the window-and-draft shape changes the head by one thing — the draft
+/// side's "!!!" past its sixteen positions — and the frame says exactly
+/// that: `runs` the one run, `stretches` the one stretch at the head's last
+/// boundary, the draft's place beside the run, the base the head. No run
+/// the head holds is sent and no word of it read: the body signs the three
+/// values, the base group and the stretch row, which the board composes
+/// from the same frame. The member is M whole, born from the head; its
+/// terms serve the stretch in positions and stand one deep; and `verify`
+/// recomputes M against it.
+#[test]
+fn the_shot_names_its_change_against_the_head_and_signs_it_with_the_stretch_row() {
+    let (dialer, board, signer) = open(World::window_and_draft());
+    let session = sign_in(&board, &signer);
+    let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], base: Some(a(&format!("{D}.1"))), ..race_inputs() };
+    let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+    assert_eq!(merged.composed.counts.m, 4, "the premise: M is four runs");
+    dialer.clear();
+    let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+    let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 1);
+    let frame = &frames[0];
+    assert_eq!((frame["base"].as_str(), frame["base_extent"].as_str()), (Some(format!("{D}.2").as_str()), Some("16")));
+    assert_eq!(frame["runs"], json!([{"origin": S, "i_start": format!("{S}.0.1.1"), "width": "3"}]), "the change's one run: {frame}");
+    assert_eq!(frame["stretches"], json!([{"start": "17", "width": "0", "count": "1"}]), "placed past the head's sixteen positions: {frame}");
+    assert_eq!(frame["places"], json!([{"subspace": "1", "ordinal": "12"}]), "the draft's place, beside the run it belongs to: {frame}");
+    // The body: the three values, the base group, the stretch row.
+    let values: Vec<[u8; 1]> = b"!!!".iter().map(|b| [*b]).collect();
+    let pieces: Vec<ShotSegmentPiece<'_>> =
+        values.iter().map(|v| ShotSegmentPiece::Value(v)).chain(std::iter::once(ShotSegmentPiece::Stretch { start: 17, width: 0 })).collect();
+    signs(&board, &signer, frame, pieces, 16);
+    // No word of the head is read: the draft's three alone, by address.
+    assert!(value_reads(&dialer).is_empty(), "no value of the head read: {:?}", value_reads(&dialer));
+    assert_eq!(dialer.frames("retrieve_i"), [crate::board::frames::retrieve_i(&[(&format!("{S}.0.1.1"), 3)])]);
+    // The member, born from the head with the stretch replaced.
+    let member = dialer.world().docs.get(&address.to_string()).unwrap().clone();
+    assert_eq!(member.runs, vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 10)], "M, the draft's text re-minted beside D's own");
+    assert_eq!((member.placed, member.base_extent, member.shot_base.clone()), (Some(3), Some(16), Some(format!("{D}.2"))));
+    assert_eq!((member.stretches.clone(), member.chain_depth), (vec![(17, 0, 3)], 1), "the stretch in positions, one deep");
+    let record = current(&board, Some(session.token()), &merged.inputs.kind, &merged.key).expect("the lookup").expect("a record");
+    assert_eq!(verify(&board, Some(session.token()), &record), Ok(Verdict::Equal));
 }
 
 /// THE DRAFT LANDING IS ONE WRITE (the landing lane's rulings R1, R4,

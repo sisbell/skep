@@ -251,8 +251,8 @@ impl Run {
     /// another run's start, or an in-crate ordinal shift of one, which keeps
     /// the element field's two components: the run-list's split
     /// (`split_runs`, both halves of a boundary run), its one clip
-    /// (`RunList::clipped_runs`, under every range and suffix walk: `resolve`,
-    /// the shot's carried tail, the address form read at the member), and a
+    /// (`RunList::clipped_runs`, under every range walk: `resolve`, the
+    /// address form read at the member), and a
     /// run union's merged pieces (`UnionPiece::to_run`). The originating sites
     /// establish it at their own door, and they are J0's two allocation steps,
     /// which the shot's re-insert shares with INSERT:

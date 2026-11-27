@@ -824,6 +824,19 @@ pub(crate) struct Metadata {
     /// daughter's address does not always name; `None` in the birth shape
     /// and where no shot minted the address.
     pub(crate) shot_base: Option<String>,
+    /// The stretches of that base the shot's runs replaced, each
+    /// `(start, width, placed)`: `width` positions of the base from `start`
+    /// on replaced by `placed` positions of the shot's own (wire.md §The
+    /// response envelope, `doc_metadata`'s `stretches`). Empty where the
+    /// board serves `null`: no shot minted the address, or its shot named
+    /// its whole arrangement, whose `placed` positions lead the member. An
+    /// entry that does not read ends the list there.
+    pub(crate) stretches: Vec<(u64, u64, u64)>,
+    /// How many shots that named a stretch list stand between the address
+    /// named and the nearest base none minted (`doc_metadata`'s
+    /// `chain_depth`): 0 for a member of a shot that named none; `None`
+    /// where no shot minted the address, and at a board that serves none.
+    pub(crate) chain_depth: Option<u64>,
     pub(crate) source: Option<String>,
     /// Beside `source`, the count of it the copy took at the mint.
     ///
@@ -988,6 +1001,16 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         placed: count("placed"),
         base_extent: count("base_extent"),
         shot_base: v["shot_base"].as_str().map(str::to_string),
+        stretches: v["stretches"]
+            .as_array()
+            .map(|list| {
+                let term = |entry: &Value, member: &str| entry[member].as_str().and_then(natural);
+                list.iter()
+                    .map_while(|entry| Some((term(entry, "start")?, term(entry, "width")?, term(entry, "placed")?)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        chain_depth: v["chain_depth"].as_u64(),
         source: v["source"].as_str().map(str::to_string),
         source_copied: count("source_copied"),
         base: v["base"].as_str().map(str::to_string),

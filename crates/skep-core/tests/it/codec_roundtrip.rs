@@ -9,7 +9,8 @@ use std::path::Path;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    Base, Change, Edit, Marker, Placed, Run, RunError, SetMerge, Shot, ShotRun, VPos, VSpec,
+    Base, Change, Edit, Marker, Placed, Run, RunError, SetMerge, Shot, ShotRun, ShotStretch, Stretch,
+    VPos, VSpec, MAX_PLACED_RUNS,
 };
 use skep_content::Val;
 use skep_discovery::{FourSet, GoOn, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
@@ -313,6 +314,7 @@ fn all_requests() -> Vec<Request> {
                         shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
                         shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 4]), 1),
                     ],
+                    stretches: Vec::new(),
                 },
                 places: vec![None, Some(vp(1, 4)), None],
                 also_places: vec![],
@@ -329,6 +331,7 @@ fn all_requests() -> Vec<Request> {
                     also: vec![],
                     keep_base: false,
                     runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 5)],
+                    stretches: Vec::new(),
                 },
                 places: vec![],
                 also_places: vec![],
@@ -355,6 +358,7 @@ fn all_requests() -> Vec<Request> {
                         shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
                         shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 4]), 1),
                     ],
+                    stretches: Vec::new(),
                 },
                 places: vec![None, Some(vp(1, 4)), Some(vp(1, 6))],
                 also_places: vec![AlsoPlaces { draft: d2(), places: vec![None, None, Some(vp(1, 4))] }],
@@ -379,6 +383,7 @@ fn all_requests() -> Vec<Request> {
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2),
                     ],
+                    stretches: Vec::new(),
                 },
                 places: vec![],
                 also_places: vec![],
@@ -421,6 +426,7 @@ fn all_requests() -> Vec<Request> {
                     also: vec![],
                     keep_base: false,
                     runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3)],
+                    stretches: Vec::new(),
                 },
                 places: vec![],
                 also_places: vec![],
@@ -442,6 +448,7 @@ fn all_requests() -> Vec<Request> {
                     also: vec![],
                     keep_base: false,
                     runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 4)],
+                    stretches: Vec::new(),
                 },
                 places: vec![],
                 also_places: vec![],
@@ -466,7 +473,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
-                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1)] },
+                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 64, 0, 1, 1]), 1)], stretches: Vec::new() },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits::default(),
@@ -478,7 +485,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Document(d1()),
-                shot: Shot { base: None, draft: Some(d3()), also: vec![], keep_base: false, runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2)] },
+                shot: Shot { base: None, draft: Some(d3()), also: vec![], keep_base: false, runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 65, 0, 1, 1]), 2)], stretches: Vec::new() },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits { claim: true, ..PublishDeposits::default() },
@@ -2070,7 +2077,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 published: true,
                 owner: Some(a(&[1, 0, 1])),
                 birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
-                terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)), base: Some(d1()) }),
+                terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)), base: Some(d1()), stretches: Vec::new(), chain_depth: 0 }),
                 source: None,
                 source_copied: None,
                 base: None,
@@ -2441,7 +2448,7 @@ fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_withou
 /// field of the change; the changes ascending and apart, two that touch
 /// admitted; the values of an `edit` held over all its changes to the
 /// frame's cap and the runs of a `set_arrangement` over all its changes to
-/// the list cap, each ahead of the store; `attest` an unknown field on
+/// the cap on what one frame places, each ahead of the store; `attest` an unknown field on
 /// both; and each refusal about one change naming it in `site.index`.
 #[test]
 fn an_edits_changes_are_capped_ordered_and_of_their_frames_one_form() {
@@ -2496,12 +2503,18 @@ fn an_edits_changes_are_capped_ordered_and_of_their_frames_one_form() {
     let (detail, index) = refused(&two(&format!("{half}a")));
     assert!(detail.contains("more than the 262144-value cap on one edit"), "{detail}");
     assert_eq!(index, Some(1), "the change that crosses the cap");
-    // (d) The runs of the frame, over its changes, one past the list cap.
+    // (d) The runs of the frame, over its changes, one past the cap on what
+    // one frame places — the store's own number, sixteen list caps: a
+    // draft's whole arrangement of 5,000 runs rides one frame, in one
+    // change, and the frame is refused only past the store's count.
     let runs = |count: usize| format!(r#""runs":[{}]"#, vec![r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}"#; count].join(","));
-    assert!(codec.parse(set(&[change(1, 0, &runs(MAX_SLOT_SPANS / 2)), change(2, 0, &runs(MAX_SLOT_SPANS / 2))]).as_bytes()).is_ok(), "the cap's runs parse");
-    let (detail, index) = refused(&set(&[change(1, 0, &runs(MAX_SLOT_SPANS / 2)), change(2, 0, &runs(MAX_SLOT_SPANS / 2 + 1))]));
-    assert!(detail.contains("past the 4096-run cap on one frame"), "{detail}");
+    assert!(codec.parse(set(&[change(1, 0, &runs(5_000))]).as_bytes()).is_ok(), "one change of 5,000 runs parses");
+    assert!(codec.parse(set(&[change(1, 0, &runs(MAX_PLACED_RUNS / 2)), change(2, 0, &runs(MAX_PLACED_RUNS / 2))]).as_bytes()).is_ok(), "the cap's runs parse");
+    let (detail, index) = refused(&set(&[change(1, 0, &runs(MAX_PLACED_RUNS / 2)), change(2, 0, &runs(MAX_PLACED_RUNS / 2 + 1))]));
+    assert!(detail.contains("the changes place 65537 runs, past the 65536-run cap on one frame"), "{detail}");
     assert_eq!(index, None);
+    let (detail, _) = refused(&set(&[change(1, 0, &runs(MAX_PLACED_RUNS + 1))]));
+    assert!(detail.contains("past the 65536-run cap on one frame"), "{detail}");
     // (e) `attest` is an unknown field on both.
     for frame in [edit(&[change(1, 0, r#""values":["a"]"#)]), set(&[change(1, 0, run)])] {
         let attested = format!(r#"{},"attest":{{"alg":"x","sig":"00"}}}}"#, &frame[..frame.len() - 1]);
@@ -3699,4 +3712,117 @@ fn a_well_known_creation_requires_its_account_and_its_slot_and_admits_an_attest(
         .expect_err("an account that is no address is refused");
     let detail = e.detail.expect("a parse failure names what failed");
     assert!(detail.contains("field 'account'"), "{detail}");
+}
+
+/// A `publish`'s stretch list (wire.md §Arrangement, `publish`): the
+/// optional member `stretches`, each entry `{start, width, count}`, parsed
+/// into the shot beside the runs it partitions and written back in the one
+/// canonical form; absent and `null` alike the whole form, which marshals
+/// to no member. The list is held to the shot by request arithmetic before
+/// any read, each refusal about one entry naming it in `site.index`; it is
+/// one wire list under the list cap; and the shot's `runs` take the cap on
+/// what one frame places, with a list or without, refused past it with the
+/// count and never split.
+#[test]
+fn a_publishs_stretch_list_is_parsed_held_by_request_arithmetic_and_written_back() {
+    let codec = JsonCodec;
+    let run = r#"{"origin":"1.0.1.0.9","i_start":"1.0.1.0.9.0.1.1","width":"2"}"#;
+    let frame = |members: &str, runs: usize| {
+        format!(r#"{{"op":"publish","doc":"1.0.1.0.1","runs":[{}]{members}}}"#, vec![run; runs].join(","))
+    };
+    let based = |stretches: &str, runs: usize| {
+        frame(&format!(r#","base":"1.0.1.0.1.2","base_extent":"10","stretches":{stretches}"#), runs)
+    };
+    let stretch = |start: u64, width: u64, count: u64| format!(r#"{{"start":"{start}","width":"{width}","count":"{count}"}}"#);
+    let refused = |frame: &str| {
+        let e = codec.parse(frame.as_bytes()).err().unwrap_or_else(|| panic!("frame must not parse: {}", &frame[..frame.len().min(240)]));
+        (e.detail.expect("a parse failure names what failed"), e.site.and_then(|s| s.index))
+    };
+    // The canonical form, and the fixpoint: three stretches — a placement
+    // before a position, a replacement that touches the next, a removal at
+    // the extent's end — whose counts take the three runs in order.
+    let text = based(&format!("[{},{},{}]", stretch(2, 0, 1), stretch(4, 2, 2), stretch(9, 2, 0)), 3);
+    let parsed = parse_ok(&codec, text.as_bytes());
+    let Op::Publish { shot, .. } = &parsed.op else { panic!("{parsed:?}") };
+    assert_eq!(
+        shot.stretches,
+        vec![
+            ShotStretch { start: n(2), width: n(0), count: 1 },
+            ShotStretch { start: n(4), width: n(2), count: 2 },
+            ShotStretch { start: n(9), width: n(2), count: 0 },
+        ]
+    );
+    assert_eq!(shot.stretch_fault(), None);
+    assert_eq!(
+        shot.stretch_terms(),
+        vec![
+            Stretch { start: n(2), width: n(0), placed: n(2) },
+            Stretch { start: n(4), width: n(2), placed: n(4) },
+            Stretch { start: n(9), width: n(2), placed: n(0) },
+        ],
+        "each count read as the positions its runs hold"
+    );
+    let marshaled = String::from_utf8(codec.marshal_request(&parsed)).expect("utf-8");
+    assert!(
+        marshaled.contains(r#""stretches":[{"count":"1","start":"2","width":"0"},{"count":"2","start":"4","width":"2"},{"count":"0","start":"9","width":"2"}]"#),
+        "{marshaled}"
+    );
+    assert_eq!(parse_ok(&codec, marshaled.as_bytes()), parsed, "parse ∘ marshal is a fixpoint");
+    // The price read carries the same member, parsed by the one parser.
+    let priced = parse_ok(&codec, text.replace(r#""op":"publish""#, r#""op":"publish_cost""#).as_bytes());
+    assert!(matches!(&priced.op, Op::PublishCost { shot: cost_shot, .. } if cost_shot == shot));
+    // Absent and null alike are the whole form, which writes no member.
+    for whole in [frame(r#","base":"1.0.1.0.1.2","base_extent":"10""#, 2), frame(r#","base":"1.0.1.0.1.2","base_extent":"10","stretches":null"#, 2)] {
+        let parsed = parse_ok(&codec, whole.as_bytes());
+        let Op::Publish { shot, .. } = &parsed.op else { panic!("{parsed:?}") };
+        assert!(shot.stretches.is_empty());
+        assert!(!String::from_utf8(codec.marshal_request(&parsed)).expect("utf-8").contains("stretches"));
+    }
+    // The request's arithmetic, each fault at its entry.
+    for (stretches, runs, index, why) in [
+        (format!("[{},{}]", stretch(5, 1, 1), stretch(3, 1, 0)), 1, Some(1), "ascending and apart"),
+        (format!("[{},{}]", stretch(3, 4, 1), stretch(6, 1, 0)), 1, Some(1), "ascending and apart"),
+        (format!("[{}]", stretch(0, 0, 1)), 1, Some(0), "starts at position 0"),
+        (format!("[{}]", stretch(12, 0, 1)), 1, Some(0), "starts past 'base_extent' + 1"),
+        (format!("[{}]", stretch(10, 2, 1)), 1, Some(0), "replaces positions past 'base_extent'"),
+        (format!("[{},{}]", stretch(2, 1, 1), stretch(5, 1, 2)), 2, Some(1), "do not sum to the 2 runs"),
+        (format!("[{},{}]", stretch(2, 1, 1), stretch(5, 1, 0)), 2, Some(1), "do not sum to the 2 runs"),
+        (format!("[{}]", stretch(2, 1, u64::MAX)), 1, Some(0), "do not sum to the 1 runs"),
+    ] {
+        let (detail, at) = refused(&based(&stretches, runs));
+        assert!(detail.contains("field 'stretches'") && detail.contains(why), "{why}: {detail}");
+        assert_eq!(at, index, "{why}: the entry named");
+    }
+    // A stretch at the last boundary, replacing nothing, is a placement past
+    // the positions the copy took: admitted.
+    assert!(codec.parse(based(&format!("[{}]", stretch(11, 0, 1)), 1).as_bytes()).is_ok());
+    // No base, the empty list, an entry of another shape: refused.
+    let (detail, index) = refused(&frame(&format!(r#","stretches":[{}]"#, stretch(1, 0, 1)), 1));
+    assert!(detail.contains("carried without 'base'") && index.is_none(), "{detail}");
+    let (detail, _) = refused(&based("[]", 1));
+    assert!(detail.contains("names no stretch"), "{detail}");
+    let (detail, index) = refused(&based(r#"[{"start":"1","width":"0","count":"1","runs":[]}]"#, 1));
+    assert!(detail.contains("unknown field 'runs'") && index == Some(0), "{detail}");
+    let (detail, index) = refused(&based(r#"[{"start":"1","count":"1"}]"#, 1));
+    assert!(detail.contains("missing field 'width'") && index == Some(0), "{detail}");
+    // The list is one wire list: 4,096 entries parse, 4,097 are refused
+    // with the count, before any entry is read.
+    let many = |count: usize| {
+        let entries: Vec<String> = (0..count as u64).map(|k| stretch(k + 1, 0, 0)).collect();
+        format!(r#"{{"op":"publish","doc":"1.0.1.0.1","runs":[],"base":"1.0.1.0.1.2","base_extent":"5000","stretches":[{}]}}"#, entries.join(","))
+    };
+    assert!(codec.parse(many(4_096).as_bytes()).is_ok(), "the list cap's stretches parse");
+    let (detail, index) = refused(&many(4_097));
+    assert!(detail.contains("field 'stretches': array has 4097 elements, past the 4096-element wire cap"), "{detail}");
+    assert_eq!(index, None);
+    // The runs take the cap on what one frame places, with a list or
+    // without: a birth and a whole form with its base of 65,536 runs parse,
+    // and one run more is refused with the count.
+    assert!(codec.parse(frame("", 5_000).as_bytes()).is_ok(), "a birth past the list cap parses");
+    assert!(codec.parse(frame(r#","base":"1.0.1.0.1.2","base_extent":"10""#, MAX_PLACED_RUNS).as_bytes()).is_ok(), "the whole form at the cap, with its base");
+    assert!(codec.parse(based(&format!("[{}]", stretch(3, 1, MAX_PLACED_RUNS as u64)), MAX_PLACED_RUNS).as_bytes()).is_ok(), "a change at the cap");
+    for over in [frame("", MAX_PLACED_RUNS + 1), based(&format!("[{}]", stretch(3, 1, MAX_PLACED_RUNS as u64 + 1)), MAX_PLACED_RUNS + 1)] {
+        let (detail, _) = refused(&over);
+        assert!(detail.contains("field 'runs': array has 65537 runs, past the 65536-run cap on what one frame places"), "{detail}");
+    }
 }

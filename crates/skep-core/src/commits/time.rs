@@ -331,6 +331,7 @@ impl TimeWriter {
             also: Vec::new(),
             keep_base: false,
             runs: vec![ShotRun { origin: draft, run }],
+            stretches: Vec::new(),
         };
         wp.head_writer.commit_publish(wp, serial, doc, shot, &refused).is_some()
     }

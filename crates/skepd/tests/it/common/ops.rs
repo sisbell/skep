@@ -492,6 +492,16 @@ pub fn publish_frame(doc: &str, base: Option<(&str, u64)>, draft: Option<&str>, 
     format!(r#"{{"op":"publish","doc":"{doc}"{base}{draft},"runs":[{}]}}"#, runs.join(","))
 }
 
+/// The shot that names its CHANGE against `base`: `stretches`, each
+/// `(start, width, count)` — `width` positions of the base from `start` on
+/// replaced by the next `count` entries of `runs` — beside the runs of the
+/// change, and `links` where the shot deposits any.
+pub fn publish_frame_by_stretches(doc: &str, base: (&str, u64), draft: Option<&str>, stretches: &[(u64, u64, usize)], runs: &[String]) -> String {
+    let mut frame: Value = serde_json::from_str(&publish_frame(doc, Some(base), draft, runs)).expect("a frame");
+    frame["stretches"] = stretches.iter().map(|(start, width, count)| serde_json::json!({"start": start.to_string(), "width": width.to_string(), "count": count.to_string()})).collect();
+    frame.to_string()
+}
+
 /// One shot from the signed session; the minted member's address.
 pub fn shot(
     port: u16,

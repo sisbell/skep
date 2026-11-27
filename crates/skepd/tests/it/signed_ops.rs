@@ -2526,6 +2526,149 @@ fn a_publish_frame_composed_from_the_member_is_the_frame_composed_from_the_reque
     );
 }
 
+/// A SHOT THAT NAMES ITS CHANGE IS SIGNED AGAINST ITS BASE, AND ITS BODY IS
+/// COMPOSED AGAIN FROM THE MEMBER. Off the first member's five words a shot
+/// names four stretches: the second word replaced by a draft's word and a
+/// window, the third removed, a window I-adjacent to the first placed before
+/// the fourth, and the fifth replaced by the draft's other word. The board
+/// composes the body from the request and verifies it; the member is the
+/// base with the stretches replaced, the two windows ONE run across the
+/// seam the removal made. A verifier holding the member and no request
+/// composes the same frame from what the board serves: its terms off
+/// `doc_metadata` — `placed`, `base_extent`, `shot_base`, and `stretches`
+/// in positions — and the member read at each stretch's image, a run
+/// clipped to the image and never joined across two, each stretch closed
+/// where its image ends: the frame is the request's byte for byte, and the
+/// marker's attestation verifies over it. The served depth of the chain of
+/// bases is 1 over a base a whole arrangement minted, 2 for the next such
+/// shot off it, and 0 again for a shot that sends its whole arrangement
+/// with its base. And the signed request RE-SENT NAMING ANOTHER BASE — the
+/// trunk's current head — composes another base group and verifies under no
+/// key: refused `attestation_invalid:signature`, nothing minted (a body
+/// that left the base out of a shot naming its stretches would verify
+/// there).
+#[test]
+fn a_shot_naming_its_stretches_is_composed_again_from_the_member_and_signed_against_its_base() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let other = edition_with(port, &signed, "pq");
+    let edition = edition_with(port, &signed, "abcde");
+    let first = shot(port, &signed, &edition, Some((&edition, 5)), None, &shot_runs(port, Some(&signed), &edition, 1, 5));
+    assert_eq!(first, format!("{edition}.1"));
+    let draft = draft_with(port, &signed, "xy");
+    let window = |ordinal: u64| run(&other, &format!("{other}.0.1.{ordinal}"), 1);
+    let word = |draft: &str, ordinal: u64| run(draft, &format!("{draft}.0.1.{ordinal}"), 1);
+    let stretches = [(2u64, 1u64, 2usize), (3, 1, 0), (4, 0, 1), (5, 1, 1)];
+    let runs = [word(&draft, 1), window(1), window(2), word(&draft, 2)];
+    let request = attach_attest(port, &signed, &publish_frame_by_stretches(&edition, (&first, 5), Some(&draft), &stretches, &runs));
+    let parsed: Value = serde_json::from_str(&request).unwrap();
+    let frame_from_request = entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &parsed).expect("composable");
+    let v = op_as_written(port, Some(&signed), &request);
+    let member = acked_addr(&v);
+    assert_eq!(member, format!("{edition}.2"));
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("attested");
+    // The member: the base, its stretches replaced.
+    let fresh = |ordinal: u64| format!("{edition}.0.1.{ordinal}");
+    assert_eq!(
+        image_runs(port, None, &member, 1, 6),
+        vec![(fresh(1), 1), (fresh(6), 1), (format!("{other}.0.1.1"), 2), (fresh(4), 1), (fresh(7), 1)],
+        "a, the draft's first word re-minted, the two windows one run across the seam, d, the draft's second word"
+    );
+    assert_eq!(values_of(port, None, &member, 1, 6).concat(), b"axpqdy");
+
+    // THE LATER VERIFIER, off the member alone.
+    let answer = doc_metadata(port, None, &member);
+    let meta = expect_resp(&answer, "doc_metadata");
+    let natural = |v: &Value| -> u64 { v.as_str().expect("a decimal string").parse().unwrap() };
+    assert_eq!((natural(&meta["placed"]), natural(&meta["base_extent"]), meta["shot_base"].as_str(), meta["chain_depth"].as_u64()), (4, 5, Some(first.as_str()), Some(1)), "{meta}");
+    assert_eq!(
+        meta["stretches"],
+        json!([{"start": "2", "width": "1", "placed": "2"}, {"start": "3", "width": "1", "placed": "0"}, {"start": "4", "width": "0", "placed": "1"}, {"start": "5", "width": "1", "placed": "1"}]),
+        "the stretch list in the member's terms: {meta}"
+    );
+    let trunk = trunk_of_str(&member);
+    let mut segments: Vec<SignerSegment> = Vec::new();
+    let (mut added, mut replaced) = (0u64, 0u64);
+    for stretch in meta["stretches"].as_array().expect("the list") {
+        let (start, width, placed) = (natural(&stretch["start"]), natural(&stretch["width"]), natural(&stretch["placed"]));
+        // The stretch's image: its start moved by what the stretches before
+        // it placed and replaced.
+        let mut ordinal = start + added - replaced;
+        if placed > 0 {
+            for (i_start, run_width) in image_runs(port, None, &member, ordinal, placed) {
+                if trunk_of_str(&origin_of(&i_start)) == trunk {
+                    segments.extend(values_of(port, None, &member, ordinal, run_width).into_iter().map(SignerSegment::Value));
+                } else {
+                    segments.push(SignerSegment::Window(addr(&i_start), run_width));
+                }
+                ordinal += run_width;
+            }
+        }
+        segments.push(SignerSegment::Stretch(start, width));
+        added += placed;
+        replaced += width;
+    }
+    assert_eq!(segments.len(), 8, "a value and a window, an end; an end; a window, an end; a value, an end");
+    assert!(
+        matches!((&segments[1], &segments[4]), (SignerSegment::Window(p, 1), SignerSegment::Window(q, 1)) if *p == addr(&format!("{other}.0.1.1")) && *q == addr(&format!("{other}.0.1.2"))),
+        "the one run the member holds across two images is a window in each"
+    );
+    let base_member = addr(&first);
+    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), Some(ShotBase { member: &base_member, extent: 5 }));
+    let board = board_term(port).expect("H.1");
+    let account = addr(&account_of(port, &signed, CLAIMANT_PRINCIPAL).expect("the account"));
+    let frame_from_member = entry_frame(ALG_MLDSA65_ED25519, board, &account, DocTerm::One(&addr(&trunk)), &body);
+    assert_eq!(frame_from_member, frame_from_request, "one preimage, composed from the request and from the member");
+    let (_, seed) = signer_of(&signed).expect("a signed session");
+    let key = HybridSigner::from_seed(FIXTURE_TAG, &seed).unwrap();
+    assert_eq!(skep_signature::verify(slot.sig_alg(), key.public_key(), &frame_from_member, slot.sig()), Ok(()), "the marker's attestation verifies over the member-composed frame");
+
+    // THE SAME CHANGE BY THE WHOLE FORM mints the same words: another
+    // draft's two, since the first draft's are published, off the same base.
+    let again = draft_with(port, &signed, "xy");
+    let whole = [run(&edition, &fresh(1), 1), word(&again, 1), window(1), window(2), run(&edition, &fresh(4), 1), word(&again, 2)];
+    let by_whole = shot(port, &signed, &edition, Some((&first, 5)), Some(&again), &whole);
+    assert_eq!(by_whole, format!("{first}.1"), "the head moved: the base's daughter");
+    assert_eq!(values_of(port, None, &by_whole, 1, 6).concat(), b"axpqdy", "one arrangement under either form");
+    let whole_runs = image_runs(port, None, &by_whole, 1, 6);
+    assert_eq!(whole_runs.iter().map(|(_, width)| *width).collect::<Vec<_>>(), vec![1, 1, 2, 1, 1], "run for run");
+    let whole_meta = doc_metadata(port, None, &by_whole);
+    assert_eq!((whole_meta["stretches"].is_null(), whole_meta["chain_depth"].as_u64(), whole_meta["placed"].as_str()), (true, Some(0), Some("6")), "{whole_meta}");
+
+    // THE DEPTH: one more for each shot naming its stretches, and none for
+    // one that sends its whole arrangement with its base.
+    let third_draft = draft_with(port, &signed, "z");
+    let third = acked_addr(&op(port, Some(&signed), &publish_frame_by_stretches(&edition, (&member, 6), Some(&third_draft), &[(7, 0, 1)], &[word(&third_draft, 1)])));
+    assert_eq!(third, format!("{edition}.3"));
+    assert_eq!(doc_metadata(port, None, &third)["chain_depth"].as_u64(), Some(2));
+    let fourth = shot(port, &signed, &edition, Some((&third, 7)), None, &shot_runs(port, Some(&signed), &third, 1, 7));
+    let anchored = doc_metadata(port, None, &fourth);
+    assert_eq!((fourth.as_str(), anchored["chain_depth"].as_u64(), anchored["stretches"].is_null()), (format!("{edition}.4").as_str(), Some(0), true), "{anchored}");
+    assert_eq!(values_of(port, None, &fourth, 1, 7).concat(), b"axpqdyz");
+
+    // THE CHANGED BASE: the first signed request, its base the current head.
+    let before = head_position(port);
+    let mut moved: Value = serde_json::from_str(&request).unwrap();
+    moved["base"] = Value::String(fourth.clone());
+    moved["base_extent"] = Value::String("7".into());
+    let v = op_as_written(port, Some(&signed), &moved.to_string());
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "the signature was made over the base it named, and verifies over no other: {v}"
+    );
+    assert_eq!(head_position(port), before, "nothing minted");
+    // The same stretches over the base it named at another extent — one the
+    // stretches still lie inside — is another preimage too.
+    let mut widened: Value = serde_json::from_str(&request).unwrap();
+    widened["base_extent"] = Value::String("6".into());
+    let v = op_as_written(port, Some(&signed), &widened.to_string());
+    assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "{v}");
+    assert_eq!(head_position(port), before);
+}
+
 /// THE RECORDED BASE WHERE THE ADDRESS NAMES ANOTHER (skep #1111): a shot
 /// off the memberless document `D` published once `D.1` stands — a draft
 /// begun before version 1 — lands as `D.1`'s daughter `D.1.1`, its signed

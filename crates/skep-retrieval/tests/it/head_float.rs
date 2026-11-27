@@ -55,6 +55,7 @@ fn a_region_read_as_named_answers_the_arrangement_its_document_held_before_versi
             origin: pdoc(),
             run: Run::new(pca(1), n(2)).expect("a content run"),
         }],
+        stretches: Vec::new(),
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &birth, &|_: &World, _: &Address| true)

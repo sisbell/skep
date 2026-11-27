@@ -961,6 +961,7 @@ impl HeadWriter {
             also: Vec::new(),
             keep_base: false,
             runs: vec![ShotRun { origin: draft, run }],
+            stretches: Vec::new(),
         };
         self.commit_publish(wp, serial, h, shot, &refused).is_some()
     }

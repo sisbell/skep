@@ -760,19 +760,20 @@ fn an_undo_after_a_put_back_is_typed_at_the_landing_where_a_members_word_became_
 /// The cap is counted on the runs a write places, never on the draft's.
 ///
 /// The draft holds the trunk's words and a member's by turns at adjoining
-/// ordinals, 4,097 runs as the board serves and takes them and one run of
-/// `D` as the core joins them. (a) The withdrawal lands: it names no
-/// change, so no run of the draft is sent or counted, the image still read,
-/// in two pages past the board's run budget, the marker cleared and every word
-/// standing (the mutant that sends the image back whole answers `OverCap`).
-/// (b) Its undo lands the same way, no record moving a word: the marker
-/// back, no run named. (c) A draft whose first and last words are `S`'s
-/// own, each named by a record as the trunk's word it became, 4,095 runs
-/// between: the one stretch the undo's mapping moves reaches from the first
-/// word to the last, so the write would place 4,097 runs and is refused
-/// `OverCap` with that count after the records' read, nothing sent and the
-/// marker staying out (the mutant that counts none sends a frame of 4,097
-/// runs).
+/// ordinals, one run more than a write may place as the board serves and
+/// takes them and one run of `D` as the core joins them. (a) The withdrawal
+/// lands: it names no change, so no run of the draft is sent or counted, the
+/// image still read, in pages past the board's run budget, the marker
+/// cleared and every word standing (the mutant that sends the image back
+/// whole answers `OverCap`). (b) Its undo lands the same way, no record
+/// moving a word: the marker back, no run named. (c) A draft whose first and
+/// last words are `S`'s own, each named by a record as the trunk's word it
+/// became, the cap's runs less one between: the one stretch the undo's
+/// mapping moves reaches from the first word to the last, so the write would
+/// place one run more than the cap and is refused `OverCap` with that count
+/// after the records' read, nothing sent and the marker staying out (the
+/// mutant that counts none sends a frame of that many runs). (d) The same
+/// undo over a draft of 5,000 runs places them all in one frame.
 #[test]
 fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     let wrote = |dialer: &Scripted| !(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
@@ -786,7 +787,7 @@ fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("(a): withdrawn");
     let names = dialer.names();
     let write = names.iter().position(|n| n == "set_arrangement").expect("(a): the write");
-    assert_eq!(names[..write].iter().filter(|n| *n == "image").count(), 2, "(a): the premise: the image read in two pages past the board's run budget: {names:?}");
+    assert_eq!(names[..write].iter().filter(|n| *n == "image").count(), (SHOT_RUN_CAP + 1).div_ceil(1 << 12), "(a): the premise: the image read in pages past the board's run budget, 4,096 runs a page: {names:?}");
     let sent = dialer.frames("set_arrangement");
     assert_eq!((sent.len(), &sent[0]["changes"]), (1, &json!([])), "(a): one write, naming no change");
     assert_eq!(dialer.world().docs.get(S).unwrap().runs, alternating(), "(a): every word stands");
@@ -816,7 +817,7 @@ fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     assert_eq!(
         unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, Some(own), None).map(drop),
         Err(Refusal::OverCap { runs: SHOT_RUN_CAP + 1, cap: SHOT_RUN_CAP }),
-        "(c): the two words mapped and the 4,095 runs between them"
+        "(c): the two words mapped and the runs between them"
     );
     for record in &records {
         assert!(dialer.frames("read_link").iter().any(|f| f["a"] == *record), "(c): the records read first: {:?}", dialer.names());
@@ -824,6 +825,36 @@ fn a_take_back_is_held_to_the_cap_on_the_runs_its_write_places() {
     assert!(!wrote(&dialer), "(c): nothing sent: {:?}", dialer.names());
     assert_eq!(dialer.world().rows.len(), rows, "(c): nothing committed");
     assert!(dialer.world().standing(S).1.is_none(), "(c): the marker stays out");
+    // (d) The same undo over a draft of 5,000 runs: the stretch its mapping
+    // moves places every one of them, past what one wire list holds and
+    // inside the cap, so it lands in ONE frame and one row, the marker back
+    // (the mutant that holds a write to 4,096 runs refuses it `OverCap`).
+    let (dialer, board, signer) = open(draft_landing_world());
+    let session = sign_in(&board, &signer);
+    let m = merger(&session, &signer);
+    landed_in_s(&board, &session, &signer);
+    let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+    let between = alternating().into_iter().take(4_998);
+    let held: Vec<Run> = [run(S, 1, 1)].into_iter().chain(between).chain([run(S, 3, 1)]).collect();
+    let own = {
+        let mut w = dialer.world();
+        // Every word the draft names is a stored one.
+        w.text(D, 16, &"x".repeat(10_000));
+        w.text(&member(), 1, &"x".repeat(5_000));
+        let own = w.change(S, held);
+        plant_record(&mut w, 1, 9_000, 1);
+        plant_record(&mut w, 3, 9_500, 1);
+        own
+    };
+    let rows = dialer.world().rows.iter().filter(|r| r.op == "set_arrangement").count();
+    dialer.clear();
+    unwithdraw(&board, m, &a(S), &a(K), withdrawn.position, Some(own), None).expect("(d): the withdrawal taken back in one write");
+    let sent = dialer.frames("set_arrangement");
+    assert_eq!(sent.len(), 1, "(d): one frame: {:?}", dialer.names());
+    let placed: usize = sent[0]["changes"].as_array().expect("changes").iter().map(|change| change["runs"].as_array().map_or(0, Vec::len)).sum();
+    assert_eq!(placed, 5_000, "(d): the two words mapped and the 4,998 runs between them, in the one frame");
+    assert_eq!(dialer.world().rows.iter().filter(|r| r.op == "set_arrangement").count(), rows + 1, "(d): one row");
+    assert!(dialer.world().standing(S).1.is_some(), "(d): the marker back");
 }
 
 /// A withdrawal's undo looks past records naming the draft as a side.

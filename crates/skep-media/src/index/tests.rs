@@ -248,6 +248,7 @@ fn a_shots_fresh_identity_is_entered_by_stored_piece_a_stretch_skipped_whole() {
         also: vec![],
         keep_base: false,
         runs: vec![ShotRun { origin: draft.clone(), run: Run::new(first, Nat::from(positions)).expect("the draft's run") }],
+        stretches: Vec::new(),
     };
     let readable = skep_engine::World::visible_to(system);
     let (member, _) = engine.vstream().publish(system, &edition, &shot, &readable).expect("the shot commits: seven units");

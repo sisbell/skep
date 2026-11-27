@@ -12,19 +12,32 @@
 //! [`replaced`], the stretches of a draft a landing there replaces, read
 //! before it.
 //!
-//! **The order, and what each step reads first.** The cap: `counts.m`
-//! against the shot's run cap before any frame (decision 13; P13). The
+//! **The order, and what each step reads first.** The cap binds what ONE
+//! WRITE sends (decision 13; P13): a landing into a draft writes the merged
+//! list whole, so `counts.m` is held to it before any frame; a shot sends
+//! what the merge changes in the head, so the merged list's count refuses
+//! nothing and the shot's own frame is judged where it is composed, by the
+//! runs it would carry. The
 //! shot's window parts ([`Answers`]; the `windows` module's doc): every
 //! window of M answered through the publication family's one core before
-//! anything is read first, the answered list checked against the cap
-//! again, and a part with no answer, or an answer that fits nothing,
+//! anything is read first, and a part with no answer, or an answer that
+//! fits nothing,
 //! refused with nothing sent ([`Refusal::WindowPartsOwed`]). The twins: a
 //! draft side's words a record names as published, read after the answers
 //! and sent by reference (the twin fence, below). A journal named: checked
 //! after the read-first steps, before the first write. The shot: the
-//! trunk's next member, then the head's daughters, read for a member whose
-//! first `placed` positions already hold the answered list —
-//! else one `publish` from the head, its body every copied run's bytes
+//! trunk's next member, then the head's daughters, read for a member that
+//! already holds the answered list — THE LANDED TEST, in its two cases: a
+//! member whose shot named its whole arrangement holds it over its first
+//! `placed` positions; a member whose shot named its stretches holds it by
+//! its arrangement, the head its base and the member that head with this
+//! merge's stretches replaced, read where either stretch list lies
+//! (`Writer::holds`) —
+//! else one `publish` from the head BY ITS CHANGE: the answered list cut
+//! against the head's image (`Writer::form_of`), the frame carrying the
+//! stretches of the head the merge replaces and the runs that replace
+//! them, the whole list where the head stands one short of the bound on
+//! its chain of bases; its body every copied run's bytes the frame carries
 //! re-read through the side that holds them and every window signed by
 //! address, the records read again just before the send so a part a record
 //! names since its answer was given is refused again, nothing published
@@ -563,8 +576,11 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// Completes a landing whose acknowledgment was lost — the residue walk.
 ///
 /// Where the shot landed and its acknowledgment was lost, the walk (the
-/// merge record's §1.5, P14) finds the member whose first `placed`
-/// positions equal M — the trunk's next member, else a daughter of the
+/// merge record's §1.5, P14) finds the member that holds M — over its
+/// first `placed` positions where its shot named its whole arrangement,
+/// and by its arrangement where its shot named its stretches of the head,
+/// whatever stretches it spelled — the trunk's next member, else a
+/// daughter of the
 /// head, which it reports as [`Landed::AsDaughter`] — or the landing the
 /// board marks in the draft named, at the position it marks, where the
 /// draft as of that position held M, whatever was edited in it since, and

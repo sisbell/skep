@@ -194,6 +194,15 @@ struct DocState {
     /// response envelope); `None` in the birth shape and where no shot
     /// minted the document.
     shot_base: Option<String>,
+    /// The stretches of that base the shot's runs replaced, each
+    /// `(start, width, placed)` — its `doc_metadata` `stretches`; empty,
+    /// served `null`, where the shot named its whole arrangement and
+    /// where no shot minted the document.
+    stretches: Vec<(u64, u64, u64)>,
+    /// How many shots that named their stretches stand between the member
+    /// and the nearest base none minted — its `doc_metadata`
+    /// `chain_depth`, served beside `placed`.
+    chain_depth: u64,
     /// The source a `version` minted the document sharing, or a `stage`
     /// copied into it — its `doc_metadata` `source`; `None` where
     /// neither did.
@@ -436,6 +445,8 @@ impl World {
                 placed: None,
                 base_extent: None,
                 shot_base: None,
+                stretches: Vec::new(),
+                chain_depth: 0,
                 source: None,
                 staged: BTreeMap::new(),
                 markers: BTreeMap::new(),
@@ -474,6 +485,22 @@ impl World {
         let d = self.docs.get_mut(text).expect("a draft of the world");
         d.staged.insert(0, (base.to_string(), copied));
         d.source = Some(base.to_string());
+    }
+
+    /// Returns the world with every trunk's head one shot short of the
+    /// bound on its chain of bases: its `doc_metadata` `chain_depth` is
+    /// `WHOLE_FORM_EVERY − 1`, so the next shot a lander makes on it names
+    /// its whole arrangement and carries no `stretches`. A cell whose
+    /// subject is the whole list as sent — its runs, its places, the words
+    /// read for its body — lands on such a head; every other cell lands by
+    /// the stretches of the head its merge replaces.
+    fn whole_form_due(mut self) -> World {
+        for head in self.trunk_head.values() {
+            let d = self.docs.get_mut(head).expect("a trunk's head");
+            assert!(d.placed.is_some(), "a head a shot minted serves its depth");
+            d.chain_depth = crate::publication::WHOLE_FORM_EVERY - 1;
+        }
+        self
     }
 
     /// A member of a chain with its shot terms, its `shot_base` the base
@@ -878,7 +905,7 @@ impl World {
                 // since it planted it at its start (wire.md §The
                 // response envelope, `arranged_at`).
                 let arranged_at = d.history.range(..=position).next_back().map(|(at, _)| *at).filter(|at| *at > 0);
-                let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.minted.or_else(|| d.history.keys().next().copied()), "arranged_at": arranged_at});
+                let mut answer = json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "stretches": (!d.stretches.is_empty()).then(|| d.stretches.iter().map(|(start, width, placed)| json!({"start": start.to_string(), "width": width.to_string(), "placed": placed.to_string()})).collect::<Vec<_>>()), "chain_depth": d.placed.map(|_| d.chain_depth), "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string()), "merge": merge, "at": d.minted.or_else(|| d.history.keys().next().copied()), "arranged_at": arranged_at});
                 // The address named's own content count, never floated —
                 // absent on an older board.
                 if !self.no_own_count {
@@ -1287,8 +1314,10 @@ impl World {
                 let base = frame["base"].as_str().unwrap().to_string();
                 let base_extent: u64 = frame["base_extent"].as_str().unwrap().parse().unwrap();
                 let draft = frame["draft"].as_str().map(str::to_string);
-                let mut positions = Vec::new();
+                // The positions each run of the request places, run by run.
+                let mut placed_by_run: Vec<Vec<(Address, u64)>> = Vec::new();
                 for r in frame["runs"].as_array().unwrap() {
+                    let mut positions = Vec::new();
                     let origin = r["origin"].as_str().unwrap().to_string();
                     let i_start: u64 = r["i_start"]
                         .as_str()
@@ -1313,9 +1342,48 @@ impl World {
                             positions.push((a(&origin), i_start + k));
                         }
                     }
+                    placed_by_run.push(positions);
                 }
+                let placed: u64 = placed_by_run.iter().map(|run| run.len() as u64).sum();
+                // THE STRETCHES (wire.md §Arrangement, `publish`): the
+                // member is the base with each stretch of it replaced by
+                // the next `count` runs; with none, the runs are the
+                // member's whole arrangement.
+                let natural = |v: &Value| v.as_str().and_then(|text| text.parse::<u64>().ok()).expect("a natural");
+                let named: Vec<(u64, u64, usize)> = frame["stretches"]
+                    .as_array()
+                    .map(|list| list.iter().map(|s| (natural(&s["start"]), natural(&s["width"]), natural(&s["count"]) as usize)).collect())
+                    .unwrap_or_default();
+                let mut stretches: Vec<(u64, u64, u64)> = Vec::new();
+                let positions: Vec<(Address, u64)> = if named.is_empty() {
+                    placed_by_run.into_iter().flatten().collect()
+                } else {
+                    assert_eq!(named.iter().map(|s| s.2).sum::<usize>(), placed_by_run.len(), "the stretches' counts take the request's runs");
+                    let held: Vec<(Address, u64)> = self
+                        .docs
+                        .get(&base)
+                        .expect("the base")
+                        .runs
+                        .iter()
+                        .flat_map(|run| (0..run.width).map(move |k| (run.origin.clone(), run.i_start + k)))
+                        .collect();
+                    let mut out = Vec::new();
+                    let mut runs = placed_by_run.into_iter();
+                    let mut cursor = 1u64;
+                    for (start, width, count) in &named {
+                        assert!(*start >= cursor && start + width <= base_extent + 1, "the stretches are ascending, apart and inside the base's extent");
+                        out.extend_from_slice(&held[cursor as usize - 1..*start as usize - 1]);
+                        let before = out.len();
+                        out.extend(runs.by_ref().take(*count).flatten());
+                        stretches.push((*start, *width, (out.len() - before) as u64));
+                        cursor = start + width;
+                    }
+                    out.extend_from_slice(&held[cursor as usize - 1..]);
+                    out
+                };
+                let chain_depth = if named.is_empty() { 0 } else { self.docs.get(&base).map_or(0, |d| d.chain_depth) + 1 };
                 let runs = coalesce(positions);
-                let placed: u64 = runs.iter().map(|r| r.width).sum();
+                let whole: u64 = runs.iter().map(|r| r.width).sum();
                 let head = self.trunk_head.get(&doc).cloned().expect("a chain");
                 // THE VALIDATION's (6), the merge bridge lane: a shot
                 // naming daughters lands on the trunk or not at all —
@@ -1347,6 +1415,8 @@ impl World {
                 d.placed = Some(placed);
                 d.base_extent = Some(base_extent);
                 d.shot_base = Some(base.clone());
+                d.stretches = stretches;
+                d.chain_depth = chain_depth;
                 if !member.strip_prefix(&format!("{doc}.")).unwrap().contains('.') {
                     self.trunk_head.insert(doc.clone(), member.clone());
                     self.docs.get_mut(&doc).unwrap().runs = runs;
@@ -1392,7 +1462,7 @@ impl World {
                 // `keep_base` moves neither (§Arrangement, `publish`).
                 let moves = frame["keep_base"].as_bool() != Some(true);
                 if let Some(s) = draft.as_ref().filter(|_| moves).and_then(|s| self.docs.get_mut(s)) {
-                    s.staged.insert(at, (member.clone(), placed));
+                    s.staged.insert(at, (member.clone(), whole));
                     s.markers.insert(at, None);
                     s.stamped.clear();
                 }

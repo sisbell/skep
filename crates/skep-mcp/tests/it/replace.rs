@@ -827,6 +827,65 @@ fn an_edit_placing_runs_lands_them_by_identity_as_one_set_arrangement_commit() {
     assert!(mcp.finish().success());
 }
 
+/// A placed call past 4,096 runs lands in ONE commit.
+///
+/// The agent sends ONE `edit` call whose one change places 5,000 runs —
+/// another draft's 5,000 words, each a run of its own, last word first —
+/// more than one wire list holds and inside the board's number for what one
+/// call places. The adapter sends ONE `set_arrangement` frame carrying all
+/// of them, the board acknowledges it, and the draft's feed shows one
+/// entry: one piece is one write, never two (a board that held a frame's
+/// runs to the wire's list would refuse the frame `malformed`, and an
+/// adapter that split the call would relay two writes and leave two rows).
+/// The draft reads, position for position, the words the call named, read
+/// back a page of the image at a time.
+#[test]
+fn a_placed_edit_of_5_000_runs_lands_in_one_commit() {
+    let fixture = Fixture::relayed("replace-placed-wide");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
+    mcp.initialize();
+    let doc = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, "kept");
+    let count = 5_000usize;
+    let other = draft_holding(&mut mcp, CLAIMANT_ACCOUNT, &"w".repeat(count));
+    let (own, theirs) = (addresses(&mut mcp, &doc), addresses(&mut mcp, &other));
+    assert_eq!(theirs.len(), count);
+    // The other draft's words, last first: no two runs I-adjacent in order.
+    let runs: Vec<Value> = theirs.iter().rev().map(|first| json!({"origin": other, "i_start": first, "width": "1"})).collect();
+    let typed = mcp.position();
+    fixture.relay().forget();
+    let landed = mcp.acked("edit", json!({"as_of": typed, "doc": doc, "changes": [{"at": {"subspace": "1", "ordinal": "1"}, "width": "0", "runs": runs}]}));
+    assert_eq!(landed["resp"], "ack", "runs placed by identity mint nothing: {landed}\n{}", mcp.log());
+    let at_commit = landed["at"].as_u64().expect("the commit's position");
+    let writes: Vec<(String, usize, String)> = fixture
+        .relay()
+        .passed()
+        .iter()
+        .filter(|passed| ["insert", "delete", "reinstate", "copy", "rearrange", "edit", "set_arrangement"].contains(&passed.op.as_str()) && passed.frame["doc"] == doc.as_str())
+        .map(|passed| {
+            let placed = passed.frame["changes"].as_array().map_or(0, |changes| changes.iter().map(|change| change["runs"].as_array().map_or(0, Vec::len)).sum());
+            (passed.op.clone(), placed, passed.answer["resp"].as_str().unwrap_or_default().to_string())
+        })
+        .collect();
+    assert_eq!(writes, [("set_arrangement".to_string(), count, "ack".to_string())], "one write relayed, every run in the one frame");
+    let page = mcp.call_json("changes_since", json!({"since": typed, "under": doc, "class": "drafts"}));
+    let rows: Vec<(String, u64)> = page["entries"].as_array().expect("entries").iter().map(|entry| (entry["op"].as_str().unwrap_or_default().to_string(), entry["at"].as_u64().unwrap_or_default())).collect();
+    assert_eq!(rows, [("set_arrangement".to_string(), at_commit)], "one commit on the feed");
+    // The draft, position for position: the image past one answer's runs is
+    // read a region at a time, each inside the run budget.
+    let mut held: Vec<String> = Vec::new();
+    for (from, width) in [(1usize, 4_096usize), (4_097, count + own.len() - 4_096)] {
+        let image = mcp.call_json("image", json!({"d": doc, "region": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]}));
+        for run in image["runs"].as_array().unwrap_or_else(|| panic!("a region inside the run budget answers its runs: {image}")) {
+            let (prefix, first) = run["i_start"].as_str().and_then(|start| start.rsplit_once('.')).expect("a run");
+            let (first, width): (u64, u64) = (first.parse().expect("an ordinal"), run["width"].as_str().and_then(|width| width.parse().ok()).expect("a width"));
+            held.extend((first..first + width).map(|n| format!("{prefix}.{n}")));
+        }
+    }
+    let expected: Vec<String> = theirs.iter().rev().cloned().chain(own.iter().cloned()).collect();
+    assert_eq!(held, expected, "every position holds the I-address the call named for it");
+    assert!(mcp.finish().success());
+}
+
 /// A draft the session does not own is refused by the board, nothing held.
 ///
 /// The agent space's principal reads the claimant's draft, which lies above

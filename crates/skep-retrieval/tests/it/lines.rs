@@ -525,6 +525,7 @@ fn a_run_of_an_unregistered_origin_is_withheld_with_the_predicate_unasked() {
             shot_run(unheld_ca(1), 2),
             shot_run(pca(3), 1),
         ],
+        stretches: Vec::new(),
     };
     vs.publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
         .expect("the birth shot commits");

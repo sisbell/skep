@@ -85,6 +85,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     ///   SORTS the document's whole provenance record, M5 stating the cost
     ///   where it is paid; R never shrinks, so a document that has deleted far
     ///   more than it holds carries a record far larger than its arrangement.
+    ///   `|R↾d|` is `M5State::recorded_span_count`, which counts what the
+    ///   read walks: the spans appended for `d`, the run-list a snapshot
+    ///   named for it at its mint, and — for a member a shot minted, which
+    ///   stores no span and loses no position — its arrangement, so such a
+    ///   member answers nothing deleted.
     /// * `n_C(d_b)·|deletions(d_a)| + n_C(d_a)·|deletions(d_b)|` for the
     ///   membership pass — one `denotes` test, a linear scan of the cover, per
     ///   enumerated position. THIS TERM DOMINATES, and it needs nothing

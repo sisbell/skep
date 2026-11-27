@@ -800,6 +800,13 @@ pub struct PublishFrame<'a> {
     pub claim: bool,
     /// The base member and `base_extent`, together or neither.
     pub base: Option<(&'a str, u64)>,
+    /// The stretches of the base the runs replace, each
+    /// `(start, width, count)`: `width` positions of the base from `start`
+    /// on replaced by the next `count` entries of `runs` (wire.md
+    /// §Arrangement, `publish`, `stretches`). Sent only where non-empty,
+    /// beside `base`: empty is the whole form, whose `runs` are the whole
+    /// arrangement.
+    pub stretches: &'a [(u64, u64, usize)],
     /// The rendering draft.
     pub draft: Option<&'a str>,
     /// The family's other drafts whose identity the shot re-mints beside
@@ -861,7 +868,8 @@ pub struct AlsoPlacesFrame<'a> {
 /// (a list of `null`s is the shot as before, so it is left out),
 /// `also_places` only with the entries whose list carries a place, in
 /// `also`'s order, and only where one remains (the canonical form the codec
-/// writes), `also`, `links`, `retract`, `originals`, `read_with` and
+/// writes), `stretches`, `also`, `links`, `retract`, `originals`,
+/// `read_with` and
 /// `supersede` only where non-empty, `mint`, `claim` and `keep_base` only
 /// where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
@@ -881,6 +889,12 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     if let Some((member, extent)) = p.base {
         frame["base"] = Value::String(member.to_string());
         frame["base_extent"] = Value::String(extent.to_string());
+    }
+    if !p.stretches.is_empty() {
+        let stretches = p.stretches.iter().map(|(start, width, count)| {
+            json!({"start": start.to_string(), "width": width.to_string(), "count": count.to_string()})
+        });
+        frame["stretches"] = Value::Array(stretches.collect());
     }
     if let Some(draft) = p.draft {
         frame["draft"] = Value::String(draft.to_string());

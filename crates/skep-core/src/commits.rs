@@ -2271,12 +2271,13 @@ enum RowTerms {
     /// For a replacing grant it is the grant record's address; its
     /// `replaces` link sits at the next.
     MakeLink,
-    /// `publish`'s placed count and base extent.
+    /// `publish`'s placed count, base extent and base.
     ///
-    /// They are the post-commit world's shot terms of the member its
-    /// `AckAddr` names, the very value `doc_metadata` serves for it (M5's
-    /// `ShotPlace`, folded per member), so the row and the member read
-    /// cannot disagree.
+    /// They are three of the post-commit world's shot terms of the member
+    /// its `AckAddr` names, the very values `doc_metadata` serves for it
+    /// (M5's `ShotPlace`, folded per member), so the row and the member read
+    /// cannot disagree; the stretch list and the chain's depth, the terms'
+    /// other two, are the member read's alone.
     Publish,
     /// An edit's base and merge, under either of its names, `edit` and
     /// `set_arrangement` (the landing lane; skep #764).

@@ -1038,14 +1038,32 @@ pub(crate) fn stage_publish_stepped<W: PublishWorld>(
     // the boundary between the last of them and the carried tail,
     // which `placed` never counts.
     let placed = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
-    // The member's placement: the client's runs in order — the
+    // The shot's placement: the client's runs in order — the
     // draft-native ones re-inserted as fresh identity under the
-    // document's own I-space, each draft identity once — then the base's
-    // post-render deposits.
+    // document's own I-space, each draft identity once — stretch after
+    // stretch. THE ACCUMULATOR RESTARTS AT EACH STRETCH BOUNDARY: a
+    // stretch's runs are accumulated apart (`share`) and joined to the
+    // placement whole, so two I-adjacent runs of two stretches stay two runs
+    // in the record, and the positions each stretch placed partition it. The
+    // fold's splice alone merges across a boundary, at the seams it makes.
+    // The whole form is one stretch, and restarts nowhere.
+    let mut boundaries = shot
+        .stretches
+        .iter()
+        .scan(0usize, |reach, stretch| {
+            *reach += stretch.count;
+            Some(*reach)
+        })
+        .peekable();
     let mut placement: Vec<Run> = Vec::new();
+    let mut share: Vec<Run> = Vec::new();
     let mut minted = MintedIdentity::default();
     let mut pairing: Pairing = Vec::new();
     for (index, SettledRun { run, origin_doc }) in supplied.into_iter().enumerate() {
+        // Every stretch that ends before this run closes the share in hand.
+        while boundaries.next_if(|reach| *reach <= index).is_some() {
+            placement.append(&mut share);
+        }
         if draft_native(&origin_doc) {
             // EACH DRAFT IDENTITY ONCE PER SHOT: the run split by the
             // identities this shot already minted, each referenced piece
@@ -1060,48 +1078,53 @@ pub(crate) fn stage_publish_stepped<W: PublishWorld>(
             for portion in minted.portions_of(run) {
                 match portion {
                     Portion::Referenced { from, to } => {
-                        extend_or_push_run(&mut placement, to.clone());
+                        extend_or_push_run(&mut share, to.clone());
                         pairing.push(MintedRun { from, to, home: origin_doc.clone(), index, minted: false });
                     }
                     Portion::Unminted(piece) => {
                         let fresh = reinsert(stg, &trunk, counted.take(&piece))?;
                         minted.note(&piece, &fresh, &origin_doc, index, &mut pairing);
                         for run in fresh {
-                            extend_or_push_run(&mut placement, run);
+                            extend_or_push_run(&mut share, run);
                         }
                     }
                 }
             }
         } else {
-            extend_or_push_run(&mut placement, run.clone());
+            extend_or_push_run(&mut share, run.clone());
         }
-        if placement.len() > MAX_PLACED_RUNS {
+        if placement.len() + share.len() > MAX_PLACED_RUNS {
             return Err(PublishError::TooManyRuns);
         }
     }
-    // The base's positions past the extent its staged copy took are
-    // the deposits the render post-dates (PUB-2.43, PUB-2.45) — asked
-    // of the arrangement, which knows its own extent, and measured as
-    // each is accumulated, the walk stopping at the cap.
-    if let Some(base) = &shot.base {
-        for run in stg.working().m5().content_runs_past(&base.member, &base.extent) {
-            extend_or_push_run(&mut placement, run);
-            if placement.len() > MAX_PLACED_RUNS {
-                return Err(PublishError::TooManyRuns);
-            }
-        }
-    }
+    placement.append(&mut share);
+    // The base's positions past the extent its staged copy took — the
+    // deposits the render post-dates (PUB-2.43, PUB-2.45) — are no part of
+    // the placement: no stretch names them, so the fold, which builds the
+    // member from the base's own list, leaves them where the base holds
+    // them. The depth of the member's chain of bases is read here, off the
+    // base's own terms as this transaction's working world holds them: zero
+    // for a shot naming no stretch list, and elsewhere one more than the
+    // base's — zero for a base no shot minted.
+    let chain_depth = if shot.stretches.is_empty() {
+        0
+    } else {
+        let base = shot.base.as_ref().and_then(|base| stg.working().m5().shot_terms(&base.member));
+        base.map_or(0, |terms| terms.chain_depth).saturating_add(1)
+    };
     // The member: born published (PUB-2.5, PUB-2.10), under the
     // anchor its admission decided.
     let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
     stg.push(m3rec.into());
     // Its placing record, pushed whatever the placement holds: the
-    // whole arrangement and the shot's terms, the base and its extent
+    // runs the shot placed and its terms — the base and its extent
     // both the request's own and both absent in the birth shape
     // (signed-ops D25; skep #1111) — the base the request named, never
     // the anchor the member is minted under, which for a memberless base
     // standing beside a first member is that member and not the base —
-    // and the draft whose base the shot moves, the rendering draft's
+    // the stretch list in the member's terms, empty for the whole form,
+    // and the depth read above — and the draft whose base the shot moves,
+    // the rendering draft's
     // document unless the shot keeps its base (`Shot::moves_base_of`), so
     // the fold moves that draft's recorded base to this member (B3-S10;
     // BASE★ on `M5State`).
@@ -1113,6 +1136,8 @@ pub(crate) fn stage_publish_stepped<W: PublishWorld>(
                 placed,
                 base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
                 base: shot.base.as_ref().map(|base| base.member.clone()),
+                stretches: shot.stretch_terms(),
+                chain_depth,
             },
             draft: shot.moves_base_of(),
         }
@@ -1228,6 +1253,27 @@ fn admit<'s, W: HasM3 + HasM5>(
     shot: &'s Shot,
     readable: &dyn Fn(&W, &Address) -> bool,
 ) -> Result<Admission<'s>, PublishError> {
+    admit_stepped(world, caller, doc, shot, readable, &mut |_| {})
+}
+
+/// Runs [`admit`], its walks of runs counted.
+///
+/// `steps` is charged one for every run of the request the admission
+/// settles and one for every run of the base it reads to judge a run
+/// carried — the two walks whose length a request or a base decides. The
+/// admission's one body; [`admit`] hands it a count that compiles away.
+///
+/// # Errors
+///
+/// [`admit`]'s.
+fn admit_stepped<'s, W: HasM3 + HasM5>(
+    world: &W,
+    caller: Caller,
+    doc: &Address,
+    shot: &'s Shot,
+    readable: &dyn Fn(&W, &Address) -> bool,
+    steps: &mut impl FnMut(u64),
+) -> Result<Admission<'s>, PublishError> {
     let trunk = trunk_of(doc);
     // Slot 1: registration and ω, on the address named.
     gate_write(
@@ -1241,7 +1287,7 @@ fn admit<'s, W: HasM3 + HasM5>(
     // Slot 3: registration — the base, each named draft in the request's
     // order, every origin document — and the unowned-draft edge per named
     // draft, then each run settled beside its origin document.
-    let supplied = settle_runs(m3, caller, shot)?;
+    let supplied = settle_runs(m3, caller, shot, steps)?;
     // Slot 5: the model's refusal — a private document has no chain to
     // append to (PUB-2.9).
     if !published_target(m3, doc) {
@@ -1287,7 +1333,7 @@ fn admit<'s, W: HasM3 + HasM5>(
         }
     };
     // Slot 6: the source gate.
-    source_gate(world, Some(&trunk), shot, &supplied, readable)?;
+    source_gate(world, Some(&trunk), shot, &supplied, readable, steps)?;
     Ok(Admission { anchor, supplied })
 }
 
@@ -1338,8 +1384,8 @@ pub fn mint_admission<W: HasM3 + HasM5>(
     if shot.base.is_some() {
         return Err(PublishError::BaseNotInChain);
     }
-    let supplied = settle_runs(m3, caller, shot)?;
-    source_gate(world, None, shot, &supplied, readable)
+    let supplied = settle_runs(m3, caller, shot, &mut |_| {})?;
+    source_gate(world, None, shot, &supplied, readable, &mut |_| {})
 }
 
 /// Runs slot 3 and the unowned-draft edge, and settles each run beside its
@@ -1359,16 +1405,29 @@ pub fn mint_admission<W: HasM3 + HasM5>(
 /// run's own start, required to be the document the client's stated `origin`
 /// projects to, then registered — the first defective run in order deciding.
 ///
+/// Ahead of them all, THE STRETCH LIST by request arithmetic
+/// ([`Shot::stretch_fault`]): a shot whose `stretches` is no list of
+/// stretches of its base is refused before any registration is asked, as
+/// the wire's door refuses its frame before any read. The runs settled are
+/// the request's own — the whole arrangement, or with a stretch list the
+/// runs of the change: nothing the base arranges is settled again, its runs
+/// having been settled when the base was born. `steps` is charged one for
+/// every run settled.
+///
 /// # Errors
 ///
-/// `SourceNotRegistered` for the base, then per named draft in the request's
-/// order `SourceNotRegistered` and `NotOwner` carrying that draft; then per
-/// run in order `BadRun` and `SourceNotRegistered`.
+/// `BadStretches`; `SourceNotRegistered` for the base, then per named draft
+/// in the request's order `SourceNotRegistered` and `NotOwner` carrying that
+/// draft; then per run in order `BadRun` and `SourceNotRegistered`.
 fn settle_runs<'s>(
     m3: &M3State,
     caller: Caller,
     shot: &'s Shot,
+    steps: &mut impl FnMut(u64),
 ) -> Result<Vec<SettledRun<'s>>, PublishError> {
+    if shot.stretch_fault().is_some() {
+        return Err(PublishError::BadStretches);
+    }
     if let Some(base) = &shot.base {
         if !m3.is_registered_document(&base.member) {
             return Err(PublishError::SourceNotRegistered);
@@ -1385,6 +1444,7 @@ fn settle_runs<'s>(
     shot.runs
         .iter()
         .map(|stated| -> Result<SettledRun<'s>, PublishError> {
+            steps(1);
             let origin_doc = run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
             if origin_doc != trunk_of(&stated.origin) {
                 return Err(PublishError::BadRun);
@@ -1403,15 +1463,20 @@ fn settle_runs<'s>(
 /// Runs slot 6, the source gate, over the settled runs.
 ///
 /// Per distinct origin document, in run order — the document's own I-space
-/// (`trunk`, where the shot has one) needs no consult, a run the base already
-/// arranges takes none (PUB-6.24), and the first unreadable origin document
-/// speaks before any existence answer. An origin document joins `admitted`
-/// only once the consult admits it: a carried run adds nothing to it, so a
-/// later run from the same origin that the base does not arrange is still
-/// asked about. The base's runs are merged into their union once, at the
-/// first run the gate must ask about, and every run is then one search of
-/// it: a carried run admits no origin, so a request of carried runs asks
-/// this of every one.
+/// (`trunk`, where the shot has one) needs no consult — `readable` is asked
+/// FIRST, once an origin: an origin it admits is admitted for every run,
+/// and one it withholds is kept withheld, so it is never asked twice. Only
+/// a run of a withheld origin meets the carried test (PUB-6.24): a run the
+/// base already arranges takes no gate, and the first run of a withheld
+/// origin the base does not arrange speaks, before any existence answer.
+/// The verdicts are those of asking the carried test first — a run is
+/// refused exactly where its origin is neither the document's own nor
+/// readable and the base does not arrange it, the first such in run order
+/// — at another cost: the base's runs are merged into their union only
+/// where some origin is withheld, at the first run of one, and each such
+/// run is then one search of it. A shot whose every origin the reader may
+/// read builds no union and reads no run of its base. `steps` is charged
+/// one for every run of the base read into the union.
 ///
 /// # Errors
 ///
@@ -1422,26 +1487,33 @@ fn source_gate<W: HasM3 + HasM5>(
     shot: &Shot,
     supplied: &[SettledRun<'_>],
     readable: &dyn Fn(&W, &Address) -> bool,
+    steps: &mut impl FnMut(u64),
 ) -> Result<(), PublishError> {
     let m5 = world.m5();
     let mut base_union: Option<RunUnion<'_>> = None;
     let mut admitted: BTreeSet<&Address> = BTreeSet::new();
+    let mut withheld: BTreeSet<&Address> = BTreeSet::new();
     for SettledRun { run, origin_doc } in supplied {
         if Some(origin_doc) == trunk || admitted.contains(origin_doc) {
             continue;
         }
+        if !withheld.contains(origin_doc) {
+            if readable(world, origin_doc) {
+                admitted.insert(origin_doc);
+                continue;
+            }
+            withheld.insert(origin_doc);
+        }
         let carried = shot.base.as_ref().is_some_and(|base| {
             base_union
-                .get_or_insert_with(|| RunUnion::of(m5.content_runs(&base.member)))
+                .get_or_insert_with(|| {
+                    RunUnion::of(m5.content_runs(&base.member).inspect(|_| steps(1)))
+                })
                 .covers(run)
         });
-        if carried {
-            continue;
-        }
-        if !readable(world, origin_doc) {
+        if !carried {
             return Err(PublishError::Withheld(origin_doc.clone()));
         }
-        admitted.insert(origin_doc);
     }
     Ok(())
 }

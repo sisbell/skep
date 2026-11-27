@@ -24,8 +24,9 @@ where
     /// content arrangement as a snapshot of the content subspace of
     /// `source`'s reading surface (the arrangement `source`'s readers answer
     /// from, below) — the multiplicity-preserving V→I map share, V2 — and
-    /// records provenance. Returns the new document address and the commit
-    /// `Seq`.
+    /// records provenance by naming that list as what the new document
+    /// contained at its mint, no span appended. Returns the new document
+    /// address and the commit `Seq`.
     ///
     /// Whether `principal` owns `source` is asked of M3's authorization
     /// predicate — `is_effective_owner`, the ω rule the ownership gate asks
@@ -150,29 +151,31 @@ where
     ///
     /// **Cost, and who owns it.** One request names one address, and the
     /// record it stages names two; what the fold then does is share the
-    /// surface's run-list (O(1), structural) and append
-    /// `#runs(reading_surface(source))` freshly-built spans to R, permanently,
-    /// R losing no member ever (P2). So the work and the state a request
-    /// commands are set by the surface's fragmentation and not by the request,
-    /// and that count is itself grown by editing — a self-COPY of a draft
+    /// surface's run-list (O(1), structural) and NAME that same list in R as
+    /// what the new document contained at its mint — a second handle on the
+    /// one vector, no span built — so the fold, and every replay of the
+    /// record ([`M5Rec::VersionSnapshot`]), costs nothing a run, whatever
+    /// the surface holds. What the snapshot commands is paid later and by the
+    /// run of the surface, `#runs(reading_surface(source))`: the named list
+    /// is kept as it stood for as long as the new document is, however it
+    /// and its source move afterwards, so once either rebuilds its own list
+    /// the named one holds the vector alone; a checkpoint writes a named
+    /// list whole, beside the arrangement it was shared from; and the
+    /// provenance reads walk it, a run a span
+    /// ([`recorded_span_count`](crate::M5State::recorded_span_count) counts
+    /// it). That count is set by the surface's fragmentation and not by the
+    /// request, and is itself grown by editing — a self-COPY of a draft
     /// doubles it, within `MAX_PLACED_RUNS` per request.
     ///
     /// M5 caps none of it, and no cap upstream reaches it: M2's
     /// `MAX_TXN_BYTES` prices the staged record, which is two addresses;
     /// skep-core's codec, M10's production `Codec`, prices values with
     /// `MAX_INSERT_VALUES` and lists with `MAX_WIRE_LIST`, and this request
-    /// carries neither. The
-    /// asymmetry against COPY is deliberate to state and not to defend:
-    /// COPY's R-append is bounded at
-    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per request and this one is
-    /// unbounded, though the two append by the same mechanism and with the
-    /// same permanence — a fork cannot be split by its caller the way an
+    /// carries neither. A fork cannot be split by its caller the way an
     /// over-budget copy can, so a ceiling here would refuse
-    /// `enabled(VERSION)` rather than shape a request. Replay re-does the
-    /// expansion from the same two addresses ([`M5Rec::VersionSnapshot`]), so
-    /// the bill is charged again at every `Kernel::open` that replays the
-    /// record. Admission control for a route carrying this op is therefore the
-    /// caller's, and a route that carries it owes the number:
+    /// `enabled(VERSION)` rather than shape a request. Admission control for
+    /// a route carrying this op is therefore the caller's, and a route that
+    /// carries it owes the number:
     /// [`content_run_count`](crate::M5State::content_run_count) of the
     /// source's [`reading_surface`], which the arrangement answers without
     /// reading a run.

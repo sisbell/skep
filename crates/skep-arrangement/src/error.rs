@@ -508,6 +508,14 @@ pub enum SubstituteError {
 /// * `SourceNotRegistered` — the base, the document a named draft projects
 ///   to (PUB-2.15; `draft` first, then each of `also` in order), or a run's
 ///   origin document is not a registered document.
+/// * `BadStretches` — the shot's stretch list is no list of stretches of
+///   its base ([`Shot::stretch_fault`](crate::Shot::stretch_fault)): it
+///   rides no base, an entry starts at position 0 or below the reach of the
+///   one before it, starts or reaches past the base's stated extent, or
+///   the counts do not partition the runs. Arithmetic on the request alone,
+///   judged ahead of every registration; it discloses nothing about what
+///   exists. The wire's door refuses such a frame before the store sees it,
+///   so this is the verdict of a shot handed to the store another way.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
 ///   its start is not a content element, or its origin document — the trunk
 ///   (PUB-2.15) of the document that minted it — is not the document the
@@ -546,7 +554,8 @@ pub enum SubstituteError {
 /// * `DanglingSource` — an I-address a run names has no stored value
 ///   (S3★): a by-reference run whose I-extent M4 does not hold whole, or a
 ///   draft-native run whose bytes are not all there to re-insert.
-/// * `TooManyRuns` — the member's placement exceeds
+/// * `TooManyRuns` — the shot's placement — the runs it places, each
+///   stretch's accumulated apart — exceeds
 ///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY, REINSTATE
 ///   and the shot share; a shot cannot be split to meet it.
 /// * `TooManyValues` — the positions the shot re-inserts
@@ -585,6 +594,8 @@ pub enum PublishError {
     /// The base, a named draft's document or a run's origin is not
     /// registered.
     SourceNotRegistered,
+    /// The stretch list is no list of stretches of the shot's base.
+    BadStretches,
     /// A supplied run is not a content run of its stated origin.
     BadRun,
     /// The base is neither the document nor a member of its chain.
@@ -699,6 +710,9 @@ impl fmt::Display for PublishError {
             }
             PublishError::SourceNotRegistered => f.write_str(
                 "publish: the base, the draft, or a run's origin is not a registered document",
+            ),
+            PublishError::BadStretches => f.write_str(
+                "publish: the stretch list is no list of stretches of the shot's base — ascending and apart, inside the base's extent, their counts the runs'",
             ),
             PublishError::BadRun => f.write_str(
                 "publish: a supplied run is not a content run of its stated origin",

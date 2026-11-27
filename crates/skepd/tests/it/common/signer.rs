@@ -281,11 +281,13 @@ fn signer_slot(port: u16, token: &str, v: &Value) -> Option<Vec<Span>> {
 }
 
 /// One segment of a `publish` body as the signer composes it (the address
-/// form, l6-A4), owned: a copied position's value, or a window's start and
-/// width.
+/// form, l6-A4), owned: a copied position's value, a window's start and
+/// width, or — for a frame naming `stretches` — the end of one stretch, its
+/// start and width, behind the segments of the runs it takes.
 pub enum SignerSegment {
     Value(Vec<u8>),
     Window(Address, u64),
+    Stretch(u64, u64),
 }
 
 impl SignerSegment {
@@ -297,6 +299,9 @@ impl SignerSegment {
                 width: NonZeroU64::new(*width)
                     .expect("a window the signer composes holds at least one position"),
             },
+            SignerSegment::Stretch(start, width) => {
+                ShotSegmentPiece::Stretch { start: *start, width: *width }
+            }
         }
     }
 }
@@ -381,7 +386,22 @@ pub fn publish_segments(
     let mut per_origin: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
     let mut supplied = supplied.map(|values| values.iter());
     let mut out: Vec<SignerSegment> = Vec::new();
-    for run in frame["runs"].as_array()? {
+    // The stretches the frame names, each with the run it ends before: its
+    // end is pushed behind its runs' segments, and no window is joined
+    // across it — the piece before a later window is then the stretch's
+    // end, never a window.
+    let number = |v: &Value| v.as_str().and_then(|text| text.parse::<u64>().ok());
+    let mut reach = 0usize;
+    let mut ends: Vec<(usize, u64, u64)> = Vec::new();
+    for stretch in frame.get("stretches").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+        reach += number(&stretch["count"])? as usize;
+        ends.push((reach, number(&stretch["start"])?, number(&stretch["width"])?));
+    }
+    let mut ends = ends.into_iter().peekable();
+    for (index, run) in frame["runs"].as_array()?.iter().enumerate() {
+        while let Some((_, start, width)) = ends.next_if(|(reach, _, _)| *reach <= index) {
+            out.push(SignerSegment::Stretch(start, width));
+        }
         let i_start = run["i_start"].as_str()?;
         let width: u64 = run["width"].as_str()?.parse().ok()?;
         if !i_start.contains(".0.1.") {
@@ -432,6 +452,7 @@ pub fn publish_segments(
             }
         }
     }
+    out.extend(ends.map(|(_, start, width)| SignerSegment::Stretch(start, width)));
     Some(out)
 }
 

@@ -64,7 +64,11 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// replay — not a recomputable hint (ASN-0047 P3); provenance is the
 /// append-only history housed next to it, and it is a type of its own whose
 /// methods offer no removal, so the permanence R promises holds by
-/// construction. The arrangement map is sparse: an absent doc reads as the
+/// construction. R↾doc is kept in three parts, and a document may hold any
+/// of them: the spans appended for it, one a run a placement or an edit
+/// placed; the run-list a snapshot named for it, the list it was born
+/// sharing as it stood at the mint; and, for a member a shot minted, its
+/// arrangement itself, which only grows and so is its own record. The arrangement map is sparse: an absent doc reads as the
 /// empty arrangement (the eager-lazy split with M3). v1 has no derived-hint
 /// fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is the identity.
 ///
@@ -86,7 +90,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///
 /// **The shot terms** (`shot_terms`; signed-ops D25) are the fourth field,
 /// and the one that is journaled per member: for every version member the
-/// shot minted, the three client terms of that shot which nothing else the
+/// shot minted, the client terms of that shot which nothing else the
 /// fold keeps answers — the count the client placed (Σ width of its runs,
 /// `placed`), the base's extent the staged copy took (`base_extent`) and the
 /// base itself (`base`), the member or memberless document the shot was made
@@ -94,21 +98,27 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// birth bit — the birth shape's: a first shot with `base` absent, where the
 /// count is `birth_extent(D.1)`; a birth version minted off its memberless
 /// document as its base carries `Some` of that document and of the extent
-/// that copy took, and its birth extent counts the tail carried past it.
+/// that copy took, and its birth extent counts the tail carried past it —
+/// and the shot's stretch list (`stretches`), which stretches of the base
+/// its runs replaced, empty for a shot that sent its whole arrangement;
+/// beside them the depth of the member's chain of bases (`chain_depth`),
+/// read off the base's own terms at the staging.
 /// They ride the shot's own placing record ([`ShotPlace`](M5Rec::ShotPlace)),
 /// so they are hashed into the commit chain, folded here, carried by every
 /// checkpoint, replayed on every replica and read off the live snapshot by
 /// anyone holding the member's address ([`shot_terms`](M5State::shot_terms))
 /// — which is what a verifier of the shot's entry signature needs beyond the
 /// member's own runs: the signature binds the runs the client placed in the
-/// address form, `placed` says where they end and the base's carried tail
-/// begins, and `base` and `base_extent` are the signed base group. The
+/// address form, `placed` and the stretches say where in the member they
+/// lie ([`ShotTerms::images`]), and `base`, `base_extent` and the stretches
+/// are the signed base group and stretch row. The
 /// member's address does not name its base in every case: a draft begun
 /// from the memberless document `D` and published once `D.1` stands lands as
 /// `D.1`'s daughter `D.1.k`, its base `D` and never `D.1`. The run-list
-/// erases the boundary between the client's last run and the carried tail
-/// whenever the two are I-adjacent, so nothing the arrangement holds
-/// afterwards could re-derive `placed`. Nothing reads them to decide a write.
+/// erases the boundary between a run the client placed and the base's run
+/// beside it whenever the two are I-adjacent, and many stretch lists yield
+/// one member, so nothing the arrangement holds afterwards could re-derive
+/// the terms. Nothing reads them to decide a write.
 ///
 /// **The fork sources** (`fork_sources`; the fork-source design record) are
 /// the fifth field, and the one that is noted off a record already
@@ -200,24 +210,33 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   however the variant set grows (ASN-0047 P2).
 /// * **P4★ — present containment is recorded.** For every `doc`, the current
 ///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
-///   `provenance.ever_contained(doc)`. Established by the four arms that
-///   place: [`ContentPlace`](M5Rec::ContentPlace) appends exactly the
-///   iextents it splices in, [`ShotPlace`](M5Rec::ShotPlace) exactly the
-///   iextents of the runs it splices at ordinal 1 (none when it places none),
-///   [`ContentEdit`](M5Rec::ContentEdit) exactly the iextents of the runs
-///   its changes place — the values a text edit minted, the runs a landing
-///   placed by identity and the published runs a re-window put at a draft's
-///   kept places alike, none where its changes only remove —
-///   while what its changes remove only contracts the image, and
-///   [`VersionSnapshot`](M5Rec::VersionSnapshot) exactly the iextents of
-///   the run-list it installs. Preserved by the other three:
+///   what `doc` ever contained, R↾doc as the provenance reads take it
+///   (`ever_contained`): the spans appended for `doc`, the run-list a
+///   snapshot named for it, and — for a member a shot minted — its
+///   arrangement. Established by the four arms that place:
+///   [`ContentPlace`](M5Rec::ContentPlace) appends exactly the iextents it
+///   splices in; [`ContentEdit`](M5Rec::ContentEdit) exactly the iextents
+///   of the runs its changes place — the values a text edit minted, the
+///   runs a landing placed by identity and the published runs a re-window
+///   put at a draft's kept places alike, none where its changes only
+///   remove — while what its changes remove only contracts the image;
+///   [`VersionSnapshot`](M5Rec::VersionSnapshot) names the run-list it
+///   installs, whole, and appends no span; and
+///   [`ShotPlace`](M5Rec::ShotPlace) appends nothing and holds by
+///   construction, the member's arrangement being the record it is read
+///   from. That last rests on one fact: no record takes a position out of
+///   a member a shot minted. Such a member is born published and stays so,
+///   every edit that removes or re-arranges refuses a published document
+///   (PUB-2.11), and a deposit lands past the arranged extent — so the
+///   image of a shot's member never contracts, and what it ever contained
+///   is what it arranges. Preserved by the other three:
 ///   [`ContentRemove`](M5Rec::ContentRemove) only contracts the image,
 ///   [`ContentReorder`](M5Rec::ContentReorder) permutes the same arranged
 ///   addresses, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
 ///   run-list, which is no part of the content image. Splitting and
 ///   coalescing move the boundaries between runs and not the addresses they
 ///   cover, so the image is stable under both. On the decode path P4★ is
-///   M2's integrity, not the type's: a checkpoint carries both fields whole
+///   M2's integrity, not the type's: a checkpoint carries the fields whole
 ///   and no door re-establishes their relation — unlike R's span shape and
 ///   the run-list's maximal merge, whose serde doors do — because
 ///   containment costs a per-class set difference over every document's
@@ -257,16 +276,24 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   [`ShotPlace`](M5Rec::ShotPlace), the record the commit that minted `m`
 ///   pushed, and no other record on the op path names `m` there: a member is
 ///   minted once, and the shot is the one op that mints a member with a
-///   placement of its own. So `placed(m)` is a prefix of the arrangement `m`
-///   was minted with — positions `[1, placed(m)]` are the client's runs and
+///   placement of its own. So the positions the client placed are the
+///   stretches' images in the arrangement `m` was minted with
+///   ([`ShotTerms::images`]): each stretch's `placed` positions opening
+///   where the stretches before it left its `start`, and between and past
+///   them the base's own positions, its carried tail among them. For a
+///   shot with no list the one image is the prefix `[1, placed(m)]`, and
 ///   `(placed(m), birth_extent(m)]` (or the count at the mint, for a later
-///   member) the base's carried tail — and
-///   [`address_form_of`](M5State::address_form_of) reads that prefix back.
+///   member) is the base's carried tail.
+///   [`address_form_of`](M5State::address_form_of) reads the images back,
+///   image by image.
 ///   Its `base` and `base_extent` are the shot's own `base` — the member
 ///   and the extent the request named, set together by the one constructor
 ///   off it, so both are `None` exactly in the birth shape — and never a
-///   reading of `m`'s address. On the decode path, as BIRTH★: carried
-///   whole, re-established by no door.
+///   reading of `m`'s address; its `stretches` are the request's list with
+///   each count read as positions, empty exactly where the request carried
+///   none; and its `chain_depth` is zero there and one more than the
+///   base's elsewhere, as the staging read it. On the decode path, as
+///   BIRTH★: carried whole, re-established by no door.
 /// * **SOURCE★ — a document's fork source is the source of the `version`
 ///   that minted it, noted once and never moved.** `fork_sources` gains
 ///   `new`'s entry at `new`'s own [`VersionSnapshot`](M5Rec::VersionSnapshot)
@@ -611,7 +638,31 @@ impl Merge {
     }
 }
 
-/// The shot's three client terms, per member the shot minted.
+/// One stretch of a shot's stretch list, in the member's terms.
+///
+/// It is one entry of the partition a shot's placing record carries
+/// ([`ShotTerms::stretches`]): `width` positions of the base from `start`
+/// on are replaced by `placed` positions of the shot's own runs. The
+/// request spells the same stretch by a count of its `runs`
+/// ([`ShotStretch`](crate::ShotStretch)); this is that entry with the count
+/// read as the positions those runs hold, which is what the member can be
+/// read back by — its run boundaries are the run-list's, never the
+/// request's — and what the shot's signed body spells in its stretch row.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Stretch {
+    /// The first position of the base the stretch replaces, 1-based.
+    ///
+    /// Where `width` is zero it is the base position the stretch's runs are
+    /// placed before, the boundary past the base's extent among them.
+    pub start: Nat,
+    /// How many positions of the base the stretch replaces.
+    pub width: Nat,
+    /// How many positions of the shot's runs replace them.
+    pub placed: Nat,
+}
+
+/// The shot's client terms, per member the shot minted, with the depth of
+/// its chain of bases.
 ///
 /// They are signed-ops D25's terms: what a verifier of the member's entry
 /// signature needs beside the member's own runs, and what nothing the
@@ -623,10 +674,12 @@ impl Merge {
 pub struct ShotTerms {
     /// The positions the client placed: Σ width of the shot's runs.
     ///
-    /// It is the count the shot's signed body leads with: positions
-    /// `[1, placed]` of the member are the client's runs; at the mint what
-    /// follows them is the base's carried tail, and a head member's later
-    /// deposits land after it.
+    /// It is the count the shot's signed body leads with. For a shot with
+    /// no stretch list, positions `[1, placed]` of the member are the
+    /// client's runs; at the mint what follows them is the base's carried
+    /// tail, and a head member's later deposits land after it. For a shot
+    /// with a list it is the sum of the stretches' `placed`, and the
+    /// positions lie where [`images`](ShotTerms::images) says.
     pub placed: Nat,
     /// The base's extent the staged copy took; `None` in the birth shape.
     ///
@@ -648,6 +701,64 @@ pub struct ShotTerms {
     /// and published once a member stands lands as the first member's
     /// daughter `D.1.k`, and its base is `D`.
     pub base: Option<Address>,
+    /// The shot's stretch list, in the member's terms; empty for a shot
+    /// that carried none.
+    ///
+    /// Each entry says which positions of the base its share of the shot's
+    /// runs replaced ([`Stretch`]), ascending and apart, in the base's own
+    /// coordinates. Empty is the whole form, and the one way a verifier
+    /// tells it: the shot named no list, its runs are the member's
+    /// positions `[1, placed]`, and its signed body carries no stretch row
+    /// — the birth shape always, and a shot with a base that sent its whole
+    /// arrangement. A shot with a list names at least one stretch, so the
+    /// two never read alike.
+    pub stretches: Vec<Stretch>,
+    /// How many shots that carried a stretch list stand between the member
+    /// and the nearest base no such shot minted.
+    ///
+    /// Zero for a member a shot with no list minted. For a member a shot
+    /// with a list minted it is one more than its base's — the base's own
+    /// terms' depth where a shot minted the base, zero where none did (a
+    /// member a `version` minted, a memberless document). Read off the
+    /// base's terms by the staging, in the transaction that mints the
+    /// member, and never moved: a base is minted before every member staged
+    /// against it, and its terms are written once. It is how many changes a
+    /// verifier of the member's whole arrangement composes before it meets
+    /// an arrangement spelled whole.
+    pub chain_depth: u64,
+}
+
+impl ShotTerms {
+    /// Returns where the positions the shot placed lie in the member.
+    ///
+    /// One entry a stretch, in order: the first position of the member the
+    /// stretch's runs hold, and how many they hold — its `placed`. A
+    /// stretch's image opens at its `start` moved by what the stretches
+    /// before it added and removed, `start + Σ placed − Σ width` over them,
+    /// so the images are ascending and apart as the stretches are, and an
+    /// image of no position (a stretch that only removed) names the place
+    /// between two positions. For a shot with no list the one image is
+    /// `(1, placed)`: the member's leading positions.
+    ///
+    /// Arithmetic on the terms alone. Over terms no staging wrote — a
+    /// decoded state whose stretches are not ascending and apart — an image
+    /// that would open below position 1 opens at 1.
+    pub fn images(&self) -> Vec<(Nat, Nat)> {
+        if self.stretches.is_empty() {
+            return vec![(Nat::one(), self.placed.clone())];
+        }
+        let (mut added, mut removed) = (Nat::from(0u8), Nat::from(0u8));
+        self.stretches
+            .iter()
+            .map(|stretch| {
+                let opened = &stretch.start + &added;
+                let at = if opened > removed { &opened - &removed } else { Nat::one() };
+                added += &stretch.placed;
+                removed += &stretch.width;
+                (at, stretch.placed.clone())
+            })
+            .collect()
+    }
 }
 
 /// M5's sole journal delta, effect-level (Conflicts #4).
@@ -768,18 +879,52 @@ pub enum M5Rec {
     VersionSnapshot { source: Address, new: Address },
     /// The publish shot's placing record (PUB-2.33; signed-ops D25).
     ///
-    /// It carries the member's whole arrangement `runs` — the client's runs
-    /// in order, the draft-native ones re-inserted, then the base's carried
-    /// tail — spliced at content ordinal 1 + R-append (J1★), as `ContentPlace`
-    /// at ordinal 1 would; and the shot's [`ShotTerms`] — the three client
-    /// facts the arrangement cannot keep, `terms.placed` counting the
-    /// client's positions alone and so short of `runs`' Σ width by the
-    /// carried tail's, `terms.base` and `terms.base_extent` the base the
-    /// request named and the extent its copy took — which the fold notes for
-    /// the member. Pushed for every member the shot
-    /// mints, an empty placement included: the terms exist whatever the
-    /// placement holds, and a birth version born empty is noted at its birth,
-    /// zero, by this record (BIRTH★).
+    /// It carries the shot's change and not the member's arrangement:
+    /// `runs`, the client's runs as the store placed them — in order, the
+    /// draft-native ones re-inserted — and the shot's [`ShotTerms`], which
+    /// say what of the base those runs replace and which the fold notes for
+    /// the member: `terms.base` and `terms.base_extent` the base the request
+    /// named and the extent its copy took, `terms.placed` the positions
+    /// `runs` hold, and `terms.stretches` the partition — each stretch of
+    /// the base the next `placed` positions of `runs` replace. A shot that
+    /// carried no stretch list is the one stretch over the base's positions
+    /// `[1, base_extent]` — over nothing in the birth shape, which has no
+    /// base — and its record spells none: `terms.stretches` is empty exactly
+    /// there. So one record shape serves the whole form and the change, and
+    /// its size follows the runs the shot placed, never the member's.
+    ///
+    /// **The fold builds the member from its base.** The member's
+    /// arrangement is the base's content run-list with every stretch
+    /// replaced by its runs, in one walk of that list
+    /// (`RunList::spliced`) — the empty list where the shot names no base —
+    /// and nothing is appended to R: a published member's arrangement only
+    /// grows, so what it ever contained is what it arranges (P4★). The
+    /// base's positions past `base_extent` are touched by no stretch, so
+    /// they stand in the member where the base holds them: the deposits the
+    /// render post-dates, carried as the whole form carries them (PUB-2.42,
+    /// PUB-2.45), by the fold's read and no run of the record's.
+    ///
+    /// **Stretch by stretch.** `runs` hold each stretch's runs after the
+    /// last's, and a run never spans two stretches: the staging restarts its
+    /// run accumulator at each stretch boundary, so two I-adjacent runs of
+    /// two stretches are two runs here, and the positions each stretch
+    /// placed partition `runs` exactly. Only the fold's splice merges across
+    /// a boundary, at the seams it makes in the member's list.
+    ///
+    /// **Linearization-at-fold**: the fold reads the base's then-current
+    /// arrangement at this record's commit or replay slot, as
+    /// [`VersionSnapshot`](M5Rec::VersionSnapshot) reads its source's — the
+    /// record's effect is defined against the state at its commit position,
+    /// not a value staged with it. Exact under v1's single-applier M2
+    /// realization (nothing lands between a transaction's base and its
+    /// commit), and deterministic at replay, records folding in journal
+    /// order; any M2 concurrency realization that lets disjoint-key commits
+    /// land in that window must re-examine this record first, beside the
+    /// snapshot.
+    ///
+    /// Pushed for every member the shot mints, an empty placement included:
+    /// the terms exist whatever the placement holds, and a birth version
+    /// born empty is noted at its birth, zero, by this record (BIRTH★).
     ///
     /// `draft` is the draft whose recorded base the shot moves
     /// ([`Shot::moves_base_of`](crate::Shot::moves_base_of)): the document
@@ -1012,8 +1157,9 @@ impl M5State {
 
     /// Returns the shot terms of `member`: those of the shot that minted it.
     ///
-    /// They are the three client terms ([`ShotTerms`]: `placed`,
-    /// `base_extent`, `base`), which the doc-metadata read serves beside the
+    /// They are the client terms and the depth beside them ([`ShotTerms`]:
+    /// `placed`, `base_extent`, `base`, `stretches`, `chain_depth`), which
+    /// the doc-metadata read serves beside the
     /// birth version and a verifier of the member's entry signature composes
     /// its body from — the base the shot recorded, never one read off the
     /// member's address — or `None` for a member no shot's record names: a
@@ -1106,21 +1252,22 @@ impl M5State {
                 draft_bases: self.draft_bases.clone(),
                 source_copied: self.source_copied.clone(),
             },
-            // The shot's placement (signed-ops D25): `ContentPlace` at
-            // ordinal 1 — the same splice, the same R-append — and the
-            // member's terms noted beside its birth extent. The birth extent
-            // is noted here for a birth version (BIRTH★): the shot journals a
-            // member's whole arrangement as one placement, in the commit that
-            // mints it (PUB-3.11), so this record naming a birth version is
-            // its mint and the count it leaves is the birth extent — zero for
-            // a member born empty, since the record is pushed whatever the
-            // placement holds. The count is read off the spliced list itself,
-            // built once and then installed — the list this record leaves the
-            // member holding, as the snapshot arm below counts the list it
-            // shares. An empty placement leaves the arrangement absent under
-            // the lazy convention (≡ empty), as the snapshot arm leaves an
-            // empty source's `new`, and appends no provenance. No fork source
-            // is noted: the shot mints its member off no source (SOURCE★).
+            // The shot's placement (signed-ops D25): the member's list built
+            // from its base's, read at this record's own slot, with every
+            // stretch replaced by its runs in ONE walk (`shot_member_list`),
+            // and the member's terms noted beside its birth extent. Nothing
+            // is appended to R: a published member's arrangement only grows,
+            // so R↾member is read off the arrangement itself (P4★). The birth
+            // extent is noted here for a birth version (BIRTH★): this record
+            // naming a birth version is its mint (PUB-3.11) and the count it
+            // leaves is the birth extent — zero for a member born empty,
+            // since the record is pushed whatever the placement holds. The
+            // count is read off the list this record leaves the member
+            // holding, built once and then installed, as the snapshot arm
+            // below counts the list it shares. A list of no run leaves the
+            // arrangement absent under the lazy convention (≡ empty), as the
+            // snapshot arm leaves an empty source's `new`. No fork source is
+            // noted: the shot mints its member off no source (SOURCE★).
             //
             // The named draft's base moves to the member (BASE★): the draft
             // the record names — the rendering draft of a shot that is its
@@ -1133,7 +1280,7 @@ impl M5State {
             // gains one naming the member as its source too. A record naming
             // no draft moves nothing.
             M5Rec::ShotPlace { doc, runs, terms, draft } => {
-                let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
+                let content = self.shot_member_list(runs, terms, &mut |_| {});
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
                 let shot_terms = self.shot_terms.update(doc.clone(), terms.clone());
                 let draft_bases = match draft {
@@ -1159,28 +1306,19 @@ impl M5State {
                 // (MOVED★): the mint is the arrangement's first change, an
                 // empty placement included.
                 let arranged_at = moved(doc);
-                if runs.is_empty() {
-                    M5State {
-                        arrangements: self.arrangements.clone(),
-                        provenance: self.provenance.clone(),
-                        birth_extents,
-                        shot_terms,
-                        fork_sources: self.fork_sources.clone(),
-                        arranged_at,
-                        draft_bases,
-                        source_copied: self.source_copied.clone(),
-                    }
-                } else {
-                    M5State {
-                        arrangements: self.arrangements_with_content(doc, |_| content),
-                        provenance: self.provenance.append(doc, runs),
-                        birth_extents,
-                        shot_terms,
-                        fork_sources: self.fork_sources.clone(),
-                        arranged_at,
-                        draft_bases,
-                        source_copied: self.source_copied.clone(),
-                    }
+                M5State {
+                    arrangements: if content.is_empty() {
+                        self.arrangements.clone()
+                    } else {
+                        self.arrangements_with_content(doc, |_| content)
+                    },
+                    provenance: self.provenance.clone(),
+                    birth_extents,
+                    shot_terms,
+                    fork_sources: self.fork_sources.clone(),
+                    arranged_at,
+                    draft_bases,
+                    source_copied: self.source_copied.clone(),
                 }
             }
             // §4 fold: split at `from` and `from + width`, drop the middle,
@@ -1242,35 +1380,27 @@ impl M5State {
                 source_copied: self.source_copied.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
-            // `new` (structural im share — O(1)) and append each shared run
-            // as provenance (run, new). This copies the V→I map, not the
-            // I-range (ASN-0123 V2): the share preserves multiplicity, so
-            // within-document transclusion duplicates survive into the fork.
-            // When the source content subspace is empty (n = 0) the fold
-            // appends no provenance and skips the arrangements update,
-            // leaving `new` absent under the lazy convention (≡ empty) —
-            // V1's zero-content footprint with no redundant entry. Source is
-            // untouched (V3); the fork diverges copy-on-write (V11).
+            // `new` (structural im share — O(1)) and NAME that list in R as
+            // what `new` contained at its mint (`Provenance::named`): the
+            // same list, shared a second time, and no span appended. This
+            // copies the V→I map, not the I-range (ASN-0123 V2): the share
+            // preserves multiplicity, so within-document transclusion
+            // duplicates survive into the fork. When the source content
+            // subspace is empty (n = 0) the fold names nothing and skips the
+            // arrangements update, leaving `new` absent under the lazy
+            // convention (≡ empty) — V1's zero-content footprint with no
+            // redundant entry. Source is untouched (V3); the fork diverges
+            // copy-on-write (V11).
             //
-            // The two halves cost differently, and only one of them is
-            // priced by the record. The arrangement share is O(1). The
-            // R-append is Θ(#runs(source)) freshly-built spans — one per
-            // run, each a pair of tumblers — and permanent (P2). This
-            // record carries two addresses whatever the source holds, so
-            // M2's `MAX_TXN_BYTES` weighs those two addresses and bounds
-            // the expansion not at all; `ContentPlace`, which appends to R
-            // by this same mechanism, carries its runs and is bounded by
-            // that ceiling and, as COPY and REINSTATE stage it, by
-            // `MAX_PLACED_RUNS` too. Replay re-pays it: the journal record
-            // stays two addresses, so `k` snapshot records — a `version`'s
-            // or a `stage`'s — cost `Σ #runs(sourceᵢ)` spans at every
-            // `Kernel::open` that replays them, and a checkpoint carries the
-            // result. What would put this
-            // append under the transaction budget where `ContentPlace`'s
-            // already sits is the explicit-runs form of this record (Open
-            // decision #4) — a second reason for that migration beside the
-            // M2-concurrency one stated on the variant. `Vstream::version`
-            // states who owns the bound meanwhile.
+            // Both halves are O(1) at the fold, whatever the source holds:
+            // the arrangement and R↾new's named list are two handles on the
+            // one vector the source holds, and replay pays the same. What
+            // the naming costs it costs later and by the run: once `new` —
+            // or a source that still moves, a trunk's head or a draft —
+            // rebuilds its own list, the named one is the only handle on the
+            // list as it stood, kept for as long as `new` is; and a
+            // checkpoint writes a named list whole, a run a run, beside the
+            // arrangement it was shared from, and decodes them apart.
             //
             // The birth extent is noted on this arm too (BIRTH★): an owned
             // VERSION of a memberless published document mints its birth
@@ -1290,8 +1420,8 @@ impl M5State {
             // a bare document, and never a reading of it made here. Beside it
             // the count the copy took, on both branches too: the width of the
             // list shared, zero for an empty surface, summed once here and
-            // read by the birth extent as well — a walk of the runs the
-            // R-append below already pays one span apiece for.
+            // read by the birth extent as well — the fold's one walk of the
+            // list it shares.
             //
             // The arranged-at entry is noted for `new` on both branches too
             // (MOVED★): the mint is the first change to the arrangement `new`
@@ -1317,7 +1447,7 @@ impl M5State {
                         source_copied,
                     }
                 } else {
-                    let provenance = self.provenance.append(new, content.iter());
+                    let provenance = self.provenance.named(new, content.clone());
                     let arr = DocArrangement {
                         content,
                         link: RunList::default(),
@@ -1433,6 +1563,38 @@ impl M5State {
         }
     }
 
+    /// Returns the arrangement a shot's placing record leaves its member
+    /// holding: its base's content run-list with every stretch replaced by
+    /// its runs, in one walk.
+    ///
+    /// The base is `terms.base`'s list as this state holds it — the empty
+    /// list in the birth shape — and the changes are the record's partition
+    /// (`shot_splices`): each stretch of the base and the runs that replace
+    /// it, ascending and apart, made together by [`RunList::spliced`]. So a
+    /// record of `k` stretches reads each run of the base once, whatever
+    /// `k`, and the run-list's seams merge what two neighbouring stretches,
+    /// or a stretch and the base beside it, hold I-adjacent.
+    ///
+    /// `steps` is `spliced`'s: one for every run of the base the walk reads,
+    /// one for every stretch and one for every run placed. The fold hands it
+    /// a count that compiles away.
+    pub(crate) fn shot_member_list(&self, runs: &[Run], terms: &ShotTerms, steps: &mut impl FnMut(u64)) -> RunList {
+        let changes = shot_splices(runs, terms);
+        match &terms.base {
+            Some(base) => self.content_list(base).spliced(&changes, steps),
+            None => RunList::default().spliced(&changes, steps),
+        }
+    }
+
+    /// Returns the members a shot minted, in tumbler order.
+    ///
+    /// They are the keys of the shot terms (TERMS★): the documents whose
+    /// R↾doc the provenance reads take off the arrangement, no span being
+    /// stored for them.
+    pub(crate) fn shot_members(&self) -> impl Iterator<Item = &Address> + '_ {
+        self.shot_terms.keys()
+    }
+
     /// Returns the markers stamped on `draft`'s standing entry.
     ///
     /// They are its [`DraftBase::stamped`], cloned for the entry a base
@@ -1450,6 +1612,50 @@ impl M5State {
     pub fn rebuild_derived(self) -> M5State {
         self
     }
+}
+
+/// Returns a shot's placing record as the changes its fold makes to the
+/// base's list: one [`Splice`] a stretch.
+///
+/// Each stretch removes its `width` positions of the base from its `start`
+/// on and places the next runs of `runs` that hold its `placed` positions;
+/// the staging closes a run at every stretch boundary, so the positions
+/// partition `runs` exactly. A record with no stretch list is the one
+/// change over the base's positions `[1, base_extent]` placing every run —
+/// over nothing where it names no base, the birth shape.
+///
+/// Total over records no staging wrote, as the fold's panic-free promise
+/// requires: a run that passes its stretch's count is placed whole in that
+/// stretch, and the runs left past the last stretch's count are placed with
+/// it.
+fn shot_splices(runs: &[Run], terms: &ShotTerms) -> Vec<Splice> {
+    if terms.stretches.is_empty() {
+        return vec![Splice {
+            at: Nat::one(),
+            width: terms.base_extent.clone().unwrap_or_default(),
+            runs: runs.to_vec(),
+        }];
+    }
+    let mut rest = runs.iter();
+    let last = terms.stretches.len() - 1;
+    terms
+        .stretches
+        .iter()
+        .enumerate()
+        .map(|(index, stretch)| {
+            let mut placed: Vec<Run> = Vec::new();
+            let mut held = Nat::default();
+            while held < stretch.placed {
+                let Some(run) = rest.next() else { break };
+                held += run.width();
+                placed.push(run.clone());
+            }
+            if index == last {
+                placed.extend(rest.by_ref().cloned());
+            }
+            Splice { at: stretch.start.clone(), width: stretch.width.clone(), runs: placed }
+        })
+        .collect()
 }
 
 #[cfg(test)]

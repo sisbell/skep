@@ -290,13 +290,18 @@ pub(super) enum OpTerms {
     /// For a replacing grant this is the grant record's address; its
     /// `replaces` link sits at the next address, read by adjacency.
     MakeLink { link: String },
-    /// `publish`: signed-ops D25's three client terms.
+    /// `publish`: three of signed-ops D25's client terms.
     ///
     /// They are exactly as `doc_metadata` serves them for the minted member —
     /// the count the client placed, the extent of the base the staged copy
     /// took, and the base itself as the board recorded it (skep #1111), the
     /// two `None` together in the birth shape (the absence is the birth
-    /// bit). The counts decimal strings, `Nat`'s wire form; the base an
+    /// bit). The member's other two terms are NOT carried: the stretch list
+    /// of a shot that named its change — up to a wire list of entries, past
+    /// a row's bound — and the depth of its chain of bases, which stands
+    /// beside the list. A reader of the row asks the member's own
+    /// `doc_metadata` for both, and that read is what says whether the shot
+    /// named a list at all. The counts decimal strings, `Nat`'s wire form; the base an
     /// address in the board's local form, as the row's `docs` are, rendered
     /// under `base` as a `set_arrangement`'s is.
     Publish { placed: String, base_extent: Option<String>, base: Option<String> },

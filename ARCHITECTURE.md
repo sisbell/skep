@@ -1381,7 +1381,12 @@ Its rules of mechanism: SP-21, SP-28.
 
 `skep-arrangement` owns what a document holds: per document a content and a
 link run-list (its arrangement), the provenance relation R (every content
-address a document has ever held), three per-member facts — the birth
+address a document has ever held — the spans appended for it and the
+run-list a snapshot named for it, kept in `provenance.rs`; a member a
+shot minted stores neither, its arrangement being its own record, and
+its placing record carries the runs the shot placed, never the member's
+list, which `state.rs` builds from the base's at the fold), three
+per-member facts — the birth
 extent, the shot terms and the fork source with the count its copy took
 — per document the position its content arrangement last changed at,
 and per staged draft its base, all in one slice, `M5State`.

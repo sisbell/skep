@@ -949,6 +949,7 @@ fn a_stage_lands_private_where_version_refuses_and_doc_metadata_serves_its_base(
             origin: edition.clone(),
             run: skep_febe::Run::new(start.clone(), nat(3)).expect("a content run"),
         }],
+        stretches: Vec::new(),
     };
     let publish = |shot: skep_febe::Shot| {
         ack_addr(ex(

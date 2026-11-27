@@ -1,9 +1,11 @@
 //! Arrangement reads, admission predicates and provenance reads (§D/§E).
 //!
 //! The arrangement reads (resolve/iter_resolve/point, the run decompositions
-//! and their counts, project/arranges_any, the content past an extent), the
+//! and their counts, project/arranges_any), the
 //! admission predicates the ops ask, the provenance reads
-//! (recorded_span_count/deletions/docs_ever_containing), the fork-source
+//! (recorded_span_count/deletions/docs_ever_containing) over R's three
+//! parts — the spans appended, the list a snapshot named and a shot
+//! member's own arrangement — the fork-source
 //! reads (fork_source/fork_source_copied) and the draft-base read
 //! (draft_base) are pure over any M2 snapshot (§2, §9).
 //!
@@ -29,6 +31,7 @@
 use num_traits::One;
 use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
+use crate::provenance::touches;
 use crate::run::Run;
 use crate::run_list::Runs;
 use crate::state::{DraftBase, M5State};
@@ -203,7 +206,8 @@ impl M5State {
     /// at this number against
     /// [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS) —
     /// [`project`](M5State::project)'s and
-    /// [`arranges_any`](M5State::arranges_any)'s joins, VERSION's R-append and
+    /// [`arranges_any`](M5State::arranges_any)'s joins, the list a VERSION
+    /// names in R, a shot's one walk of its base and
     /// the shot's carried-run union are priced in, so a caller that owns
     /// admission control for one of them reads the number here rather than
     /// materializing the runs to count them. One map lookup, reading no run;
@@ -220,15 +224,21 @@ impl M5State {
         self.link_list(doc).run_count()
     }
 
-    /// Returns `|R↾doc|`, how many spans R records for `doc`.
+    /// Returns `|R↾doc|`, how many spans the provenance reads walk for `doc`.
     ///
-    /// That is one per run it has ever placed, deleted or not (P2). It is one
-    /// of the two terms of [`deletions`](M5State::deletions)' cost, and the
-    /// one a document's current arrangement does not reveal, so a caller
-    /// pricing SHOWDELETIONS reads it here. One map lookup, reading no span;
-    /// absent doc ⇒ 0.
+    /// R↾doc is read from three places, and the count is theirs summed: one
+    /// per run of the list a snapshot named for `doc` — the list a `stage`,
+    /// a `version` or a `fork` shared into it, as it stood at the mint; one
+    /// per run a placement or an edit has put into it since, deleted or not
+    /// (P2); and, for a member a shot minted, one per run of its
+    /// arrangement, which is its own record. So it counts exactly what
+    /// [`deletions`](M5State::deletions) walks for its historical operand,
+    /// and is the term of that read's cost a document's current arrangement
+    /// does not reveal: a caller pricing SHOWDELETIONS reads it here. A few
+    /// map lookups, reading no span and no run; absent doc ⇒ 0.
     pub fn recorded_span_count(&self, doc: &Address) -> usize {
-        self.provenance.recorded_span_count(doc)
+        let arranged = if self.shot_terms(doc).is_some() { self.content_run_count(doc) } else { 0 };
+        arranged + self.provenance.recorded_span_count(doc)
     }
 
     /// Returns whether `ord` is a placement boundary of `doc`'s content.
@@ -306,25 +316,6 @@ impl M5State {
     /// first, which is why this predicate does not re-ask it.
     pub(crate) fn contains_content_range(&self, doc: &Address, from: &Nat, width: &Nat) -> bool {
         from + width <= &self.content_count(doc) + &Nat::one()
-    }
-
-    /// Returns the content runs of `doc` past ordinal `extent`.
-    ///
-    /// They are positions `[extent + 1, n_C]`, V-ordered, the boundary run
-    /// clipped, and nothing at all when `extent ≥ n_C`. The publish shot's
-    /// carried tail (PUB-2.42, PUB-2.45): a published member's content
-    /// changes only by deposits appended at fresh positions (PUB-2.43), so
-    /// its positions past the extent a staged copy took are exactly the
-    /// deposits that copy's render post-dates. Asked of the arrangement,
-    /// which knows where its content ends, so the shot names a boundary and
-    /// derives no count of its own.
-    ///
-    /// Answered off the run-list's own suffix walk, which names no upper
-    /// bound and sums no total to find one. Lazy as that walk is, so a
-    /// consumer with a budget of its own stops it at the budget. Absent doc
-    /// ⇒ nothing.
-    pub(crate) fn content_runs_past(&self, doc: &Address, extent: &Nat) -> impl Iterator<Item = Run> + '_ {
-        self.content_list(doc).iter_resolve_from(&(extent + &Nat::one()))
     }
 
     /// Returns whether `link` is seated in `doc`'s link subspace (§8, CL-UNIQ).
@@ -437,6 +428,23 @@ impl M5State {
         self.content_list(doc).image()
     }
 
+    /// Returns R↾doc: the iextent cover of everything `doc` ever contained.
+    ///
+    /// It is the relation's own two parts — the list a snapshot named for
+    /// `doc`, then the spans appended for it (`Provenance::ever_contained`)
+    /// — and, ahead of them for a member a shot minted, the member's
+    /// arrangement: no span is stored for such a member's mint, since no
+    /// record takes a position out of it (P4★ on [`M5State`]), so what it
+    /// arranges is what it ever contained. M5-internal, raw and possibly
+    /// mixed-length, as [`content_image`](M5State::content_image) is.
+    fn ever_contained(&self, doc: &Address) -> SpanSet {
+        let recorded = self.provenance.ever_contained(doc);
+        if self.shot_terms(doc).is_none() {
+            return recorded;
+        }
+        self.content_list(doc).iter().map(Run::iextent).chain(recorded.iter().cloned()).collect()
+    }
+
     /// Returns what `doc` has ever contained, minus its current content image.
     ///
     /// It is the SHOWDELETIONS primitive (§9; ASN-0047 P2; ASN-0075's
@@ -457,14 +465,20 @@ impl M5State {
     /// sorts its two operands, so the work is
     /// `Θ(|R↾doc| log |R↾doc| + #runs(doc) log #runs(doc))` and the transient
     /// heap is several full copies of each operand. `|R↾doc|` —
-    /// [`recorded_span_count`](M5State::recorded_span_count), cheap to read —
-    /// is not bounded here and is monotone (P2, R losing no member): it is
-    /// every span `doc` has ever placed, grown by INSERT, by COPY, REINSTATE
-    /// and the shot up to [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per
-    /// request, and by VERSION without a ceiling
-    /// ([`Vstream::version`](crate::Vstream::version)), so a document that has
+    /// [`recorded_span_count`](M5State::recorded_span_count), cheap to read,
+    /// which counts what this read walks: the list a snapshot named for
+    /// `doc`, the spans appended since, and a shot's member's own
+    /// arrangement — is not bounded here. Its appended part is monotone (P2,
+    /// R losing no member): every run `doc` has placed, grown by INSERT, by
+    /// COPY, REINSTATE and an edit up to
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per request; its named
+    /// part is the run count of the source a `stage` or a `version` shared,
+    /// which has no ceiling
+    /// ([`Vstream::version`](crate::Vstream::version)); so a document that has
     /// deleted much more than it holds costs far more here than its current
-    /// arrangement suggests. There is no index over R in v1 (Open decision #3)
+    /// arrangement suggests. A member a shot minted answers nothing deleted:
+    /// its historical operand is its arrangement, and its deposits' spans
+    /// lie in it. There is no index over R in v1 (Open decision #3)
     /// and no admission gate: this read refuses nothing and bounds nothing, so
     /// admission control and concurrency for the query that composes on it
     /// are the caller's, as they are for
@@ -475,7 +489,7 @@ impl M5State {
         // A class the current image does not reach subtracts nothing.
         let absent = SpanSet::empty();
         let mut out = SpanSet::empty();
-        for (len, ever) in self.provenance.ever_contained(doc).by_level_class() {
+        for (len, ever) in self.ever_contained(doc).by_level_class() {
             let now = image.get(&len).unwrap_or(&absent);
             let deleted = difference_sets(&ever, now).expect(
                 "per-class operands share one length class, and every span of \
@@ -622,17 +636,30 @@ impl M5State {
     /// merely adjacent candidate (M6's FINDDOCSCONTAINING).
     ///
     /// **A superset with no false negatives**: a document genuinely holding an
-    /// address of `coverage` placed a span that overlaps it in the tumbler
-    /// order (P4★ puts every present containment in R), so it is always a
-    /// candidate — which is what makes the narrowing sound. Total for any
-    /// coverage, mixed-length included.
+    /// address of `coverage` holds it in a recorded span that overlaps it in
+    /// the tumbler order (P4★ puts every present containment in R), so it is
+    /// always a candidate — which is what makes the narrowing sound. Total
+    /// for any coverage, mixed-length included.
+    ///
+    /// **Where R↾doc is read from.** The relation's own two parts — the list
+    /// a snapshot named for a document, and the spans appended for it — and
+    /// then every member a shot minted, read off its arrangement, run by
+    /// run: no span is stored for such a member's mint (P4★). A run of the
+    /// arrangement is the union of the runs its shot and its deposits
+    /// placed, I-adjacent ones merged, and overlap-or-adjacency with a
+    /// coverage span is the same question of a merged run as of its parts,
+    /// so a member is a candidate exactly where the spans its placements
+    /// would have recorded made it one.
     ///
     /// **Cost, and who owns it.** Per call: at most one span comparison for
-    /// every pair of (recorded span, coverage span) over the whole relation —
+    /// every pair of (recorded span, coverage span) over the whole relation
+    /// and (arranged run, coverage span) over every shot's member —
     /// a document's walk stops at its first match — each deriving both
     /// operands' endpoints. Neither factor is bounded here — R never
     /// loses a member (P2), so it is the sum of every run ever placed by any
-    /// document, and `coverage` is as large as the caller's own aggregation
+    /// document, of every list a snapshot named, and of every shot member's
+    /// run count, each member walked for itself whatever it shares with its
+    /// base; and `coverage` is as large as the caller's own aggregation
     /// (M6 builds it from region images, whose size is the source documents'
     /// fragmentation, and caps it as it is produced). There is no index over R
     /// in v1 (Open decision #3, which belongs here, R's owner) and no
@@ -643,7 +670,14 @@ impl M5State {
     /// [`recorded_span_count`](M5State::recorded_span_count) summed over every
     /// document, which v1 does not keep.
     pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
-        self.provenance.docs_ever_containing(coverage)
+        let mut docs = self.provenance.docs_ever_containing(coverage);
+        for member in self.shot_members() {
+            let held = || self.content_list(member).iter().any(|run| touches(&run.iextent(), coverage));
+            if !docs.contains(member) && held() {
+                docs.insert(member.clone());
+            }
+        }
+        docs.into_iter().collect()
     }
 }
 

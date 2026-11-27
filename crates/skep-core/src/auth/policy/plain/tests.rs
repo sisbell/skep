@@ -140,6 +140,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         also: vec![],
         keep_base: false,
         runs: vec![ShotRun { origin: home.clone(), run: Run::new(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32)).expect("a run") }; runs],
+        stretches: Vec::new(),
     };
     let publish_at = |shot: Shot, places: Vec<Option<VPos>>, read_with: usize| Op::Publish {
         target: PublishTarget::Document(home.clone()),
@@ -272,7 +273,7 @@ fn the_price_read_answers_the_figures_the_refusal_names_daughters_among_them() {
     let members = |daughters: usize| {
         let first = crate::codec::wire_address(&format!("{}.0.1.1", board.draft)).expect("the draft's first content address");
         let run = Run::new(first, Nat::from(1u32)).expect("a run");
-        let shot = Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run }] };
+        let shot = Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run }], stretches: Vec::new() };
         let deposits = PublishDeposits { supersede: vec![home.clone(); daughters], ..PublishDeposits::default() };
         (PublishTarget::Document(home.clone()), shot, vec![Some(VPos::content(Nat::from(1u32)))], deposits)
     };
@@ -341,7 +342,7 @@ fn the_refusal_ahead_of_the_lock_prices_a_stray_place_at_the_callers_class() {
             origin: draft.clone(),
             run: Run::new(crate::codec::wire_address(&format!("{}.0.1.{ordinal}", board.draft)).expect("a content address"), Nat::from(width)).expect("a run"),
         };
-        let shot = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs };
+        let shot = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs, stretches: Vec::new() };
         match records {
             // M5's shot alone: the words minted, no record written.
             0 => {
@@ -370,7 +371,7 @@ fn the_refusal_ahead_of_the_lock_prices_a_stray_place_at_the_callers_class() {
         let wide = LinkEntry { home: NamedAddress::Member, from: EndArg::Spans(spans.clone()), to: EndArg::Spans(spans), ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]), old: None };
         Op::Publish {
             target: PublishTarget::Document(into.clone()),
-            shot: Shot { base: None, draft: Some(into), also: vec![], keep_base: false, runs: vec![ShotRun { origin: home, run: words }] },
+            shot: Shot { base: None, draft: Some(into), also: vec![], keep_base: false, runs: vec![ShotRun { origin: home, run: words }], stretches: Vec::new() },
             places: vec![Some(VPos::content(Nat::from(1u32)))],
             also_places: Vec::new(),
             deposits: PublishDeposits { links: vec![wide; 100], ..PublishDeposits::default() },
@@ -436,7 +437,7 @@ fn the_refusal_ahead_of_the_lock_counts_no_unit_of_a_draft_the_caller_may_not_re
         let wide = LinkEntry { home: NamedAddress::Member, from: EndArg::Spans(spans.clone()), to: EndArg::Spans(spans), ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]), old: None };
         Op::Publish {
             target: PublishTarget::Document(into),
-            shot: Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft, run: words }] },
+            shot: Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft, run: words }], stretches: Vec::new() },
             places: Vec::new(),
             also_places: Vec::new(),
             deposits: PublishDeposits { links: vec![wide; 100], ..PublishDeposits::default() },
@@ -503,9 +504,9 @@ fn the_refusal_ahead_of_the_lock_counts_no_run_of_a_draft_the_caller_may_not_rea
         let stray = ShotRun { origin: home.clone(), run: Run::new(wire(&format!("{}.0.1.1", board.home)), Nat::from(1u32)).expect("a run") };
         let place = Some(VPos::content(Nat::from(1u32)));
         let (shot, places, also_places) = if among_also {
-            (Shot { base: None, draft: Some(theirs.clone()), also: vec![draft.clone()], keep_base: false, runs: vec![stray] }, Vec::new(), vec![AlsoPlaces { draft, places: vec![place] }])
+            (Shot { base: None, draft: Some(theirs.clone()), also: vec![draft.clone()], keep_base: false, runs: vec![stray], stretches: Vec::new() }, Vec::new(), vec![AlsoPlaces { draft, places: vec![place] }])
         } else {
-            (Shot { base: None, draft: Some(draft), also: vec![], keep_base: false, runs: vec![stray] }, vec![place], Vec::new())
+            (Shot { base: None, draft: Some(draft), also: vec![], keep_base: false, runs: vec![stray], stretches: Vec::new() }, vec![place], Vec::new())
         };
         let deposits = PublishDeposits { read_with: vec![home; MAX_PUBLICATION_READS], ..PublishDeposits::default() };
         Op::Publish { target: PublishTarget::Document(theirs), shot, places, also_places, deposits }
@@ -594,7 +595,7 @@ fn the_refusal_ahead_of_the_lock_prices_no_stored_type_of_a_link_the_caller_may_
         let rest = Run::new(wire(&format!("{}.0.1.1", board.draft)), Nat::from(1u32)).expect("a run").iextent();
         Op::Publish {
             target: PublishTarget::Document(theirs),
-            shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![by_reference; 4096] },
+            shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![by_reference; 4096], stretches: Vec::new() },
             places: Vec::new(),
             also_places: Vec::new(),
             deposits: PublishDeposits { links: vec![entry; 100], originals: vec![OriginalEntry { old: old.clone(), rest: vec![rest] }], ..PublishDeposits::default() },
@@ -663,7 +664,7 @@ fn a_publications_base_runs_are_set_ahead_of_the_lock_where_an_entry_names_an_or
     let home = crate::codec::wire_address(&board.home).expect("the home's address");
     let publish = |base: &Address, extent: u32, old: Option<Address>| Op::Publish {
         target: PublishTarget::Document(home.clone()),
-        shot: Shot { base: Some(Base { member: base.clone(), extent: Nat::from(extent) }), draft: None, also: Vec::new(), keep_base: false, runs: Vec::new() },
+        shot: Shot { base: Some(Base { member: base.clone(), extent: Nat::from(extent) }), draft: None, also: Vec::new(), keep_base: false, runs: Vec::new(), stretches: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits {
@@ -850,7 +851,7 @@ fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_fo
     use skep_links::{OriginalEntry, PublishDeposits, PublishTarget};
     let publish = |retract: Vec<Address>, originals: Vec<Address>| Op::Publish {
         target: PublishTarget::Document(addr_of(&[1, 0, 1, 0, 1])),
-        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
         places: vec![],
         also_places: vec![],
         deposits: PublishDeposits {
@@ -1352,7 +1353,7 @@ fn a_minting_publish_into_an_empty_account_is_refused_mint_home_first() {
     let lock = CredentialLock::new();
     let publish = |target: PublishTarget| Op::Publish {
         target,
-        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
         places: vec![],
         also_places: vec![],
         deposits: PublishDeposits::default(),

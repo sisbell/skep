@@ -89,7 +89,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             Caller::Principal(PrincipalId(2)),
             &pdoc(),
-            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&subdoc, &sca, 1)] },
+            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&subdoc, &sca, 1)], stretches: Vec::new() },
             &refusing
         )),
         PublishError::NotOwner(d) if d == pdoc()
@@ -115,6 +115,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                     shot_run(&subdoc, &dangling, 1),
                     shot_run(&doc2(), &w, 1),
                 ],
+                stretches: Vec::new(),
             },
             &refusing_subdoc
         )),
@@ -125,8 +126,9 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         &[doc2(), subdoc.clone()],
         "the document's own space is not consulted, and the unreadable origin is refused before its dangling run is probed"
     );
-    // (3) readable origins are placed; and an origin the BASE already
-    //     arranges is NOT consulted again on the next shot.
+    // (3) readable origins are placed; and a run the BASE already
+    //     arranges takes no gate on the next shot, whatever the consult
+    //     then says of its origin.
     asked.borrow_mut().clear();
     let admitting = recording_consult(&asked, vec![doc2(), subdoc.clone()]);
     let (member1, _) = vs
@@ -139,6 +141,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
+                stretches: Vec::new(),
             },
             &admitting,
         )
@@ -147,8 +150,9 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(6));
     asked.borrow_mut().clear();
     // The next shot re-supplies the doc2 window and the subdoc run exactly
-    // as member1 arranges them: both are CARRIED (PUB-6.24), and a consult
-    // that would now refuse doc2 is never asked.
+    // as member1 arranges them: both are CARRIED (PUB-6.24). The consult is
+    // asked first, once an origin, and now refuses doc2 — whose run the
+    // base arranges, so the refusal decides nothing.
     let refusing_doc2 = recording_consult(&asked, vec![subdoc.clone()]);
     let (member2, _) = vs
         .publish(
@@ -160,11 +164,16 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
+                stretches: Vec::new(),
             },
             &refusing_doc2,
         )
-        .expect("carried runs need no consult");
-    assert_eq!(asked.borrow().as_slice(), &[] as &[Address], "every run was carried by the base");
+        .expect("a carried run of a withheld origin takes no gate");
+    assert_eq!(
+        asked.borrow().as_slice(),
+        &[doc2(), subdoc.clone()],
+        "each origin asked once, in run order; the withheld one's run was carried by the base"
+    );
     assert_eq!(member2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     // (4) existence, behind the gate: a readable origin's non-existent
     //     address answers dangling.
@@ -172,7 +181,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&member2, 6)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(9), 1)] },
+            &Shot { base: Some(base(&member2, 6)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(9), 1)], stretches: Vec::new() },
             &refusing_doc2
         )),
         PublishError::DanglingSource
@@ -186,7 +195,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&member1, 99)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&subdoc, &dangling, 1)] },
+            &Shot { base: Some(base(&member1, 99)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&subdoc, &dangling, 1)], stretches: Vec::new() },
             &refusing
         )),
         PublishError::BaseExtentTooLarge
@@ -231,6 +240,7 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
                     shot_run(&subdoc, &sca, 1),
                     shot_run(&doc2(), &w, 1),
                 ],
+                stretches: Vec::new(),
             },
             &refusing
         )),
@@ -261,6 +271,7 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
                     shot_run(&subdoc, &sca, 1),
                     shot_run(&doc2(), &w, 1),
                 ],
+                stretches: Vec::new(),
             },
             &admitting,
         )
@@ -277,7 +288,7 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
         .publish(
             P1,
             &member1,
-            &Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() },
             &refusing,
         )
         .expect("the edition's own I-space takes no consult, whichever member names the shot");
@@ -312,6 +323,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2)],
+                stretches: Vec::new(),
             },
             &admitting,
         )
@@ -321,10 +333,10 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
         .expect("doc2 grows y");
     assert_eq!(y, a(&[1, 0, 1, 0, nth_doc(2), 0, 1, 3]), "y continues w..x's I-extent");
     let refusing = recording_consult(&asked, vec![]);
-    let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs };
+    let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs, stretches: Vec::new() };
     let before = k.current_seq();
-    // Per run: the carried w marks nothing about doc2, so the later y is asked
-    // about — and refused.
+    // Per run: the carried w admits nothing of doc2, so the later y, which
+    // the base does not arrange, is refused — doc2 asked once, at w.
     asked.borrow_mut().clear();
     assert!(matches!(
         rejected(vs.publish(
@@ -335,7 +347,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
         )),
         PublishError::Withheld(d) if d == doc2()
     ));
-    assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once, about the run member1 does not carry");
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once an origin, and the run member1 does not carry refused");
     // Per I-extent: ONE run opening on w, x — which member1 arranges — and
     // reaching y, which it does not. Judged on its start it would be carried.
     asked.borrow_mut().clear();
@@ -359,8 +371,8 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
             &shot_off_member1(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2)]),
             &refusing,
         )
-        .expect("a run carried whole takes no consult");
-    assert!(asked.borrow().is_empty(), "nothing was asked");
+        .expect("a run carried whole takes no gate");
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once, and its answer decided nothing");
     assert_eq!(k.snapshot().world().m5().content_count(&member2), n(5));
 }
 
@@ -395,13 +407,14 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
                     shot_run(&doc2(), &w, 1),
                     shot_run(&doc2(), &y, 1),
                 ],
+                stretches: Vec::new(),
             },
             &admitting,
         )
         .expect("the head windows w and y, never x");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(5));
     let refusing = recording_consult(&asked, vec![]);
-    let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs };
+    let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs, stretches: Vec::new() };
     let before = k.current_seq();
     asked.borrow_mut().clear();
     assert!(matches!(
@@ -416,7 +429,7 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
     assert_eq!(asked.borrow().as_slice(), &[doc2()], "the bridging run is asked about, and refused");
     assert_eq!(k.current_seq(), before, "the refusal commits nothing");
     // The control: the base's own two windows, re-supplied as it arranges
-    // them, are carried, and the same consult is never asked.
+    // them, are carried, and the same consult's refusal decides nothing.
     asked.borrow_mut().clear();
     let (member2, _) = vs
         .publish(
@@ -429,8 +442,8 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
             ]),
             &refusing,
         )
-        .expect("runs carried whole take no consult");
-    assert!(asked.borrow().is_empty(), "nothing was asked");
+        .expect("runs carried whole take no gate");
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once for the two runs of one origin");
     assert_eq!(k.snapshot().world().m5().content_count(&member2), n(5));
 }
 
@@ -455,7 +468,7 @@ fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_i
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() },
             &readable_by(PrincipalId(1)),
         )
         .expect("the head arranges the edition's three positions");
@@ -477,6 +490,7 @@ fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_i
                     origin: doc2(),
                     run: Run::new(never_minted, widest).expect("a content run"),
                 }],
+                stretches: Vec::new(),
             },
             &admitting
         )),
@@ -503,7 +517,7 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(2), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(2), 3)], stretches: Vec::new() },
             &readable
         )),
         PublishError::DanglingSource
@@ -515,7 +529,7 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&doc1(), &ca(2), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&doc1(), &ca(2), 3)], stretches: Vec::new() },
             &readable
         )),
         PublishError::DanglingSource
@@ -533,6 +547,7 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(2), 2), shot_run(&doc1(), &ca(2), 2)],
+                stretches: Vec::new(),
             },
             &readable,
         )
@@ -573,6 +588,7 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
             .iter()
             .map(|&width| shot_run(&doc2(), &w, width))
             .collect(),
+            stretches: Vec::new(),
     };
     let before = k.current_seq();
     for widths in [[2, 3, 1], [3, 1, 2], [1, 2, 3]] {
@@ -628,6 +644,7 @@ fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once(
         also: vec![],
         keep_base: false,
         runs,
+        stretches: Vec::new(),
     };
     let repeated = rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), EACH)).collect());
     assert_eq!(repeated.reinserted_values(), n(EACH), "257 distinct positions, named 4096 times");
@@ -658,6 +675,7 @@ fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once(
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), EACH)],
+                stretches: Vec::new(),
             },
             &readable,
         )
@@ -698,7 +716,7 @@ fn a_draft_the_caller_does_not_own_is_refused_at_the_shots_own_door() {
         .expect("the sub-account's draft holds a byte");
     let anyone = |_: &World, _: &Address| true;
     let own_class = readable_by(PrincipalId(1));
-    let from_subdoc = |runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(subdoc.clone()), also: vec![], keep_base: false, runs };
+    let from_subdoc = |runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(subdoc.clone()), also: vec![], keep_base: false, runs, stretches: Vec::new() };
     let before = k.current_seq();
     // (a), (b): readable or not, the draft is not P1's.
     for (what, consult) in [("readable", &anyone as &dyn Fn(&World, &Address) -> bool), ("unreadable", &own_class)] {
@@ -721,7 +739,7 @@ fn a_draft_the_caller_does_not_own_is_refused_at_the_shots_own_door() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: Some(unregistered), also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: Some(unregistered), also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &anyone
         )),
         PublishError::SourceNotRegistered
@@ -777,7 +795,7 @@ fn an_also_draft_the_caller_does_not_own_is_refused_after_the_drafts_own_check_a
     let unregistered = a(&[1, 0, 1, 1, 0, 71]);
     let anyone = |_: &World, _: &Address| true;
     let own_class = readable_by(PrincipalId(1));
-    let family = |draft: Address, also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(draft), also, keep_base: false, runs };
+    let family = |draft: Address, also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(draft), also, keep_base: false, runs, stretches: Vec::new() };
     let before = k.current_seq();
     // (a), (b): the `also` draft is not P1's, whatever the consult says and
     // whether or not a run of it is named.
@@ -896,7 +914,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&draft, &start, 1)] },
+            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&draft, &start, 1)], stretches: Vec::new() },
             &consult
         )),
         PublishError::Withheld(d) if d == draft
@@ -921,7 +939,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     insert_abc(&k);
     let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
-    let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, also: vec![], keep_base: false, runs };
+    let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, also: vec![], keep_base: false, runs, stretches: Vec::new() };
     let unregistered_doc = a(&[1, 0, 1, 0, 71]);
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
@@ -936,7 +954,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &doc1(),
-            &Shot { base: Some(base(&pdoc(), 1)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&pdoc(), 1)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::PrivateSourceVersionless
@@ -950,7 +968,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &doc1(),
-            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -969,7 +987,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -990,7 +1008,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             Caller::Principal(PrincipalId(2)),
             &pdoc(),
-            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&unregistered_doc, 1)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::NotOwner(d) if d == pdoc()
@@ -1008,6 +1026,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&doc2(), &ca(1), 1)],
+                stretches: Vec::new(),
             },
             &readable
         )),
@@ -1026,6 +1045,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&doc2(), &ca(1), 1)],
+                stretches: Vec::new(),
             },
             &readable
         )),
@@ -1076,7 +1096,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&doc1(), 99)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&doc1(), 99)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::BaseNotInChain
@@ -1098,7 +1118,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 99)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&pdoc(), 99)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -1116,7 +1136,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         .publish(
             P1,
             &member1,
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable,
         )
         .expect("the bare base lands as the first member's daughter");
@@ -1127,7 +1147,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     // Named, the member is a base — and a shot with no runs lands an EMPTY
     // member, read as the lazy empty arrangement.
     let (member2, _) = vs
-        .publish(P1, &pdoc(), &Shot { base: Some(base(&member1, 3)), draft: None, also: vec![], keep_base: false, runs: vec![] }, &readable)
+        .publish(P1, &pdoc(), &Shot { base: Some(base(&member1, 3)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() }, &readable)
         .expect("an empty member");
     assert_eq!(k.snapshot().world().m5().content_count(&member2), n(0));
     assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), member2);
@@ -1151,7 +1171,7 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
         .expect("a deposit named by the member, minted under its content chain");
     assert_eq!(member_start, vca(1));
     let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
-        vs.publish(P1, &pdoc(), &Shot { base: Some(base(&member1, 4)), draft, also: vec![], keep_base: false, runs }, &readable)
+        vs.publish(P1, &pdoc(), &Shot { base: Some(base(&member1, 4)), draft, also: vec![], keep_base: false, runs, stretches: Vec::new() }, &readable)
     };
     let before = k.current_seq();
     // An element minted under the trunk, and one minted under a member.
@@ -1190,6 +1210,7 @@ fn a_shot_named_by_a_member_is_gated_as_named_and_judged_as_its_document() {
         also: vec![],
         keep_base: false,
         runs: vec![],
+        stretches: Vec::new(),
     };
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]); // stamped published; doc1 is private
     let member_of_edition = a(&[1, 0, 1, 0, nth_doc(3), 1]); // stamped private; pdoc is published
@@ -1256,6 +1277,7 @@ fn a_shot_refused_for_a_dangling_run_leaves_no_member_no_mint_and_no_placement()
                     shot_run(&doc1(), &ca(1), 3),
                     shot_run(&pdoc(), &pca(9), 1),
                 ],
+                stretches: Vec::new(),
             },
             &readable
         )),
@@ -1280,6 +1302,7 @@ fn a_shot_refused_for_a_dangling_run_leaves_no_member_no_mint_and_no_placement()
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(1), 3)],
+                stretches: Vec::new(),
             },
             &readable,
         )
@@ -1314,7 +1337,7 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
         .expect("a private draft P1 may not read holds a byte");
     let unregistered = a(&[1, 0, 1, 0, 71]);
     let readable = readable_by(PrincipalId(1));
-    let plain = |base: Option<Base>, runs: Vec<ShotRun>| Shot { base, draft: None, also: vec![], keep_base: false, runs };
+    let plain = |base: Option<Base>, runs: Vec<ShotRun>| Shot { base, draft: None, also: vec![], keep_base: false, runs, stretches: Vec::new() };
     let cases = [
         (P1, unregistered.clone(), plain(None, vec![]), true),
         (Caller::Principal(PrincipalId(2)), pdoc(), plain(None, vec![]), true),

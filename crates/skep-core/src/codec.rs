@@ -60,7 +60,8 @@ use std::str::FromStr;
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{
-    trunk_of, Base, Change, Edit, Placed, Run, SetMerge, Shot, ShotRun, VPos, VSpec,
+    trunk_of, Base, Change, Edit, Placed, Run, SetMerge, Shot, ShotRun, ShotStretch, StretchFault,
+    VPos, VSpec, MAX_PLACED_RUNS,
 };
 use skep_content::Val;
 use skep_discovery::{FourSet, GoOn, SlotSpec};
@@ -85,11 +86,13 @@ use marshal::{j_response, req_pairs};
 /// The most elements one wire array may carry, applied at [`p_list`].
 ///
 /// Every attacker-sized list on the request surface (span regions, spec and
-/// region lists, address lists, v-spec lists, `rearrange` cuts, the shot
-/// runs of `reinstate` and `publish`, `retrieve_i`'s spans, `line_numbers`'
-/// positions and lines, `emit`'s type endset, and the query endsets of the
-/// ftt family) meets it there, at one door — save `insert`'s `values`, whose
-/// minted values [`MAX_INSERT_VALUES`] bounds instead.
+/// region lists, address lists, v-spec lists, `rearrange` cuts, the runs of
+/// `reinstate`, a `publish`'s stretch list, `retrieve_i`'s spans,
+/// `line_numbers`' positions and lines, `emit`'s type endset, and the query
+/// endsets of the ftt family) meets it there, at one door — save two:
+/// `insert`'s `values`, whose minted values [`MAX_INSERT_VALUES`] bounds
+/// instead, and the runs one frame places — a `publish`'s `runs` and the
+/// runs of a `set_arrangement`'s changes — which [`MAX_WIRE_RUNS`] bounds.
 ///
 /// Not a round number: it is M7's published per-slot budget
 /// ([`MAX_SLOT_SPANS`]), whose argument transfers verbatim. That argument
@@ -131,6 +134,35 @@ use marshal::{j_response, req_pairs};
 /// is measured before the resolution is built, and what this cap should be
 /// if it is not, are M7's and M5's.
 const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
+
+/// The most runs one frame may place.
+///
+/// It bounds a `publish`'s `runs` — the whole arrangement of a birth or of
+/// a shot that sends one, and the runs of a change — and the runs of all a
+/// `set_arrangement`'s changes together, applied at [`p_runs`] and at the
+/// edit's sum. A `publish`'s `places` and each `also_places` list ride it
+/// too, each no longer than `runs`.
+///
+/// It is the store's own number for what one request places,
+/// [`MAX_PLACED_RUNS`], and that constant's card is this one's argument:
+/// what a placed run costs is a run held live and about a hundred bytes of
+/// the transaction, which the store's budget already prices at this count,
+/// an order inside M2's ceiling. [`MAX_WIRE_LIST`] argues another cost —
+/// a span of a slot or of a query, which multiplies the links it meets —
+/// and its own card says that reading it onto a list of runs is a use that
+/// argument does not cover. Held to the list cap, a frame could place a
+/// sixteenth of what the store admits, and a document past 4,096 runs could
+/// not be born, landed whole, undone or restored at all.
+///
+/// The door's one exception beside `insert`'s `values`. The store still
+/// refuses `too_many_runs` past its own count of the runs as placed, which
+/// this bound cannot see — a draft-native run re-inserted in pieces is more
+/// than one — so the two are the same number judged at two places: here on
+/// the request, before a run is parsed; there on the placement, as it
+/// accumulates. The elements are counted before any is parsed, as at
+/// [`p_list`], and the request body's cap bounds the frame whatever it
+/// lists.
+const MAX_WIRE_RUNS: usize = MAX_PLACED_RUNS;
 
 /// The most values one `insert` frame may mint.
 ///
@@ -1157,7 +1189,9 @@ impl Fields {
     /// Three things are held here by arithmetic on the request, each ahead
     /// of the store: the values the frame mints over all its changes, to
     /// [`MAX_EDIT_VALUES`], each element's share asked before it is minted;
-    /// the runs it places over all its changes, to [`MAX_WIRE_LIST`], the
+    /// the runs it places over all its changes, to [`MAX_WIRE_RUNS`] — the
+    /// store's number for what one call places, so a draft's whole
+    /// arrangement rides one frame up to it — the
     /// lists counted before any run is parsed; and the changes' order —
     /// each `at.ordinal` at or past `at.ordinal + width` of the change
     /// before it, so they are ascending and apart in the one state they are
@@ -1187,16 +1221,17 @@ impl Fields {
             .into());
         }
         // The runs the frame places, counted off the lists before one is
-        // parsed: each list rides the list cap, and so does their sum.
+        // parsed: each list rides the placed-runs cap, and so does their
+        // sum.
         if placing == Placing::Runs {
             let runs: usize = entries
                 .iter()
                 .filter_map(|change| change.get("runs").and_then(Value::as_array))
                 .map(Vec::len)
                 .fold(0, usize::saturating_add);
-            if runs > MAX_WIRE_LIST {
+            if runs > MAX_WIRE_RUNS {
                 return Err(PErr(format!(
-                    "field 'changes': the changes place {runs} runs, past the {MAX_WIRE_LIST}-run cap on one frame"
+                    "field 'changes': the changes place {runs} runs, past the {MAX_WIRE_RUNS}-run cap on one frame"
                 ))
                 .into());
             }
@@ -1423,19 +1458,36 @@ impl Fields {
     /// writes back; `keep_base` is a flag, the rendering draft's recorded
     /// base kept (skep #944), carried only beside a `draft` — absent, `null`
     /// and `false` alike are the draft's own publication, the form the
-    /// marshal writes back; `runs` is the client-rendered arrangement, each
-    /// run its origin, its start and its width.
+    /// marshal writes back; `runs` is the client-rendered runs, each
+    /// run its origin, its start and its width, one list under
+    /// [`MAX_WIRE_RUNS`] — the whole arrangement, or with `stretches` the
+    /// runs of the change; `stretches` is optional, the stretches of the
+    /// base those runs replace: one wire list under [`MAX_WIRE_LIST`], each
+    /// entry `{start, width, count}`, three naturals — `width` positions of
+    /// the base from `start` on replaced by the next `count` entries of
+    /// `runs`. Absent and `null` alike are the whole form, the form the
+    /// marshal writes back for it; a list is held to the shot by request
+    /// arithmetic before any read, the store's own rule
+    /// (`Shot::stretch_fault`): it rides a base, its entries are ascending
+    /// and apart, none starts past `base_extent + 1` or reaches past
+    /// `base_extent`, and their counts sum to `runs`' length. The empty
+    /// list is refused: it names no stretch, and the whole form is spelled
+    /// by leaving the member out.
     ///
     /// # Errors
     ///
     /// A [`Refusal`] where `base`, `base_extent`, `draft`, `also` or
     /// `keep_base` is present and refused, where one of `base` and
     /// `base_extent` comes without the other, where `also` or a set
-    /// `keep_base` is carried without `draft`, or where
-    /// `runs` is missing or refused; the two shapes of `also` judged entry by
+    /// `keep_base` is carried without `draft`, where
+    /// `runs` is missing or refused, or where `stretches` is no array, is
+    /// empty, is past the cap or rides no `base`; the two shapes of `also`
+    /// judged entry by
     /// entry — an entry that is the `draft` itself, an entry repeating an
     /// earlier one — name the entry at fault in the `malformed` rejection's
-    /// `site.index`, as [`Fields::places`] names its.
+    /// `site.index`, as [`Fields::places`] names its, and so does a
+    /// `stretches` entry that is no object of its three members or that the
+    /// arithmetic refuses.
     fn shot(&mut self) -> Result<Shot, Refusal> {
         let member = self.opt_addr("base")?;
         let extent = match self.take_opt("base_extent") {
@@ -1504,8 +1556,53 @@ impl Fields {
             )
             .into());
         }
-        let runs = self.field("runs", |v| p_list(v, p_shot_run))?;
-        Ok(Shot { base, draft, also, keep_base, runs })
+        let runs = self.field("runs", p_runs)?;
+        // The stretch list, where the shot names its change: one wire list,
+        // each entry at its index, then the request's own arithmetic — the
+        // store's rule, asked of the shot as parsed, so the door and the
+        // store cannot part on what a list of stretches is.
+        let stretches = match self.take_opt("stretches") {
+            None => Vec::new(),
+            Some(v) => {
+                let list = indexed_list(&v, "stretches", p_stretch)?;
+                if list.is_empty() {
+                    return Err(PErr(
+                        "field 'stretches': names no stretch; a shot that sends its whole arrangement carries no 'stretches'"
+                            .into(),
+                    )
+                    .into());
+                }
+                list
+            }
+        };
+        let shot = Shot { base, draft, also, keep_base, runs, stretches };
+        if let Some(fault) = shot.stretch_fault() {
+            let at = |index: usize, why: &str| Refusal(format!("field 'stretches': [{index}]: {why}"), Some(index));
+            return Err(match fault {
+                StretchFault::NoBase => PErr(
+                    "field 'stretches': carried without 'base'; a stretch is a stretch of the base's positions".into(),
+                )
+                .into(),
+                StretchFault::NotApart { index } => at(
+                    index,
+                    "starts at position 0 or below the reach of the entry before it; the stretches are in the base's coordinates, ascending and apart",
+                ),
+                StretchFault::StartPastExtent { index } => {
+                    at(index, "starts past 'base_extent' + 1, the last boundary of the positions the copy took")
+                }
+                StretchFault::ReachPastExtent { index } => {
+                    at(index, "replaces positions past 'base_extent'")
+                }
+                StretchFault::CountMismatch { index } => at(
+                    index,
+                    &format!(
+                        "the entries' counts do not sum to the {} runs the request carries; each stretch takes the next 'count' entries of 'runs', and together every one",
+                        shot.runs.len()
+                    ),
+                ),
+            });
+        }
+        Ok(shot)
     }
 
     /// Takes the publish shot's kept places (the link-sets design §5.7).
@@ -1589,7 +1686,7 @@ impl Fields {
     /// "places": [⟨V-position⟩ | null, …]}`: at most one entry per draft, its
     /// `draft` one the request's `also` names, its `places` parallel to
     /// `runs` by index as the rendering draft's `places` is and no longer
-    /// than it — a non-null entry the content V-position the run held IN
+    /// than it, so it rides `runs`' own cap — a non-null entry the content V-position the run held IN
     /// THAT DRAFT when the client composed the request, read off that
     /// draft's image, or `null` for a run that draft is not re-windowed at.
     /// A place in draft A's list stands beside a run of A's own identity
@@ -2248,7 +2345,7 @@ fn p_change(v: &Value, placing: Placing, minted: usize) -> PResult<Change> {
     let width = field(m, "width", p_nat)?;
     let placed = match placing {
         Placing::Values => Placed::Values(field(m, "values", |v| p_values_within(v, minted, &EDIT_VALUES))?),
-        Placing::Runs => Placed::Runs(field(m, "runs", |v| p_list(v, p_shot_run))?),
+        Placing::Runs => Placed::Runs(field(m, "runs", p_runs)?),
     };
     Ok(Change { at, width, placed })
 }
@@ -2378,6 +2475,51 @@ fn p_vpos(v: &Value) -> PResult<VPos> {
 fn p_vspec(v: &Value) -> PResult<VSpec> {
     let m = p_obj(v, &["source", "span"])?;
     Ok(VSpec { source: field(m, "source", p_addr)?, span: field(m, "span", p_span)? })
+}
+
+/// Parses the runs one frame places: *the* place [`MAX_WIRE_RUNS`] is
+/// enforced on a list.
+///
+/// A `publish`'s `runs` and each change's `runs` of a `set_arrangement`
+/// pass here, each run through [`p_shot_run`]. The elements are counted
+/// before any is parsed, as [`p_list`] counts its own.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no array, where it holds more than
+/// [`MAX_WIRE_RUNS`] runs, or where a run is refused, the fault prefixed
+/// with the run's index.
+fn p_runs(v: &Value) -> PResult<Vec<ShotRun>> {
+    let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
+    if arr.len() > MAX_WIRE_RUNS {
+        return Err(PErr(format!(
+            "array has {} runs, past the {MAX_WIRE_RUNS}-run cap on what one frame places",
+            arr.len()
+        )));
+    }
+    arr.iter().enumerate().map(|(i, x)| p_shot_run(x).map_err(|e| PErr(format!("[{i}]: {e}")))).collect()
+}
+
+/// Parses one entry of a `publish`'s `stretches` (wire.md §Arrangement,
+/// `publish`): `{start, width, count}`, three naturals.
+///
+/// `start` is the first position of the base the stretch replaces, `width`
+/// how many it replaces, `count` how many entries of `runs` replace them.
+/// A count no machine word holds is read as the largest one, which no list
+/// of runs reaches, so the request's arithmetic refuses it by name.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of the three members alone, or one of
+/// them is missing or no natural.
+fn p_stretch(v: &Value) -> PResult<ShotStretch> {
+    let m = p_obj(v, &["count", "start", "width"])?;
+    let count = field(m, "count", p_nat)?;
+    Ok(ShotStretch {
+        start: field(m, "start", p_nat)?,
+        width: field(m, "width", p_nat)?,
+        count: usize::try_from(&count).unwrap_or(usize::MAX),
+    })
 }
 
 /// Parses a `{at, extent}` pair: a member and the content count read of it

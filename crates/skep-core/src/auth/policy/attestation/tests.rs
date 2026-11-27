@@ -148,7 +148,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     let h = head_document();
     let into_h = |base: Option<Base>| Op::Publish {
         target: PublishTarget::Document(h.clone()),
-        shot: Shot { base, draft: None, also: vec![], keep_base: false, runs: Vec::new() },
+        shot: Shot { base, draft: None, also: vec![], keep_base: false, runs: Vec::new(), stretches: Vec::new() },
         places: Vec::new(),
         also_places: Vec::new(),
         deposits: PublishDeposits::default(),
@@ -281,7 +281,7 @@ fn a_shot_with_also_places_composes_the_same_entry_frame_as_the_same_shot_withou
     let (draft, other) = (addr_of(&[1, 1, 0, 1, 0, 3]), addr_of(&[1, 1, 0, 1, 0, 4]));
     let publish = |places: Vec<Option<VPos>>, also_places: Vec<AlsoPlaces>| Op::Publish {
         target: PublishTarget::Document(head_document()),
-        shot: Shot { base: None, draft: Some(draft.clone()), also: vec![other.clone()], keep_base: false, runs: Vec::new() },
+        shot: Shot { base: None, draft: Some(draft.clone()), also: vec![other.clone()], keep_base: false, runs: Vec::new(), stretches: Vec::new() },
         places,
         also_places,
         deposits: PublishDeposits::default(),

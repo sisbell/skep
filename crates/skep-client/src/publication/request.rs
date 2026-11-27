@@ -117,7 +117,7 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, EntryBody, MemberPositions, PublishBody, ShotBase, SlotElement};
 
 use crate::address::parse_address;
-use crate::board::answers::{self, LinkSpan, MergeMarker};
+use crate::board::answers::{self, IRun, LinkSpan, MergeMarker};
 use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::{Rejection, T_RETRACTION, T_SUPERSEDES};
 
@@ -439,6 +439,151 @@ pub fn originals_of(job_list: &[&Removal]) -> Vec<OriginalEntry> {
     out
 }
 
+/// One stretch of a request's stretch list (the wire's `stretches` entry):
+/// `width` positions of the base from the 1-based `start` on are replaced
+/// by the next `count` entries of the request's `runs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Stretch {
+    /// The first position of the base the stretch replaces.
+    pub start: u64,
+    /// How many positions of the base it replaces.
+    pub width: u64,
+    /// How many of the request's runs, the next in order, replace them.
+    pub count: usize,
+}
+
+/// How many publications of one chain of bases name their change before one
+/// names its whole arrangement again.
+///
+/// A shot that names its change is signed against its base, so a verifier
+/// of a member's whole arrangement composes the member's own change and
+/// then its base's, and that base's, back to a member born from a whole
+/// arrangement: a signature, a `doc_metadata` read and the runs of one
+/// change for each. The board serves how far that is (`doc_metadata`'s
+/// `chain_depth`), and a lander holds it under this number: where its
+/// base's depth is one short of it, the lander sends the whole arrangement
+/// with its base, which signs as a shot always has and stands at depth 0.
+/// So no member a lander of this library mints is more than 63 changes from
+/// one spelled whole.
+///
+/// 64, weighed from both ends. The whole form costs its file — a run's
+/// bytes journaled for each run of it, and each copied word read for the
+/// signature — where a change costs its own runs; paid once in 64
+/// landings, a file of 4,096 runs adds under 7 KB a landing to the journal
+/// its changes write anyway, and one at the store's 65,536 about 107 KB.
+/// And 63 changes is what a verifier walks at most: 63 signatures and 63
+/// small reads, a second or so over a network. A smaller number buys a
+/// shorter walk with more whole files written; a larger one the reverse.
+/// The board enforces none: the depth is a lander's to keep, and a member
+/// past it verifies as any other does, by a longer walk.
+pub const WHOLE_FORM_EVERY: u64 = 64;
+
+/// A member's runs cut against its base: the stretches of the base they
+/// replace, and which of the runs replace them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Cut {
+    /// The stretches, ascending and apart, in the base's coordinates; at
+    /// least one.
+    pub(crate) stretches: Vec<Stretch>,
+    /// Per run of the member, whether a stretch places it: `false` for a
+    /// run the base holds where the member does, which no stretch names
+    /// and the request does not carry.
+    pub(crate) placed: Vec<bool>,
+}
+
+impl Cut {
+    /// Returns `list`, parallel to the member's runs, as its entries at the
+    /// runs the stretches place: what a request that names the cut carries
+    /// of it.
+    pub(crate) fn of<T: Clone>(&self, list: &[T]) -> Vec<T> {
+        list.iter().zip(&self.placed).filter(|(_, placed)| **placed).map(|(entry, _)| entry.clone()).collect()
+    }
+}
+
+/// Cuts `runs`, a member's whole arrangement, against `base`, its base's
+/// image over positions `1 ..= extent`: the stretches of the base the
+/// member replaces, and the runs that replace them.
+///
+/// The member is the base with its stretches replaced, so a run of it that
+/// the base holds where the member does need not be sent. The runs are
+/// walked once, in order, against a cursor in the base that only moves
+/// forward: a run stands in the base where the base holds exactly its
+/// words, by identity, at or past the cursor and inside the extent — at
+/// the nearest such place, the cursor then moving past it — and everything
+/// between two runs that stand is one stretch: the base's positions the
+/// cursor skipped, replaced by the runs met since. A run `pinned` answers
+/// for is never left standing, whatever the base holds: a run the commit
+/// re-mints, one that carries a kept place or a record, one an entry's end
+/// counts positions over — each must ride the request to keep its index.
+///
+/// The cut is exact — the base with these stretches replaced by these runs
+/// is the member, position for position — and not the least one: the walk
+/// takes the nearest place a run stands at and never looks back, so words
+/// moved up the file stand where they landed and the words they passed
+/// are placed again by reference. A run is stood or placed whole, never in
+/// part. Where the member is the base, position for position, the cut is
+/// the one stretch at the extent's last boundary that replaces nothing
+/// with nothing: a list always names a stretch.
+///
+/// Reads nothing. Each run costs a search of the base's runs on its chain
+/// and a look at those that could hold it.
+pub(crate) fn cut_against(base: &[IRun], extent: u64, runs: &[Run], pinned: &dyn Fn(usize) -> bool) -> Cut {
+    // The base's runs by chain, each chain's in I-order — a run its first
+    // address, its width and the position it stands at — with the widest:
+    // a run of the base holding an address starts no further below it.
+    type Chain = (Vec<(u64, u64, u64)>, u64);
+    let mut by_chain: BTreeMap<&str, Chain> = BTreeMap::new();
+    for held in base {
+        let (chain, widest) = by_chain.entry(held.prefix.as_str()).or_default();
+        chain.push((held.first, held.width, held.ordinal));
+        *widest = (*widest).max(held.width);
+    }
+    for (chain, _) in by_chain.values_mut() {
+        chain.sort_unstable();
+    }
+    // The nearest position at or past `cursor` where the base holds the
+    // run's words whole, inside the extent.
+    let standing = |run: &Run, cursor: u64| -> Option<u64> {
+        let (chain, widest) = by_chain.get(run.chain().as_str())?;
+        let upto = chain.partition_point(|held| held.0 <= run.i_start);
+        chain[..upto]
+            .iter()
+            .rev()
+            .take_while(|held| held.0.saturating_add(*widest) > run.i_start)
+            .filter(|held| run.reach() <= held.0.saturating_add(held.1))
+            .map(|held| held.2 + (run.i_start - held.0))
+            .filter(|at| *at >= cursor && at.saturating_add(run.width) <= extent.saturating_add(1))
+            .min()
+    };
+    let mut stretches: Vec<Stretch> = Vec::new();
+    let mut placed: Vec<bool> = Vec::with_capacity(runs.len());
+    let (mut cursor, mut pending) = (1u64, 0usize);
+    for (index, run) in runs.iter().enumerate() {
+        let stands = if pinned(index) { None } else { standing(run, cursor) };
+        match stands {
+            Some(at) => {
+                if at > cursor || pending > 0 {
+                    stretches.push(Stretch { start: cursor, width: at - cursor, count: pending });
+                    pending = 0;
+                }
+                cursor = at + run.width;
+                placed.push(false);
+            }
+            None => {
+                pending += 1;
+                placed.push(true);
+            }
+        }
+    }
+    if cursor <= extent || pending > 0 {
+        stretches.push(Stretch { start: cursor, width: extent.saturating_add(1).saturating_sub(cursor), count: pending });
+    }
+    if stretches.is_empty() {
+        stretches.push(Stretch { start: extent.saturating_add(1), width: 0, count: 0 });
+    }
+    Cut { stretches, placed }
+}
+
 /// The one request, as built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -450,6 +595,15 @@ pub struct Request {
     pub claim: bool,
     /// The base member and extent.
     pub base: Option<(Address, u64)>,
+    /// The stretches of the base the runs replace (the wire's `stretches`),
+    /// ascending and apart; empty where the request names its whole
+    /// arrangement — a first publication, which has no base; one whose
+    /// base is the bare document, a draft begun before its first version;
+    /// and the publication that follows [`WHOLE_FORM_EVERY`] − 1 that
+    /// named their change. Where it is named, `runs` and every list
+    /// parallel to them hold the change alone: the runs the stretches
+    /// place, in order.
+    pub stretches: Vec<Stretch>,
     /// The rendering draft; `None` at a bare shot naming none (the merge's).
     pub draft: Option<Address>,
     /// The family's other drafts whose identity the shot re-mints beside
@@ -462,7 +616,8 @@ pub struct Request {
     /// from the head, which publishes the draft's words without being its
     /// publication; `false` at every publication of the draft itself.
     pub keep_base: bool,
-    /// The runs, in V-order.
+    /// The runs, in V-order: the member's whole arrangement, or with
+    /// `stretches` the runs of the change, stretch after stretch.
     pub runs: Vec<Run>,
     /// The RENDERING draft's kept places, parallel to the runs: at a run of
     /// any named draft's identity — its own, or an `also` draft's it holds
@@ -533,21 +688,36 @@ impl Request {
         self.doc.as_ref().or(self.mint.as_ref()).expect("a request is the document form or the mint form")
     }
 
-    /// Returns the shot's own body — the count, the segments, the base group.
+    /// Returns the shot's own body — the count, the segments, the base
+    /// group and, where the request names its stretches, the stretch row.
+    ///
+    /// The pieces are pushed stretch by stretch, each stretch closed where
+    /// its runs end: a window is never one segment across two stretches and
+    /// the open value stretch ends with each, as the board composes it. A
+    /// request naming no stretch closes none, and spells no row.
     pub fn shot_body(&self) -> EntryBody {
         let base_text = self.base.as_ref();
         let mut body = PublishBody::within(usize::MAX, base_text.map(|(member, extent)| ShotBase { member, extent: *extent })).expect("no bound refuses the body of no segments");
-        for piece in &self.pieces {
-            body = match piece {
+        let push = |mut body: PublishBody, piece: &Piece| -> PublishBody {
+            match piece {
                 Piece::Values(values) => {
-                    let mut b = body;
                     for v in values {
-                        b = b.push(v).expect("no bound refuses a piece");
+                        body = body.push(v).expect("no bound refuses a piece");
                     }
-                    b
+                    body
                 }
                 Piece::Window { start, width } => body.window(start, NonZeroU64::new(*width).expect("a run has width")).expect("no bound refuses a window"),
-            };
+            }
+        };
+        let mut pieces = self.pieces.iter();
+        for stretch in &self.stretches {
+            for piece in pieces.by_ref().take(stretch.count) {
+                body = push(body, piece);
+            }
+            body = body.stretch(stretch.start, stretch.width).expect("no bound refuses a stretch");
+        }
+        for piece in pieces {
+            body = push(body, piece);
         }
         body.finish()
     }
@@ -578,12 +748,14 @@ impl Request {
         let also: Vec<String> = self.also.iter().map(ToString::to_string).collect();
         let also_places: Vec<(String, Vec<Value>)> = self.also_places.iter().map(|a| (a.draft.to_string(), a.places.iter().map(|p| p.map_or(Value::Null, frames::place)).collect())).collect();
         let also_entries: Vec<AlsoPlacesFrame<'_>> = also_places.iter().map(|(draft, places)| AlsoPlacesFrame { draft, places }).collect();
+        let stretches: Vec<(u64, u64, usize)> = self.stretches.iter().map(|s| (s.start, s.width, s.count)).collect();
         frames::publication(&PublishFrame {
             doc: doc.as_deref(),
             account: account.as_deref(),
             mint: self.mint.is_some(),
             claim: self.claim,
             base: base.as_ref().map(|(m, e)| (m.as_str(), *e)),
+            stretches: &stretches,
             draft: draft.as_deref(),
             also: &also.iter().map(String::as_str).collect::<Vec<_>>(),
             keep_base: self.keep_base,
@@ -1058,7 +1230,8 @@ fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumera
 
     // The entries, and the lists beside them.
     door.step("entries");
-    let Lists { entries, unspellable, retract, originals, read_with, count } = Lists::of(inputs, e, panel, &confirmed.switches, &records, &runs);
+    let lists = Lists::of(inputs, e, panel, &confirmed.switches, &records, &runs);
+    let (entries, retract, read_with) = (&lists.entries, &lists.retract, &lists.read_with);
 
     // The daughters, the skip read first: one an active claim of the
     // person's own already names is dropped, as the board's plan drops it.
@@ -1072,12 +1245,17 @@ fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumera
     door.step("base");
     let fresh = runs.iter().any(|r| inputs.is_named_draft(&r.origin));
     let placed = places.iter().any(Option::is_some) || also_places.iter().any(AlsoPlaces::carries_a_place);
+    // The base's image over the positions the copy took, read once where a
+    // base stands: the enumeration's where it read that member.
+    let base_image: Option<Vec<IRun>> = match &inputs.base {
+        Some(base) => Some(match e.base.as_ref().filter(|known| known.is_of(base)) {
+            Some(known) => known.image.clone(),
+            None => door.image(&base.0.to_string(), 1, base.1)?,
+        }),
+        None => None,
+    };
     if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && supersede.is_empty() && inputs.mint.is_none() && !placed {
-        if let Some(base) = &inputs.base {
-            let image = match e.base.as_ref().filter(|known| known.is_of(base)) {
-                Some(known) => known.image.clone(),
-                None => door.image(&base.0.to_string(), 1, base.1)?,
-            };
+        if let Some(image) = &base_image {
             let same = image.len() == runs.len() && image.iter().zip(&runs).all(|(a, r)| a.prefix == r.chain() && a.first == r.i_start && a.width == r.width);
             if same {
                 return Ok(Built::Inert(Inert::Unchanged));
@@ -1085,9 +1263,69 @@ fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumera
         }
     }
 
-    // The body's pieces: the values of every copied run — a named draft's,
-    // the trunk's own — read through the rendering draft, which arranges
-    // them at their places; a window by address.
+    // THE FORM. A publication with a base names its CHANGE: the runs are cut
+    // against the base's image (`cut_against`) and the request carries the
+    // stretches and the runs that replace them, every list beside the runs
+    // cut to those runs. A run rides the request, whatever the base holds,
+    // where it is a named draft's — the commit re-mints it — where a list
+    // carries its kept place or a record covers it, and where an entry any
+    // row could send counts positions over it: an end on this shot's new
+    // words is spelled by the request's own positions, which only its own
+    // runs have. The whole arrangement is sent where there is no base; where
+    // the base is the bare document — a draft begun before its first
+    // version, whose base's own arrangement no read here takes: the image
+    // above floats to the head once a member stands, and a cut against it
+    // would name stretches of another list; where the base stands one short
+    // of the chain's bound, so this member ends the chain
+    // (`WHOLE_FORM_EVERY`); where the cut replaces the base whole; and where
+    // it names more stretches than one list carries.
+    let is_member = |base: &Address| {
+        let text = base.to_string();
+        super::trunk_of(&text).is_some_and(|trunk| trunk != text)
+    };
+    let cut = match (&inputs.base, &base_image) {
+        (Some(base), Some(image)) if is_member(&base.0) => {
+            let depth = door.metadata(&base.0.to_string())?.chain_depth.unwrap_or(0);
+            if depth.saturating_add(1) >= WHOLE_FORM_EVERY {
+                None
+            } else {
+                // Every row switched on: the positions any entry's end may
+                // count are held in the request whatever is switched later.
+                let mut every = confirmed.switches.clone();
+                every.on.extend(panel.rows.iter().map(|row| row.home.clone()));
+                let counted = member_end_runs(&Lists::of(inputs, e, panel, &every, &records, &runs).entries, &runs);
+                let pinned = |index: usize| {
+                    inputs.is_named_draft(&runs[index].origin)
+                        || places.get(index).copied().flatten().is_some()
+                        || also_places.iter().any(|a| a.places.get(index).copied().flatten().is_some())
+                        || stray_records.get(index).is_some_and(|records| *records > 0)
+                        || counted.contains(&index)
+                };
+                let cut = cut_against(image, base.1, &runs, &pinned);
+                let whole = cut.stretches == [Stretch { start: 1, width: base.1, count: runs.len() }];
+                (!whole && cut.stretches.len() <= super::enumerate::MAX_WIRE_LIST).then_some(cut)
+            }
+        }
+        _ => None,
+    };
+    let (runs, places, draft_places, stray_records, also_places, stretches, lists) = match cut {
+        Some(cut) => {
+            let runs = cut.of(&runs);
+            let also_places = also_places.iter().map(|a| AlsoPlaces { draft: a.draft.clone(), places: cut.of(&a.places) }).collect();
+            // The entries again, each end spelled over the runs the request
+            // now carries: a position counted is a position of these runs.
+            let lists = Lists::of(inputs, e, panel, &confirmed.switches, &records, &runs);
+            (runs, cut.of(&places), cut.of(&draft_places), cut.of(&stray_records), also_places, cut.stretches, lists)
+        }
+        None => (runs, places, draft_places, stray_records, also_places, Vec::new(), lists),
+    };
+    let Lists { entries, unspellable, retract, originals, read_with, count } = lists;
+
+    // The body's pieces: the values of every copied run the request carries
+    // — a named draft's, the trunk's own — read through the rendering draft,
+    // which arranges them at their places; a window by address. A run the
+    // base holds where the member does is in no stretch, and no value of it
+    // is read.
     door.step("values");
     let draft = inputs.draft.to_string();
     let mut pieces = Vec::with_capacity(runs.len());
@@ -1105,6 +1343,7 @@ fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumera
         mint: inputs.mint.clone(),
         claim: inputs.claim,
         base: inputs.base.clone(),
+        stretches,
         draft: Some(inputs.draft.clone()),
         also: inputs.also.clone(),
         // A publication of the draft itself: its base moves to the member.
@@ -1126,6 +1365,32 @@ fn compose_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumera
         as_of: door.as_of().max(e.as_of),
     };
     Ok(Built::Request(Box::new(request)))
+}
+
+/// Returns the runs of `runs` a member-position end of `entries` counts a
+/// position over, by index: what must ride a request for those ends to be
+/// spelled over its own runs.
+fn member_end_runs(entries: &[Entry], runs: &[Run]) -> BTreeSet<usize> {
+    let mut at = 1u64;
+    let spans: Vec<(u64, u64)> = runs
+        .iter()
+        .map(|run| {
+            let span = (at, at.saturating_add(run.width));
+            at = span.1;
+            span
+        })
+        .collect();
+    let mut counted = BTreeSet::new();
+    for entry in entries {
+        for end in [&entry.from, &entry.to, &entry.ty] {
+            let End::Member(positions) = end else { continue };
+            for &(ordinal, width) in positions {
+                let reach = ordinal.saturating_add(width);
+                counted.extend(spans.iter().enumerate().filter(|(_, (first, past))| *first < reach && ordinal < *past).map(|(index, _)| index));
+            }
+        }
+    }
+    counted
 }
 
 /// The lists a request carries beside its runs, as the switches decide

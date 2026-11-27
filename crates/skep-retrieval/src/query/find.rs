@@ -160,7 +160,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
         }
         let coverage: SpanSet = coverage_spans.into_iter().collect(); // collect AS GIVEN
         // Phase 2: the historical superset (tumbler-ordered, level-classes
-        // handled inside M5), narrowed by the present-tense filter — one
+        // handled inside M5, read off R's three parts: the spans appended,
+        // the lists snapshots named, and each shot member's own arrangement,
+        // which stores no span), narrowed by the present-tense filter — one
         // `arranges_any` per candidate, true iff the candidate holds some
         // covered address NOW. TWO narrowings separate that superset from the
         // live answer, and the filter discharges both at once — from

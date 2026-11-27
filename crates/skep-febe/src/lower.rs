@@ -483,6 +483,12 @@ impl Lower for PublishError {
             PublishError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             PublishError::NotOwner(a) => not_owner(a),
             PublishError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            // A stretch list the request's own arithmetic refuses. A
+            // transport's codec refuses such a frame under this code before
+            // the store is asked, naming the entry; the store's verdict is
+            // the same rule's, for a request built past a codec, and takes
+            // the same code.
+            PublishError::BadStretches => (RejectCode::Malformed, None),
             PublishError::BadRun => (RejectCode::BadRun, None),
             PublishError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
             PublishError::BaseSuperseded => (RejectCode::BaseSuperseded, None),

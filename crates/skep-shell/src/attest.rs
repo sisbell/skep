@@ -154,9 +154,19 @@ impl CheckedKind {
 /// It is `skep-core`'s codec's constant, refused at the board's parse
 /// (`malformed`, the frame unparsed: `op: unparseable`) whatever the array
 /// holds: a slot's addresses, V-specs or spans, `emit`'s `to`, a shot's
-/// `runs`. The codec's constant is private, so the suite pins this one by
-/// the board's behaviour: a list at it parsed, one past it refused.
+/// `stretches`. The codec's constant is private, so the suite pins this one
+/// by the board's behaviour: a list at it parsed, one past it refused.
 pub const MAX_WIRE_LIST: usize = 4096;
+
+/// The most runs one frame may place: the codec's cap on a shot's `runs`.
+///
+/// It is the store's number for what one request places, 65,536, which the
+/// board parses a shot's `runs` to — the whole arrangement of a first
+/// publication, or the runs of a change — where it parses every other list
+/// to [`MAX_WIRE_LIST`]. A frame past it is refused at the board's parse as
+/// a longer list of any kind is, so the composer stops there first. Pinned
+/// equal to the store's by the suite.
+pub const MAX_WIRE_RUNS: usize = 1 << 16;
 
 /// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
 ///
@@ -889,12 +899,19 @@ impl Composer<'_> {
     /// The budget is [`MAX_FRAME_BYTES`], the parity the daemon holds a
     /// shot's body to. The body holds each run the shot names in V-order, a
     /// run onto the shot document's own trunk or the staging draft copied by
-    /// its values, any other a window; then the base group.
+    /// its values, any other a window; then the base group; then, where the
+    /// frame names `stretches`, the stretch row — each stretch closed where
+    /// its `count` of the runs ends, the open value stretch ended with it,
+    /// as the board composes it (`PublishBody::stretch`). A frame naming no
+    /// `stretches` spells no row: the whole form's body is unchanged.
     ///
     /// # Errors
     ///
     /// The request's arithmetic comes first, every run classed and counted
-    /// before anything is read: the runs within [`MAX_WIRE_LIST`], the
+    /// before anything is read: the runs within [`MAX_WIRE_RUNS`] and the
+    /// stretches within [`MAX_WIRE_LIST`], each stretch three naturals and
+    /// their counts the runs' — a halt where the list is no array of such
+    /// entries, is empty, or its counts do not sum to the runs; the
     /// positions placed within the body's eight-byte count, and the copied
     /// ones within what a body under the budget can carry — a halt past
     /// each, and for a shot that names no `runs` or a run whose member,
@@ -916,7 +933,32 @@ impl Composer<'_> {
         let draft = frame["draft"].as_str();
         let draft_trunk = draft.and_then(trunk_text);
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
-        check_wire_list(runs, "runs")?;
+        if runs.len() > MAX_WIRE_RUNS {
+            return Err(fault(format!("the shot's `runs` lists {} runs, past the {MAX_WIRE_RUNS} one frame may place", runs.len()), "the board refuses a frame placing more `malformed`, unparsed").into());
+        }
+        // The stretch list, where the frame names its change: each entry
+        // its start, its width and its count of the runs, the counts the
+        // runs' together. Absent and `null` alike are the whole form.
+        let stretches: Vec<(u64, u64, usize)> = match &frame["stretches"] {
+            Value::Null => Vec::new(),
+            Value::Array(list) => {
+                check_wire_list(list, "stretches")?;
+                let term = |entry: &Value, name: &str| natural(&entry[name]).ok_or_else(|| fault(format!("a stretch's `{name}` is no natural"), entry.to_string()));
+                let listed = list
+                    .iter()
+                    .map(|entry| Ok((term(entry, "start")?, term(entry, "width")?, usize::try_from(term(entry, "count")?).unwrap_or(usize::MAX))))
+                    .collect::<Result<Vec<_>, Halt>>()?;
+                if listed.is_empty() || listed.iter().try_fold(0usize, |sum, stretch| sum.checked_add(stretch.2)) != Some(runs.len()) {
+                    return Err(fault(
+                        "the shot's `stretches` do not take its runs",
+                        format!("each stretch takes the next `count` entries of `runs`, and together every one: {} runs", runs.len()),
+                    )
+                    .into());
+                }
+                listed
+            }
+            other => return Err(fault("the shot's `stretches` is no list", other.to_string()).into()),
+        };
         let (mut placed, mut copied) = (0u64, 0u64);
         // The draft-native ranges, for the distinct count the store holds
         // to its budget: merged once every run is read.
@@ -999,7 +1041,7 @@ impl Composer<'_> {
         let mut spent = 0usize;
         let read_backs: Vec<ReadBack<'_>> = wants.into_iter().map(|wanted| self.read_back(wanted, &mut spent)).collect::<Result<_, _>>()?;
         let mut body = PublishBody::within(MAX_FRAME_BYTES, base).map_err(body_refused)?;
-        for part in &parts {
+        let push = |mut body: PublishBody, part: &ShotPart<'_>| -> Result<PublishBody, Unattested> {
             match part {
                 ShotPart::Copied { origin, range } => {
                     let read_back = &read_backs[origins[origin]];
@@ -1012,9 +1054,22 @@ impl Composer<'_> {
                         })?;
                         body = body.push(value).map_err(body_refused)?;
                     }
+                    Ok(body)
                 }
-                ShotPart::Window { start, width } => body = body.window(start, *width).map_err(body_refused)?,
+                ShotPart::Window { start, width } => Ok(body.window(start, *width).map_err(body_refused)?),
             }
+        };
+        // Stretch by stretch: each stretch's runs, then its close — the
+        // boundary no segment crosses. A frame naming no stretch closes none.
+        let mut parts = parts.iter();
+        for (start, width, count) in stretches {
+            for part in parts.by_ref().take(count) {
+                body = push(body, part)?;
+            }
+            body = body.stretch(start, width).map_err(body_refused)?;
+        }
+        for part in parts {
+            body = push(body, part)?;
         }
         Ok(body.finish())
     }

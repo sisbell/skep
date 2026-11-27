@@ -118,11 +118,16 @@ fn a_draft_is_put_back_to_a_past_state_in_one_write_and_back_again() {
 }
 
 /// A draft of 5,001 runs is restored to the one run it held before it was
-/// cut, the past state one page; and its state of 5,001 runs, read back, is
-/// read whole — two pages through `/op-at`, the kernel loading one base for
-/// the extent and one for both pages — and refused at the cap on what one
-/// write places, counted on every run of it: a read that took the first
-/// page for the image would count 4,096 and answer a state.
+/// cut, the past state one page; its state of 5,001 runs, read back, is read
+/// whole — two pages through `/op-at`, the kernel loading one base for the
+/// extent and one for both pages, every run counted: a read that took the
+/// first page for the image would count 4,096 — and that state is put back
+/// in ONE write: one `set_arrangement` of 5,001 runs, one row, the draft
+/// reading as it did — and, typed against a state another hand has since
+/// edited, refused `arrangement_moved` with nothing written. The cap on
+/// what one write places is the store's own
+/// number, sixteen wire lists; a state past it is refused before any frame
+/// (the scripted suites hold that refusal).
 #[test]
 fn a_draft_past_the_run_budget_is_put_back_and_its_past_state_is_read_in_pages() {
     let rig = Rig::new();
@@ -140,12 +145,38 @@ fn a_draft_past_the_run_budget_is_put_back_and_its_past_state_is_read_in_pages()
     assert_eq!((p.state.clone(), p.held), (vec![Run::new(d.clone(), 1, 2_501)], Some(5_001)));
     let restored = restore(&rig.board, &token, &p).expect("a draft of 5,001 runs put back to one");
     assert_eq!(image(&rig.board, &token, &d, 2_501), vec![(format!("{d}.0.1.1"), 2_501)]);
-    // The state of 5,001 runs, read back at the position it stood at.
+    // The state of 5,001 runs, read back at the position it stood at: whole,
+    // every run counted, and inside the cap on what one write places.
     let loaded = rig.sd.daemon().bases_loaded();
-    let refused = past(&rig.board, &token, &d, cut);
-    assert_eq!(refused, Err(Refusal::OverCap { runs: 5_001, cap: 4_096 }), "read whole, every run counted");
+    let fragmented = past(&rig.board, &token, &d, cut).expect("the state of 5,001 runs, read whole");
+    assert_eq!(fragmented.state.len(), 5_001, "read whole, every run counted");
+    assert!(fragmented.state.len() > 4_096 && fragmented.state.len() <= skep_client::merge::SHOT_RUN_CAP, "past one wire list, inside one write");
     assert_eq!(rig.sd.daemon().bases_loaded() - loaded, 2, "the extent's reconstruction, and one for both pages of the image");
-    assert_eq!(rig.position(), restored.position, "the refused read wrote nothing");
+    assert_eq!(rig.position(), restored.position, "the read wrote nothing");
+    // Typed against an older state it is refused whole: another hand's edit
+    // after the read, and the write of 5,001 runs lands nothing.
+    let moved_at = insert_text(&rig.board, &rig.bare, &d_s, 2_502, "!");
+    let err = restore(&rig.board, &token, &fragmented).expect_err("the draft changed since the read");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    assert_eq!(rig.position(), moved_at, "nothing committed");
+    let fragmented = past(&rig.board, &token, &d, cut).expect("read again, at the draft as it stands");
+    assert_eq!((fragmented.state.len(), fragmented.as_of), (5_001, moved_at));
+    // Put back in ONE write: one `set_arrangement` row, at the position the
+    // restore answers, and the draft reads back in its 5,001 runs.
+    let writes = |rig: &Rig| rig.rows_under(&token, &d).iter().filter(|r| r["op"] == "set_arrangement").count();
+    let before = writes(&rig);
+    let again = restore(&rig.board, &token, &fragmented).expect("a state of 5,001 runs put back in one write");
+    assert_eq!(writes(&rig), before + 1, "one write, one row");
+    assert_eq!(rig.position(), again.position, "and one commit: the restore's own");
+    let expected = as_image(&fragmented.state);
+    let mut held: Vec<(String, u64)> = Vec::new();
+    for (from, width) in [(1u64, 4_096u64), (4_097, 905)] {
+        let v = read(&rig.board, Some(&token), &frames::image(&d_s, from, width));
+        held.extend(v["runs"].as_array().expect("a region inside the run budget answers its runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().parse::<u64>().unwrap())));
+    }
+    assert_eq!(held.len(), 5_001);
+    assert_eq!(held, expected, "the draft holds the state, run for run");
     session.close().expect("close");
 }
 

@@ -1,7 +1,10 @@
 //! §The publish shot's values (PUB-2.33, PUB-8.1).
 //!
 //! They are its request — the client-supplied I-address runs with the origin
-//! each windows, the base the staged draft was taken from, the drafts whose
+//! each windows, the base the staged draft was taken from, the stretches of
+//! that base the runs replace where the shot names its change and not its
+//! whole arrangement ([`ShotStretch`], judged by request arithmetic alone,
+//! [`Shot::stretch_fault`]), the drafts whose
 //! identity the shot re-mints (the rendering `draft` and the family's other
 //! drafts `also` names — THE NAMED DRAFTS, [`Shot::named_drafts`], the family
 //! rule's one spelling with [`Shot::is_draft_native`]), and the whole shot,
@@ -34,7 +37,7 @@ use crate::chain::trunk_of;
 use crate::run::Run;
 use crate::run_list::extend_or_push_run;
 use crate::run_union::RunUnion;
-use crate::state::M5State;
+use crate::state::{M5State, Stretch};
 
 /// Returns a supplied run's origin document.
 ///
@@ -122,15 +125,83 @@ pub struct Base {
     pub extent: Nat,
 }
 
+/// One stretch of a shot's stretch list (the wire's `stretches` entry).
+///
+/// The member is its base with stretches replaced: `width` positions of the
+/// base from `start` on are replaced by the next `count` entries of the
+/// shot's `runs`. A stretch of no width places its runs before `start`, the
+/// boundary past the base's extent among them; one of no count only
+/// removes. The stretches of one shot are in the base's own coordinates,
+/// ascending and apart, and their counts partition `runs` in order
+/// ([`Shot::stretch_fault`] judges all of it).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ShotStretch {
+    /// The first position of the base the stretch replaces, 1-based.
+    pub start: Nat,
+    /// How many positions of the base it replaces.
+    pub width: Nat,
+    /// How many entries of the shot's `runs`, the next in order, replace
+    /// them.
+    pub count: usize,
+}
+
+/// Why a shot's stretch list is no list of stretches of its base.
+///
+/// It is request arithmetic alone — the list, the base's stated extent and
+/// the count of `runs` — judged in this order, the first fault deciding:
+/// the list as a whole, then each entry in turn, then the counts' sum.
+/// [`Shot::stretch_fault`] answers it; a door ahead of the store refuses
+/// the frame with the entry it names, and the store refuses the shot
+/// ([`PublishError::BadStretches`](crate::PublishError::BadStretches)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StretchFault {
+    /// The shot carries a list and names no base for it to replace
+    /// stretches of.
+    NoBase,
+    /// The entry at `index` starts at position 0, or below the reach of the
+    /// entry before it: the stretches are ascending and apart.
+    NotApart {
+        /// The entry's position in the list.
+        index: usize,
+    },
+    /// The entry at `index` starts past `base.extent + 1`, the last
+    /// boundary of the positions the staged copy took.
+    StartPastExtent {
+        /// The entry's position in the list.
+        index: usize,
+    },
+    /// The entry at `index` replaces positions past `base.extent`.
+    ReachPastExtent {
+        /// The entry's position in the list.
+        index: usize,
+    },
+    /// The counts do not sum to `runs`' length: `index` is the entry whose
+    /// count first carries the sum past it, or the last entry where the
+    /// sum falls short.
+    CountMismatch {
+        /// The entry's position in the list.
+        index: usize,
+    },
+}
+
 /// One publish shot (PUB-2.33): the next member of the document's chain.
 ///
 /// The member is born published, in one commit.
 ///
 /// `base` absent is the birth shape (PUB-2.34), which mints the birth version
 /// — the chain's first member — and is admitted only while the chain is
-/// empty. `runs` is the whole arrangement the client rendered (PUB-2.33 as
+/// empty. With `stretches` empty — THE WHOLE FORM — `runs` is the whole
+/// arrangement the client rendered (PUB-2.33 as
 /// amended); the composite appends the base's post-render deposits after it
-/// (PUB-2.42, PUB-2.45) — with a base; absent, nothing is appended.
+/// (PUB-2.42, PUB-2.45) — with a base; absent, nothing is appended. With
+/// `stretches` named, `runs` is THE CHANGE: the member is the base with each
+/// stretch replaced by its share of `runs` ([`ShotStretch`]), every position
+/// of the base no stretch names standing where the base holds it, its
+/// post-render deposits past `base.extent` among them. The whole form is the
+/// change of one stretch over the base's positions `[1, base.extent]`, so
+/// the two forms mint one member from one request's facts, and every index
+/// into `runs` — a kept place's, a pairing's, a refusal's site — counts the
+/// runs the request carries under either.
 ///
 /// `draft` names the RENDERING draft — the draft whose arrangement the runs
 /// render, the home of the kept places and of the records for its own
@@ -202,11 +273,108 @@ pub struct Shot {
     /// Inert without a `draft`, which the codec refuses, and outside the
     /// signed body, as `draft` is.
     pub keep_base: bool,
-    /// The client-rendered arrangement, in order.
+    /// The client-rendered runs, in order: the whole arrangement, or with
+    /// `stretches` the runs of the change, stretch after stretch.
     pub runs: Vec<ShotRun>,
+    /// The stretches of the base `runs` replace, ascending and apart; empty
+    /// for the whole form.
+    ///
+    /// **Precondition.** [`stretch_fault`](Shot::stretch_fault) answers
+    /// `None`: the list rides a base, lies inside its extent and partitions
+    /// `runs`. The store refuses a shot that breaks it
+    /// (`PublishError::BadStretches`); the pure reads here —
+    /// [`address_form`](Shot::address_form),
+    /// [`stretch_terms`](Shot::stretch_terms) — are total over one that
+    /// does, a count past the runs left taking what is left.
+    pub stretches: Vec<ShotStretch>,
 }
 
 impl Shot {
+    /// Returns why `stretches` is no list of stretches of the shot's base,
+    /// or `None` where it is one — and for the whole form, which names none.
+    ///
+    /// Request arithmetic, reading nothing: a list with no base
+    /// ([`StretchFault::NoBase`]); then each entry in order — a start at
+    /// position 0 or below the reach (`start + width`) of the entry before
+    /// it ([`StretchFault::NotApart`]; two stretches may touch, and two
+    /// that replace nothing may name one position, the earlier's runs then
+    /// standing before the later's), a start past `base.extent + 1`
+    /// ([`StretchFault::StartPastExtent`]), a reach past it
+    /// ([`StretchFault::ReachPastExtent`]), a count carrying the counts'
+    /// sum past `runs`' length ([`StretchFault::CountMismatch`]) — then a
+    /// sum short of it, named at the last entry. The one spelling of the
+    /// rule: the wire's door refuses a frame by it before any read, and the
+    /// store a shot handed to it another way.
+    pub fn stretch_fault(&self) -> Option<StretchFault> {
+        if self.stretches.is_empty() {
+            return None;
+        }
+        let Some(base) = &self.base else { return Some(StretchFault::NoBase) };
+        let boundary = &base.extent + Nat::one();
+        let mut reach = Nat::one();
+        let mut counted = 0usize;
+        for (index, stretch) in self.stretches.iter().enumerate() {
+            if stretch.start < reach {
+                return Some(StretchFault::NotApart { index });
+            }
+            if stretch.start > boundary {
+                return Some(StretchFault::StartPastExtent { index });
+            }
+            reach = &stretch.start + &stretch.width;
+            if reach > boundary {
+                return Some(StretchFault::ReachPastExtent { index });
+            }
+            counted = counted.saturating_add(stretch.count);
+            if counted > self.runs.len() {
+                return Some(StretchFault::CountMismatch { index });
+            }
+        }
+        (counted != self.runs.len()).then_some(StretchFault::CountMismatch { index: self.stretches.len() - 1 })
+    }
+
+    /// Returns `runs` stretch by stretch: each stretch's share, in order.
+    ///
+    /// The whole form is one share, every run. With a list each stretch
+    /// takes its `count` of the runs left — what is left where the count
+    /// passes it, and the last stretch nothing past its own count, so runs
+    /// no count reaches are in no share: a list
+    /// [`stretch_fault`](Shot::stretch_fault) refuses, which the store
+    /// never places.
+    pub(crate) fn runs_by_stretch(&self) -> impl Iterator<Item = &[ShotRun]> + '_ {
+        let whole = self.stretches.is_empty().then_some(self.runs.as_slice());
+        let mut rest = self.runs.as_slice();
+        let shares = self.stretches.iter().map(move |stretch| {
+            let (share, left) = rest.split_at(stretch.count.min(rest.len()));
+            rest = left;
+            share
+        });
+        whole.into_iter().chain(shares)
+    }
+
+    /// Returns the stretch list in the member's terms: each stretch with
+    /// its count read as the positions its runs hold.
+    ///
+    /// One [`Stretch`] an entry of `stretches`, `placed` the widths of its
+    /// share of `runs` summed; empty for the whole form. It is what the
+    /// shot's placing record keeps ([`ShotTerms`](crate::ShotTerms)), what
+    /// its signed body's stretch row spells, and so what a signer composes
+    /// from the request and a verifier from the member's terms alike.
+    /// Request arithmetic, reading nothing.
+    pub fn stretch_terms(&self) -> Vec<Stretch> {
+        if self.stretches.is_empty() {
+            return Vec::new();
+        }
+        self.stretches
+            .iter()
+            .zip(self.runs_by_stretch())
+            .map(|(stretch, share)| Stretch {
+                start: stretch.start.clone(),
+                width: stretch.width.clone(),
+                placed: share.iter().map(|stated| stated.run.width()).sum(),
+            })
+            .collect()
+    }
+
     /// Returns the address form of the runs as the commit will place them.
     ///
     /// The commit is [`Vstream::publish`](crate::Vstream::publish) asked with
@@ -228,9 +396,19 @@ impl Shot {
     /// — its segments are each window and each stretch of consecutive value
     /// runs, as [`SegmentRun`] states.
     ///
+    /// **A stretch boundary closes a segment.** Where the shot names
+    /// `stretches`, the runs of one stretch are classed and joined as above
+    /// and no window is joined across two: the accumulator restarts at each
+    /// stretch's first run, as the placement's does, so two I-adjacent
+    /// windows of two stretches stay two here — and two in the member's
+    /// form, which is read image by image. The runs come back in one list,
+    /// stretch after stretch; where each stretch's runs end is
+    /// [`stretch_terms`](Shot::stretch_terms)' to say, by positions, and a
+    /// composer of the signed body closes its value stretch there too.
+    ///
     /// So it answers for the request what [`M5State::address_form_of`]
-    /// answers for the member it mints, read back with the shot's `placed`
-    /// count — as the signed body spells it: the same windows, run for run
+    /// answers for the member it mints, read back at the images of the
+    /// shot's stretches — as the signed body spells it: the same windows, run for run
     /// and in the same V-places, and between them the same positions spelled
     /// by value, value for value. The value runs themselves need not match —
     /// the member holds as one run what the request may name as several, and
@@ -247,21 +425,24 @@ impl Shot {
     pub fn address_form(&self, doc: &Address) -> Vec<SegmentRun> {
         let trunk = trunk_of(doc);
         let mut out: Vec<SegmentRun> = Vec::new();
-        // The consecutive windows in hand, accumulated through the one run
-        // accumulator (`extend_or_push_run`), so the merge condition is the
-        // placement's own; a value run closes the group.
-        let mut windows: Vec<Run> = Vec::new();
-        for ShotRun { run, .. } in &self.runs {
-            let by_value = run_origin_document(run)
-                .is_some_and(|origin_doc| origin_doc == trunk || self.is_draft_native(&origin_doc));
-            if by_value {
-                out.extend(windows.drain(..).map(SegmentRun::Window));
-                out.push(SegmentRun::Value(run.clone()));
-            } else {
-                extend_or_push_run(&mut windows, run.clone());
+        for share in self.runs_by_stretch() {
+            // The consecutive windows in hand, accumulated through the one
+            // run accumulator (`extend_or_push_run`), so the merge condition
+            // is the placement's own; a value run closes the group, and so
+            // does the stretch's end.
+            let mut windows: Vec<Run> = Vec::new();
+            for ShotRun { run, .. } in share {
+                let by_value = run_origin_document(run)
+                    .is_some_and(|origin_doc| origin_doc == trunk || self.is_draft_native(&origin_doc));
+                if by_value {
+                    out.extend(windows.drain(..).map(SegmentRun::Window));
+                    out.push(SegmentRun::Value(run.clone()));
+                } else {
+                    extend_or_push_run(&mut windows, run.clone());
+                }
             }
+            out.extend(windows.into_iter().map(SegmentRun::Window));
         }
-        out.extend(windows.into_iter().map(SegmentRun::Window));
         out
     }
 
@@ -485,37 +666,49 @@ impl SegmentRun {
 }
 
 impl M5State {
-    /// Returns the address form read at `member`'s first `placed` positions.
+    /// Returns the address form read at the positions `member`'s shot placed.
     ///
     /// Those positions are the runs the client placed, which its entry
-    /// signature covers, ahead of the base's carried tail — answered as
-    /// [`SegmentRun`]s in V-order, each run classed by its origin document as
+    /// signature covers — the member's leading positions for a shot with no
+    /// stretch list, ahead of the base's carried tail, and for a shot with
+    /// one the images of its stretches, each stretch's share of the runs
+    /// where the stretches before it left its start
+    /// ([`ShotTerms::images`](crate::ShotTerms::images)) — answered as
+    /// [`SegmentRun`]s in V-order, image after image, each run classed by its
+    /// origin document as
     /// the commit left it: a run of the member's own trunk is a
     /// [`Value`](SegmentRun::Value) run — the shot document's own I-space
     /// placed by reference, and the named drafts' text the commit
     /// re-inserted under that trunk, told apart by nothing here and signed
     /// alike, by value — and a run of any other document is a
     /// [`Window`](SegmentRun::Window), signed by address. The runs are the
-    /// arrangement's own, maximally merged, the last one clipped where the
-    /// client's positions end, by the run-list's own clip — the range walk
-    /// every resolution takes; so what this answers for a committed member is
+    /// arrangement's own, maximally merged within an image and clipped at
+    /// its two ends by the run-list's own clip — the range walk
+    /// every resolution takes — so a run the member holds across two images,
+    /// or across an image and the base's positions beside it, is answered
+    /// in each image's part alone, never joined across; and what this
+    /// answers for a committed member is
     /// what [`Shot::address_form`] answered for the request that minted it, as
     /// the body spells them (stated there), and a verifier holding the member
-    /// composes the shot's signed body with no request in hand. `placed` is
-    /// the caller's — the member's own [`shot_terms`](M5State::shot_terms),
-    /// or a count a checker chooses. A member with fewer positions than
-    /// `placed` answers what it has; an absent arrangement answers nothing.
-    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<SegmentRun> {
+    /// composes the shot's signed body with no request in hand. The terms are
+    /// the member's own ([`shot_terms`](M5State::shot_terms)): a member no
+    /// shot minted answers nothing. A member with fewer positions than an
+    /// image names answers what it has; an absent arrangement answers
+    /// nothing.
+    pub fn address_form_of(&self, member: &Address) -> Vec<SegmentRun> {
+        let Some(terms) = self.shot_terms(member) else { return Vec::new() };
         let trunk = trunk_of(member);
-        self.content_list(member)
-            .iter_resolve_range(&Nat::one(), placed)
-            .map(|run| {
+        let list = self.content_list(member);
+        let mut out: Vec<SegmentRun> = Vec::new();
+        for (at, placed) in terms.images() {
+            out.extend(list.iter_resolve_range(&at, &placed).map(|run| {
                 if run_origin_document(&run).as_ref() == Some(&trunk) {
                     SegmentRun::Value(run)
                 } else {
                     SegmentRun::Window(run)
                 }
-            })
-            .collect()
+            }));
+        }
+        out
     }
 }

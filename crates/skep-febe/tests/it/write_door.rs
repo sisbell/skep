@@ -1014,6 +1014,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
             origin: unreadable_edition.clone(),
             run: Run::new(edition_start.clone(), nat(3)).expect("a content run"),
         }],
+        stretches: Vec::new(),
     };
     let before = fx.febe.log_position();
     assert_withheld(

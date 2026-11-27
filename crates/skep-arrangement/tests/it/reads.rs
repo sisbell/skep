@@ -2,8 +2,8 @@
 //! present-tense filter, the level-class discipline, absent documents, and
 //! the lazy resolution.
 
-use skep_address::{subtree_of, Span, SpanSet};
-use skep_arrangement::{seat_link, HasM5, Run, VSpec};
+use skep_address::{subtree_of, Address, Span, SpanSet};
+use skep_arrangement::{seat_link, Deposit, HasM5, Run, Shot, ShotStretch, VSpec};
 use skep_namespace::PrincipalId;
 
 use crate::common::*;
@@ -198,4 +198,71 @@ fn the_lazy_resolution_yields_what_resolve_collects_and_a_prefix_when_stopped() 
     assert_eq!(m5.resolve(&doc1(), &vspan(1, 2, 4)).len(), 2, "across the seam");
     assert!(m5.resolve(&doc1(), &vspan(1, 7, 2)).is_empty(), "past the arranged end");
     assert_eq!(m5.resolve(&doc1(), &vspan(2, 1, 1)).len(), 1, "the link subspace");
+}
+
+#[test]
+fn a_shots_member_stores_no_span_and_the_provenance_reads_answer_off_its_arrangement() {
+    // A member a shot minted keeps no span in R: what it ever contained is
+    // what it arranges, since nothing takes a position out of it. So it is
+    // a candidate of every coverage its arrangement touches — by a run the
+    // shot placed, by a run it kept from its base, and by the deposit it
+    // took as the head — exactly where the spans its placements once
+    // recorded made it one; it answers nothing deleted; and the count of
+    // what the reads walk for it is its own run count.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared, now(&k))
+        .expect("doc2 holds w x");
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
+    let readable = readable_by(PrincipalId(1));
+    // The birth: the edition's own a, c — two runs, b left out.
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
+        stretches: Vec::new(),
+    };
+    let (first, _) = vs.publish(P1, &pdoc(), &birth, &readable).expect("the birth shot");
+    // A stretch shot off it: a window onto doc2's w placed before c.
+    let second_shot = Shot {
+        base: Some(base(&first, 2)),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![shot_run(&doc2(), &doc2_ca(1), 1)],
+        stretches: vec![ShotStretch { start: n(2), width: n(0), count: 1 }],
+    };
+    let (second, _) = vs.publish(P1, &pdoc(), &second_shot, &readable).expect("the stretch shot");
+    // The head takes a deposit: one more position, past its extent.
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k)).expect("a deposit into the head");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(content_runs_of(&s, &second), vec![
+        Run::new(pca(1), n(1)).expect("a run"),
+        Run::new(doc2_ca(1), n(1)).expect("a run"),
+        Run::new(pca(3), n(2)).expect("a run"),
+    ]);
+    let covering = |addr: &Address| SpanSet::singleton(Run::new(addr.clone(), n(1)).expect("a run").iextent());
+    // A run both members hold, kept from the base by the second.
+    assert_eq!(m5.docs_ever_containing(&covering(&pca(1))), vec![pdoc(), first.clone(), second.clone()]);
+    // The window the stretch shot placed: doc2, whose own it is, and the
+    // member that windows it — never the base.
+    assert_eq!(m5.docs_ever_containing(&covering(&doc2_ca(1))), vec![doc2(), second.clone()]);
+    // The deposit the head took, held by the head alone — and the edition's
+    // b, which no member ever arranged: adjacent to a run each holds, so
+    // each is a candidate of the coarse test, and none arranges it.
+    assert_eq!(m5.docs_ever_containing(&covering(&pca(4))), vec![pdoc(), first.clone(), second.clone()]);
+    assert!(m5.arranges_any(&second, &covering(&pca(4))) && !m5.arranges_any(&first, &covering(&pca(4))));
+    assert!(!m5.arranges_any(&second, &covering(&pca(2))));
+    for member in [&first, &second] {
+        assert!(m5.deletions(member).is_empty(), "a member loses no position, so nothing of it is deleted");
+    }
+    assert_eq!(m5.recorded_span_count(&first), 2, "the birth's two runs, read off its arrangement");
+    assert_eq!(
+        m5.recorded_span_count(&second),
+        m5.content_run_count(&second) + 1,
+        "the head's arrangement, and the one span its deposit appended"
+    );
 }

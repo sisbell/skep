@@ -440,14 +440,20 @@ impl Name {
     /// (`skep_client::merge::Refusal::TwoDrafts`); the way out is to shoot
     /// one.
     pub const TWO_DRAFTS: Name = Name("two_drafts");
-    /// The merged list holds more runs than one publication may carry.
+    /// One write would place more runs than a write may.
     ///
     /// `skep_client::merge::Refusal::OverCap`, met at `merge.compose` with
-    /// nothing landed (the merge record's decision 13, "refuse with count";
-    /// B3-S11's cap face at the act), and at `history.past`,
-    /// `history.restore`, `merge.undo` and `merge.withdraw` where the state
-    /// the one write would set is in more runs than it may name, nothing
-    /// sent; the detail names `n`, the runs, and the `cap`.
+    /// nothing landed where the merged list — which that row's landing
+    /// writes whole into its draft, in one frame — is in more runs than the
+    /// cap (the merge record's decision 13, "refuse with count"; B3-S11's
+    /// cap face at the act), and at `history.past`, `history.restore`,
+    /// `merge.undo` and `merge.withdraw` where the state the one write would
+    /// set is in more runs than it may name, nothing sent; the detail names
+    /// `n`, the runs, and the `cap` — the board's own number for what one
+    /// request places, 65,536, never the wire's list cap. The cap binds what
+    /// ONE WRITE sends: a publication of the landing's draft sends what it
+    /// changes in its base, so a document of more runs is published from a
+    /// draft that could be written.
     pub const OVER_CAP: Name = Name("over_cap");
     /// A row's draft that is another account's, or a published document.
     ///

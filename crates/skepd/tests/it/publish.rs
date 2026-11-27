@@ -2948,3 +2948,148 @@ fn beside_a_copy_a_retraction_and_a_read_with_every_deposit_lands_in_the_documen
     assert_eq!(entries[0]["docs"], serde_json::json!(want), "{}", entries[0]);
     sd.shutdown();
 }
+
+// ── the shot that names its change ─────────────────────────────────────────
+
+/// A second edition of the claimant's whose first member arranges `count`
+/// runs, none I-adjacent to the next: the edition's own words at every
+/// second address, placed by a birth shot. Answers the edition and the
+/// member.
+fn fragmented_edition(port: u16, signed: &str, count: u64) -> (String, String) {
+    let e = common::edition_with(port, signed, &"x".repeat(2 * count as usize + 2));
+    let runs: Vec<String> = (1..=count).map(|k| run(&e, &format!("{e}.0.1.{}", 2 * k), 1)).collect();
+    let first = acked_addr(&op(port, Some(signed), &publish(&e, None, None, &runs)));
+    assert_eq!(first, format!("{e}.1"));
+    (e, first)
+}
+
+/// The shot terms `doc_metadata` serves for `member`: `placed`, whether
+/// `stretches` is null, and `chain_depth`.
+fn served_terms(port: u16, member: &str) -> (Option<String>, bool, Option<u64>) {
+    let v = doc_metadata(port, None, member);
+    (v["placed"].as_str().map(str::to_string), v["stretches"].is_null(), v["chain_depth"].as_u64())
+}
+
+/// A BIRTH AND A WHOLE ARRANGEMENT WITH ITS BASE TAKE THE STORE'S RUN CAP.
+/// A shot's `runs` is parsed to the store's own number for what one request
+/// places, with a stretch list or without: a birth version of 65,535 runs —
+/// sixteen times what one wire list holds — is admitted, and so is a shot
+/// that names that member as its base and sends its whole arrangement of
+/// 65,536 runs, the store's number exactly, carrying no `stretches` (a board
+/// that refused a based shot with no list would refuse it; one that held
+/// `runs` to the wire's list refuses both `malformed`). That frame is well
+/// inside the 8 MiB one request's body carries. Each member serves no
+/// stretch list and stands at depth 0. One run past the store's number is
+/// refused `malformed` with the count, the frame unparsed and nothing
+/// committed: never split.
+#[test]
+fn a_birth_and_a_whole_arrangement_with_its_base_take_the_stores_run_cap() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let count = 65_535u64;
+    let (e, first) = fragmented_edition(port, &signed, count);
+    assert_eq!(content_extent(port, &first), count);
+    assert_eq!(served_terms(port, &first), (Some("65535".into()), true, Some(0)), "the birth: its whole arrangement, no list");
+    // The whole form with its base: every run of the base again, and one
+    // word more — the store's number of runs exactly.
+    let mut runs: Vec<String> = (1..=count).map(|k| run(&e, &format!("{e}.0.1.{}", 2 * k), 1)).collect();
+    runs.push(run(&e, &format!("{e}.0.1.1"), 1));
+    assert_eq!(runs.len(), 65_536);
+    let whole = publish(&e, Some((&first, count)), None, &runs);
+    assert!(whole.len() < 8 * 1024 * 1024, "the whole form at the store's number fits one request's body: {} bytes", whole.len());
+    // The signer is handed the copied words, each an `x`: the edition's own
+    // address now floats to a head of 65,535 runs, more than one image
+    // answer carries.
+    let words: Vec<&[u8]> = vec![&b"x"[..]; count as usize + 1];
+    let second = acked_addr(&op_with_publish_values(port, &signed, &whole, &words));
+    assert_eq!(second, format!("{e}.2"));
+    assert_eq!(content_extent(port, &second), count + 1);
+    assert_eq!(served_terms(port, &second), (Some("65536".into()), true, Some(0)), "the whole form with its base: no list, depth 0");
+    assert_eq!(doc_metadata(port, None, &second)["shot_base"].as_str(), Some(first.as_str()));
+    assert_eq!(
+        image(port, &second, count - 1, 3),
+        vec![
+            (format!("{e}.0.1.{}", 2 * (count - 1)), "1".to_string()),
+            (format!("{e}.0.1.{}", 2 * count), "1".to_string()),
+            (format!("{e}.0.1.1"), "1".to_string()),
+        ]
+    );
+    // One run past the store's number: the parse's refusal, with the count.
+    let before = head(port);
+    let over: Vec<String> = vec![run(&e, &format!("{e}.0.1.2"), 1); 65_537];
+    let v = op_as_written(port, Some(&signed), &publish(&e, Some((&second, count + 1)), None, &over));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
+    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("array has 65537 runs, past the 65536-run cap on what one frame places")), "refused with the count: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    sd.shutdown();
+}
+
+/// A STRETCH LIST IS HELD BY THE REQUEST'S OWN ARITHMETIC, BEFORE ANY READ,
+/// and each cap in its unit. Over a base of five positions: entries not
+/// ascending, entries that overlap, a start at position 0, a start past
+/// `base_extent + 1`, a reach past `base_extent`, counts short of the runs
+/// and counts past them are each refused `malformed`, the frame unparsed,
+/// `site.index` the entry at fault; a list beside no base, and the empty
+/// list, refused the same naming no entry; and a list of 4,097 entries
+/// refused with its count before an entry is read. Each is refused the same
+/// where its base and its runs name documents that do not exist — no
+/// registration is asked first — and none commits anything. A list at the
+/// boundary — touching entries, a placement past the base's last position —
+/// is admitted and lands.
+#[test]
+fn a_stretch_list_is_held_by_request_arithmetic_before_any_read_and_each_cap_in_its_unit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let e = common::edition_with(port, &signed, "abcde");
+    let first = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&e, 5)), None, &[run(&e, &format!("{e}.0.1.1"), 5)])));
+    let word = |ordinal: u64| run(&e, &format!("{e}.0.1.{ordinal}"), 1);
+    let stretch = |start: u64, width: u64, count: u64| format!(r#"{{"start":"{start}","width":"{width}","count":"{count}"}}"#);
+    // A frame naming `stretches` over `base`, the list as written.
+    let frame = |base: &str, stretches: &str, runs: &[String]| {
+        format!(r#"{{"op":"publish","doc":"{e}","base":"{base}","base_extent":"5","stretches":{stretches},"runs":[{}]}}"#, runs.join(","))
+    };
+    let nowhere = "1.0.1.0.4242.1";
+    let ghost = [run("1.0.1.0.4243", "1.0.1.0.4243.0.1.1", 1)];
+    let before = head(port);
+    let cases: Vec<(&str, String, usize, Option<u64>, &str)> = vec![
+        ("not ascending", format!("[{},{}]", stretch(4, 1, 1), stretch(2, 1, 0)), 1, Some(1), "ascending and apart"),
+        ("overlapping", format!("[{},{}]", stretch(2, 3, 1), stretch(4, 1, 0)), 1, Some(1), "ascending and apart"),
+        ("a start at position 0", format!("[{}]", stretch(0, 0, 1)), 1, Some(0), "starts at position 0"),
+        ("a start past the extent's last boundary", format!("[{}]", stretch(7, 0, 1)), 1, Some(0), "starts past 'base_extent' + 1"),
+        ("a reach past the extent", format!("[{}]", stretch(5, 2, 1)), 1, Some(0), "replaces positions past 'base_extent'"),
+        ("counts short of the runs", format!("[{},{}]", stretch(2, 1, 1), stretch(4, 1, 0)), 2, Some(1), "do not sum to the 2 runs"),
+        ("counts past the runs", format!("[{}]", stretch(2, 1, 2)), 1, Some(0), "do not sum to the 1 runs"),
+        ("the empty list", "[]".to_string(), 1, None, "names no stretch"),
+    ];
+    for (what, stretches, runs, index, says) in &cases {
+        for (base, placed) in [(first.as_str(), vec![word(1); *runs]), (nowhere, vec![ghost[0].clone(); *runs])] {
+            let v = op_as_written(port, Some(&signed), &frame(base, stretches, &placed));
+            let rej = expect_resp(&v, "rejected");
+            assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{what} over {base}: {v}");
+            assert!(rej["detail"].as_str().is_some_and(|d| d.contains("field 'stretches'") && d.contains(says)), "{what} over {base}: {v}");
+            assert_eq!(rej["site"]["index"].as_u64(), *index, "{what} over {base}: the entry at fault: {v}");
+        }
+    }
+    // Beside no base.
+    let v = op_as_written(port, Some(&signed), &format!(r#"{{"op":"publish","doc":"{e}","stretches":[{}],"runs":[{}]}}"#, stretch(1, 0, 1), word(1)));
+    let rej = expect_resp(&v, "rejected");
+    assert!(rej["code"] == "malformed" && rej["detail"].as_str().is_some_and(|d| d.contains("carried without 'base'")), "{v}");
+    // One wire list: 4,097 entries, refused with the count.
+    let many: Vec<String> = (0..4_097).map(|_| stretch(1, 0, 0)).collect();
+    let v = op_as_written(port, Some(&signed), &frame(&first, &format!("[{}]", many.join(",")), &[]));
+    let rej = expect_resp(&v, "rejected");
+    assert!(rej["code"] == "malformed" && rej["detail"].as_str().is_some_and(|d| d.contains("array has 4097 elements, past the 4096-element wire cap")), "{v}");
+    assert_eq!(head(port), before, "no refusal committed anything");
+    // The boundary: two entries that touch, and a placement past the base's
+    // last position.
+    let touching = format!("[{},{},{}]", stretch(2, 1, 1), stretch(3, 0, 1), stretch(6, 0, 1));
+    let second = acked_addr(&op(port, Some(&signed), &frame(&first, &touching, &[word(5), word(4), word(1)])));
+    assert_eq!(second, format!("{e}.2"));
+    assert_eq!(text(port, &second, 1, 7), "aedcdea", "position 2 replaced, a word placed before 3, a word past the fifth");
+    sd.shutdown();
+}

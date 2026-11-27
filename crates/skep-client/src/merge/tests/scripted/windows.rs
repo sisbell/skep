@@ -92,7 +92,7 @@ fn a_part_a_record_names_unanswered_refuses_naming_its_pair_and_sends_nothing() 
 fn a_window_answer_publishes_the_counterpart_by_reference() {
     let mut world = World::windowed();
     let record = world.record_of_o(1, 5, 40);
-    let (dialer, board, signer) = open(world);
+    let (dialer, board, signer) = open(world.whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     dialer.clear();
@@ -117,7 +117,7 @@ fn a_window_answer_publishes_the_counterpart_by_reference() {
 fn a_leave_out_and_a_keep_private_compose_their_parts_and_nothing_else() {
     let mut world = World::windowed();
     world.record_of_o(1, 5, 40);
-    let (dialer, board, signer) = open(world);
+    let (dialer, board, signer) = open(world.whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     dialer.clear();
@@ -128,7 +128,7 @@ fn a_leave_out_and_a_keep_private_compose_their_parts_and_nothing_else() {
     let Landed::Member { answers, .. } = &landed else { panic!("{landed:?}") };
     assert_eq!(answers[0].answer, Some(OriginAnswer::Drop));
 
-    let (dialer, board, signer) = open(World::windowed());
+    let (dialer, board, signer) = open(World::windowed().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     dialer.clear();
@@ -157,7 +157,7 @@ fn a_counterpart_in_the_trunks_own_chain_is_signed_by_value_through_the_windows_
     world.docs.get_mut(S).unwrap().history.insert(at, vec![run(D, 1, 11), run(S, 1, 3)]);
     world.links.push(LinkRow { addr: format!("{O}.0.2.1"), home: O.to_string(), from: vec![format!("{O}.0.1.1")], to: vec![format!("{D}.0.1.20")], ty: crate::board::frames::T_CORRESPONDENCE.to_string(), width: 5, at: Some(40) });
     world.rows.push(FeedRow { at: 40, op: "publish", docs: vec![format!("{D}.1")], terms: None });
-    let (dialer, board, signer) = open(world);
+    let (dialer, board, signer) = open(world.whole_form_due());
     let session = sign_in(&board, &signer);
     let inputs = Inputs { sides: vec![Side::Draft { at: a(S), position: None }], base: Some(a(&format!("{D}.1"))), ..race_inputs() };
     let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
@@ -253,7 +253,7 @@ fn another_accounts_words_are_asked_naming_their_owner_and_withheld_ones_with_no
         w.fork(f2, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 4), run(f2, 1, 4), run(D, 5, 7)]);
         w
     };
-    let (dialer, board, signer) = open(fork_world());
+    let (dialer, board, signer) = open(fork_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let inputs = Inputs { sides: vec![Side::Fork(a(f2))], ..race_inputs() };
     let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
@@ -351,7 +351,7 @@ fn an_answered_shot_verifies_equal_and_differs_without_its_answers() {
 fn an_answered_list_past_the_cap_is_refused_with_its_count() {
     let mut world = World::windowed();
     world.record_of_o(1, 2, 40);
-    let (dialer, board, signer) = open(world);
+    let (dialer, board, signer) = open(world.whole_form_due());
     let session = sign_in(&board, &signer);
     let mut merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
     merged.cap = merged.composed.counts.m;
@@ -406,7 +406,7 @@ fn cut_by_the_draft_world() -> World {
 /// run would refuse a merge the draft has done nothing to.
 #[test]
 fn a_run_of_m_the_draft_holds_at_two_places_is_sent_as_two_at_their_places() {
-    let (dialer, board, signer) = open(cut_by_the_draft_world());
+    let (dialer, board, signer) = open(cut_by_the_draft_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     assert_eq!(
@@ -438,7 +438,7 @@ fn a_run_of_m_the_draft_holds_at_two_places_is_sent_as_two_at_their_places() {
 /// refused with its count before the head is read or anything sent.
 #[test]
 fn a_list_the_kept_places_cut_past_the_cap_is_refused_before_anything_is_sent() {
-    let (dialer, board, signer) = open(cut_by_the_draft_world());
+    let (dialer, board, signer) = open(cut_by_the_draft_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let mut merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     merged.cap = merged.composed.counts.m;
@@ -485,7 +485,7 @@ fn window_in_the_draft_world() -> World {
 fn a_part_answered_by_its_counterpart_takes_the_drafts_place_and_a_kept_private_one_none() {
     let mut world = window_in_the_draft_world();
     world.record_of_o(1, 5, 40);
-    let (dialer, board, signer) = open(world);
+    let (dialer, board, signer) = open(world.whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     dialer.clear();
@@ -511,7 +511,7 @@ fn a_part_answered_by_its_counterpart_takes_the_drafts_place_and_a_kept_private_
         "the window's own place in the draft, and the draft's own words': {frame}"
     );
 
-    let (dialer, board, signer) = open(window_in_the_draft_world());
+    let (dialer, board, signer) = open(window_in_the_draft_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     dialer.clear();
@@ -587,7 +587,7 @@ fn a_window_origins_records_are_read_once_and_its_parts_words_together() {
         };
         // Answered: the step and the re-read, one find each; the words, one
         // read.
-        let (dialer, board, signer) = open(fork_world());
+        let (dialer, board, signer) = open(fork_world().whole_form_due());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
         assert_eq!(merged.families.iter().filter(|f| **f == Family::Window).count() as u64, p, "the premise: p windows");
@@ -623,7 +623,7 @@ fn a_window_origins_records_are_read_once_and_its_parts_words_together() {
             "p = {p}: M as composed, each window kept private"
         );
         // Unanswered: each part's word and the merged text before it.
-        let (dialer, board, signer) = open(fork_world());
+        let (dialer, board, signer) = open(fork_world().whole_form_due());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
         dialer.clear();

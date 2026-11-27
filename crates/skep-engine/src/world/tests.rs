@@ -48,7 +48,7 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// Each slice's own checkpoint layout, at its TOP LEVEL, pinned to the
 /// World format count that names it. A slice's layout is a World layout
 /// ([`FormatStamp`]), and the author who changes one is a store's, with
-/// no edge to this file: count 1 names thirteen layouts because slices grew
+/// no edge to this file: count 1 names fourteen layouts because slices grew
 /// fields under it. This pin is where such a change meets the count — a
 /// field appended, removed, renamed or reordered on any slice fails here,
 /// and the failure says what it owes. The count is asserted beside the
@@ -848,7 +848,7 @@ fn shot_members(shots: usize) -> (World, Vec<Address>) {
             member: member.clone(),
             extent: engine.kernel().snapshot().world().arrangement.content_count(member),
         });
-        let shot = Shot { base, draft: None, also: vec![], keep_base: false, runs: vec![] };
+        let shot = Shot { base, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() };
         let (member, _) = vstream
             .publish(caller, &edition, &shot, &World::visible_to(caller))
             .expect("a shot into the owner's own edition");

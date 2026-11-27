@@ -8,6 +8,7 @@
 
 use skep_address::Address;
 
+use crate::board::answers::Metadata;
 use crate::board::Board;
 use crate::merge::compose::Run;
 use crate::merge::reads::{
@@ -16,6 +17,9 @@ use crate::merge::reads::{
 };
 use crate::merge::record::RecordLanding;
 use crate::merge::windows::{self, ShotParts};
+use crate::publication;
+use crate::publication::landed::{clipped, hulls, Positions, Stands};
+use crate::publication::request::cut_against;
 
 use super::faults::own_fault_face;
 use super::landing::{Landed, Landing};
@@ -44,6 +48,13 @@ use super::writer::{Stem, Writer};
 /// landing into a draft named reads the key's alone
 /// (`Writer::newest_record`).
 ///
+/// **The cap binds what one write sends.** A draft landing writes the
+/// merged list whole, in one frame, so a list past the cap is refused
+/// [`Refusal::OverCap`] here, before any read, with its count. A shot sends
+/// what the merge changes in the head, so the merged list's count refuses
+/// nothing: the shot's own frame is judged where it is composed
+/// ([`Writer::publish`]), by the runs it would carry.
+///
 /// # Errors
 ///
 /// As [`land`]'s, or as [`resume`]'s with `shoot` off.
@@ -57,7 +68,7 @@ pub(super) fn walk(
     shoot: bool,
 ) -> Result<Option<Landed>, Refusal> {
     let (m, cap) = (merged.composed.counts.m, merged.cap);
-    if m > cap {
+    if matches!(landing, Landing::Draft { .. }) && m > cap {
         return Err(Refusal::OverCap { runs: m, cap });
     }
     let merger = landing.merger();
@@ -66,9 +77,6 @@ pub(super) fn walk(
     match &landing {
         Landing::Shot { draft, answers, .. } => {
             let mut shot = windows::step(&writer, merged, answers, draft.as_ref())?;
-            if shot.runs.len() > cap {
-                return Err(Refusal::OverCap { runs: shot.runs.len(), cap });
-            }
             let (member, position) = match writer.standing_member(merged, &shot)? {
                 Standing::Trunk(member, at) => (member, at),
                 Standing::Daughter(address, position) => {
@@ -205,7 +213,9 @@ enum Holds {
     Nothing,
     /// Another arrangement, or one this reader cannot read.
     Other,
-    /// M over its first `placed` positions, minted at this position.
+    /// M — over its first `placed` positions where its shot named its whole
+    /// arrangement, and as the head with its stretches replaced where its
+    /// shot named them — minted at this position.
     ///
     /// It is the member's own `doc_metadata` `at`, the position of the
     /// commit that minted it, which the board serves whatever its feed
@@ -256,11 +266,21 @@ impl Writer<'_> {
         Ok(Standing::Absent)
     }
 
-    /// Returns whether `member` holds the answered list over its first
-    /// `placed` positions.
+    /// Returns whether `member` holds the answered list: the landed test at
+    /// the merge's resume walk.
     ///
-    /// A member whose `placed` is not the list's width holds another list,
-    /// and its image is not read. A member whose addresses match the list
+    /// The test is the publication's (`publication/landed.rs`), in its two
+    /// cases, and this site's base is the head the merge composed on, its
+    /// request's runs the answered list. A member whose shot named its whole
+    /// arrangement — its `doc_metadata` serves no stretch — holds the list
+    /// over its first `placed` positions: one whose `placed` is not the
+    /// list's width holds another list, and its image is not read. A member
+    /// whose shot named its stretches holds it by its arrangement
+    /// ([`Writer::holds_change`]): the head the merge composed on is its
+    /// base, and it is that head with the stretches of this merge replaced,
+    /// read where its own stretches or this merge's lie — whatever
+    /// stretches its shot spelled, so a landing cut one way is found by a
+    /// walk that cuts another. A member whose addresses match the list
     /// holds it where its words at the draft side's re-minted runs are that
     /// side's own (`first_word_difference`): the shot gave those words new
     /// addresses, so a version of other words of the same widths is never
@@ -283,21 +303,28 @@ impl Writer<'_> {
             Err(e) => return Err(e),
         };
         let Some(placed) = meta.placed else { return Ok(Holds::Other) };
-        if placed != shot.runs.iter().map(|a| a.run.width).sum::<u64>() {
-            return Ok(Holds::Other);
-        }
-        let image = match self.reader.image(member, None, 1, placed) {
-            Ok(runs) => runs,
-            Err(Refusal::Unreadable(_)) => return Ok(Holds::Other),
-            Err(e) => return Err(e),
+        let re_minted = if meta.stretches.is_empty() {
+            if placed != shot.runs.iter().map(|a| a.run.width).sum::<u64>() {
+                return Ok(Holds::Other);
+            }
+            let image = match self.reader.image(member, None, 1, placed) {
+                Ok(runs) => runs,
+                Err(Refusal::Unreadable(_)) => return Ok(Holds::Other),
+                Err(e) => return Err(e),
+            };
+            let actual = runs_of(&image)?;
+            let expected: Vec<(Run, Family)> =
+                shot.runs.iter().map(|a| (a.run.clone(), a.family)).collect();
+            if first_difference(&expected, &actual, &merged.inputs.doc).is_some() {
+                return Ok(Holds::Other);
+            }
+            windows::re_minted(&shot.runs)
+        } else {
+            match self.holds_change(merged, shot, member, &meta)? {
+                Some(re_minted) => re_minted,
+                None => return Ok(Holds::Other),
+            }
         };
-        let actual = runs_of(&image)?;
-        let expected: Vec<(Run, Family)> =
-            shot.runs.iter().map(|a| (a.run.clone(), a.family)).collect();
-        if first_difference(&expected, &actual, &merged.inputs.doc).is_some() {
-            return Ok(Holds::Other);
-        }
-        let re_minted = windows::re_minted(&shot.runs);
         let doc = &merged.inputs.doc;
         if first_word_difference(&self.reader, doc, &merged.maps, member, &re_minted)?.is_some() {
             return Ok(Holds::Other);
@@ -307,5 +334,102 @@ impl Writer<'_> {
             None => position_of(&self.reader, member)?.unwrap_or_else(|| self.reader.as_of()),
         };
         Ok(Holds::Merged(at))
+    }
+
+    /// Returns where `member`, born of a shot that named its stretches,
+    /// holds the draft side's re-minted runs — or `None` where it is not the
+    /// head the merge composed on with this merge's stretches replaced.
+    ///
+    /// The landed test's second case at this site. The member's `shot_base`
+    /// is the head, at the extent the composition read; the answered list is
+    /// cut against the head's image, which the composition holds
+    /// (`cut_against`, a draft side's runs alone made to ride — the cut is
+    /// this walk's own, and need not be the one the shot spelled); and the
+    /// member is read in the hulls of its own stretch list and that cut's
+    /// ([`hulls`]), each compared with what the cut places there — the
+    /// list's runs, and the head's own between them, read off the image in
+    /// hand. So the reads are the member's, where the change lies, and
+    /// nothing of the head. The answer is each re-minted run with the
+    /// member's ordinal it lands at, the side its words are read through and
+    /// the run they are read as, for the words' own check
+    /// (`first_word_difference`).
+    ///
+    /// # Errors
+    ///
+    /// The member's image reads' refusals but `withheld`, which answers as
+    /// what it holds; an `image` run that is no content I-address.
+    #[allow(clippy::type_complexity)]
+    fn holds_change<'s>(
+        &self,
+        merged: &Merged,
+        shot: &'s ShotParts,
+        member: &Address,
+        meta: &Metadata,
+    ) -> Result<Option<Vec<(u64, Option<usize>, &'s Run)>>, Refusal> {
+        let head = merged.inputs.head.to_string();
+        if meta.shot_base.as_deref() != Some(head.as_str()) || meta.base_extent != Some(merged.head_extent) {
+            return Ok(None);
+        }
+        let Some(held) = merged.maps.first() else { return Ok(None) };
+        let listed: Vec<publication::Run> = shot
+            .runs
+            .iter()
+            .map(|a| publication::Run::new(a.run.origin.clone(), a.run.i_start, a.run.width))
+            .collect();
+        let re_mints = |index: usize| shot.runs[index].family == Family::DraftNative;
+        let cut = cut_against(&held.runs, merged.head_extent, &listed, &re_mints);
+        let placed = cut.of(&shot.runs.iter().collect::<Vec<_>>());
+        // Each stretch of the cut with the positions it places, and where
+        // its runs begin among the runs the cut places.
+        let mut first_run = Vec::with_capacity(cut.stretches.len());
+        let mut taken = 0usize;
+        let asked: Vec<Positions> = cut
+            .stretches
+            .iter()
+            .map(|stretch| {
+                first_run.push(taken);
+                let width = placed.iter().skip(taken).take(stretch.count).map(|a| a.run.width).sum();
+                taken += stretch.count;
+                (stretch.start, stretch.width, width)
+            })
+            .collect();
+        let Some(plan) = hulls(&meta.stretches, &asked) else { return Ok(None) };
+        let doc = &merged.inputs.doc;
+        let mut re_minted = Vec::new();
+        for hull in plan {
+            let actual = if hull.member.1 == 0 {
+                Vec::new()
+            } else {
+                match self.reader.image(member, None, hull.member.0, hull.member.1) {
+                    Ok(runs) => runs_of(&runs)?,
+                    Err(Refusal::Unreadable(_)) => return Ok(None),
+                    Err(e) => return Err(e),
+                }
+            };
+            let mut expected: Vec<(Run, Family)> = Vec::new();
+            let mut at = hull.member.0;
+            for stands in &hull.expected {
+                match *stands {
+                    Stands::Base { from, width } => {
+                        let kept = runs_of(&clipped(&held.runs, from.saturating_sub(1), width))?;
+                        expected.extend(kept.into_iter().map(|run| (run, Family::Window)));
+                        at = at.saturating_add(width);
+                    }
+                    Stands::Stretch { index } => {
+                        for answered in placed.iter().skip(first_run[index]).take(cut.stretches[index].count) {
+                            if answered.family == Family::DraftNative {
+                                re_minted.push((at, answered.side.map(|s| usize::from(s.0)), &answered.through));
+                            }
+                            expected.push((answered.run.clone(), answered.family));
+                            at = at.saturating_add(answered.run.width);
+                        }
+                    }
+                }
+            }
+            if first_difference(&expected, &actual, doc).is_some() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(re_minted))
     }
 }

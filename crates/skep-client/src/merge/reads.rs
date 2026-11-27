@@ -195,13 +195,20 @@ pub(super) use readings::{check_shape, fence, read_shape, values_for, values_of,
 pub(super) use refusal::stretches;
 pub use refusal::{NoUndo, Refusal};
 
-/// The most runs one shot may name.
+/// The most runs one write may place.
 ///
-/// It is the wire's list cap, `MAX_WIRE_LIST` = 4,096 elements per request
-/// array, which the shot's `runs` is parsed through (the merge record's §8,
-/// "The three caps, read at the pin"). A merged list past it is refused
-/// with the count, never split (decision 13).
-pub const SHOT_RUN_CAP: usize = 1 << 12;
+/// It is the board's own number for what one request places, 65,536: a
+/// `publish`'s `runs` and the runs of a `set_arrangement`'s changes are each
+/// parsed to it, and the store refuses a placement past it. It binds what
+/// ONE WRITE SENDS, never the length of a file: a shot sends what the merge
+/// changes in the head, so a merged list of any length lands where its
+/// change fits; a landing into a draft, an undo, a withdrawal and a restore
+/// each send a draft's list in one frame, so each is held to it by that
+/// list's count. A write past it is refused with the count, before any
+/// frame, and never split across writes (decision 13): two writes of one
+/// act are two commits, and a death between them leaves a state neither
+/// the act nor its undo names.
+pub const SHOT_RUN_CAP: usize = 1 << 16;
 
 /// The most sides one merge composes besides the head.
 ///
@@ -257,8 +264,9 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 /// and as the record's draft side position, so a verifier reads the draft
 /// and its recorded base as this composition did (§4: "for a draft read at
 /// N") and the landing types its write against it. The result carries M
-/// with each run's family, the gap report, the counts (`counts.m` against
-/// [`SHOT_RUN_CAP`], carried, not refused here), the record the landing
+/// with each run's family, the gap report, the counts (`counts.m`, which a
+/// landing into a draft holds to [`SHOT_RUN_CAP`] and a shot does not —
+/// carried, not refused here), the record the landing
 /// would write, and the standing record for the key where one is current.
 ///
 /// # Errors

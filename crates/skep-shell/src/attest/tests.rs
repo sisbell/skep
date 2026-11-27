@@ -388,20 +388,39 @@ fn run(origin: &str, i_start: &str, width: u64) -> Value {
     json!({"origin": origin, "i_start": i_start, "width": width.to_string()})
 }
 
-/// A SHOT is held to its ARITHMETIC before any read: runs past the wire's
-/// list, the copied positions past what a body under the budget can carry,
-/// and a count past `be64` (a window of width 2^64 − 1 and a run after it —
-/// a panic in the signer's own builder) are each refused with nothing read,
-/// the board's price among the reads not made; a shot that copies in none
-/// of its draft's words asks no price at all.
+/// A SHOT is held to its ARITHMETIC before any read: runs past what one
+/// frame may place — the store's number, which the composer's copy equals —
+/// a stretch list past the wire's list, one whose counts do not take the
+/// runs, an empty one and one that is no list of naturals, the copied
+/// positions past what a body under the budget can carry, and a count past
+/// `be64` (a window of width 2^64 − 1 and a run after it — a panic in the
+/// signer's own builder) are each refused with nothing read, the board's
+/// price among the reads not made; runs past the wire's list and inside the
+/// frame's cap are composed on; and a shot that copies in none of its
+/// draft's words asks no price at all.
 #[test]
 fn a_shot_is_held_to_its_arithmetic_before_any_read() {
+    assert_eq!((MAX_WIRE_RUNS, MAX_WIRE_LIST), (skep_arrangement::MAX_PLACED_RUNS, 4096), "the runs' cap is the store's number for what one request places");
     let g = Ground::over(Fake::default());
     let c = g.composer();
     let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.64", "runs": runs});
     let draft_run = |width: u64| run("1.0.1.0.64", "1.0.1.0.64.0.1.1", width);
+    let stretched = |stretches: Value| {
+        let mut frame = shot(vec![draft_run(1), draft_run(1)]);
+        frame["base"] = json!("1.0.1.0.1.1");
+        frame["base_extent"] = json!("5");
+        frame["stretches"] = stretches;
+        frame
+    };
+    let stretch = |start: u64, width: u64, count: u64| json!({"start": start.to_string(), "width": width.to_string(), "count": count.to_string()});
     let cells = [
-        ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
+        ("runs past what one frame may place", shot(vec![draft_run(1); MAX_WIRE_RUNS + 1]), "one frame may place"),
+        ("stretches past the wire's list", stretched(Value::Array(vec![stretch(1, 0, 0); MAX_WIRE_LIST + 1])), "elements"),
+        ("stretches whose counts fall short of the runs", stretched(json!([stretch(2, 1, 1)])), "do not take its runs"),
+        ("stretches whose counts pass the runs", stretched(json!([stretch(2, 1, 1), stretch(4, 0, 2)])), "do not take its runs"),
+        ("an empty stretch list", stretched(json!([])), "do not take its runs"),
+        ("a stretch that is no three naturals", stretched(json!([{"start": "2", "width": "1"}])), "is no natural"),
+        ("stretches that are no list", stretched(json!("2")), "is no list"),
         ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_COPIED_POSITIONS + 1)]), "copies in"),
         ("the draft's positions past a body", shot(vec![draft_run(MAX_COPIED_POSITIONS + 1)]), "copies in"),
         ("a count past be64", shot(vec![run("1.0.9.0.1", "1.0.9.0.1.0.1.1", u64::MAX), run("1.0.9.0.1", "1.0.9.0.1.0.1.1", 1)]), "2^64"),
@@ -576,6 +595,89 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
     assert_eq!(body.as_bytes(), spelled.as_bytes());
     let reads = g.fake.dialed();
     assert_eq!(reads.iter().filter(|op| *op == "retrieve_v").count(), 2, "one read per origin: {reads:?}");
+}
+
+/// ONE BODY, WHATEVER HAND COMPOSES IT. A shot naming several stretches of
+/// its base — the draft's two words placed before its first position; a
+/// window in place of its second; a window I-adjacent to that one and two
+/// more of the draft's words placed before its fourth; its fifth removed —
+/// is composed three ways: by the publication library's request from its
+/// pieces, by this composer from the frame that request sends, and by the
+/// entry body's own builder from the same pieces with each stretch's end
+/// among them. The three spell the same bytes: each stretch's segments
+/// closed at its end, the two adjacent windows two segments, the stretch
+/// row behind the base group. The same runs sent with no `stretches` spell
+/// another body, with no row — so a composer left spelling the whole form
+/// for a frame that names its stretches signs bytes the board does not
+/// compose, which it refuses `attestation_invalid`.
+#[test]
+fn a_shot_naming_its_stretches_is_one_body_from_the_request_the_frame_and_the_builder() {
+    use skep_client::publication::{Count, Piece, Price, Request, Run, Stretch};
+    let g = Ground::over(Fake::default().text("1.0.1.0.64", "1.0.1.0.64.0.1", 1, "abcd"));
+    let address = |text: &str| -> Address { parse_address(text).unwrap() };
+    let (trunk, draft, other, member) = (address("1.0.1.0.1"), address("1.0.1.0.64"), address("1.0.9.0.1"), address("1.0.1.0.1.1"));
+    let window = |first: u64, width: u64| Piece::Window { start: address(&format!("1.0.9.0.1.0.1.{first}")), width };
+    let values = |text: &str| Piece::Values(text.bytes().map(|b| vec![b]).collect());
+    let request = Request {
+        doc: Some(trunk.clone()),
+        mint: None,
+        claim: false,
+        base: Some((member.clone(), 5)),
+        stretches: vec![
+            Stretch { start: 1, width: 0, count: 1 },
+            Stretch { start: 2, width: 1, count: 1 },
+            Stretch { start: 4, width: 0, count: 2 },
+            Stretch { start: 5, width: 1, count: 0 },
+        ],
+        draft: Some(draft.clone()),
+        also: Vec::new(),
+        keep_base: false,
+        runs: vec![Run::new(draft.clone(), 1, 2), Run::new(other.clone(), 5, 1), Run::new(other.clone(), 6, 2), Run::new(draft.clone(), 3, 2)],
+        places: vec![None; 4],
+        also_places: Vec::new(),
+        stray_records: vec![0; 4],
+        pieces: vec![values("ab"), window(5, 1), window(6, 2), values("cd")],
+        entries: Vec::new(),
+        retract: Vec::new(),
+        originals: Vec::new(),
+        read_with: Vec::new(),
+        supersede: Vec::new(),
+        unspellable: Vec::new(),
+        id: "k-1".into(),
+        count: Count::default(),
+        price: Price::default(),
+        as_of: 0,
+    };
+    // The client's body, and the composer's from the frame the client sends.
+    let frame = request.frame(None);
+    assert_eq!(frame["stretches"].as_array().map(Vec::len), Some(4), "{frame}");
+    let by_request = request.shot_body();
+    let by_frame = g.composer().publish_body(&frame, "1.0.1.0.1").unwrap();
+    assert_eq!(by_frame.as_bytes(), by_request.as_bytes(), "the composer spells the frame as the request that sent it does");
+    // The builder's, from the same pieces and each stretch's end.
+    let (first, second) = (address("1.0.9.0.1.0.1.5"), address("1.0.9.0.1.0.1.6"));
+    let value = |v: &'static [u8]| ShotSegmentPiece::Value(v);
+    let wide = |start: &'static Address, width: u64| ShotSegmentPiece::Window { start, width: NonZeroU64::new(width).unwrap() };
+    let (first, second): (&'static Address, &'static Address) = (Box::leak(Box::new(first)), Box::leak(Box::new(second)));
+    let end = |start: u64, width: u64| ShotSegmentPiece::Stretch { start, width };
+    let base = Some(ShotBase { member: &member, extent: 5 });
+    let pieces = [value(b"a"), value(b"b"), end(1, 0), wide(first, 1), end(2, 1), wide(second, 2), value(b"c"), value(b"d"), end(4, 0), end(5, 1)];
+    let by_builder = entry_body_publish(pieces, base);
+    assert_eq!(by_frame.as_bytes(), by_builder.as_bytes(), "and as the entry body's own builder spells the pieces");
+    assert!(by_builder.as_bytes().windows(13).any(|w| w == [&[0u8, 0, 0, 9][..], &b"stretches"[..]].concat()), "the stretch row is in it");
+    // Two windows, never one: the boundary between the second stretch and
+    // the third parts the two I-adjacent runs onto the other document.
+    let one_window = entry_body_publish([value(b"a"), value(b"b"), end(1, 0), wide(first, 3), end(2, 1), value(b"c"), value(b"d"), end(4, 0), end(5, 1)], base);
+    assert_ne!(by_frame.as_bytes(), one_window.as_bytes(), "no window is one segment across two stretches");
+    // The same runs with no stretch named: another body, the whole form's —
+    // no row behind the base group, the body ending on it.
+    let row = [&[0u8, 0, 0, 9][..], &b"stretches"[..]].concat();
+    let mut whole = frame.clone();
+    whole.as_object_mut().unwrap().remove("stretches");
+    let by_whole_frame = g.composer().publish_body(&whole, "1.0.1.0.1").unwrap();
+    assert!(!by_whole_frame.as_bytes().windows(13).any(|w| w == row), "no list: no row");
+    assert!(by_whole_frame.as_bytes().ends_with(&5u64.to_be_bytes()), "the whole form's body ends on its base group");
+    assert_ne!(by_frame.as_bytes(), by_whole_frame.as_bytes(), "the two forms never spell one body");
 }
 
 /// A PUBLICATION's NATURALS read in either of the wire's spellings (wire.md

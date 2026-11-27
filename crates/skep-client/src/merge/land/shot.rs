@@ -22,7 +22,8 @@ use crate::merge::reads::{
     Refusal, Side,
 };
 use crate::merge::windows::{self, AnsweredRun, ShotParts};
-use crate::publication::{self, own_claim_names, owned_by, Piece, SupersedeCause};
+use crate::publication::request::{cut_against, Cut};
+use crate::publication::{self, own_claim_names, owned_by, Piece, Stretch, SupersedeCause, MAX_WIRE_LIST, WHOLE_FORM_EVERY};
 
 use super::faults::{head_owed, own_fault, own_fault_face, shape_face};
 use super::standing::Standing;
@@ -194,9 +195,22 @@ impl Writer<'_> {
     /// ([`Writer::attest_after_claim`]). Where the skip leaves no daughter
     /// and the head holds the whole list (`head_holds`), nothing is sent.
     ///
+    /// **Sent by its places against the head.** The list is cut against the
+    /// head's image, which the composition read ([`Writer::form_of`]): the
+    /// frame carries the stretches of the head the merge replaces and the
+    /// runs that replace them, and no run the head holds where the merged
+    /// list does — so the values read, the body signed and the frame sent
+    /// follow the change, and a file of any length lands where its change
+    /// fits one write. The whole list is sent, with the head as its base,
+    /// where the head stands one short of the chain's bound
+    /// ([`WHOLE_FORM_EVERY`]).
+    ///
     /// # Errors
     ///
-    /// [`Refusal::OverCap`] over the list the kept places cut, nothing sent;
+    /// The head's `doc_metadata` read's refusal, where its depth is read;
+    /// [`Refusal::OverCap`] over the runs the frame would carry — the
+    /// change's, or the whole list's where the whole is sent — the list the
+    /// kept places cut, nothing sent;
     /// [`Refusal::BodyOverBudget`] where the copied positions alone pass
     /// [`SHOT_BODY_BUDGET`] at four bytes each, nothing read; then the head's
     /// refusal and halts ([`Writer::signing_term`]), read before the values,
@@ -223,6 +237,13 @@ impl Writer<'_> {
         let rendered = draft.filter(|d| merged.inputs.sides.iter().any(|s| matches!(s, Side::Draft { at, .. } if at == *d)));
         let image = rendered.and_then(|d| merged.maps.iter().find(|m| m.doc == *d)).map(|m| m.runs.as_slice());
         let sent = windows::kept_places(&shot.runs, image);
+        // The form: the change against the head, or the whole list. What
+        // one write sends is held to the cap, never the merged list's count.
+        let form = self.form_of(merged, &sent)?;
+        let (sent, stretches) = match form {
+            Some(cut) => (cut.of(&sent), cut.stretches),
+            None => (sent, Vec::new()),
+        };
         if sent.len() > merged.cap {
             return Err(Refusal::OverCap { runs: sent.len(), cap: merged.cap });
         }
@@ -289,6 +310,7 @@ impl Writer<'_> {
             mint: None,
             claim: false,
             base: Some((head.clone(), merged.head_extent)),
+            stretches,
             draft: draft.cloned(),
             also: Vec::new(),
             // A merge shot is no publication of the draft it names: M holds
@@ -330,6 +352,39 @@ impl Writer<'_> {
             v = self.answered_write(&request.frame(Some(attest)), "publishing the merge")?;
         }
         Ok(v)
+    }
+
+    /// Returns the cut of `sent`, the list a shot would send whole, against
+    /// the head — the stretches of the head the merge replaces and which
+    /// runs replace them — or `None` where the shot sends the whole list.
+    ///
+    /// The head's image is the composition's own, read at the head's extent
+    /// ([`Merged::head_extent`]), so the cut reads nothing of the board
+    /// (`cut_against`). A run rides the shot, whatever the head holds, where
+    /// the commit re-mints it — a draft side's words — and where it carries
+    /// a kept place: its index is the place's. The whole list is sent where
+    /// the head stands one short of the chain's bound, its depth read off
+    /// its `doc_metadata` — so the member minted ends the chain, signed over
+    /// its whole arrangement — where the cut replaces the head whole, and
+    /// where it names more stretches than one list carries.
+    ///
+    /// # Errors
+    ///
+    /// The head's `doc_metadata` read's refusal.
+    fn form_of(&self, merged: &Merged, sent: &[(AnsweredRun, Option<u64>)]) -> Result<Option<Cut>, Refusal> {
+        let Some(head) = merged.maps.first() else { return Ok(None) };
+        let depth = self.reader.metadata(&merged.inputs.head, None)?.chain_depth.unwrap_or(0);
+        if depth.saturating_add(1) >= WHOLE_FORM_EVERY {
+            return Ok(None);
+        }
+        let runs: Vec<publication::Run> = sent
+            .iter()
+            .map(|(placed, _)| publication::Run::new(placed.run.origin.clone(), placed.run.i_start, placed.run.width))
+            .collect();
+        let rides = |index: usize| sent[index].0.family == Family::DraftNative || sent[index].1.is_some();
+        let cut = cut_against(&head.runs, merged.head_extent, &runs, &rides);
+        let whole = cut.stretches == [Stretch { start: 1, width: merged.head_extent, count: runs.len() }];
+        Ok((!whole && cut.stretches.len() <= MAX_WIRE_LIST).then_some(cut))
     }
 
     /// Returns the `attest` a shot sent unsigned is sent again with, where a

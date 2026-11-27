@@ -46,7 +46,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   atom or a whole run of single bytes at `REINSERTED_UNIT_BYTES` and its
   own bytes, the units the ones M5's count answers
   (`Shot::reinserted_units`), so a long run of typed bytes is priced
-  near its length. The price carries those units too (`ReadPrice::units`,
+  near its length; and a shot that names its change against its base at
+  the runs of the change and one entry a stretch (`STRETCH_BYTES`), its
+  placing record carrying those and never the base's runs. The price
+  carries those units too (`ReadPrice::units`,
   beside `UNIT_BUDGET` and `POSITION_BUDGET`, M5's two re-insert
   budgets), which the store refuses on and the price never does. It is
   taken at the caller's read class: a stray place counts the

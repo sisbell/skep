@@ -374,8 +374,10 @@ fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read(
 /// beside a null base — the one place the landing's position is kept; a
 /// head naming no registered document is `source_not_registered`, reorder,
 /// and naming a `base` for it is `no_base_to_record`, each with nothing
-/// written; an empty `runs` empties it; and the wire's documented example
-/// is answered as the op.
+/// written; an empty `runs` empties it; the wire's documented example
+/// is answered as the op; and a frame's runs are held to the store's number
+/// for what one call places — 4,097 land in one write, 65,537 are refused
+/// at the parse with the count.
 #[test]
 fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -424,9 +426,22 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     let v = op_as_written(port, Some(&owner), example);
     assert_eq!(v["resp"].as_str(), Some("rejected"), "{v}");
     assert_eq!(v["op"].as_str(), Some("set_arrangement"), "the frame is the op: {v}");
-    // A run list past the wire's cap is refused at the parse, as a shot's.
+    // A run list past the wire's list cap rides ONE frame: the runs a frame
+    // places are held to the store's own number for what one call places,
+    // so 4,097 runs land in one write and one row. One run past that number
+    // is refused at the parse with the count, as a shot's, nothing written.
     let many: Vec<(String, String, u64)> = (0..4097).map(|_| runs[0].clone()).collect();
+    let before = head_position(port);
     let v = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&many), None, None, None, None));
-    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("malformed"), "{}", v["detail"]);
+    expect_resp(&v, "ack");
+    assert_eq!(content_extent(port, Some(&owner), &plain), 4097 * 3, "every run placed, by identity");
+    assert_eq!(changes_since(port, &owner, before).len(), 1, "one write, one row");
+    let over: Vec<(String, String, u64)> = (0..65_537).map(|_| runs[0].clone()).collect();
+    let before = head_position(port);
+    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, own_count(port, &owner, &plain), &borrowed(&over), None, None, None, None));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("malformed"), "{}", v["detail"]);
+    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("the changes place 65537 runs, past the 65536-run cap on one frame")), "refused with the count: {}", v["detail"]);
+    assert_eq!(head_position(port), before, "nothing written");
     sd.shutdown();
 }

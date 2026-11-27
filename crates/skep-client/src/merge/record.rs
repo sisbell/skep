@@ -36,7 +36,9 @@
 //! or a draft the verifier may read, the rules are versioned, the value
 //! switches are in the body — so `verify` recomputes M, under this build's
 //! rules whatever version the record names ([`RULES`]), and compares it
-//! with the landed member's image over its first `placed` positions, or the
+//! with the landed member's image over the positions M takes — its first
+//! `placed`, or for a member whose shot named its stretches of the head its
+//! leading positions as wide as M — or the
 //! draft's at the position recorded, the daemon's `compare` the oracle the
 //! client's join is checked against (§1.3 step 4), and answers `Equal`,
 //! `Differs`, `SideMoved` or `Unreadable`, never a verdict manufactured for
@@ -1892,10 +1894,12 @@ fn atom_values(
 /// What [`verify`] answers (§4, testimony).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// The landed member holds M over its first `placed` positions.
+    /// The landed member holds M over its leading positions.
     ///
-    /// For a draft landing, the draft's whole image at the position recorded
-    /// is M.
+    /// Those are its first `placed` where its shot named its whole
+    /// arrangement, and as many as M is wide where its shot named its
+    /// stretches. For a draft landing, the draft's whole image at the
+    /// position recorded is M.
     Equal,
     /// The landed member or draft differs from M, first at this V-ordinal.
     Differs {
@@ -1943,8 +1947,13 @@ pub enum Verdict {
 /// value switches and the choices its gaps record — the merger's answers at
 /// its window parts applied to it (`answers`, one function with the shot's
 /// own, `merge::windows`'s `applied`), and compared with the landed
-/// member's image over its first `placed` positions, or the draft's whole
-/// image at the position recorded. A member is compared as the shot
+/// member's image over the positions M takes, or the draft's whole
+/// image at the position recorded. A member whose shot named its whole
+/// arrangement holds M over its first `placed` positions; one whose shot
+/// named the stretches of the head it replaced holds M over its leading
+/// positions, as many as M is wide — `placed` there counts the change's
+/// positions, which lie among the head's — so the member is read that far
+/// and compared whole, as the recomputation is whole. A member is compared as the shot
 /// minted it, a draft side's fresh text re-minted under the trunk, which
 /// its addresses match by width alone: the member's words there and the
 /// draft side's own are read at the head and compared position by position,
@@ -2113,6 +2122,11 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         Err(Refusal::Unreadable(doc)) => return Ok(Verdict::Unreadable(doc)),
         Err(e) => return at_record(e, composed_at),
     }
+    // A member holds a draft side's text re-minted under the trunk, which
+    // its family says, and each part as the merger's answer left it; a
+    // draft holds every run of M by identity.
+    let by_identity = matches!(record.landed, Some(RecordLanding::Draft { .. }));
+    let answered = super::windows::applied(&readings.composed.runs, &readings.families, &record.doc, &record.answers);
     let (target, at, placed) = match landed {
         RecordLanding::Member { member, .. } => {
             let meta = match reader.metadata(member, None) {
@@ -2123,7 +2137,11 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
                 Err(e) => return Err(e),
             };
             let placed = meta.placed.ok_or_else(|| Halt::face(format!("{member} carries no `placed` term"), "a member a shot minted carries the positions the client placed (wire.md §Namespace, `doc_metadata`)", "this member was not minted by a shot this library can verify"))?;
-            (member.clone(), None, placed)
+            // A shot that named its stretches placed its change among the
+            // head's positions: the member holds M over as many leading
+            // positions as M is wide, and is read that far.
+            let leading = if meta.stretches.is_empty() { placed } else { answered.iter().map(|a| a.run.width).sum() };
+            (member.clone(), None, leading)
         }
         RecordLanding::Draft { draft, position } => {
             let extent = match reader.extent(draft, Some(*position)) {
@@ -2144,11 +2162,6 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         Err(e) => return at_record(e, at.map(|p| (&target, p))),
     };
     let actual = reads::runs_of(&image)?;
-    // A member holds a draft side's text re-minted under the trunk, which
-    // its family says, and each part as the merger's answer left it; a
-    // draft holds every run of M by identity.
-    let by_identity = matches!(record.landed, Some(RecordLanding::Draft { .. }));
-    let answered = super::windows::applied(&readings.composed.runs, &readings.families, &record.doc, &record.answers);
     let expected: Vec<(Run, reads::Family)> = answered
         .iter()
         .map(|a| (a.run.clone(), if by_identity { reads::Family::Own } else { a.family }))

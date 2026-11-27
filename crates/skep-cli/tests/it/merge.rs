@@ -639,7 +639,7 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["gaps"], json!([]), "different material on each side: no gap");
     assert_eq!(v["deduped"], json!([]), "nothing added alike: nothing kept once");
     assert_eq!(v["counts"], json!({"a": 3, "b": 1, "m": 3}));
-    assert_eq!((v["over_cap"].as_bool(), v["cap"].as_u64()), (Some(false), Some(4096)));
+    assert_eq!((v["over_cap"].as_bool(), v["cap"].as_u64()), (Some(false), Some(65_536)), "the cap is the board's number for what one write places");
     assert!(v["prior"].is_null() && v["landed"].is_null(), "{v}");
     assert_eq!(v["record"]["type"].as_str(), Some("merge"));
     assert!(v["record"]["landed"].is_null(), "the record unlanded: {}", v["record"]);

@@ -504,6 +504,114 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
 /// over the same member at another extent, or in the birth shape, is another
 /// body (V, bu7-E2).
 #[test]
+fn the_stretch_row_follows_the_base_group_for_a_shot_that_names_its_stretches_and_no_other() {
+    // A shot that names its change: the stretches' ends ride among the
+    // pieces, each closing the open value stretch — `a` and `b`, one value
+    // stretch with no boundary between them, are two here — and the row is
+    // the body's last part, behind the base group: the token `stretches`
+    // delimited, the count, then each stretch as its start, its width and
+    // the positions the pieces since the last end hold. The first stretch
+    // replaces one position of the base at 2 by one position; the second
+    // places three before position 5, removing none.
+    let window_start = addr(&[1, 0, 2, 0, 1, 4]);
+    let base_member = addr(&[1, 0, 1, 0, 1, 2]);
+    let base = Some(ShotBase { member: &base_member, extent: 5 });
+    let window = ShotSegmentPiece::Window { start: &window_start, width: nonzero(2) };
+    let by_stretches = entry_body_publish(
+        [
+            ShotSegmentPiece::Value(b"a"),
+            ShotSegmentPiece::Stretch { start: 2, width: 1 },
+            ShotSegmentPiece::Value(b"b"),
+            window,
+            ShotSegmentPiece::Stretch { start: 5, width: 0 },
+        ],
+        base,
+    );
+    let row = [
+        &[0u8, 0, 0, 9][..],
+        &b"stretches"[..],
+        &[0, 0, 0, 0, 0, 0, 0, 2][..],
+        &[0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1][..],
+        &[0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3][..],
+    ]
+    .concat();
+    assert_eq!(
+        by_stretches.as_bytes(),
+        [
+            &[0u8, 0, 0, 0, 0, 0, 0, 4][..],
+            &[0x02][..],
+            &value_sequence_bytes([&b"a"[..]])[..],
+            &[0x02][..],
+            &value_sequence_bytes([&b"b"[..]])[..],
+            &[0x01][..],
+            &window_bytes(&window_start, 2)[..],
+            &base_group(5)[..],
+            &row[..],
+        ]
+        .concat(),
+        "the count, each stretch's segments closed at its end, the base group, then the row"
+    );
+    // The same pieces with no stretch named are today's body: one value
+    // stretch of two, the window, the base group, and nothing behind it.
+    let whole = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), window], base);
+    assert_eq!(
+        whole.as_bytes(),
+        [
+            &[0u8, 0, 0, 0, 0, 0, 0, 4][..],
+            &[0x02][..],
+            &value_sequence_bytes([&b"a"[..], &b"b"[..]])[..],
+            &[0x01][..],
+            &window_bytes(&window_start, 2)[..],
+            &base_group(5)[..],
+        ]
+        .concat(),
+        "a shot with no stretch list spells no row and closes no segment"
+    );
+    // A stretch that only removes holds no position, and is spelled all the
+    // same; and the deposit groups of a publication follow the row.
+    let removal = entry_body_publish([ShotSegmentPiece::Stretch { start: 3, width: 2 }], base);
+    assert_eq!(
+        removal.as_bytes(),
+        [
+            &[0u8; 8][..],
+            &base_group(5)[..],
+            &[0, 0, 0, 9][..],
+            &b"stretches"[..],
+            &[0, 0, 0, 0, 0, 0, 0, 1][..],
+            &[0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0][..],
+        ]
+        .concat()
+    );
+    let home = addr(&[1, 0, 1, 0, 9]);
+    let deposit = DepositRow {
+        home: DepositHome::Address(&home),
+        kind: DepositKind::ReadWith,
+        ty: DepositSlot::Stored(vec![]),
+        from: DepositSlot::Stored(vec![]),
+        to: DepositSlot::Stored(vec![]),
+    };
+    let with_deposit = entry_body_publication(by_stretches.clone(), std::slice::from_ref(&deposit));
+    assert!(with_deposit.as_bytes().starts_with(by_stretches.as_bytes()), "the groups follow the row");
+    let group = &with_deposit.as_bytes()[by_stretches.as_bytes().len()..];
+    assert_eq!(&group[..4 + 9], [&[0u8, 0, 0, 9][..], &b"1.0.1.0.9"[..]].concat(), "a group opens with its home");
+    assert_ne!(&group[4..13], b"stretches", "which is never the row's token: an address opens with a digit");
+    // The budget is the finished body's, the row included: on its own
+    // length the body is built, and one byte short the stretch that would
+    // pass it is refused, the builder gone with it.
+    let fed = |budget: usize| {
+        PublishBody::within(budget, base)
+            .and_then(|body| body.push(b"a"))
+            .and_then(|body| body.stretch(2, 1))
+            .and_then(|body| body.push(b"b"))
+            .and_then(|body| body.window(&window_start, nonzero(2)))
+            .and_then(|body| body.stretch(5, 0))
+    };
+    let budget = by_stretches.as_bytes().len();
+    assert_eq!(fed(budget).map(PublishBody::finish), Ok(by_stretches));
+    assert_eq!(fed(budget - 1).err(), Some(PublishRefusal::PastBudget), "the last stretch's entry is one byte past");
+}
+
+#[test]
 fn the_base_group_signs_its_member_and_its_extent_both() {
     let base_member = addr(&[1, 0, 1, 0, 1, 2]);
     let base_at = |extent: u64| Some(ShotBase { member: &base_member, extent });
@@ -637,6 +745,7 @@ fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
             pieces.iter().try_fold(empty, |body, piece| match *piece {
                 ShotSegmentPiece::Value(value) => body.push(value),
                 ShotSegmentPiece::Window { start, width } => body.window(start, width),
+                ShotSegmentPiece::Stretch { start, width } => body.stretch(start, width),
             })
         })
     };

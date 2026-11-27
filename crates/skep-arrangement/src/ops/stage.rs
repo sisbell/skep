@@ -109,9 +109,10 @@ where
     /// since the snapshot takes the source's reading surface off that
     /// frontier — the keys `version`'s cross-owner arm takes.
     ///
-    /// **Cost**: `version`'s, stated there — the share O(1), the R-append
-    /// `#runs(reading_surface(from))` spans, permanent, re-paid at replay —
-    /// plus one map lookup for the base and one for the count.
+    /// **Cost**: `version`'s, stated there — the share O(1) and the list
+    /// named in R a second handle on it, no span appended, at the fold and
+    /// at replay alike — plus one map lookup for the base and one for the
+    /// count.
     ///
     /// # Errors
     ///

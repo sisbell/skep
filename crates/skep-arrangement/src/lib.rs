@@ -291,8 +291,8 @@ pub use run_list::{Runs, Splice};
 #[cfg(feature = "test-hooks")]
 pub use seat::seat_link;
 pub use seat::stage_seat_link;
-pub use shot::{Base, SegmentRun, Shot, ShotRun};
-pub use state::{DraftBase, M5Rec, M5State, Marker, Merge, ShotTerms};
+pub use shot::{Base, SegmentRun, Shot, ShotRun, ShotStretch, StretchFault};
+pub use state::{DraftBase, M5Rec, M5State, Marker, Merge, ShotTerms, Stretch};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice.

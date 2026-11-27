@@ -822,6 +822,7 @@ pub fn commit_every_write(
             origin: edition.clone(),
             run: Run::new(edition_start, nat(3)).expect("a content run"),
         }],
+        stretches: Vec::new(),
     };
     ack_addr(write(fx.user, Op::Publish { target: PublishTarget::Document(edition), shot, places: Vec::new(), also_places: Vec::new(), deposits: PublishDeposits::default() }));
 

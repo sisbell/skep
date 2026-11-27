@@ -24,7 +24,8 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A trailing component inside an authoritative slice is that
 //!   store's own serde field, and a private one: `map` is M4's,
-//!   `arrangements`, `provenance`, `fork_sources`, `arranged_at`,
+//!   `arrangements`, `provenance` with its two maps `appended` and `named`,
+//!   `fork_sources`, `arranged_at`,
 //!   `draft_bases` and `source_copied` are M5's (its third and fourth,
 //!   `birth_extents` and `shot_terms`, are kept whole by name and end no
 //!   path), `links` is M7's.
@@ -114,10 +115,13 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   not this filter's.
 /// * `authoritative.content.map` — a content line leaves when its element's
 ///   document is unreadable.
-/// * `authoritative.arrangement.{arrangements, provenance}` — the entries
+/// * `authoritative.arrangement.arrangements` and
+///   `authoritative.arrangement.provenance.{appended, named}` — the entries
 ///   keyed by an unreadable document leave: its arrangement (M5's
-///   per-document arrangement holds content and link subspaces alike) and its
-///   provenance (keyed by the placing document).
+///   per-document arrangement holds content and link subspaces alike) and
+///   both parts of its provenance, each keyed by the placing document — the
+///   spans appended for it, and the run-list a snapshot named for it, which
+///   is the arrangement it was born holding.
 /// * `authoritative.arrangement.birth_extents` — kept whole. Every key M5's
 ///   fold writes to its birth memo (PUB-3.19) is a version member — a trunk's
 ///   opening `D.1` — and every version address that exists names a published
@@ -134,7 +138,9 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   memo's ground: every key M5's fold writes there is a version member the
 ///   shot minted (signed-ops D25), so a published state every reader class
 ///   reads; and what an entry holds — the count the client placed, the base
-///   the shot was made against and the extent its copy took (skep #1111) —
+///   the shot was made against and the extent its copy took (skep #1111),
+///   the stretches of that base its runs replaced and the depth of its chain
+///   of bases —
 ///   is what the member's `doc_metadata` serves to every reader who may read
 ///   the member. The base is a member of the same chain or the memberless
 ///   document itself, a published state too (PUB-2.10), and an address is
@@ -286,7 +292,8 @@ pub(super) fn filter_tree(
 
     retain_map(&mut root, &["authoritative", "content", "map"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_serde_form);
-    retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "provenance", "appended"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "provenance", "named"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "fork_sources"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "arranged_at"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "draft_bases"], &keep_serde_form);

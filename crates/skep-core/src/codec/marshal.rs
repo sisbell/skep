@@ -344,7 +344,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // (`doc`, or `account` with `mint: true`), `claim: true` where the
         // deposits claim, at either form (an unset flag is no field), and
         // each of `links`, `retract`, `originals`, `read_with` and
-        // `supersede` only where it holds an entry. The price read carries
+        // `supersede` only where it holds an entry — and so does the stretch
+        // list: `stretches` rides only where the shot names one, each entry
+        // its three naturals as decimal strings, and the whole form
+        // marshals to no member. The price read carries
         // the same members under its own name, so one arm writes both.
         Op::Publish { target, shot, places, also_places, deposits }
         | Op::PublishCost { target, shot, places, also_places, deposits } => {
@@ -359,6 +362,16 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if let Some(base) = &shot.base {
                 pairs.push(("base", j_addr(&base.member)));
                 pairs.push(("base_extent", j_nat(&base.extent)));
+            }
+            if !shot.stretches.is_empty() {
+                let stretches = shot.stretches.iter().map(|stretch| {
+                    obj(vec![
+                        ("start", j_nat(&stretch.start)),
+                        ("width", j_nat(&stretch.width)),
+                        ("count", j_nat(&Nat::from(stretch.count))),
+                    ])
+                });
+                pairs.push(("stretches", Value::Array(stretches.collect())));
             }
             if let Some(draft) = &shot.draft {
                 pairs.push(("draft", j_addr(draft)));
@@ -762,7 +775,16 @@ pub(super) fn j_response(r: &Response) -> Value {
         // without terms); `placed` carried and the other two null for a
         // member the birth shape minted — the nulls *are* the birth bit
         // there; all carried otherwise, `shot_base` the base the shot's
-        // request named as the board recorded it (skep #1111). `source` (the
+        // request named as the board recorded it (skep #1111). `stretches`
+        // and `chain_depth` are two more keys over the same terms:
+        // `stretches` the shot's stretch list in the member's terms, each
+        // entry `{start, width, placed}` as decimal strings — null where the
+        // address carries no terms and where its shot carried no list, the
+        // null beside a carried `placed` being the whole form's mark — and
+        // `chain_depth` how many shots that carried a list stand between the
+        // member and the nearest base none minted, a number, 0 for a member
+        // of a shot with no list, null where the address carries no terms.
+        // `source` (the
         // fork-source design record) is a payload option over the fork
         // source of the address named: the member or bare document a
         // `version` snapshotted or a `stage` copied into it, null where
@@ -828,6 +850,28 @@ pub(super) fn j_response(r: &Response) -> Value {
                     "shot_base",
                     terms.as_ref().and_then(|t| t.base.as_ref()).map(j_addr).unwrap_or(Value::Null),
                 ),
+                (
+                    "stretches",
+                    terms
+                        .as_ref()
+                        .filter(|t| !t.stretches.is_empty())
+                        .map(|t| {
+                            Value::Array(
+                                t.stretches
+                                    .iter()
+                                    .map(|stretch| {
+                                        obj(vec![
+                                            ("start", j_nat(&stretch.start)),
+                                            ("width", j_nat(&stretch.width)),
+                                            ("placed", j_nat(&stretch.placed)),
+                                        ])
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .unwrap_or(Value::Null),
+                ),
+                ("chain_depth", terms.as_ref().map(|t| Value::from(t.chain_depth)).unwrap_or(Value::Null)),
                 ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("source_copied", source_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("base", base.as_ref().map(j_addr).unwrap_or(Value::Null)),

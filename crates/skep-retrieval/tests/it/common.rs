@@ -407,6 +407,7 @@ pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
         also: vec![],
         keep_base: false,
         runs: vec![pca1_run; 8192],
+        stretches: Vec::new(),
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
@@ -437,6 +438,7 @@ pub fn unheld_origin_head(k: &Kernel<World>) -> Vstream<'_, World> {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(pca(1), 1), shot_run(unheld_ca(1), 2)],
+        stretches: Vec::new(),
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)

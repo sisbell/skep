@@ -35,7 +35,7 @@ fn run(start: &Address, width: u32) -> Run {
 /// A family shot off the edition's three: the rendering draft doc1, `also`
 /// as given, the runs as given.
 fn family(also: Vec<Address>, runs: Vec<ShotRun>) -> Shot {
-    Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also, keep_base: false, runs }
+    Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), also, keep_base: false, runs, stretches: Vec::new() }
 }
 
 /// One item of a shot's signed body as it spells the address form: a
@@ -165,7 +165,7 @@ fn the_reinserted_runs_group_by_named_draft_in_one_pass() {
     let also: Vec<Address> = (0..4096u32).map(|k| a(&[1, 0, 2, 0, 1 + k])).collect();
     let last = also.last().cloned().expect("the drafts");
     let runs: Vec<ShotRun> = (0..4096u32).map(|k| shot_run(&last, &a(&[1, 0, 2, 0, 4096, 0, 1, 1 + k]), 1)).collect();
-    let wide = Shot { base: None, draft: Some(doc1()), also, keep_base: false, runs };
+    let wide = Shot { base: None, draft: Some(doc1()), also, keep_base: false, runs, stretches: Vec::new() };
     let started = std::time::Instant::now();
     let groups = wide.reinserted_runs_by_draft();
     let elapsed = started.elapsed();
@@ -251,8 +251,8 @@ fn the_address_forms_agree_as_the_body_spells_them_over_two_homes() {
     let (member, _) = vs.publish(P1, &pdoc(), &shot, &anyone).expect("the shot commits");
     let s = k.snapshot();
     let (m5, content) = (s.world().m5(), s.world().content());
-    let terms = m5.shot_terms(&member).expect("the member carries its terms");
-    let at_member = m5.address_form_of(&member, &terms.placed);
+    assert!(m5.shot_terms(&member).is_some(), "the member carries its terms");
+    let at_member = m5.address_form_of(&member);
     assert_eq!(requested.len(), 4, "{requested:?}");
     assert_eq!(at_member.len(), 4, "{at_member:?}");
     assert_eq!(requested[1], SegmentRun::Value(run(&ca2(1), 2)), "doc2's run is a value run of the request");

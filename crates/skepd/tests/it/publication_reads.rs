@@ -1227,3 +1227,130 @@ fn publish_cost_and_the_refusal_count_no_record_homed_in_a_draft_the_caller_may_
     assert_eq!(in_sixteen_runs, in_one_run, "fifteen more runs in a draft it may not read move no figure of the detail");
     sd.shutdown();
 }
+
+/// The journal's bytes under `dir`: its segment files' lengths, summed.
+fn journal_bytes(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .expect("the data dir")
+        .map(|entry| entry.expect("an entry"))
+        .filter(|entry| entry.file_name().to_str().is_some_and(|name| name.starts_with("seg-") && name.ends_with(".wal")))
+        .map(|entry| entry.metadata().expect("metadata").len())
+        .sum()
+}
+
+/// A ONE-WORD CHANGE TO A DOCUMENT OF 5,000 RUNS IS PRICED, SIGNED AND
+/// JOURNALED AS ONE WORD. The edition's first member arranges 5,000 runs.
+/// A draft's one word is published into it BY ITS CHANGE: one run, one
+/// stretch placing it before the base's position 2,500, and a link of the
+/// member's on the new word, its end in the member-position form.
+///
+/// THE PRICE READ prices the request as it stands: one placed run and one
+/// stretch entry beside the shot's fixed part, never a run's bytes for each
+/// of the base's 5,000 — the figure is the table's — and the commit then
+/// journals no more than that price and, beside it, its own marker and
+/// attestation, under 8 KiB together where the document's runs would be
+/// half a megabyte. The same change in the whole form is priced, and
+/// journals, a run's bytes more for every run of the document.
+///
+/// THE MEMBER-POSITION END COUNTS THE CHANGE'S POSITIONS: ordinal 1 is the
+/// first position of the request's own runs — the new word — and the copy
+/// the commit stores holds the I-address the member arranges at ITS position
+/// 2,500, where the stretch's image stands; the whole form's request, whose
+/// runs are the whole arrangement, spells that word at ordinal 2,500, and
+/// its copy holds its own member's address there the same (an end read as
+/// the minted member's own position 1 would store the base's first word).
+#[test]
+fn publish_cost_prices_a_change_by_its_runs_and_a_member_end_counts_the_changes_positions() {
+    use skep_links::{stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, PLACED_RUN_BYTES, REINSERTED_UNIT_BYTES, SHOT_BYTES, STRETCH_BYTES};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let count = 5_000u64;
+    let e = edition_with(port, &signed, &"x".repeat(2 * count as usize + 2));
+    let base_runs: Vec<String> = (1..=count).map(|k| run(&e, &format!("{e}.0.1.{}", 2 * k), 1)).collect();
+    let first = shot(port, &signed, &e, None, None, &base_runs);
+    let citation = "1.1.0.1.0.1.0.3.13";
+    // The link on the new word, its end counted at `ordinal` of the runs.
+    let link = |ordinal: u64| json!([{"home": "member", "from": {"member": [{"ordinal": ordinal.to_string(), "width": "1"}]}, "to": {"addrs": [e]}, "ty": {"addrs": [citation]}}]);
+    let stored_tumbler = |address: &str| stored_tumbler_bytes(&skep_core::codec::wire_address(address).expect("an address").tumbler().clone());
+    // The one-word publication of `draft` off the first member: by its
+    // change, or whole.
+    let request = |draft: &str, by_change: bool| -> Value {
+        let word = run(draft, &format!("{draft}.0.1.1"), 1);
+        let mut frame: Value = if by_change {
+            serde_json::from_str(&publish_frame_by_stretches(&e, (&first, count), Some(draft), &[(2_500, 0, 1)], &[word])).expect("a frame")
+        } else {
+            let mut runs = base_runs.clone();
+            runs.insert(2_499, word);
+            serde_json::from_str(&publish_frame(&e, Some((&first, count)), Some(draft), &runs)).expect("a frame")
+        };
+        frame["links"] = link(if by_change { 1 } else { 2_500 });
+        frame
+    };
+    let priced = |frame: &Value| -> u64 {
+        let mut asked = frame.clone();
+        asked["op"] = json!("publish_cost");
+        let v = op(port, Some(&bare), &asked.to_string());
+        expect_resp(&v, "publish_cost")["staged_bytes"].as_u64().expect("staged_bytes")
+    };
+    // What a commit journals: the journal's growth across it. The signer
+    // is handed the words the frame copies in, in order — the edition's own
+    // address floats to a head of 5,000 runs, more than it reads back in
+    // one image answer.
+    let journaled = |frame: &Value| -> (String, u64) {
+        let draft = frame["draft"].as_str().expect("the draft");
+        let words: Vec<&[u8]> = frame["runs"].as_array().expect("runs").iter().map(|run| if run["origin"] == draft { &b"w"[..] } else { &b"x"[..] }).collect();
+        let before = journal_bytes(dir.path());
+        let member = acked_addr(&op_with_publish_values(port, &signed, &frame.to_string(), &words));
+        (member, journal_bytes(dir.path()) - before)
+    };
+    // The address the copy homed in `member` holds as its `from`, and the
+    // one `member` arranges at its position 2,500.
+    let copy_from = |member: &str| -> (String, String) {
+        let copy = read_link(port, Some(&signed), &format!("{member}.0.2.1"));
+        let from = copy["slots"][0][0]["start"].as_str().unwrap_or_else(|| panic!("the copy's from: {copy}")).to_string();
+        (from, image_runs(port, None, member, 2_500, 1)[0].0.clone())
+    };
+
+    // BY ITS CHANGE.
+    let by_change_draft = draft_with(port, &bare, "w");
+    let by_change = request(&by_change_draft, true);
+    let change_price = priced(&by_change);
+    let (member, change_journaled) = journaled(&by_change);
+    assert_eq!(member, format!("{e}.2"));
+    assert_eq!(content_extent(port, &signed, &member), count + 1, "the member is the whole arrangement");
+    let (stored, arranged) = copy_from(&member);
+    assert_eq!(stored, arranged, "the end's ordinal 1 is the change's first position: the new word, at the member's position 2,500");
+    assert_eq!(origin_of(&stored), e, "the word re-minted under the edition");
+    // BY THE WHOLE FORM, off the same base: another draft's word, the
+    // member the base's daughter.
+    let whole_draft = draft_with(port, &bare, "w");
+    let whole = request(&whole_draft, false);
+    let whole_price = priced(&whole);
+    let (daughter, whole_journaled) = journaled(&whole);
+    assert_eq!(daughter, format!("{first}.1"));
+    let (stored, arranged) = copy_from(&daughter);
+    assert_eq!(stored, arranged, "the whole form spells the same word at ordinal 2,500, and stores the same end");
+
+    // THE PRICE: the change's, by the table; the whole form's a run's bytes
+    // more for every run of the base, less the one stretch entry.
+    let fixed = |draft: &str| SHOT_BYTES + stored_tumbler(&first) + stored_tumbler(draft) + CORRESPONDENCE_RECORD_BYTES + REINSERTED_UNIT_BYTES + 1;
+    let deposit = change_price - fixed(&by_change_draft) - PLACED_RUN_BYTES - STRETCH_BYTES;
+    assert!(deposit > 0 && deposit < 4_096, "what is left is the one link's copy: {deposit}");
+    assert_eq!(whole_price, fixed(&whole_draft) + (count + 1) * PLACED_RUN_BYTES + deposit, "the whole form: every run of the arrangement");
+    assert_eq!(whole_price - change_price, count * PLACED_RUN_BYTES - STRETCH_BYTES);
+    // THE JOURNAL follows the change: the two commits differ by the base's
+    // runs, a run's bytes each, and the change's commit journals no more
+    // than its price and, beside it, its marker and its attestation — under
+    // 8 KiB together. (The whole form lands here as a daughter of the base,
+    // whose longer address its own records carry and no term prices.)
+    let beside = change_journaled.checked_sub(change_price).expect("the price bounds no more than the commit journals with its marker and attestation");
+    assert!(beside < 8 * 1024, "the marker and the attestation: {beside}");
+    println!("a one-word change into {count} runs: priced {change_price} B, journaled {change_journaled} B; the whole form priced {whole_price} B, journaled {whole_journaled} B");
+    assert!(change_journaled < 16 * 1024, "the change's commit, not the document's: {change_journaled}");
+    let more = whole_journaled - change_journaled;
+    assert!(more >= (count - 1) * PLACED_RUN_BYTES && more <= (count + 1) * PLACED_RUN_BYTES, "the whole form journals a run's bytes for every run of the document: {more}");
+    sd.shutdown();
+}

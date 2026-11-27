@@ -388,7 +388,11 @@ pub enum Op {
     /// PUBLISH, the shot (PUB-2.33, PUB-8.1).
     ///
     /// It appends the next member of `doc`'s chain, born published, in one
-    /// commit, from the client-supplied runs of `shot`. M5's composite
+    /// commit, from the client-supplied runs of `shot` — the member's whole
+    /// arrangement, or, where the shot names its stretch list
+    /// (`Shot::stretches`), the runs of its change, the member then its
+    /// base with those stretches replaced; M10 hands either form through as
+    /// the codec parsed it. M5's composite
     /// decides the destination at commit (the trunk's next member, or the
     /// base's daughter — PUB-2.39), places the runs by their origin
     /// (PUB-2.40) and runs the source gate (PUB-6.23) under the session's

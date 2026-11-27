@@ -256,10 +256,12 @@ pub struct Merged {
     /// and a draft's state are terms of it, so a merge composed over a side
     /// whose text has changed since is another key.
     pub key: RecordKey,
-    /// The cap `composed.counts.m` is checked against at the landing.
+    /// The cap on the runs one write of the landing places.
     ///
-    /// It is [`SHOT_RUN_CAP`]. The count is carried whatever it is, so a face
-    /// can show it; the refusal is the landing's.
+    /// It is [`SHOT_RUN_CAP`]. A landing into a draft writes the merged list
+    /// whole and holds `composed.counts.m` to it; a shot sends what the
+    /// merge changes in the head and holds that to it. The count is carried
+    /// whatever it is, so a face can show it; the refusal is the landing's.
     ///
     /// [`SHOT_RUN_CAP`]: super::SHOT_RUN_CAP
     pub cap: usize,

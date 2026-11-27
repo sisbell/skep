@@ -231,6 +231,7 @@ fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
             pieces.iter().try_fold(empty, |body, piece| match *piece {
                 ShotSegmentPiece::Value(value) => body.push(value),
                 ShotSegmentPiece::Window { start, width } => body.window(start, width),
+                ShotSegmentPiece::Stretch { start, width } => body.stretch(start, width),
             })
         })
     };

@@ -122,12 +122,25 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   arrangement reads and `version`'s snapshot — while `copy`'s sources
   and the arrangement's own reads take the address named; a version
   address reads as itself forever, and a declared deposit into a chain
-  lands in the head member alone. The shot's placing record
-  (`ShotPlace`) journals the member's whole arrangement and the shot's
-  three client terms — the count it placed, the base it was made
-  against and the extent its copy took — for every member it mints, so
-  a verifier of the member's entry signature reads them off the state
-  beside the member's runs, the base as the shot recorded it and never
+  lands in the head member alone. A shot may name its CHANGE in place of
+  its whole arrangement: `Shot::stretches` lists the stretches of the
+  base its runs replace (`ShotStretch`, held to the request by
+  `Shot::stretch_fault`), and the member is the base with them replaced
+  — one member under either form. The shot's placing record
+  (`ShotPlace`) journals THE RUNS THE SHOT PLACED, never the member's
+  arrangement, and the shot's terms — the count it placed, the base it
+  was made against, the extent its copy took, its stretch list in
+  positions and the depth of the member's chain of bases — for every
+  member it mints; the fold builds the member from its base's list with
+  every stretch spliced in one walk (`RunList::spliced`), so a shot's
+  journal follows its change. A member the shot minted stores no span
+  of provenance — its arrangement only grows, so the provenance reads
+  take R↾member off the arrangement — and a snapshot (`stage`,
+  `version`) appends none either, naming the list it shares. So
+  a verifier of the member's entry signature reads the terms off the state
+  beside the member's runs at the stretches' images
+  (`ShotTerms::images`, `M5State::address_form_of`), the base as the
+  shot recorded it and never
   read off the member's address, in the
   address form the signature covers (the document's own runs by value,
   windows by address). What the shot re-inserts is answered too —

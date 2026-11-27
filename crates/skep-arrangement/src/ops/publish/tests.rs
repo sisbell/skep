@@ -189,6 +189,7 @@ fn shot_off_the_head(extent: u32, runs: Vec<ShotRun>) -> Shot {
         also: vec![],
         keep_base: false,
         runs,
+        stretches: Vec::new(),
     }
 }
 
@@ -235,28 +236,28 @@ fn the_shot_refuses_a_client_arrangement_past_the_run_budget_and_places_one_at_i
 }
 
 #[test]
-fn the_shot_refuses_a_carried_tail_past_the_run_budget() {
-    // The base's post-render deposits count against the same budget,
-    // measured as each is carried: a head arranging MAX_PLACED_RUNS + 1
-    // non-adjacent runs cannot be shot from extent 0, though the client
-    // supplies nothing. The head's bytes are stored as well, so the
-    // budget is the only thing this world could refuse the shot for.
+fn the_carried_tail_is_the_folds_and_meets_no_run_budget() {
+    // The base's post-render deposits are no part of what the shot places:
+    // the fold leaves them standing where the base holds them, and the
+    // budget binds the runs the shot's own record carries. A head arranging
+    // MAX_PLACED_RUNS + 1 non-adjacent runs is shot from extent 0 by a
+    // client supplying nothing, and the member holds every one of them; from
+    // extent 1 it holds all but the first.
     let p1 = Caller::Principal(PrincipalId(1));
     let ordinals: Vec<u32> = (1..=MAX_PLACED_RUNS as u32 + 1).map(|o| 2 * o).collect();
     let head_runs: Vec<Run> = ordinals.iter().map(|&o| run(&pca(o), 1)).collect();
     let k = shot_kernel(head_runs.clone(), &ordinals);
     let anyone = |_: &ShotWorld, _: &Address| true;
-    let before = k.current_seq();
-    assert!(matches!(
-        rejected(Vstream::new(&k).publish(p1, &pdoc(), &shot_off_the_head(0, vec![]), &anyone)),
-        PublishError::TooManyRuns
-    ));
-    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
-    // The equal case: from extent 1 the tail is exactly the budget, and it
-    // is carried whole, in order.
+    let (whole, _) = Vstream::new(&k)
+        .publish(p1, &pdoc(), &shot_off_the_head(0, vec![]), &anyone)
+        .expect("a tail past the placement budget is carried: the shot placed nothing");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&whole).cloned().collect::<Vec<_>>(),
+        head_runs
+    );
     let (member, _) = Vstream::new(&k)
         .publish(p1, &pdoc(), &shot_off_the_head(1, vec![]), &anyone)
-        .expect("a tail of exactly the budget is carried");
+        .expect("and from extent 1, the tail past it");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
         head_runs[1..].to_vec()
@@ -291,6 +292,7 @@ fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
         also: vec![],
         keep_base: false,
         runs,
+        stretches: Vec::new(),
     };
     // Runs of the draft, each `(first ordinal, width)`.
     let from_the_draft = |runs: &[(u32, usize)]| {
@@ -380,6 +382,7 @@ fn a_shot_reinserts_a_drafts_one_byte_values_as_one_stretch() {
         also: vec![],
         keep_base: false,
         runs: vec![ShotRun { origin: doc1(), run: run(&ca(1), 3) }],
+        stretches: Vec::new(),
     };
     let (member, _) = Vstream::new(&k)
         .publish(p1, &pdoc(), &shot, &anyone)
@@ -431,6 +434,8 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
             placed: n(0),
             base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
             base: shot.base.as_ref().map(|base| base.member.clone()),
+            stretches: Vec::new(),
+            chain_depth: 0,
         }),
         "the terms are journaled all the same"
     );
@@ -441,32 +446,39 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
 fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_member() {
     // "A rejection leaves no state change" where it is more than trivially
     // true: the draft's one value re-inserted — a mint and a write staged —
-    // ahead of a carried tail of exactly the budget, which it pushes one run
-    // past. The refusal leaves no `Seq`, no value, no move of the trunk's
-    // content frontier and no member (PUB-2.33's ONE commit). One carried run
-    // shorter, the same shot commits, its re-insert landing where the refused
-    // one staged its mint.
+    // ahead of the edition's own runs, exactly the budget of them, which it
+    // pushes one run past. The refusal leaves no `Seq`, no value, no move of
+    // the trunk's content frontier and no member (PUB-2.33's ONE commit).
+    // One own run shorter, the same shot commits, its re-insert landing
+    // where the refused one staged its mint. The own runs open at pca(4):
+    // the fresh identity lands at pca(1), which a run at pca(2) would join.
     let p1 = Caller::Principal(PrincipalId(1));
     let ordinals: Vec<u32> = (1..=MAX_PLACED_RUNS as u32 + 1).map(|o| 2 * o).collect();
-    let head_runs: Vec<Run> = ordinals.iter().map(|&o| run(&pca(o), 1)).collect();
-    let k = shot_kernel(head_runs, &ordinals);
+    let k = shot_kernel(vec![], &ordinals);
     let vs = Vstream::new(&k);
     let values = vec![Val::new(&b"d"[..])];
     vs.insert(p1, &doc1(), vp(1, 1), values, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("the draft holds one value, at ca(1)");
     let anyone = |_: &ShotWorld, _: &Address| true;
-    let carrying_past = |extent: u32| Shot {
+    // The shot whose own runs fall `short` of the budget.
+    let carrying_past = |short: u32| Shot {
         base: Some(Base {
             member: pdoc_member(),
-            extent: n(extent),
+            extent: n(0),
         }),
         draft: Some(doc1()),
         also: vec![],
         keep_base: false,
-        runs: vec![ShotRun {
+        runs: std::iter::once(ShotRun {
             origin: doc1(),
             run: run(&ca(1), 1),
-        }],
+        })
+        .chain(ordinals[1..=MAX_PLACED_RUNS + 1 - short as usize].iter().map(|&o| ShotRun {
+            origin: pdoc(),
+            run: run(&pca(o), 1),
+        }))
+        .collect(),
+        stretches: Vec::new(),
     };
     let before = k.current_seq();
     let stored = k.snapshot().world().content().len();
@@ -490,7 +502,7 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
     );
     let (member, _) = vs
         .publish(p1, &pdoc(), &carrying_past(2), &anyone)
-        .expect("the re-insert and a tail one run shorter place exactly the budget");
+        .expect("the re-insert and one own run fewer place exactly the budget");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&member), MAX_PLACED_RUNS);
     assert_eq!(
@@ -533,6 +545,7 @@ fn birth_shot(also: Vec<Address>, runs: &[(Address, Address, u32)]) -> Shot {
         also,
         keep_base: false,
         runs: runs.iter().map(|(origin, start, width)| ShotRun { origin: origin.clone(), run: run(start, *width) }).collect(),
+        stretches: Vec::new(),
     }
 }
 
@@ -783,4 +796,120 @@ fn a_shot_past_the_positions_is_refused_with_no_piece_walked_and_one_past_the_un
     let (staged, _) = staged_counting(&k, &reaching);
     assert_eq!(staged.expect_err("a position holding nothing"), PublishError::DanglingSource);
     assert_eq!(Staged::take(), Staged::default());
+}
+
+/// A shot off `pdoc_member()` at `extent` that replaces one position of it,
+/// the one at `start`, by `placed`.
+fn one_stretch_off_the_head(extent: u32, start: u32, placed: ShotRun) -> Shot {
+    Shot {
+        base: Some(Base { member: pdoc_member(), extent: n(extent) }),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![placed],
+        stretches: vec![crate::ShotStretch { start: n(start), width: n(1), count: 1 }],
+    }
+}
+
+#[test]
+fn the_admission_of_a_stretch_shot_settles_its_own_runs_and_reads_no_run_of_its_base() {
+    // The base's runs were settled and gated when the base was born. A shot
+    // that names one stretch of a 5,000-run head settles ONE run — its own —
+    // and, its origin readable, builds no union of the base: the admission's
+    // two walks read nothing of the 5,000. The head here windows doc2 at
+    // every second address, so every run of it is another document's.
+    let p1 = Caller::Principal(PrincipalId(1));
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
+    let count = 5_000u32;
+    let head_runs: Vec<Run> = (1..=count).map(|i| run(&doc2_ca(2 * i), 1)).collect();
+    let k = shot_kernel(head_runs, &[]);
+    let s = k.snapshot();
+    let world = s.world();
+    let steps_of = |shot: &Shot, readable: &dyn Fn(&ShotWorld, &Address) -> bool| {
+        let mut steps = 0u64;
+        let verdict = admit_stepped(world, p1, &pdoc(), shot, readable, &mut |n| steps += n).map(|_| ());
+        (verdict, steps)
+    };
+    let anyone = |_: &ShotWorld, _: &Address| true;
+    let no_one = |_: &ShotWorld, _: &Address| false;
+    // A window the head does not arrange, its origin readable: one run
+    // settled, no run of the base read.
+    let fresh_window = one_stretch_off_the_head(count, 2_500, ShotRun { origin: doc2(), run: run(&doc2_ca(1), 1) });
+    assert_eq!(steps_of(&fresh_window, &anyone), (Ok(()), 1), "the change's one run, and nothing of the base");
+    // The carried test is asked only of a run whose origin the reader may
+    // not read — and only then is the base's union built, once: the run
+    // settled, then every run of the base.
+    let (verdict, steps) = steps_of(&fresh_window, &no_one);
+    assert_eq!(verdict, Err(PublishError::Withheld(doc2())), "withheld, and the head does not arrange it");
+    assert_eq!(steps, 1 + u64::from(count));
+    let carried = one_stretch_off_the_head(count, 2_500, ShotRun { origin: doc2(), run: run(&doc2_ca(2), 1) });
+    assert_eq!(
+        steps_of(&carried, &no_one),
+        (Ok(()), 1 + u64::from(count)),
+        "a run the head arranges takes no gate, whatever the reader may read"
+    );
+    // The whole form is the same admission: its runs settled, one a run, and
+    // no union where every origin is readable.
+    let whole = shot_off_the_head(count, (1..=count).map(|i| ShotRun { origin: doc2(), run: run(&doc2_ca(2 * i), 1) }).collect());
+    assert_eq!(steps_of(&whole, &anyone), (Ok(()), u64::from(count)));
+}
+
+#[test]
+fn a_shot_stages_its_change_and_never_its_base_and_its_stretches_are_judged_before_a_read() {
+    // The placing record carries the runs the shot placed: one run for a
+    // one-run change into a 5,000-run head, and the head's runs in none of
+    // it. A stretch list the request's arithmetic refuses is refused before
+    // any registration is asked and stages nothing.
+    let p1 = Caller::Principal(PrincipalId(1));
+    let count = 5_000u32;
+    let ordinals: Vec<u32> = (1..=count + 1).map(|o| 2 * o).collect();
+    let head_runs: Vec<Run> = ordinals[..count as usize].iter().map(|&o| run(&pca(o), 1)).collect();
+    let k = shot_kernel(head_runs.clone(), &ordinals);
+    let anyone = |_: &ShotWorld, _: &Address| true;
+    let own = |ordinal: u32| ShotRun { origin: pdoc(), run: run(&pca(ordinal), 1) };
+    let shot = one_stretch_off_the_head(count, 2_500, own(ordinals[count as usize]));
+    Staged::take();
+    let before = k.current_seq();
+    let (member, _) = Vstream::new(&k).publish(p1, &pdoc(), &shot, &anyone).expect("the stretch shot commits");
+    assert_eq!(Staged::take(), Staged { mints: 1, writes: 0, stretches: 0, placements: 1 });
+    let s = k.snapshot();
+    let mut expected = head_runs.clone();
+    expected[2_499] = run(&pca(ordinals[count as usize]), 1);
+    assert_eq!(s.world().m5().content_runs(&member).cloned().collect::<Vec<_>>(), expected);
+    assert!(k.current_seq() > before, "the shot committed");
+    // Each fault of the list's arithmetic, at the store: refused, nothing
+    // staged, no position taken.
+    let with = |stretches: Vec<(u32, u32, usize)>, runs: Vec<ShotRun>, base: bool| Shot {
+        base: base.then(|| Base { member: pdoc_member(), extent: n(count) }),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs,
+        stretches: stretches
+            .into_iter()
+            .map(|(start, width, count)| crate::ShotStretch { start: n(start), width: n(width), count })
+            .collect(),
+    };
+    let faulty = [
+        ("no base", with(vec![(1, 0, 1)], vec![own(2)], false)),
+        ("a start at position 0", with(vec![(0, 0, 1)], vec![own(2)], true)),
+        ("not ascending", with(vec![(9, 1, 1), (5, 1, 0)], vec![own(2)], true)),
+        ("overlapping", with(vec![(5, 4, 1), (8, 1, 0)], vec![own(2)], true)),
+        ("a start past the extent's last boundary", with(vec![(count + 2, 0, 1)], vec![own(2)], true)),
+        ("a reach past the extent", with(vec![(count, 2, 1)], vec![own(2)], true)),
+        ("counts past the runs", with(vec![(5, 1, 2)], vec![own(2)], true)),
+        ("counts short of the runs", with(vec![(5, 1, 1)], vec![own(2), own(4)], true)),
+    ];
+    let at = k.current_seq();
+    for (label, shot) in faulty {
+        assert!(shot.stretch_fault().is_some(), "{label}");
+        Staged::take();
+        assert!(
+            matches!(rejected(Vstream::new(&k).publish(p1, &pdoc(), &shot, &anyone)), PublishError::BadStretches),
+            "{label}"
+        );
+        assert_eq!(Staged::take(), Staged::default(), "{label}: nothing staged");
+        assert!(matches!(shot_admission(k.snapshot().world(), p1, &pdoc(), &shot, &anyone), Err(PublishError::BadStretches)), "{label}");
+    }
+    assert_eq!(k.current_seq(), at, "no refusal took a position");
 }

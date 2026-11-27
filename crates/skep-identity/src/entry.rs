@@ -151,7 +151,10 @@
 //! * `edit_link` — [`entry_body_edit_link`];
 //! * `publish` — [`entry_body_publish`], or piece by piece under a byte
 //!   budget by [`PublishBody`], in the child module `publish`, the one module
-//!   the builder's fields are visible to — and, for a publication carrying
+//!   the builder's fields are visible to — its segments, its base group
+//!   and, for a shot that names its change against its base, the stretch
+//!   row behind the group ([`PublishBody::stretch`]; a shot naming no
+//!   stretch spells none) — and, for a publication carrying
 //!   deposits, that body extended by [`entry_body_publication`] in the child
 //!   module `publication`, the deposit rows behind it;
 //! * `record` — [`entry_body_record`] over a [`RecordRows`], framed by

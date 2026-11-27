@@ -307,6 +307,82 @@ pub(crate) fn shot(
     addr(acked_addr(&acked(session.op(&frame))).expect("the member's address"))
 }
 
+/// A ONE-WORD MERGE LANDS INTO A DOCUMENT OF 5,000 RUNS, against the daemon.
+/// The document's own words stand at every second address: its first
+/// version holds 5,000 runs — a birth past one wire list — its head the same
+/// with a word more at the end, sent whole with its base, and a daughter of
+/// the first version one word in the middle. The merge of the head and the
+/// daughter is 5,002 runs. `land` sends ONE `publish` that names its
+/// change — one run, one stretch — and the board mints the trunk's next
+/// member from the head: 5,002 positions, the daughter's word where the
+/// merge places it, the member's terms the stretch in positions and a depth
+/// of 1; the journal grows by the change, not the document; and the record
+/// names the member. (The record's verification reads every side at the
+/// composition's position, a reconstruction a page, and is the scripted
+/// suite's to hold at this size.)
+#[test]
+fn a_one_word_merge_lands_into_a_document_of_5_000_runs_as_one_shot_of_its_change() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let d = published_document(&rig.board, &session, &rig.device);
+    // The document's own words: a declared deposit while it holds no member.
+    let count = 5_000u64;
+    let words = "x".repeat(2 * count as usize + 4);
+    let as_of = crate::common::typed_at(&rig.board, &token, &d.to_string());
+    let mut deposit = json!({"op": "insert", "doc": d.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": [words], "deposit": skep_client::board::T_ENROLL, "as_of": as_of});
+    deposit["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), &d, &skep_identity::entry_body_insert(Some(&addr(skep_client::board::T_ENROLL)), words.as_bytes().chunks(1)));
+    acked(session.op(&deposit));
+    let own = |ordinal: u64| Staged::Own { from: ordinal, text: "x" };
+    let base_list = || -> Vec<Staged<'static>> { (1..=count).map(|k| own(2 * k)).collect() };
+    let base = shot(&rig.board, &session, &rig.device, &rig.bare, &d, None, &base_list());
+    let mut head_list = base_list();
+    head_list.push(own(2 * count + 3));
+    let head = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, count)), &head_list);
+    let mut side_list = base_list();
+    side_list.insert(2_499, own(1));
+    let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, count)), &side_list);
+    assert_eq!((base.to_string(), head.to_string(), daughter.to_string()), (format!("{d}.1"), format!("{d}.2"), format!("{d}.1.1")));
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter.clone())], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    assert_eq!(merged.composed.counts.m, 5_002, "the document, the daughter's word and the head's");
+    let journal_bytes = || -> u64 {
+        std::fs::read_dir(rig._dir.path().join("board")).expect("the data dir").map(|e| e.expect("an entry")).filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wal"))).map(|e| e.metadata().expect("metadata").len()).sum()
+    };
+    let (before, journaled_before) = (rig.position(), journal_bytes());
+    let landed = land(&rig.board, &merged, Landing::Shot { merger: merger(&rig, &session), draft: None, answers: Answers::default(), journal: None }).expect("the document lands by its change");
+    let Landed::Member { address: member, record: link, .. } = landed.clone() else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"));
+    let under = d.to_string();
+    let page = rig.board.changes(Some(&token), &ChangesQuery { since: before, under: Some(&under), drafts: false, limit: None }).expect("the feed");
+    let ChangesAnswer::Page(page) = page else { panic!("a page") };
+    let publishes: Vec<&Value> = page.changes.iter().filter(|row| row["op"] == "publish").collect();
+    assert_eq!(publishes.len(), 1, "one shot: {:?}", page.changes);
+    assert_eq!(publishes[0]["docs"][0].as_str(), Some(member.to_string().as_str()));
+    let meta = rig.metadata(&token, &member);
+    assert_eq!(meta["stretches"], json!([{"start": "2500", "width": "0", "placed": "1"}]), "the change: one word before the head's position 2,500: {meta}");
+    assert_eq!((meta["placed"].as_str(), meta["shot_base"].as_str(), meta["base_extent"].as_str(), meta["chain_depth"].as_u64()), (Some("1"), Some(head.to_string().as_str()), Some("5001"), Some(1)), "{meta}");
+    assert_eq!(meta["own_count"].as_str(), Some("5002"), "the member holds the merged list");
+    let near = read(&rig.board, Some(&token), &frames::image(&member.to_string(), 2_499, 3));
+    let held: Vec<(String, u64)> = near["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().parse().unwrap())).collect();
+    assert_eq!(held, vec![(format!("{d}.0.1.4998"), 1), (format!("{d}.0.1.1"), 1), (format!("{d}.0.1.5000"), 1)], "the daughter's word where the merge places it");
+    let journaled = journal_bytes() - journaled_before;
+    println!("a one-word merge shot into {count} runs journaled {journaled} B with its claim and record");
+    assert!(journaled < 64 * 1024, "the landing's journal follows its change, never a run's bytes for each of the document's: {journaled}");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("the record");
+    assert_eq!(record.landed, Some(skep_client::merge::RecordLanding::Member { member: member.clone(), position: landed_position(&landed) }), "the record names the member the shot minted");
+    let _ = link;
+}
+
+/// The position a member landing answers.
+fn landed_position(landed: &Landed) -> u64 {
+    match landed {
+        Landed::Member { position, .. } => *position,
+        other => panic!("{other:?}"),
+    }
+}
+
 /// The runs of the race shape over `d`: `(d, s, w)`.
 fn rd(d: &Address, s: u64, w: u64) -> Run {
     Run::new(d.clone(), s, w)
@@ -429,9 +505,15 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         "homed in the trunk"
     );
     assert!(position > before);
-    // The member's image over its first `placed` positions is M.
+    // The shot named its change against the head — the head's last four
+    // positions removed, no run placed — so `placed` counts none, the
+    // stretch list the board serves says where the change lies, the member
+    // stands one deep in its chain of bases, and its arrangement is M.
     let meta = read(&board, Some(&token), &frames::doc_metadata(&member.to_string()));
-    assert_eq!(meta["placed"].as_str(), Some("11"), "{meta}");
+    assert_eq!(meta["placed"].as_str(), Some("0"), "{meta}");
+    assert_eq!(meta["stretches"], serde_json::json!([{"start": "12", "width": "4", "placed": "0"}]), "{meta}");
+    assert_eq!((meta["shot_base"].as_str(), meta["base_extent"].as_str(), meta["chain_depth"].as_u64()), (Some(head.to_string().as_str()), Some("15"), Some(1)), "{meta}");
+    assert_eq!(read(&board, Some(&token), &frames::doc_metadata(&head.to_string()))["chain_depth"].as_u64(), Some(0), "the head a whole arrangement minted");
     assert_eq!(
         image(&board, &token, &member, 11),
         vec![(format!("{d}.0.1.1"), 4), (format!("{d}.0.1.12"), 4), (format!("{d}.0.1.5"), 3)]

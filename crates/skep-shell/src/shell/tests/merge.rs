@@ -728,6 +728,62 @@ fn the_head_read_is_refused_past_its_doubling_and_hands_the_composition_the_newe
     }
 }
 
+/// A MERGED LIST PAST 4,096 RUNS is composed under the cap and landed in its
+/// draft, against the daemon. E.1 holds 3,900 runs — windows onto another
+/// published document's words at every second address, set into a staged
+/// draft by one write and published. Its head E.2 adds 150 windows at the
+/// end and its daughter E.1.1 150 in the middle, so each side is inside one
+/// wire list and the merge of the two is 4,200 runs, past it.
+/// `merge.compose` composes them and lands the merged list in a fresh draft
+/// in ONE write: `over_cap` false, the `cap` the board's own number for
+/// what one write places, the draft holding all 4,200 positions (a shell
+/// that held the merged list to the wire's list refuses the compose
+/// `over_cap` with nothing landed, as it did while a shot named its whole
+/// arrangement).
+#[test]
+fn a_merged_list_past_4_096_runs_composes_under_the_cap_and_lands_in_its_draft() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    // The words the windows name: a published document of the claimant's.
+    let x = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    g.op(json!({"op": "insert", "doc": x, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x".repeat(9_000)], "deposit": skep_client::board::T_ENROLL, "as_of": g.position()}));
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let open = |draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition, x]})).unwrap_or_else(|r| panic!("{r}"));
+    let confirm = || g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    // `count` windows onto X from its `first` word, every second address:
+    // none I-adjacent to the next.
+    let windows = |first: u64, count: u64| -> Vec<Value> { (0..count).map(|k| frames::shot_run(&x, &format!("{x}.0.1.{}", first + 2 * k), 1)).collect() };
+    let place = |draft: &str, at: u64, runs: &[Value]| {
+        let set = g.op(frames::set_arrangement(draft, &[frames::placed(at, 0, runs)], g.position(), None, None, None, None));
+        assert_eq!(set["resp"], "ack", "{set}");
+    };
+    // D: staged from the memberless edition, 3,900 windows — E.1.
+    let d = g.addr(frames::stage(&edition, None));
+    place(&d, 1, &windows(2, 3_900));
+    open(&d);
+    let e1 = format!("{edition}.1");
+    assert_eq!(confirm()["member"].as_str(), Some(e1.as_str()));
+    // S: staged from E.1, 150 windows in its middle; D: 150 at its end.
+    let s = g.addr(frames::stage(&e1, None));
+    place(&s, 2_000, &windows(8_302, 150));
+    place(&d, 3_901, &windows(7_902, 150));
+    open(&d);
+    let e2 = format!("{edition}.2");
+    assert_eq!(confirm()["member"].as_str(), Some(e2.as_str()));
+    open(&s);
+    let e11 = format!("{e1}.1");
+    assert_eq!(confirm()["member"].as_str(), Some(e11.as_str()), "the daughter under E.1");
+    // COMPOSE: each side inside one wire list, the merged list past it.
+    let before = g.position();
+    let report = g.call("merge.compose", json!({"session": g.session, "doc": edition, "alternative": e11})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(report["counts"], json!({"a": 4_050, "b": 4_050, "m": 4_200}), "each side under 4,096 runs, the merged list over");
+    assert_eq!((report["outcome"].as_str(), report["over_cap"].as_bool(), report["cap"].as_u64(), report["fresh"].as_bool()), (Some("landed"), Some(false), Some(65_536), Some(true)), "{}", report["counts"]);
+    let fresh = report["into"].as_str().expect("the fresh draft").to_string();
+    assert_eq!(g.op(frames::span_set(&fresh))["set"][0]["width"].as_str(), Some("0.4200"), "the draft holds the merged list");
+    assert_eq!(arrangement_rows(&g, &fresh, before).len(), 1, "landed by one write");
+}
+
 /// Checks a daughter composed and landed, and taken back, against the
 /// daemon.
 ///

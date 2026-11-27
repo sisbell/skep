@@ -286,7 +286,7 @@ fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
         .expect("a range and its stretch commit");
     assert_eq!(first_of_values, first_of_stretch, "B2: one chain, one first address");
     let run = Run::new(first_of_stretch, Nat::from(3u32)).expect("a three-position run");
-    let shot = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new() };
+    let shot = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: Vec::new(), stretches: Vec::new() };
     let body_of = |engine: &skep_engine::Engine| {
         let snap = engine.kernel().snapshot();
         publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())], &mut |_| {})
@@ -406,7 +406,7 @@ fn draft_holding(engine: &skep_engine::Engine, values: Vec<skep_content::Val>) -
 fn body_counting(engine: &skep_engine::Engine, draft: &Address, first: &Address, width: usize) -> (Result<EntryBody, ComposeFault>, u64) {
     use skep_arrangement::{Run, ShotRun};
     let run = Run::new(first.clone(), Nat::from(width)).expect("a run of one position or more");
-    let shot = Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run }] };
+    let shot = Shot { base: None, draft: Some(draft.clone()), also: vec![], keep_base: false, runs: vec![ShotRun { origin: draft.clone(), run }], stretches: Vec::new() };
     let snap = engine.kernel().snapshot();
     let mut walked = 0u64;
     let body = publish_body(snap.world(), &shot, &shot.address_form(&skep_namespace::head_document()), &mut |pieces| walked += pieces);

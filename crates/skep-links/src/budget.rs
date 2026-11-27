@@ -169,10 +169,11 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 /// 65,534 runs; a change of 1,613 pieces into a draft of 4,167 runs, at
 /// 5,780 steps and its 1,613 fence stabs; a first publication placed run
 /// for run of a draft of up to 21,845 runs, three steps a run — the run
-/// walked, its piece, its fence stab — which is past what one request's
-/// `runs` list carries, so every such publication the wire admits is
-/// inside it; and the terms share the one budget, so a request near it on
-/// one has little room on the others. A refusal is permanent for the
+/// walked, its piece, its fence stab — which is inside what one request's
+/// `runs` list carries (the store's 65,536, `MAX_PLACED_RUNS`), so a
+/// publication re-windowing a draft at more places than that is refused
+/// here though its frame parses; and the terms share the one budget, so a
+/// request near it on one has little room on the others. A refusal is permanent for the
 /// request as sent — the same board prices it the same — and the act that
 /// exists is a narrower one: fewer entries, or fewer places.
 pub const MAX_PUBLICATION_READS: usize = 16 * MAX_SLOT_SPANS;

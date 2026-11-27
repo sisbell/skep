@@ -387,6 +387,8 @@ fn fixture(name: &str) -> Response {
                 placed: n(5),
                 base_extent: Some(n(3)),
                 base: Some(a(&[1, 0, 1, 0, 1])),
+                stretches: Vec::new(),
+                chain_depth: 0,
             }),
             source: None,
             source_copied: None,
@@ -474,6 +476,34 @@ fn fixture(name: &str) -> Response {
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(15),
+        },
+        // The trunk's second member, asked by its own address: minted at 12
+        // by a shot that named its change against the birth version — its
+        // fourth position replaced by two of the shot's own — so its terms
+        // carry the stretch in positions and stand one deep in the chain of
+        // bases; it holds six positions.
+        "doc_metadata_change" => Response::DocMetadata {
+            doc: a(&[1, 0, 1, 0, 1]),
+            published: true,
+            owner: Some(a(&[1, 0, 1])),
+            birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
+            terms: Some(ShotTerms {
+                placed: n(2),
+                base_extent: Some(n(5)),
+                base: Some(a(&[1, 0, 1, 0, 1, 1])),
+                stretches: vec![skep_arrangement::Stretch { start: n(4), width: n(1), placed: n(2) }],
+                chain_depth: 1,
+            }),
+            source: None,
+            source_copied: None,
+            base: None,
+            base_copied: None,
+            merge: None,
+            own_count: n(6),
+            arranged_at: Some(Seq(12)),
+            at: Some(Seq(12)),
+            time: Some(MintTime { millis: 1_786_838_400_061, source: TimeSource::Feed }),
+            as_of: Seq(13),
         },
         "edition_claims" => Response::EditionClaims {
             claims: vec![EditionClaim {
@@ -1566,6 +1596,100 @@ fn doc_states_a_drafts_run_count_and_an_originals_type_are_priced_at_the_callers
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
+}
+
+/// THE CHANGE FORM, AS THE CONTRACT SAYS IT. The `publish` row states the
+/// stretch list — its entries, what each replaces, that a list is held to
+/// the request by arithmetic before any read with the entry named, the two
+/// shapes refused whole, that absent and `null` are the whole form, and
+/// each cap in its unit — the stretch row of the signed body and that a
+/// shot naming none signs as before, what a reader composes the body from,
+/// and what a member-position end's ordinals count; §The response
+/// envelope's `doc_metadata` entry states the stretch list in the member's
+/// terms, where the positions stand, and the depth of the chain with the
+/// bound no board enforces; the feed's `publish` row says it carries
+/// neither; `set_arrangement`'s row states the runs one frame places; and
+/// §The publish shot says what a shot journals and what no member stores.
+/// The daemon's behaviour is pinned in `publish.rs` and `signed_ops.rs`;
+/// this pins that the contract says so.
+#[test]
+fn doc_states_the_stretch_list_its_signed_row_and_the_terms_a_member_serves() {
+    let row = op_row("publish");
+    for fact in [
+        "`stretches`, optional, is THE STRETCH LIST, by which a shot names its CHANGE against its base and not its whole arrangement",
+        "a list of `{\"start\", \"width\", \"count\"}`, three naturals as decimal strings",
+        "`width` positions of the base from the 1-based `start` on are replaced by the next `count` entries of `runs`",
+        "each position of the base no stretch names standing where the base holds it, the base's positions past `base_extent` among them",
+        "`malformed` before any read with `site.index` the entry at fault",
+        "ascending and apart — each `start` at least `1` and at or past `start + width` of the entry before it, so two may touch",
+        "no `start` past `base_extent + 1`, no `start + width − 1` past `base_extent`, and the `count`s sum to the length of `runs`",
+        "A list carried without `base` is `malformed`, and so is the EMPTY list",
+        "Absent and `null` alike are THE WHOLE FORM",
+        "The two forms mint ONE member from the same facts, and every index into `runs` counts the runs the request carries under either",
+        "`stretches` is one wire list, at most 4,096 entries",
+        "`runs` — the whole arrangement or the change — is at most 65,536 runs, the store's own number for what one request places, `malformed` past it with the count and never split",
+        "ONLY for a shot that carries `stretches`, THE STRETCH ROW",
+        "`be64(start) ‖ be64(width) ‖ be64(placed)`",
+        "A STRETCH BOUNDARY CLOSES A SEGMENT",
+        "A shot carrying NO `stretches` spells no row and closes no segment: its body is byte for byte what it was before the row existed",
+        "a shot that names its change is signed AGAINST ITS BASE",
+        "`doc_metadata` terms — `placed`, `base_extent`, `shot_base` and `stretches` — with no request in hand",
+        "where `stretches` is `null` the runs are the member's first `placed` positions",
+        "COUNTED OVER THE SHOT's OWN `runs` in order",
+        "where it names them the positions of its change, which stand in the member at its stretches' images",
+    ] {
+        assert!(row.contains(fact), "the `publish` row says {fact:?}");
+    }
+    let entry = prose_after("\n## The response envelope", "\n**`doc_metadata`** —", &["\n**`", "\n## "]);
+    for fact in [
+        "`stretches` is THE SHOT's STRETCH LIST IN THE MEMBER's TERMS: `null` for a member whose shot named none",
+        "a list of `{\"start\", \"width\", \"placed\"}`, decimal strings, one entry per stretch the request named, in its order",
+        "each stretch's `placed` positions open at its `start` plus the positions the stretches before it placed, less the widths they replaced",
+        "`chain_depth` is THE DEPTH OF THE MEMBER's CHAIN OF BASES, a number",
+        "`0` for a member of a shot that named none, and for one that named them one more than its base's",
+        "The board enforces no bound on it",
+        "the client library's landers once in 64",
+        "All five are `null` where the address named carries no terms",
+    ] {
+        assert!(entry.contains(fact), "the `doc_metadata` entry says {fact:?}");
+    }
+    let feed = prose("\n## The change feed", &["\n## "]);
+    for fact in [
+        "these three are what a verifier composing the entry frame of a shot that named no `stretches` still needs from the feed alone",
+        "THE ROW CARRIES NEITHER THE LIST NOR THE DEPTH",
+        "a verifier reads `stretches` off the minted member's `doc_metadata`, where `chain_depth` stands beside it",
+    ] {
+        assert!(feed.contains(fact), "§The change feed says {fact:?}");
+    }
+    let set = op_row("set_arrangement");
+    for fact in [
+        "the runs of ALL its changes together are at most 65,536",
+        "rides ONE frame and one commit up to it",
+        "`malformed` past it with the count, never split across frames",
+    ] {
+        assert!(set.contains(fact), "the `set_arrangement` row says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "where the shot names `stretches` (§Arrangement, `publish`), THE CHANGE",
+        "A shot naming `stretches` appends nothing and loses nothing",
+        "The commit's placing record carries THE RUNS THE SHOT PLACED and its stretch list in positions — never the member's arrangement",
+        "the board stores NO SPAN OF A MEMBER's PROVENANCE",
+        "A `stage`, a `version` and a fork likewise append none",
+        "a member-position end to the I-spans the shot's own runs hold at those positions as the commit placed them",
+        "its placing record carrying a run's bytes per run the request places and one entry per stretch of `stretches`",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The publish shot and head-float"]);
+    assert!(codes.contains("its frame's own cap, the same 65536 runs over all its changes, is the parse's"), "§Rejection codes states the frame's runs cap");
+    assert!(codes.contains("a shot's placement is the runs it places, each stretch's accumulated apart, and no run of its base is counted"), "§Rejection codes states what a shot's placement counts");
+    // The request example that names its stretches is a frame the codec
+    // parses to a shot of one stretch, which the store's own rule admits.
+    let example = blocks().into_iter().find(|(kind, name, body)| kind == "request" && name == "publish" && body.contains("\"stretches\"")).expect("the example of a shot naming its change").2;
+    let parsed = JsonCodec.parse(example.as_bytes()).expect("the example parses");
+    let skep_febe::Op::Publish { shot, .. } = &parsed.op else { panic!("{parsed:?}") };
+    assert_eq!((shot.stretches.len(), shot.runs.len(), shot.stretch_fault()), (1, 1, None));
 }
 
 /// THE PRICE READ. §Arrangement's `publish_cost` row and §The response

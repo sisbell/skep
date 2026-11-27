@@ -1520,24 +1520,50 @@ nothing. A `publish` with NO runs journals its placing record all the
 same, so a birth version born EMPTY that way answers `0` for good; no
 conforming mint is empty.
 
-`placed`, `base_extent` and `shot_base` are THE SHOT TERMS OF THE
-ADDRESS NAMED (signed ops; the design record's D25, arm (c′)): asked of
+`placed`, `base_extent`, `shot_base` and `stretches` are THE SHOT TERMS
+OF THE ADDRESS NAMED (signed ops; the design record's D25, arm (c′)),
+and `chain_depth` stands beside them: asked of
 a version member the `publish` shot minted, `placed` is the number of
-content positions the shot's client runs covered — positions `1`
-through `placed` of the member are the client's runs, the base's
-carried tail follows them — `base_extent` is the shot's own
+content positions the shot's client runs covered, `base_extent` is the
+shot's own
 `base_extent`, the positions of its base the staged copy took, and
 `shot_base` is the shot's own `base`, the member or memberless document
 the shot was made against, as the board RECORDED it at the shot.
+`stretches` is THE SHOT's STRETCH LIST IN THE MEMBER's TERMS: `null` for
+a member whose shot named none — the whole form, positions `1` through
+`placed` of the member the client's runs and the base's carried tail
+following them — and else a list of `{"start", "width", "placed"}`,
+decimal strings, one entry per stretch the request named, in its order:
+`width` positions of the base from `start` on were replaced by `placed`
+positions of the shot's runs — the request's `count` of runs read as the
+positions those runs hold, which is what a member can be read back by,
+its run boundaries being the arrangement's and never the request's. The
+positions the client placed are then THE STRETCHES' IMAGES in the
+member: each stretch's `placed` positions open at its `start` plus the
+positions the stretches before it placed, less the widths they
+replaced; `placed` is their sum; and between and past the images stand
+the base's own positions, its carried tail among them. `chain_depth` is
+THE DEPTH OF THE MEMBER's CHAIN OF BASES, a number: how many shots that
+named `stretches` stand between the member and the nearest base none
+minted — `0` for a member of a shot that named none, and for one that
+named them one more than its base's, a base no shot minted counting
+`0`. It is how many changes a verifier of the member's WHOLE arrangement
+composes before it meets one spelled whole, each a signature, a
+`doc_metadata` read and the runs of one change. The board enforces no
+bound on it: a lander keeps it under one of its own by sending the
+whole form with its base once in so many landings (the client library's
+landers once in 64), and a member past any bound verifies as every
+other does, by a longer walk.
 `base_extent` and `shot_base` are `null` together for a member the
 birth shape minted (no base — the `null`s ARE the birth bit, and there
-`placed` is the birth extent). All three are `null` where the address
+`placed` is the birth extent). All five are `null` where the address
 named carries no terms: the trunk document itself, a birth version an
 owned `version` minted, a member minted before the record carried them.
 Journaled in the shot's own placing record, so they ride the commit
 chain, every checkpoint and every replica. With the member's runs they
 are everything a reader needs to re-compose the `publish` signature's
-frame (§Arrangement, `publish`): the base group is `shot_base` with
+frame (§Arrangement, `publish`): the stretch row is `stretches`, absent
+where it is `null`, and the base group is `shot_base` with
 `base_extent` — the recorded base, never one read off the member's
 address, which does not name it in every case: a draft begun from the
 memberless document `D` and published once `D.1` stands lands as
@@ -1704,7 +1730,20 @@ and its `arranged_at`, its row still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"arranged_at":7,"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"time":1786838400047,"time_from":"feed"}
+{"arranged_at":7,"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","chain_depth":0,"doc":"1.0.1.0.1","merge":null,"own_count":"5","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1","source":null,"source_copied":null,"stretches":null,"time":1786838400047,"time_from":"feed"}
+```
+
+The trunk's second member, asked by its own address after a shot at 12
+that named its change against the birth version — its fourth position
+replaced by two of the shot's own, so `placed` is 2 and `stretches`
+says where they stand; `base_extent` is the five positions the copy
+took and `shot_base` the birth version; the member is one deep in its
+chain of bases, its base a whole arrangement's; and it holds six
+positions, the base's five with the one replaced by two:
+
+<!-- wire: response doc_metadata_change -->
+```json
+{"arranged_at":12,"as_of":13,"at":12,"base":null,"base_copied":null,"base_extent":"5","birth":"1.0.1.0.1.1","birth_extent":"5","chain_depth":1,"doc":"1.0.1.0.1","merge":null,"own_count":"6","owner":"1.0.1","placed":"2","published":true,"resp":"doc_metadata","shot_base":"1.0.1.0.1.1","source":null,"source_copied":null,"stretches":[{"placed":"2","start":"4","width":"1"}],"time":1786838400061,"time_from":"feed"}
 ```
 
 A private draft the staging act minted at 8 off that birth version —
@@ -1716,7 +1755,7 @@ too — whose feed line is gone, dated by the hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"arranged_at":8,"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"arranged_at":8,"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"chain_depth":null,"doc":"1.0.1.0.64","merge":null,"own_count":"5","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","stretches":null,"time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
@@ -1729,7 +1768,7 @@ positions, so neither its age nor its `arranged_at` is known:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"arranged_at":null,"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":null,"time_from":null}
+{"arranged_at":null,"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"chain_depth":null,"doc":"1.0.2.0.1","merge":null,"own_count":"5","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","stretches":null,"time":null,"time_from":null}
 ```
 
 The staged draft above after a merge's landing: a `set_arrangement` at
@@ -1745,7 +1784,7 @@ its `arranged_at` 14 beside the `at` 8 of its mint:
 
 <!-- wire: response doc_metadata_marked -->
 ```json
-{"arranged_at":14,"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"own_count":"7","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","time":1786838400052,"time_from":"anchor"}
+{"arranged_at":14,"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"chain_depth":null,"doc":"1.0.1.0.64","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"own_count":"7","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","shot_base":null,"source":"1.0.1.0.1.1","source_copied":"5","stretches":null,"time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2158,8 +2197,11 @@ source's whole run count ahead of its walk, so a spec aimed past its
 source's arranged end is refused for the work it would do while keeping
 nothing — one code for both causes, told apart by the store's message;
 permanent, a copy or a reinstate past it is split by its caller, a
-set_arrangement composed into fewer runs — its frame's own cap, 4096
-runs over all its changes, is the parse's, ahead of this one; the
+set_arrangement composed into fewer runs — its frame's own cap, the same
+65536 runs over all its changes, is the parse's, ahead of this one; a
+shot's placement is the runs it places, each stretch's accumulated
+apart, and no run of its base is counted, the shot's own list of runs
+held to the same 65536 at the parse; the
 publish table below carries the first) and `too_many_values` (a shot's
 re-insert past either of M5's two budgets — one code for both causes,
 told apart by the store's message. THE POSITIONS: its draft-native runs
@@ -2376,7 +2418,11 @@ document's shot.
 
 **The member's arrangement** (PUB-2.40, PUB-2.41, PUB-2.42): `runs` is
 the client's WHOLE rendered arrangement, in order, each run its
-`origin`, its `i_start` and its `width`. A run is placed by its
+`origin`, its `i_start` and its `width` — or, where the shot names
+`stretches` (§Arrangement, `publish`), THE CHANGE: the runs that replace
+the stretches of the base the list names, the member the base with
+those stretches replaced. A run is placed alike under either form, and
+what follows of the runs is said of the runs the request carries. A run is placed by its
 origin's relation to `doc`: the document's own I-space (its own chain
 or any member's) by reference; a NAMED draft's — the rendering
 `draft`'s, or one `also` names — RE-INSERTED as
@@ -2408,9 +2454,31 @@ post-dates, carried unchanged after the client's runs (PUB-2.45,
 PUB-2.67). That is how the whole-arrangement reading (PUB-2.33) and the
 deposit cell (PUB-2.42) hold together: the client renders, the
 composite appends what the client could not have seen; nothing is
-positionally applied to an advanced head. `base` and `base_extent`
-travel together — either both or neither. An empty `runs` lands an
-empty member.
+positionally applied to an advanced head. A shot naming `stretches`
+appends nothing and loses nothing: its member is built from the base's
+own arrangement, read at the commit, so every position of the base no
+stretch names stands in it where the base holds it — those past
+`base_extent` among them, the same deposits the whole form carries.
+`base` and `base_extent`
+travel together — either both or neither. An empty `runs` with no
+`stretches` lands an empty member.
+
+**What a shot journals and keeps.** The commit's placing record carries
+THE RUNS THE SHOT PLACED and its stretch list in positions — never the
+member's arrangement — so a shot that names its change journals its
+change: a one-run change into a document of five thousand runs is the
+same bytes as into one of a thousand, where the whole form journals a
+run's bytes for every run of the document. The member's arrangement is
+built from its base's when the record is folded, every stretch replaced
+in one walk of the base's list. And the board stores NO SPAN OF A
+MEMBER's PROVENANCE: a published member's arrangement only grows — an
+edit of it is refused and a deposit lands at fresh positions past its
+arranged extent — so what a member ever contained is what it arranges,
+and the reads that ask (`show_deletions`, the candidates of
+`find_docs_containing`) take it from the arrangement. A `stage`, a
+`version` and a fork likewise append none: what the new document was
+born holding is the list it shares with its source, kept as it stood,
+and only what it places afterwards is recorded span by span.
 
 **The correspondence records** (the link-sets design §5.5, §5.7). The
 shot's ONE commit carries, for every piece of draft identity it minted,
@@ -2663,7 +2731,10 @@ yours and whatever its `new`, is SKIPPED, never refused — the entry
 commits nothing, the publication lands. A copy is homed where the
 entry says, typed as given, its ends as stored — the tags resolved to
 the addresses the commit mints, a member-position end to the I-spans
-the member holds at those positions — and its original's supersession
+the shot's own runs hold at those positions as the commit placed them,
+the ordinals counted over `runs` (the member's leading positions for a
+shot naming no `stretches`, the positions of its change for one naming
+them, the same I-spans under either form) — and its original's supersession
 claim beside it in the original's home; a retraction is `nullify`'s
 tuple at the target's home; a read-with is typed `3.71`, `from` the
 edition, `to` the set, homed in the set; a supersession claim is
@@ -2788,7 +2859,11 @@ where the entry names a `rest`, a fresh mark at the rest's spans and the
 original's stored type — the type read only where the caller may read
 the original's home, a link homed where the caller may not read priced
 as an address where no link stands; the
-shot's own records and, at the mint form, the edition's mint and claim
+shot's own records — its placing record carrying a run's bytes per run
+the request places and one entry per stretch of `stretches`, so a shot
+that names its change is priced at the runs of the change and one that
+sends its whole arrangement at every run of it — and, at the mint form,
+the edition's mint and claim
 — against the kernel's transaction budget, `MAX_TXN_BYTES` = 67108864
 (64 MiB), an upper bound on what the kernel charges, so the kernel's
 own `txn_over_budget` is met only by a bug or a race; and a request
@@ -2806,8 +2881,10 @@ over 64, 256 over 256; one typed word — one placed run — in a draft of
 up to 65,534 runs; 1,613 placed pieces in a draft of 4,167 runs, at
 5,780 steps and 1,613 fence stabs; a first publication placed run for
 run of a draft of up to 21,845 runs, three steps a run — the run, its
-piece, its fence stab — which is past the 4096 runs one request's list
-carries; the terms share the one budget. What the bytes refuse that the
+piece, its fence stab — which is inside the 65,536 runs one request's
+list carries, so a publication that re-windows a draft at more places
+than that is refused here though its frame parses; the terms share the
+one budget. What the bytes refuse that the
 caps alone do not: a request within the 8 MiB body can command far more
 staged bytes than one
 transaction holds — a `links` entry's member-position slot is up to
@@ -3927,7 +4004,10 @@ document a `version` snapshotted into it, or a `stage` copied into it —
 and `null` where neither minted it, served to whoever may read the
 address named, with `source_copied` beside it, the positions of it the
 copy took at the mint; a version member a `publish` shot minted answers
-its shot terms, the recorded base of its shot (`shot_base`) among them;
+its shot terms, the recorded base of its shot (`shot_base`) among them,
+with the stretches of that base its runs replaced (`stretches`, `null`
+for a shot that sent its whole arrangement) and the depth of its chain
+of bases (`chain_depth`);
 `base` and `base_copied` are the draft base the board
 records for it — the member its next publication lands after and the
 positions the copy took of it, recorded by `stage` and moved by every
@@ -4319,7 +4399,11 @@ run `origin`, `i_start`, `width`, the form `reinstate`'s take, placed by
 identity as `reinstate` places them, in the order given, I-adjacent runs
 of one origin coalescing, a run placed twice placed twice — so it mints
 nothing and answers `ack`; the runs of ALL its changes together are at
-most 4,096, `malformed` past it. And its row on the change feed is
+most 65,536 — the store's own number for what one call places, so a
+draft's whole arrangement, a landing's, an undo's or a restore's, rides
+ONE frame and one commit up to it — `malformed` past it with the count,
+never split across frames (`changes` itself keeps `edit`'s 4,096). And
+its row on the change feed is
 named `set_arrangement`, which is how a landing's readers find it
 (§The change feed). The board composes no merge — what it places is
 what it is sent.
@@ -4513,11 +4597,47 @@ none of.
 
 **`publish`** — the SHOT: append the next member of `doc`'s
 version chain, born published, in one commit, its arrangement the
-client's own `runs` (§The publish shot and head-float). `base` is the
+client's own `runs` — or, where the shot names `stretches`, its base
+with those stretches replaced by the runs (§The publish shot and
+head-float). `base` is the
 member the draft was staged from — `doc` itself where the draft was
 staged before any version — with `base_extent` the number of content
 positions the staged copy took, both present or neither (neither is
 the birth version);
+`stretches`, optional, is THE STRETCH LIST, by which a shot names its
+CHANGE against its base and not its whole arrangement: a list of
+`{"start", "width", "count"}`, three naturals as decimal strings —
+`width` positions of the base from the 1-based `start` on are replaced
+by the next `count` entries of `runs`. The member is then the base
+member with every stretch replaced, each position of the base no
+stretch names standing where the base holds it, the base's positions
+past `base_extent` among them, and `runs` holds the runs of the change
+alone, stretch after stretch in V-order. A stretch of `width` `0`
+places its runs before `start` — at `base_extent + 1`, past the
+positions the copy took — and one of `count` `0` only removes. The list
+is held to the request by its own arithmetic, `malformed` before any
+read with `site.index` the entry at fault: the entries are in the
+base's coordinates, ascending and apart — each `start` at least `1` and
+at or past `start + width` of the entry before it, so two may touch —
+no `start` past `base_extent + 1`, no `start + width − 1` past
+`base_extent`, and the `count`s sum to the length of `runs`, each
+stretch taking the next `count` runs and together every one. A list
+carried without `base` is `malformed`, and so is the EMPTY list: a shot
+that sends its whole arrangement leaves the member out. Absent and
+`null` alike are THE WHOLE FORM — `runs` the member's whole
+arrangement, the base's positions past `base_extent` carried after it —
+which is the one stretch over the base's positions `1` through
+`base_extent`, spelled by no list: the birth version's form, which has
+no base, and that of a shot naming a base and sending everything. The
+two forms mint ONE member from the same facts, and every index into
+`runs` counts the runs the request carries under either: a kept
+place's, a refusal's `site.index`, and the ordinals of a `links` entry's
+member-position end, below. THE CAPS, each in its unit: `stretches` is
+one wire list, at most 4,096 entries; `runs` — the whole arrangement or
+the change — is at most 65,536 runs, the store's own number for what
+one request places, `malformed` past it with the count and never split
+(`places` and each `also_places` list ride it, no longer than `runs`);
+and the frame is the transport's 8 MiB whatever it lists.
 `draft` names the RENDERING draft — the draft whose arrangement the
 runs render, the home of the kept places and of the records for its own
 identity — whose runs are re-inserted as fresh identity under `doc`'s
@@ -4652,9 +4772,14 @@ so every entry is `supersede_refused` there) and never lands beside the
 edition claim, a first version having no daughter to take in. Each end of a `links` entry is the address form `{"addrs": […]}` —
 the tags `member` and, at the mint form, `edition` admitted among the
 addresses — the I-span form `{"spans": […]}`, or THE MEMBER-POSITION
-FORM `{"member": [{"ordinal": "4", "width": "2"}, …]}`, spans of the
-member's own positions inside `[1, placed]`, 1-based, for an end on the
-shot's own new words, which must be CANONICAL: the lowest member
+FORM `{"member": [{"ordinal": "4", "width": "2"}, …]}`, spans of
+positions inside `[1, placed]`, 1-based, COUNTED OVER THE SHOT's OWN
+`runs` in order — the member's own leading positions where the shot
+names no `stretches`, and where it names them the positions of its
+change, which stand in the member at its stretches' images
+(`doc_metadata`'s `stretches`), an end on words the change does not
+carry taking the I-span form — for an end on the
+shot's own new words, which must be CANONICAL: the lowest such
 positions holding each value, consecutive positions merged, else
 `malformed` naming the spelling owed; `ty` takes the first two forms
 over addresses alone. A V-spec is admitted in no entry. A `supersede`
@@ -4684,12 +4809,30 @@ them; then THE BASE GROUP, one length-delimited group — EMPTY (`be32(0)`)
 where the shot has no base, else the base MEMBER's address as an
 address-form slot row of one element (`0x01 ‖ be64(1) ‖ be32(len) ‖ the
 dotted decimal`, the form the `record` body's optional rows take) followed
-by `be64(base_extent)`; then, for a publication carrying deposits, THE
+by `be64(base_extent)`; then, ONLY for a shot that carries `stretches`,
+THE STRETCH ROW: the token `stretches` length-delimited
+(`be32(9) ‖ stretches`), `be64(n)`, then each of the `n` stretches in
+the list's order as `be64(start) ‖ be64(width) ‖ be64(placed)` —
+`placed` the positions its `count` of the runs holds, the stretch in the
+member's terms, as `doc_metadata` serves it. And A STRETCH BOUNDARY
+CLOSES A SEGMENT: the open value stretch ends where a stretch's runs
+end, and no window is one segment across two stretches, so two
+I-adjacent windows of two stretches are two segments, for the signer
+and for a verifier reading the member stretch by stretch alike. A shot
+carrying NO `stretches` spells no row and closes no segment: its body is
+byte for byte what it was before the row existed — the birth version's,
+and a whole-form shot's with its base — and the row is never empty, so
+the two forms never spell one body. Then, for a publication carrying
+deposits, THE
 DEPOSIT ROWS (§The publish shot and head-float, the deposits), one
 group per public deposit in the signed order — nothing for a request
 carrying none, so a shot alone signs as before. So the signature binds
 the base, member and
-extent both: `base` is no member of the frame, but a verifier READS it
+extent both, and with `stretches` the stretches of it the runs replace
+— a shot that names its change is signed AGAINST ITS BASE, its member's
+whole arrangement attested by its own change and then by its base's,
+back to a member born of a whole arrangement (THE CHAIN OF BASES,
+`doc_metadata`'s `chain_depth`): `base` is no member of the frame, but a verifier READS it
 as the board recorded it at the shot — `doc_metadata`'s `shot_base`
 beside `base_extent`, never the minted member's address, which a draft
 begun before version 1 and landed as its daughter `D.1.k` does not name
@@ -4702,9 +4845,14 @@ binds the bytes. The daemon composes the same body off its snapshot — the
 values of the copied runs read there, the windows spelled from the
 request, the base as the request names it — and verifies before the
 transaction; a reader holding the member later composes it again from
-the member's runs over its first `placed` positions and its
-`doc_metadata` terms — `placed`, `base_extent` and `shot_base` — with no
-request in hand (§Namespace, `doc_metadata`). A REPLAYED shot verifies as it did and names a `base`
+the member's runs at the positions its shot placed and its
+`doc_metadata` terms — `placed`, `base_extent`, `shot_base` and
+`stretches` — with no request in hand (§Namespace, `doc_metadata`):
+where `stretches` is `null` the runs are the member's first `placed`
+positions, and where it holds the list they are each stretch's `placed`
+positions at its image — its `start` moved by what the stretches before
+it placed and replaced — read image by image, a run the member holds
+across two images spelled in each image's part and never joined. A REPLAYED shot verifies as it did and names a `base`
 its own commit left no longer the head, so the store's rule mints that
 base's DAUGHTER, never the trunk's next: the document's current text does
 not move — where it re-inserts nothing from a draft; a replayed shot
@@ -4726,6 +4874,17 @@ and one read-with:
 <!-- wire: request publish -->
 ```json
 {"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.69","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.69.0.2.1","to":{"addrs":["1.0.1.0.64"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","originals":[{"old":"1.0.1.0.69.0.2.2"}],"places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.64"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.69.0.1.1","origin":"1.0.1.0.69","width":"2"}]}
+```
+
+A shot that names its CHANGE: off the third member, taken at five
+positions, with the draft's one new word in place of its fourth — the
+one run of the change, the draft's kept place beside it, and the
+stretch of the base it replaces; the member is the base's five
+positions with that one replaced, and no run the base holds is sent:
+
+<!-- wire: request publish -->
+```json
+{"base":"1.0.1.0.1.3","base_extent":"5","doc":"1.0.1.0.1","draft":"1.0.1.0.69","op":"publish","places":[{"ordinal":"4","subspace":"1"}],"runs":[{"i_start":"1.0.1.0.69.0.1.3","origin":"1.0.1.0.69","width":"1"}],"stretches":[{"count":"1","start":"4","width":"1"}]}
 ```
 
 **`publish_cost`** — THE PRICE OF A PUBLICATION, asked before the act: a
@@ -7237,7 +7396,14 @@ Each entry:
   shot carried no `base`; the absence is the birth bit), and `base`
   `null` too on a row written before the board recorded it. The base and
   its extent are the signed base group, so these three are what a
-  verifier composing the entry frame from the feed alone still needs. On
+  verifier composing the entry frame of a shot that named no `stretches`
+  still needs from the feed alone. A shot that named its stretches signs
+  them too, in the stretch row, and THE ROW CARRIES NEITHER THE LIST NOR
+  THE DEPTH: 4,096 entries would pass a row's 8 KiB bound, so a verifier
+  reads `stretches` off the minted member's `doc_metadata`, where
+  `chain_depth` stands beside it — and that read is what tells the two
+  forms apart, `stretches` being `null` there for a shot that named
+  none. On
   a bare row, the journal's answer (below); absent on every other op's
   row but `base` on an `edit`'s and a `set_arrangement`'s.
 * `base`, `merge` — on an `edit` row and a `set_arrangement` row

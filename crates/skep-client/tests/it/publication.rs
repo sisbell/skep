@@ -460,15 +460,20 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     let priced = publication::price(&p, &with_daughter).expect("the board prices the frame");
     assert_eq!(priced.bytes, request.price.bytes + skep_links::CLAIM_BYTES, "a claim staged a daughter");
     assert!(priced.reads > request.price.reads, "an entry over the homes a daughter: {priced:?} against {:?}", request.price);
-    assert_eq!(request.runs, vec![run(e, 1, 19), run(d, 1, 10), run(o, 1, 5)]);
-    assert_eq!(request.places, vec![None, Some(20), None]);
+    // The request names its CHANGE against version 1: the draft's new words
+    // and the window, placed past the base's nineteen positions, which no
+    // run of the request repeats.
+    assert_eq!(request.runs, vec![run(d, 1, 10), run(o, 1, 5)]);
+    assert_eq!(request.stretches, vec![publication::Stretch { start: 20, width: 0, count: 2 }]);
+    assert_eq!(request.places, vec![Some(20), None]);
     assert_eq!(request.retract, vec![addr(&seeded.mpub)]);
     assert_eq!(request.originals.iter().map(|o| (o.old.to_string(), o.rest.clone(), o.marks.clone())).collect::<Vec<_>>(), vec![(seeded.orig_d.clone(), vec![], vec![addr(&seeded.mpub)])], "the rider: the held mark's original, found from the copy, every word covered");
     assert_eq!(request.read_with, vec![addr(s2)]);
     assert_eq!(request.entries.len(), 4, "the line's two marks, the citation, the note");
     let frame = request.frame(None);
     assert_eq!(frame["originals"], json!([{"old": seeded.orig_d}]), "the rider on the wire, no rest");
-    assert_eq!(frame["links"][0]["to"], json!({"member": [{"ordinal": "21", "width": "3"}]}), "the bold's end in the member-position form, canonical");
+    assert_eq!(frame["stretches"], json!([{"start": "20", "width": "0", "count": "2"}]), "the stretch list on the wire");
+    assert_eq!(frame["links"][0]["to"], json!({"member": [{"ordinal": "2", "width": "3"}]}), "the bold's end in the member-position form, canonical — its ordinals counted over the request's own runs, the new words the first of them");
     assert_eq!(frame["links"][3]["home"].as_str(), Some(s2.as_str()));
     assert_eq!(frame["links"][3]["from"], json!({"spans": [{"start": format!("{e}.0.1.5"), "width": "5"}]}), "the note's kept-word end by reference, the width a natural");
 
@@ -835,8 +840,9 @@ fn a_draft_showing_its_published_words_as_its_own_again_offers_nothing_and_lands
     let pn = panel(&p, &second, &en).expect("the panel");
     assert!(pn.formatting.marks.is_empty(), "no mark on the line");
     let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
-    assert_eq!(request.runs, vec![run(e, 1, 19), run(e, 20, 10), run(o, 1, 5)], "D's words by reference to E's");
-    assert_eq!(request.places, vec![None, Some(20), None], "with their kept place");
+    assert_eq!(request.runs, vec![run(e, 20, 10)], "D's words by reference to E's — the one run of the change: the base holds the words before it and the window after it in place");
+    assert_eq!(request.stretches, vec![publication::Stretch { start: 20, width: 10, count: 1 }], "over the base's own ten positions there");
+    assert_eq!(request.places, vec![Some(20)], "with their kept place");
     assert!(request.entries.is_empty(), "{:?}", request.entries);
     let sent = send(&p, &second, &mut request).expect("sent");
     let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
@@ -912,7 +918,7 @@ fn the_board_accepts_the_request_each_answer_composes() {
     let Built::Inert(publication::Inert::Unanswered(owed)) = build(&p, &third, &en, &pn, &answered(OriginAnswer::KeepPrivate)).expect("built") else { panic!("no owed answer") };
     assert_eq!(owed.iter().map(|o| (o.part, o.named)).collect::<Vec<_>>(), vec![(key, true)], "no placeholder over published words");
     let Built::Request(mut left) = build(&p, &third, &en, &pn, &answered(OriginAnswer::Drop)).expect("built") else { panic!("inert") };
-    assert_eq!(left.runs, vec![run(e, 1, 29)], "the part left out");
+    assert_eq!((left.runs.clone(), left.stretches.clone()), (vec![], vec![publication::Stretch { start: 30, width: 5, count: 0 }]), "the part left out: the base's five positions of it removed, and no run sent");
     assert!(!names(&left, &note_o), "no entry on the words left out: {:?}", left.entries);
     let sent = send(&p, &third, &mut left).expect("sent");
     let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
@@ -928,7 +934,7 @@ fn the_board_accepts_the_request_each_answer_composes() {
     let Built::Request(mut request) = build(&p, &fourth, &en, &pn, &taken).expect("built") else { panic!("inert") };
     let entry = request.entries.iter().find(|entry| entry.old.as_ref().map(ToString::to_string).as_deref() == Some(note_o.as_str())).expect("the note's entry");
     assert!(matches!(&entry.from, publication::End::Spans(spans) if spans.iter().all(|span| span.chain == format!("{edition}.0.1"))), "on the edition's words: {:?}", entry.from);
-    assert_eq!(request.places, vec![None, Some(30)], "the window's kept place beside its counterpart");
+    assert_eq!(request.places, vec![Some(30)], "the window's kept place beside its counterpart, the one run of the change");
     let sent = send(&p, &fourth, &mut request).expect("sent");
     let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
     assert_eq!(ack.member.to_string(), format!("{e}.4"));
@@ -985,7 +991,7 @@ fn a_far_end_original_is_offered_and_lands_at_the_shot_that_publishes_its_words(
     let pn = panel(&p, &second, &en).expect("the panel");
     let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
     let entry = request.entries.iter().find(|entry| en.candidates[entry.candidate].link.to_string() == note).expect("the note's entry");
-    assert_eq!(entry.to, publication::End::Member(vec![(22, 2)]), "the far end on the new words, after the kept words' nineteen");
+    assert_eq!(entry.to, publication::End::Member(vec![(3, 2)]), "the far end on the new words, counted over the request's own runs: the draft's words are the first of them");
     let Sent::Acknowledged(ack) = send(&p, &second, &mut request).expect("sent") else { panic!("refused") };
     assert_eq!(ack.member.to_string(), format!("{e}.3"));
     let accepted = claims(&note);
@@ -1215,8 +1221,12 @@ fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
     assert_eq!(pn.inherited, vec![publication::Inherited { draft: addr(d), passages: 1 }]);
     let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
     assert_eq!(request.also, vec![addr(d)]);
-    assert_eq!(request.places, vec![None, Some(20), Some(30)], "the rendering draft's kept place for every run of a named draft's identity: D's ten at 20, its own six at 30");
-    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None, Some(20), None] }], "D's own place for its run, off D's image");
+    // The change against version 1: the two re-minted runs, placed past its
+    // nineteen positions; the base's own run stands and is not sent, so
+    // every list beside the runs holds two entries.
+    assert_eq!(request.stretches, vec![publication::Stretch { start: 20, width: 0, count: 2 }]);
+    assert_eq!(request.places, vec![Some(20), Some(30)], "the rendering draft's kept place for every run of a named draft's identity: D's ten at 20, its own six at 30");
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![Some(20), None] }], "D's own place for its run, off D's image");
     assert!(request.price.admits(), "{:?}", request.price);
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).expect("sent") else { panic!("refused") };
     let e2 = format!("{e}.2");
@@ -1283,21 +1293,21 @@ fn a_moved_also_draft_is_refused_naming_it_and_left_as_it_stands_once_its_place_
     let en = enumerate(&p, &inputs).expect("enumerated");
     let pn = panel(&p, &inputs, &en).expect("the panel");
     let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
-    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None, Some(20), None] }]);
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![Some(20), None] }]);
     // D's move after the place was read: its first five own words and its
     // last five swapped.
     let as_of = crate::common::typed_at(&board, &bare_token, d);
     acked(board.op(Some(&bare_token), &json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "20"}, {"subspace": "1", "ordinal": "25"}, {"subspace": "1", "ordinal": "30"}], "as_of": as_of})));
     let sent = send(&p, &inputs, &mut request).expect("sent");
     let Sent::Refused(Refusal::KeptPlaceMoved { index, draft, race }) = sent else { panic!("{sent:?}") };
-    assert_eq!((index, &draft), (1, &addr(d)), "the entry of D's run, and D named");
+    assert_eq!((index, &draft), (0, &addr(d)), "the entry of D's run — the first run the request carries, the base's own standing unsent — and D named");
     assert_eq!(race.expect("the race's key off the feed under D").key.as_deref(), Some("bare"), "read under D: the bare session's own write");
     assert_eq!(image(&board, &bare_token, &a_draft, 20, 10), vec![(format!("{d}.0.1.1"), 10)], "nothing committed: A as it was");
     let rr = reread(&p, &inputs, &en, &pn).expect("re-read");
     assert_eq!(rr.restatement, None, "A's placements stand; D's move is none of the rendering draft's");
     let Built::Request(mut again) = build(&p, &inputs, &rr.enumeration, &rr.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
-    assert_eq!(again.places, vec![None, Some(20), Some(30)]);
-    assert_eq!(again.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None; 3] }], "D no longer arranges its run whole: no place for it");
+    assert_eq!(again.places, vec![Some(20), Some(30)]);
+    assert_eq!(again.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None; 2] }], "D no longer arranges its run whole: no place for it");
     assert!(again.frame(None).get("also_places").is_none(), "an all-None entry is not sent");
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut again).expect("sent") else { panic!("refused") };
     let e2 = format!("{e}.2");
@@ -1456,12 +1466,12 @@ fn a_nested_held_run_takes_its_own_place_and_lands() {
     assert_eq!(image(&board, &bare_token, &d, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 6)], "the premise");
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    assert_eq!(request.places, vec![Some(20), Some(30)], "the two runs of the change, the base's own nineteen standing unsent");
     let mut inside = request.clone();
-    inside.places[2] = Some(24);
+    inside.places[1] = Some(24);
     inside.id = publication::fresh_id();
     let refused = send(&p, &inputs, &mut inside).expect("sent");
-    assert!(matches!(&refused, Sent::Refused(Refusal::KeptPlaceMoved { index: 2, draft, .. }) if *draft == addr(&d)), "the later of two overlapping places: {refused:?}");
+    assert!(matches!(&refused, Sent::Refused(Refusal::KeptPlaceMoved { index: 1, draft, .. }) if *draft == addr(&d)), "the later of two overlapping places: {refused:?}");
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)];
@@ -1477,7 +1487,7 @@ fn a_nested_held_run_takes_its_own_place_and_lands() {
     assert_eq!(image(&board, &bare_token, &d, 1, 41), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.5"), 6), (format!("{d}.0.1.1"), 10), (format!("{d}.0.1.5"), 6)], "the premise");
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 5, 6), run(&d, 1, 10), run(&d, 5, 6)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.places, vec![None, Some(20), Some(26), Some(36)]);
+    assert_eq!(request.places, vec![Some(20), Some(26), Some(36)]);
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 6), (format!("{e}.0.1.20"), 6)];
@@ -1490,7 +1500,7 @@ fn a_nested_held_run_takes_its_own_place_and_lands() {
     copy(&board, &bare_token, &d, 30, &d, 20, 4);
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 1, 4)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    assert_eq!(request.places, vec![Some(20), Some(30)]);
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 4)];
@@ -1503,8 +1513,8 @@ fn a_nested_held_run_takes_its_own_place_and_lands() {
     copy(&board, &bare_token, &d, 30, &d, 24, 6);
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 5, 6), run(&d, 1, 10)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.runs, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)], "the draft's order, whichever comes first in the selection");
-    assert_eq!(request.places, vec![None, Some(20), Some(30)], "the nested run clear of the enclosing one");
+    assert_eq!(request.runs, vec![run(&d, 1, 10), run(&d, 5, 6)], "the draft's order, whichever comes first in the selection");
+    assert_eq!(request.places, vec![Some(20), Some(30)], "the nested run clear of the enclosing one");
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)];
@@ -1546,7 +1556,7 @@ fn a_held_run_arranged_at_a_second_place_lands_at_both() {
     let settled = reread(&p, &inputs, &rr.enumeration, &rr.panel).expect("re-read");
     assert_eq!(settled.restatement, None, "nothing moved since the re-statement");
     let Built::Request(mut request) = build(&p, &inputs, &settled.enumeration, &settled.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
-    assert_eq!(request.places, vec![None, Some(20), Some(30)]);
+    assert_eq!(request.places, vec![Some(20), Some(30)]);
     let ack = acknowledged(&p, &inputs, &mut request);
     let words = vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.20"), 10)];
     assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 39), words, "the member holds the run at both places on one fresh identity");
@@ -1578,7 +1588,7 @@ fn a_nested_run_with_no_place_of_its_own_is_covered_by_the_run_enclosing_it() {
     let (e, e1, d) = nesting_ground(&board, &session, &device, &bare_token);
     let inputs = nesting_inputs(&e, &e1, &d, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)]);
     let mut request = confirmed_request(&p, &inputs);
-    assert_eq!(request.places, vec![None, Some(20), None], "the enclosing run keeps its place, the nested run takes none");
+    assert_eq!(request.places, vec![Some(20), None], "the enclosing run keeps its place, the nested run takes none");
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 35), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6)], "the member holds both runs");
@@ -1608,7 +1618,7 @@ fn an_also_drafts_nested_runs_take_their_own_places() {
     let token = session.token().clone();
     let bare_token = bare(&board, PRINCIPAL);
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    for (what, nested_in_d, d_places, d_after) in [("D arranges the nested run too", true, vec![None, Some(20), Some(30)], 35), ("D arranges the ten alone", false, vec![None, Some(20), None], 29)] {
+    for (what, nested_in_d, d_places, d_after) in [("D arranges the nested run too", true, vec![Some(20), Some(30)], 35), ("D arranges the ten alone", false, vec![Some(20), None], 29)] {
         let (e, e1, d) = nesting_ground(&board, &session, &device, &bare_token);
         if nested_in_d {
             copy(&board, &bare_token, &d, 30, &d, 24, 6);
@@ -1621,7 +1631,7 @@ fn an_also_drafts_nested_runs_take_their_own_places() {
         let held = vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6)];
         let inputs = Inputs { draft: addr(&rendering), also: vec![addr(&d)], readable_drafts: vec![addr(&rendering), addr(&d)], ..nesting_inputs(&e, &e1, &d, held) };
         let mut request = confirmed_request(&p, &inputs);
-        assert_eq!(request.places, vec![None, Some(20), Some(30)], "{what}: the rendering draft's list");
+        assert_eq!(request.places, vec![Some(20), Some(30)], "{what}: the rendering draft's list");
         assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(&d), places: d_places }], "{what}: D's own list, off D's image");
         let ack = acknowledged(&p, &inputs, &mut request);
         assert_eq!(ack.member.to_string(), format!("{e}.2"), "{what}");
@@ -1673,8 +1683,8 @@ fn a_split_run_takes_no_place_inside_another_held_runs() {
     let again = reread(&p, &inputs, &rr.enumeration, &rr.panel).expect("re-read");
     assert_eq!(again.restatement, None);
     let Built::Request(mut request) = build(&p, &inputs, &again.enumeration, &again.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
-    assert_eq!(request.runs, vec![run(&e, 1, 19), run(&d, 1, 10), run(&d, 5, 6), run(&d, 5, 6)]);
-    assert_eq!(request.places, vec![None, Some(20), None, Some(30)], "no place inside the enclosing run's");
+    assert_eq!(request.runs, vec![run(&d, 1, 10), run(&d, 5, 6), run(&d, 5, 6)]);
+    assert_eq!(request.places, vec![Some(20), None, Some(30)], "no place inside the enclosing run's");
     let ack = acknowledged(&p, &inputs, &mut request);
     assert_eq!(ack.member.to_string(), format!("{e}.2"));
     assert_eq!(image(&board, &token, &ack.member.to_string(), 1, 41), vec![(format!("{e}.0.1.1"), 29), (format!("{e}.0.1.24"), 6), (format!("{e}.0.1.24"), 6)], "the member holds every piece");

@@ -12,7 +12,7 @@
 //! — are the parent's, stated there with the frame's other rows.
 //!
 //! The body — the design record §2.5's `publish` cell — is three parts, in
-//! order:
+//! order, and a fourth for a shot that names its change against its base:
 //!
 //! * `be64(placed)` — the positions the client placed, Σ width of its runs,
 //!   and so how many of the minted member's positions (the version the shot
@@ -32,17 +32,49 @@
 //!   the shot has no base — the birth bit — else the base member's address as
 //!   an address-list row of one element (the optional-address row's own
 //!   spelling of a present address, so the body takes no new form) followed
-//!   by `be64(base_extent)` — [`push_base`] over a [`ShotBase`].
+//!   by `be64(base_extent)` — [`push_base`] over a [`ShotBase`];
+//! * then, ONLY for a shot that carries a stretch list, THE STRETCH ROW: the
+//!   token `stretches` as one length-delimited element, `be64(n)`, then
+//!   each of the `n` stretches in the list's order as
+//!   `be64(start) ‖ be64(width) ‖ be64(placed)` — the first position of the
+//!   base the stretch replaces, how many positions of the base it replaces,
+//!   and how many positions of the segments above replace them, the
+//!   stretch in the member's terms. The `placed` of the stretches sum to
+//!   the leading count, so the row says which of the segments' positions
+//!   stand at which place of the base.
 //!
-//! **The base is signed**, its member and its extent both. The signer and the
-//! daemon read the two off the request's own `base` and `base_extent`. A
+//! **A shot with no stretch list spells no fourth part.** Its body is the
+//! three parts above, byte for byte what it was before the row existed:
+//! the birth shape's, and a shot's that names a base and sends its whole
+//! arrangement. The row is never empty — a list names at least one stretch
+//! — so the two forms never spell one body.
+//!
+//! **A stretch boundary closes a segment.** Within one stretch the segments
+//! are built as above. At the end of each stretch the open value stretch is
+//! closed, so the next stretch's first value opens a row of its own, and no
+//! window is one segment across two stretches: two I-adjacent windows of
+//! two stretches are two segments, on the signer's side as on the
+//! verifier's, which reads the member one stretch's image at a time and
+//! never joins a run across two images. With no list there is one stretch
+//! and no boundary.
+//!
+//! **The base is signed**, its member and its extent both, and with a list
+//! the stretches of it the shot replaces. The signer and the
+//! daemon read them off the request's own `base`, `base_extent` and
+//! `stretches`, each stretch's count of runs read as the positions those
+//! runs hold. A
 //! verifier holding the minted member and no request composes the same
-//! bytes: it reads the base member, `placed` and `base_extent` where the
+//! bytes: it reads the base member, `placed`, `base_extent` and the stretch
+//! list where the
 //! design record's D25 journals them, in M5's placing record — the base the
 //! request named, recorded as named (skep #1111), and absent where the group
-//! is empty — and reads the minted member's first `placed` positions,
+//! is empty; the stretches in the member's terms, none where the shot
+//! carried none — and reads the minted member at the stretches' images:
+//! its first `placed` positions for a shot with no list, and for a shot
+//! with one each stretch's `placed` positions where the stretches before it
+//! left its start (`start + Σ placed − Σ width` over them),
 //! spelling a stretch from the values there and a window from the run the
-//! member holds. The member's address does not name its base in every case:
+//! member holds, clipped to the image. The member's address does not name its base in every case:
 //! a draft begun from the memberless document `D` and published once `D.1`
 //! stands lands as `D.1`'s daughter `D.1.k`, its group naming `D`, so a
 //! verifier reading the base off the address composes a group the author
@@ -63,6 +95,17 @@
 //! group needs no marker of its own; its first byte is its `be32` length's
 //! high byte, a zero — which no class byte is — only while the group is
 //! shorter than 16 MiB, and the count, not that byte, ends the segments.
+//!
+//! What follows the base group is the stretch row, the deposit groups of a
+//! publication (the sibling module `publication`), both or neither, the row
+//! first. Each of the two opens with one length-delimited element, and the
+//! elements never read alike: the row's is the token `stretches`, a deposit
+//! group's is its home — the token `member`, the token `edition`, or an
+//! address in its dotted-decimal spelling, which opens with a digit. So a
+//! reader takes the element after the base group and knows which it holds;
+//! the row is then `be64(n)` and `n` fixed-width entries, and the groups
+//! follow it. The composition stays injective: the row's presence, its
+//! entries and where each stretch's segments end are all spelled.
 
 use core::fmt;
 use core::num::NonZeroU64;
@@ -71,6 +114,16 @@ use skep_address::Address;
 
 use super::{address_bytes, push_address_list, push_window, EntryBody, Grammar, ValueSequence};
 use crate::framing::{delimited_len, push_delimited};
+
+/// The stretch row's token, its first element.
+///
+/// It is the wire's name for the list. No deposit group opens with it: a
+/// group's first element is its home, a tag of other letters or an
+/// address's digits.
+const STRETCH_ROW_TOKEN: &[u8] = b"stretches";
+
+/// The bytes one stretch adds to the stretch row: three `be64`.
+const STRETCH_ENTRY_BYTES: usize = 24;
 
 /// The `publish` body's segment class bytes: a window, and a value stretch.
 ///
@@ -84,7 +137,9 @@ const SEGMENT_VALUE_STRETCH: u8 = 0x02;
 ///
 /// It is a piece of the shot's address form, taken in V-order: one position
 /// the commit copies in, by its value, or one window onto another document's
-/// I-space, by its address. The pieces are not the segments: consecutive
+/// I-space, by its address — or, for a shot that carries a stretch list, the
+/// end of one stretch, which names the stretch of the base the pieces since
+/// the last end replace. The pieces are not the segments: consecutive
 /// values make one value stretch, and each window makes a segment of its
 /// own. `Copy`, as the slices it borrows are: a view of the caller's piece,
 /// never an owner of it.
@@ -114,6 +169,21 @@ pub enum ShotSegmentPiece<'a> {
         ///
         /// Its type, `NonZeroU64`, holds that.
         width: NonZeroU64,
+    },
+    /// The end of one stretch of the shot's stretch list.
+    ///
+    /// Every value and window since the last such piece — or since the
+    /// first piece — is the stretch's: the positions that replace `width`
+    /// positions of the base from `start` on. It closes the open value
+    /// stretch and adds the stretch to the body's stretch row
+    /// ([`PublishBody::stretch`]). A shot with no stretch list is built
+    /// from no such piece, and a shot with one from a piece for every
+    /// stretch, the last of them the last piece.
+    Stretch {
+        /// The first position of the base the stretch replaces, 1-based.
+        start: u64,
+        /// How many positions of the base it replaces.
+        width: u64,
     },
 }
 
@@ -162,7 +232,13 @@ fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
 /// order given — each run of consecutive values one value stretch, its class
 /// byte and one value-sequence row; each window its class byte and one
 /// window row — then the base group over `base`, the shot's [`ShotBase`] or
-/// `None` in the birth shape. It is [`PublishBody`] under a budget no body
+/// `None` in the birth shape; and, where `pieces` holds the ends of the
+/// shot's stretches ([`ShotSegmentPiece::Stretch`]), each closing the value
+/// stretch open at it, the stretch row behind the base group: the token
+/// `stretches` length-delimited, `be64(n)`, then per stretch
+/// `be64(start) ‖ be64(width) ‖ be64(placed)`, `placed` the positions of
+/// the pieces since the last end. Pieces holding no such end spell no row.
+/// It is [`PublishBody`] under a budget no body
 /// reaches: over pieces a budget admits, the two build one body.
 ///
 /// It is a signer's composer, over pieces the signer authored: it holds no
@@ -192,6 +268,7 @@ pub fn entry_body_publish<'a>(
             pieces.into_iter().try_fold(empty, |body, piece| match piece {
                 ShotSegmentPiece::Value(value) => body.push(value),
                 ShotSegmentPiece::Window { start, width } => body.window(start, width),
+                ShotSegmentPiece::Stretch { start, width } => body.stretch(start, width),
             })
         })
         .expect(
@@ -215,11 +292,13 @@ pub fn entry_body_publish<'a>(
 /// for each refusal, and collects nothing ahead of the build.
 ///
 /// Its standing invariant is the one the budget exists for: the body built
-/// so far, its leading count and the base group [`PublishBody::finish`]
+/// so far, its leading count and the base group and stretch row
+/// [`PublishBody::finish`]
 /// appends included, never passes `budget` bytes — [`PublishBody::within`],
 /// the type's one constructor, establishes it, refusing a budget the body of
-/// no segments already passes, and each of its two growth sites,
-/// [`PublishBody::push`] and [`PublishBody::window`], keeps it or refuses, so
+/// no segments already passes, and each of its three growth sites,
+/// [`PublishBody::push`], [`PublishBody::window`] and
+/// [`PublishBody::stretch`], keeps it or refuses, so
 /// `finish` never answers a body past its budget.
 ///
 /// A refusal consumes the builder, at a push and at a window alike, and the
@@ -253,6 +332,15 @@ pub struct PublishBody {
     /// It is spelled at `within` so its bytes count against the budget from
     /// the start.
     base_group: Vec<u8>,
+    /// The stretches closed so far, each as the stretch row spells it:
+    /// `start`, `width` and the positions placed in it.
+    ///
+    /// Empty for a shot with no stretch list, which spells no row.
+    stretches: Vec<[u64; 3]>,
+    /// The positions placed when the last stretch was closed.
+    ///
+    /// The next stretch's `placed` is counted from it.
+    closed_at: u64,
     budget: usize,
 }
 
@@ -294,14 +382,38 @@ impl PublishBody {
         if bytes.len() + base_group.len() > budget {
             return Err(PublishRefusal::PastBudget);
         }
-        Ok(PublishBody { bytes, stretch: None, placed: 0, base_group, budget })
+        Ok(PublishBody {
+            bytes,
+            stretch: None,
+            placed: 0,
+            base_group,
+            stretches: Vec::new(),
+            closed_at: 0,
+            budget,
+        })
+    }
+
+    /// Returns what the stretch row measures over `n` stretches.
+    ///
+    /// Nothing for none: a shot with no list spells no row. Else the
+    /// delimited token, the count and `n` entries.
+    fn stretch_row_len(n: usize) -> usize {
+        if n == 0 {
+            return 0;
+        }
+        delimited_len(STRETCH_ROW_TOKEN.len())
+            .saturating_add(8)
+            .saturating_add(n.saturating_mul(STRETCH_ENTRY_BYTES))
     }
 
     /// Returns what the body would measure if finished now.
     ///
-    /// That is the bytes down, and the group `finish` appends.
+    /// That is the bytes down, the group `finish` appends and the stretch
+    /// row over the stretches closed so far.
     fn finished_len(&self) -> usize {
-        self.bytes.len() + self.base_group.len()
+        self.bytes.len()
+            + self.base_group.len()
+            + PublishBody::stretch_row_len(self.stretches.len())
     }
 
     /// Appends `value` as the body's next position and hands the builder back.
@@ -386,19 +498,71 @@ impl PublishBody {
         Ok(self)
     }
 
+    /// Closes one stretch of the shot's stretch list and hands the builder
+    /// back.
+    ///
+    /// Every value and window taken since the last stretch was closed — or
+    /// since the body's start — is the stretch's: the positions that replace
+    /// `width` positions of the base from `start` on. The open value stretch
+    /// is closed, so a value pushed next opens a segment of its own, and the
+    /// stretch joins the stretch row [`finish`](PublishBody::finish) appends
+    /// behind the base group as `be64(start) ‖ be64(width) ‖ be64(placed)`,
+    /// `placed` the positions counted here. A stretch may hold no position:
+    /// one that only removes.
+    ///
+    /// **Precondition.** Every piece of the body lies in a stretch: the
+    /// builder is finished right after its last stretch is closed, and a
+    /// shot with no stretch list never calls this. Pieces taken after the
+    /// last close are counted in the leading `be64(placed)` and in no
+    /// stretch, which is a body no verifier composes — refused
+    /// `attestation_invalid:signature` at the board, never an outcome a
+    /// refusal here could name. The stretches' own arithmetic — ascending,
+    /// apart, inside the base's extent — is the request's door's to judge;
+    /// this row spells what it is handed.
+    ///
+    /// # Errors
+    ///
+    /// [`PublishRefusal::PastBudget`] where the finished body, the row over
+    /// one more stretch included, would pass its budget; the builder is gone
+    /// with it, as after a refused push. The first stretch costs the row's
+    /// token and count besides its own twenty-four bytes.
+    #[must_use = "stretch takes the builder: the body goes on in the one it returns"]
+    pub fn stretch(mut self, start: u64, width: u64) -> Result<PublishBody, PublishRefusal> {
+        let grown = self.bytes.len()
+            + self.base_group.len()
+            + PublishBody::stretch_row_len(self.stretches.len() + 1);
+        if grown > self.budget {
+            return Err(PublishRefusal::PastBudget);
+        }
+        if let Some(stretch) = self.stretch.take() {
+            stretch.close(&mut self.bytes);
+        }
+        self.stretches.push([start, width, self.placed - self.closed_at]);
+        self.closed_at = self.placed;
+        Ok(self)
+    }
+
     /// Returns the body, under the `publish` token.
     ///
     /// It is the count of positions the pieces this builder took cover, the
     /// segments built from them in the order pushed — the open stretch closed
-    /// — then the base group; never past its budget, by the standing
-    /// invariant.
+    /// — then the base group, then the stretch row where a stretch was
+    /// closed ([`stretch`](PublishBody::stretch)) and nothing where none
+    /// was; never past its budget, by the standing invariant.
     pub fn finish(self) -> EntryBody {
-        let PublishBody { mut bytes, stretch, placed, base_group, .. } = self;
+        let PublishBody { mut bytes, stretch, placed, base_group, stretches, .. } = self;
         if let Some(stretch) = stretch {
             stretch.close(&mut bytes);
         }
         bytes[..8].copy_from_slice(&placed.to_be_bytes());
         bytes.extend_from_slice(&base_group);
+        if !stretches.is_empty() {
+            push_delimited(&mut bytes, STRETCH_ROW_TOKEN);
+            bytes.extend_from_slice(&(stretches.len() as u64).to_be_bytes());
+            for term in stretches.iter().flatten() {
+                bytes.extend_from_slice(&term.to_be_bytes());
+            }
+        }
         EntryBody { grammar: Grammar::Publish, bytes }
     }
 }

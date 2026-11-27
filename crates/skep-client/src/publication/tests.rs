@@ -136,6 +136,16 @@ struct DocState {
     owner: String,
     placed: Option<u64>,
     base_extent: Option<u64>,
+    /// The base the shot that minted a member named — `doc_metadata`'s
+    /// `shot_base`; `None` in the birth shape and for no member.
+    shot_base: Option<String>,
+    /// The stretches of that base the shot's runs replaced, each
+    /// `(start, width, placed)` — `doc_metadata`'s `stretches`, served
+    /// `null` where the shot named its whole arrangement.
+    stretches: Vec<(u64, u64, u64)>,
+    /// How many shots that named their stretches stand between a member
+    /// and the nearest base none minted — `doc_metadata`'s `chain_depth`.
+    chain_depth: u64,
     /// The surface a `stage` copied into it — `doc_metadata`'s `source`.
     source: Option<String>,
     /// The draft base the board records — `doc_metadata`'s `base`, and
@@ -213,7 +223,7 @@ impl World {
 
     fn doc(&mut self, text: &str, published: bool, owner: &str, runs: Vec<Run>) {
         self.position += 1;
-        self.docs.insert(text.to_string(), DocState { runs, published, owner: owner.to_string(), placed: None, base_extent: None, source: None, base: None, base_copied: None, at: self.position });
+        self.docs.insert(text.to_string(), DocState { runs, published, owner: owner.to_string(), placed: None, base_extent: None, shot_base: None, stretches: Vec::new(), chain_depth: 0, source: None, base: None, base_copied: None, at: self.position });
     }
 
     fn text(&mut self, origin: &str, from: u64, text: &str) {
@@ -282,6 +292,11 @@ impl World {
         w.doc(E, true, ACCOUNT, vec![run(E, 1, 19)]);
         w.doc(&format!("{E}.1"), true, ACCOUNT, vec![run(E, 1, 19)]);
         w.docs.get_mut(&format!("{E}.1")).unwrap().placed = Some(19);
+        // The fixture's base stands one shot short of the bound on its chain
+        // of bases, so a publication off it names its WHOLE arrangement: the
+        // cells pin each list of the request over the whole selection. The
+        // cells of the change form set the depth back to 0 (`by_its_change`).
+        w.docs.get_mut(&format!("{E}.1")).unwrap().chain_depth = WHOLE_FORM_EVERY - 1;
         w.trunk_head.insert(E.to_string(), format!("{E}.1"));
         w.rows.push(FeedRow { at: w.position, op: "publish", docs: vec![format!("{E}.1")], key: None });
         w.text(S, 1, "set one");
@@ -525,7 +540,7 @@ impl World {
                 if !self.readable(doc) {
                     return Ok(rejected("withheld", json!({"site": {"addr": doc}})));
                 }
-                Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": trunk_of(doc), "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": d.base, "base_copied": d.base_copied.map(|c| c.to_string()), "at": d.at})))
+                Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": trunk_of(doc), "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "shot_base": d.shot_base, "stretches": (!d.stretches.is_empty()).then(|| d.stretches.iter().map(|(start, width, placed)| json!({"start": start.to_string(), "width": width.to_string(), "placed": placed.to_string()})).collect::<Vec<_>>()), "chain_depth": d.placed.map(|_| d.chain_depth), "source": d.source, "base": d.base, "base_copied": d.base_copied.map(|c| c.to_string()), "at": d.at})))
             }
             "retrieve_doc_v_span_set" => {
                 let doc = frame["doc"].as_str().unwrap();
@@ -741,7 +756,7 @@ impl World {
             let e = format!("{account}.0.{}", self.next_doc);
             self.next_doc += 1;
             self.position += 1;
-            self.docs.insert(e.clone(), DocState { runs: Vec::new(), published: true, owner: account.to_string(), placed: None, base_extent: None, source: None, base: None, base_copied: None, at: self.position });
+            self.docs.insert(e.clone(), DocState { runs: Vec::new(), published: true, owner: account.to_string(), placed: None, base_extent: None, shot_base: None, stretches: Vec::new(), chain_depth: 0, source: None, base: None, base_copied: None, at: self.position });
             (e.clone(), Some(e))
         } else {
             (frame["doc"].as_str().unwrap().to_string(), None)
@@ -908,6 +923,8 @@ impl World {
         // distinct, so one draft's ordinal is no other's.
         let mut fresh_of: BTreeMap<(String, u64), u64> = BTreeMap::new();
         let mut positions: Vec<(Address, u64)> = Vec::new();
+        // Where each run's positions end among `positions`.
+        let mut run_ends: Vec<usize> = Vec::new();
         let mut fresh_runs: Vec<Run> = Vec::new();
         // Each record: the draft it is homed in, its draft start, its fresh
         // start, its width.
@@ -952,10 +969,42 @@ impl World {
                 positions.extend((run.i_start..run.reach()).map(|n| (run.origin.clone(), n)));
                 fresh_runs.push(run.clone());
             }
+            run_ends.push(positions.len());
         }
+        // THE STRETCHES (wire.md §Arrangement, `publish`): the member is the
+        // base with each stretch of it replaced by the next `count` runs —
+        // the base's positions past its extent standing where it holds them;
+        // with none the runs are the member's whole arrangement.
+        let placed = positions.len() as u64;
+        let base_extent: Option<u64> = frame["base_extent"].as_str().and_then(|e| e.parse().ok());
+        let natural = |v: &Value| v.as_str().and_then(|text| text.parse::<u64>().ok()).expect("a natural");
+        let named_stretches: Vec<(u64, u64, usize)> = frame["stretches"].as_array().map(|list| list.iter().map(|s| (natural(&s["start"]), natural(&s["width"]), natural(&s["count"]) as usize)).collect()).unwrap_or_default();
+        let mut stretches: Vec<(u64, u64, u64)> = Vec::new();
+        let (positions, chain_depth) = if named_stretches.is_empty() {
+            (positions, 0)
+        } else {
+            let base = base.as_deref().expect("the composition sent stretches beside no base, which the codec refuses malformed");
+            let extent = base_extent.expect("a base rides with its extent");
+            assert_eq!(named_stretches.iter().map(|s| s.2).sum::<usize>(), runs.len(), "the composition sent stretches whose counts do not take its runs, which the codec refuses malformed");
+            let held = Self::expand(&self.arrangement(base).expect("the base"));
+            let mut out: Vec<(Address, u64)> = Vec::new();
+            let (mut cursor, mut taken) = (1u64, 0usize);
+            for (start, width, count) in &named_stretches {
+                assert!(*start >= cursor && start + width <= extent + 1, "the composition sent stretches not ascending, apart and inside the base's extent, which the codec refuses malformed");
+                out.extend_from_slice(&held[cursor as usize - 1..*start as usize - 1]);
+                let from = if taken == 0 { 0 } else { run_ends[taken - 1] };
+                let to = if taken + count == 0 { 0 } else { run_ends[taken + count - 1] };
+                out.extend_from_slice(&positions[from..to]);
+                stretches.push((*start, *width, (to - from) as u64));
+                taken += count;
+                cursor = start + width;
+            }
+            out.extend_from_slice(&held[cursor as usize - 1..]);
+            (out, self.docs.get(base).map_or(0, |d| d.chain_depth) + 1)
+        };
         let member_runs = Self::coalesce(positions);
-        let placed: u64 = member_runs.iter().map(|r| r.width).sum();
-        self.docs.insert(member.clone(), DocState { runs: member_runs.clone(), published: true, owner: ACCOUNT.to_string(), placed: Some(placed), base_extent: frame["base_extent"].as_str().and_then(|e| e.parse().ok()), source: None, base: None, base_copied: None, at });
+        let whole: u64 = member_runs.iter().map(|r| r.width).sum();
+        self.docs.insert(member.clone(), DocState { runs: member_runs.clone(), published: true, owner: ACCOUNT.to_string(), placed: Some(placed), base_extent, shot_base: base.clone(), stretches, chain_depth, source: None, base: None, base_copied: None, at });
         // The rendering draft's base moves to the member, at its whole
         // count, its source kept (wire.md §Namespace, THE BASE MOVES): a
         // draft with none, its first publication's member — and none moves
@@ -963,7 +1012,7 @@ impl World {
         let moves = frame["keep_base"].as_bool() != Some(true);
         if let Some(d) = draft.as_ref().filter(|_| moves).and_then(|d| self.docs.get_mut(d)) {
             d.base = Some(member.clone());
-            d.base_copied = Some(placed);
+            d.base_copied = Some(whole);
         }
         if !member.strip_prefix(&format!("{trunk}.")).unwrap().contains('.') {
             self.trunk_head.insert(trunk.clone(), member.clone());
@@ -2502,30 +2551,35 @@ fn a_request_naming_daughters_is_priced_by_the_board_with_its_supersede_list() {
     assert_eq!((request.price.reads, request.price.bytes), (4 + 1, 3_000), "and the price is the board's for that frame");
 }
 
-/// THE SHAPE PAST ITS OWN CAP IS REFUSED HERE, WITH NO FRAME: a list past
-/// 4,096 or the body past 8 MiB — the board is not asked, a frame past the
-/// list cap or the body cap parsing nowhere — and the price names those
-/// terms with no units, no reads and no bytes beside them, its positions
-/// judged against nothing, the budget they are held to being the board's
-/// to state.
+/// THE SHAPE PAST ITS OWN CAP IS REFUSED HERE, WITH NO FRAME: the runs, or
+/// the places beside them, past the 65,536 one frame may place, another
+/// list past 4,096, or the body past 8 MiB — the board is not asked, a
+/// frame past a list's cap or the body cap parsing nowhere — and the price
+/// names those terms with no units, no reads and no bytes beside them, its
+/// positions judged against nothing, the budget they are held to being the
+/// board's to state. The two list caps are the board's own, each in its
+/// unit: 4,097 runs are inside theirs, and 4,097 links are past theirs.
 #[test]
 fn a_shape_past_its_own_cap_is_refused_before_any_frame() {
-    let within = price::Shape { lists: [4_096, 4_096, 4_096, 4_096, 4_096, 4_096], body: price::REQUEST_BODY_BYTES, values: 1 << 30 };
+    assert_eq!((MAX_WIRE_RUNS, MAX_WIRE_LIST), (skep_arrangement::MAX_PLACED_RUNS, 4_096), "the runs' cap is the store's number for what one request places");
+    let within = price::Shape { lists: [MAX_WIRE_RUNS, MAX_WIRE_RUNS, 4_096, 4_096, 4_096, 4_096], body: price::REQUEST_BODY_BYTES, values: 1 << 30 };
     assert!(within.over().is_empty(), "at every cap is inside it");
-    let lists = price::Shape { lists: [4_097, 0, 4_100, 0, 0, 4_098], ..within.clone() };
-    assert_eq!(lists.over(), vec![(Term::Runs, 1), (Term::Links, 4), (Term::Originals, 2)]);
+    let lists = price::Shape { lists: [MAX_WIRE_RUNS + 1, MAX_WIRE_RUNS + 3, 4_100, 0, 0, 4_098], ..within.clone() };
+    assert_eq!(lists.over(), vec![(Term::Runs, 1), (Term::Places, 3), (Term::Links, 4), (Term::Originals, 2)]);
+    let past_the_list_cap = price::Shape { lists: [4_097, 4_097, 4_097, 0, 0, 0], ..within.clone() };
+    assert_eq!(past_the_list_cap.over(), vec![(Term::Links, 1)], "the runs and their places ride their own cap");
     let wide = price::Shape { body: price::REQUEST_BODY_BYTES + 7, ..within.clone() };
     assert_eq!(wide.over(), vec![(Term::Body, 7)]);
     let unasked = Price::of(&wide, None);
     assert_eq!((unasked.units, unasked.reads, unasked.bytes, unasked.over.clone()), (0, 0, 0, wide.over()), "no figure of the board's beside the terms passed, and the positions held to no budget");
-    // Through the door: a request whose runs pass the list cap sends no
-    // price read.
+    // Through the door: a request whose runs pass their cap sends no price
+    // read.
     let (world, _) = World::base();
     let (dialer, board, signer) = open(world);
     let tok = token();
     let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
     let mut many = request.clone();
-    many.runs = (0..4_097).map(|k| run(E, 1 + k, 1)).collect();
+    many.runs = (0..MAX_WIRE_RUNS as u64 + 1).map(|k| run(E, 1 + k, 1)).collect();
     many.pieces = many.runs.iter().map(|_| Piece::Values(vec![vec![b'x']])).collect();
     dialer.clear();
     let p = publisher(&board, &tok, &signer);
@@ -3747,8 +3801,13 @@ fn a_draft_showing_published_words_as_its_own_offers_nothing_their_publication_a
     let pn = panel(&p, &stray, &e).unwrap();
     assert_eq!(links_of(&e, &pn.formatting.marks), vec![fresh.clone()], "the fresh bold alone on the line");
     let Built::Request(mut request) = build(&p, &stray, &e, &pn, &switched(None)).unwrap() else { panic!("inert") };
-    assert_eq!(request.runs, vec![run(E, 1, 19), run(E, 20, 10), run(O, 1, 5)], "D's words by reference to the published words their record names");
-    assert_eq!((request.places.clone(), request.stray_records.clone()), (vec![None, Some(20), None], vec![0, 1, 0]), "with their kept place, the record the commit reads for it");
+    // The request names its CHANGE against the member the first publication
+    // minted: the one run that carries a kept place rides it, replacing the
+    // base's own ten positions there; the words before it and the window
+    // after stand in the base where the member holds them, and are not sent.
+    assert_eq!(request.runs, vec![run(E, 20, 10)], "D's words by reference to the published words their record names, and no run the base holds in place");
+    assert_eq!(request.stretches, vec![Stretch { start: 20, width: 10, count: 1 }], "the base's positions 20..29 replaced by the one run");
+    assert_eq!((request.places.clone(), request.stray_records.clone()), (vec![Some(20)], vec![1]), "with their kept place, the record the commit reads for it — each list cut to the runs sent");
     let entries: Vec<(String, End)> = request.entries.iter().map(|en| (e.candidates[en.candidate].link.to_string(), en.to.clone())).collect();
     assert_eq!(entries, vec![(fresh, End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first: 25, width: 2 }]))], "the fresh bold alone, on E's words");
     let sent = send(&p, &stray, &mut request).unwrap();
@@ -4510,8 +4569,12 @@ fn an_also_drafts_published_words_shown_as_its_own_again_offer_nothing_their_pub
     assert_eq!(pn.inherited, vec![Inherited { draft: a(A), passages: 0 }], "no passage first written in A publishes");
     let confirmed = Confirmed { answers: BTreeMap::from([(part(2, 0), OriginAnswer::KeepPrivate)]), ..Confirmed::default() };
     let Built::Request(mut request) = build(&p, &again, &e, &pn, &confirmed).unwrap() else { panic!("inert") };
-    assert_eq!(request.runs, vec![run(E, 1, 29), run(E, 30, 5), run(O, 1, 5)], "A's words by reference to the published words its record names");
-    assert_eq!(request.places, vec![None, Some(30), None], "with D's kept place");
+    // The change against the member the first publication minted: the run
+    // that carries D's kept place alone, over the base's five positions
+    // there.
+    assert_eq!(request.runs, vec![run(E, 30, 5)], "A's words by reference to the published words its record names, and no run the base holds in place");
+    assert_eq!(request.stretches, vec![Stretch { start: 30, width: 5, count: 1 }]);
+    assert_eq!(request.places, vec![Some(30)], "with D's kept place");
     assert!(request.entries.is_empty(), "{:?}", request.entries);
     let sent = send(&p, &again, &mut request).unwrap();
     assert!(matches!(&sent, Sent::Acknowledged(ack) if ack.member.to_string() == format!("{E}.3")), "{sent:?}");
@@ -6251,3 +6314,234 @@ fn the_door_images_a_long_document_whole_a_page_a_frame() {
 }
 
 mod walks;
+
+// ── THE CHANGE FORM ──────────────────────────────────────────────────────
+
+/// A plain draft of the person's: no window, no link of its own, never
+/// published.
+const P9: &str = "1.0.1.0.79";
+
+/// The fixture with its base `E.1` at `depth` of its chain of bases, as its
+/// `doc_metadata` serves it.
+fn base_at_depth(depth: u64) -> (World, Named) {
+    let (mut world, named) = World::base();
+    world.docs.get_mut(&format!("{E}.1")).unwrap().chain_depth = depth;
+    (world, named)
+}
+
+/// The inputs of a publication of the plain draft `P9` off `base`, its
+/// whole arrangement `selection`.
+fn plain_inputs(base: (&str, u64), selection: Vec<Run>) -> Inputs {
+    Inputs { base: Some((a(base.0), base.1)), draft: a(P9), selection, notes: vec![], readable_drafts: vec![a(P9)], published: vec![a(E)], ..inputs() }
+}
+
+/// A PUBLICATION NAMES ITS CHANGE AGAINST ITS BASE, AND THE LANDER BOUNDS
+/// THE CHAIN. Off a base at depth 0, 1 and two short of the bound the
+/// request carries the runs of the change — the draft's new words and the
+/// window, placed past the base's nineteen positions, which no run of it
+/// repeats — with `stretches` saying where, every list beside the runs cut
+/// to them and each member-position end counted over them; the member the
+/// board mints from the base is the whole arrangement, one deeper than its
+/// base. Off a base ONE short of the bound the request names its whole
+/// arrangement and no stretch, and the member stands at depth 0 (the mutant
+/// that never sends the whole form mints a member at the bound). Either
+/// form mints the same member.
+#[test]
+fn a_publication_names_its_change_against_its_base_and_sends_the_whole_once_in_every_bound() {
+    for depth in [0, 1, WHOLE_FORM_EVERY - 2, WHOLE_FORM_EVERY - 1] {
+        let (world, named) = base_at_depth(depth);
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+        let bold = request.entries.iter().find(|entry| e.candidates[entry.candidate].link.to_string() == named.mark_d).expect("the bold's entry").to.clone();
+        let frame = request.frame(None);
+        if depth == WHOLE_FORM_EVERY - 1 {
+            assert!(request.stretches.is_empty() && frame.get("stretches").is_none(), "one short of the bound: the whole form");
+            assert_eq!(request.runs, vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)]);
+            assert_eq!(request.places, vec![None, Some(20), None]);
+            assert_eq!(bold, End::Member(vec![(21, 3)]), "counted over the whole arrangement");
+        } else {
+            assert_eq!(request.runs, vec![run(D, 1, 10), run(O, 1, 5)], "depth {depth}: the change's runs alone");
+            assert_eq!(request.stretches, vec![Stretch { start: 20, width: 0, count: 2 }], "depth {depth}");
+            assert_eq!(frame["stretches"], json!([{"start": "20", "width": "0", "count": "2"}]), "depth {depth}: on the wire");
+            assert_eq!((request.places.clone(), request.stray_records.clone(), request.pieces.len()), (vec![Some(20), None], vec![0, 0], 2), "depth {depth}: each list cut to the runs sent");
+            assert_eq!(bold, End::Member(vec![(2, 3)]), "depth {depth}: counted over the request's own runs, the new words the first of them");
+        }
+        let p = publisher(&board, &tok, &signer);
+        let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("refused") };
+        let member = dialer.world().docs[&ack.member.to_string()].clone();
+        assert_eq!(member.runs, vec![run(E, 1, 29), run(O, 1, 5)], "depth {depth}: one member under either form");
+        let expected = if depth == WHOLE_FORM_EVERY - 1 { (0, Some(34), vec![]) } else { (depth + 1, Some(15), vec![(20, 0, 15)]) };
+        assert_eq!((member.chain_depth, member.placed, member.stretches.clone()), expected, "depth {depth}");
+        assert!(member.chain_depth < WHOLE_FORM_EVERY, "depth {depth}: no member this lander mints stands at the bound");
+        // The copy's stored end is the member's fresh words under either
+        // form: the end counted over the request's runs names the same words.
+        let copy = dialer.world().links.iter().find(|l| l.home == ack.member.to_string() && l.ty.first().is_some_and(|ty| ty.0 == T_STRONG)).expect("the bold's copy").to.clone();
+        assert_eq!(copy, vec![ispan(E, 21, 3)], "depth {depth}: the bold on the words the draft's 2..4 became");
+    }
+}
+
+/// A CHAIN OF LANDINGS, counted. One draft is published again and again,
+/// a word typed before each: every publication names its one-word change
+/// against the member the last one minted, and the depth the board serves
+/// climbs 1, 2, … to one short of the bound; the publication that would
+/// reach the bound sends the draft's whole arrangement with its base and the
+/// depth is 0 again; and the next names its change once more.
+#[test]
+fn a_chain_of_publications_climbs_to_one_short_of_the_bound_and_starts_again() {
+    let (mut world, _) = base_at_depth(0);
+    world.doc(P9, false, ACCOUNT, vec![run(E, 1, 19)]);
+    world.stage(P9, E);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let mut base = (format!("{E}.1"), 19u64);
+    for landing in 1..=WHOLE_FORM_EVERY + 1 {
+        // A word typed at the draft's end.
+        let selection = {
+            let mut w = dialer.world();
+            w.text(P9, landing, "w");
+            let d = w.docs.get_mut(P9).unwrap();
+            d.runs.push(run(P9, landing, 1));
+            d.runs.clone()
+        };
+        let inputs = plain_inputs((&base.0, base.1), selection.clone());
+        let e = enumerate(&p, &inputs).expect("enumerated");
+        let pn = panel(&p, &inputs, &e).expect("the panel");
+        let Built::Request(mut request) = build(&p, &inputs, &e, &pn, &Confirmed::default()).expect("built") else { panic!("inert at landing {landing}") };
+        let whole = landing == WHOLE_FORM_EVERY;
+        if whole {
+            assert!(request.stretches.is_empty(), "landing {landing}: the whole form with its base");
+            assert_eq!((request.runs.clone(), request.base.as_ref().map(|b| b.0.to_string())), (selection.clone(), Some(base.0.clone())), "landing {landing}");
+        } else {
+            assert_eq!(request.runs, vec![run(P9, landing, 1)], "landing {landing}: the one word");
+            assert_eq!(request.stretches, vec![Stretch { start: base.1 + 1, width: 0, count: 1 }], "landing {landing}: past the base's positions");
+        }
+        let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused at landing {landing}") };
+        let member = ack.member.to_string();
+        assert_eq!(member, format!("{E}.{}", landing + 1), "landing {landing}: the trunk's next member");
+        let served = Door::new(&board, &tok).metadata(&member).expect("the member's metadata").chain_depth;
+        let expected = if landing < WHOLE_FORM_EVERY { landing } else { landing - WHOLE_FORM_EVERY };
+        assert_eq!(served, Some(expected), "landing {landing}: the depth the board serves");
+        assert_eq!(dialer.world().docs[&member].runs, vec![run(E, 1, 19 + landing)], "landing {landing}: the member holds every word");
+        assert_eq!(dialer.world().docs[P9].runs, vec![run(E, 1, 19 + landing)], "landing {landing}: the draft re-windowed onto it");
+        base = (member, 19 + landing);
+    }
+}
+
+/// A CHANGE WHOSE ANSWER WAS LOST IS FOUND BY ITS MEMBER'S ARRANGEMENT. The
+/// request names its change; both acknowledgments are lost; the records
+/// name the member, and the member is the request's base with the request's
+/// stretches replaced — read where the two stretch lists lie, the member's
+/// off its own `doc_metadata` — so the publication is acknowledged from the
+/// board and never sent a third time (the mutant that reads the member's
+/// first `placed` positions for the request's runs finds none, and the
+/// caller sends again). The same change SPELLED BY OTHER STRETCHES — a
+/// wider stretch replacing the base's last word with itself, a stretch of
+/// nothing ahead of it — finds the same member; a request of another change
+/// to the same base does not; and a member born of another base, or holding
+/// other words in the same stretch, is not taken for it.
+#[test]
+fn a_change_whose_answer_was_lost_is_found_by_its_members_arrangement() {
+    let (world, _) = base_at_depth(0);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(Some(S2)));
+    assert_eq!(request.stretches, vec![Stretch { start: 20, width: 0, count: 2 }], "the premise: the request names its change");
+    let p = publisher(&board, &tok, &signer);
+    dialer.world().drop_acks = 2;
+    dialer.clear();
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    let member = ack.member.clone();
+    assert_eq!((member.to_string(), ack.via), (format!("{E}.2"), AckVia::Records));
+    assert_eq!(dialer.frames("publish").len(), 2, "one re-ask under the same id, no third");
+    assert!(!dialer.world().docs.contains_key(&format!("{E}.3")) && !dialer.world().docs.contains_key(&format!("{E}.1.1")), "one member, no second");
+    let found = |request: &Request| landed(&p, &inputs(), request, Base::Member(member.clone())).expect("the landed test");
+    assert!(matches!(found(&request), Verdict::Passed(_)));
+    // Other spellings of the one change.
+    let mut wider = request.clone();
+    wider.runs.insert(0, run(E, 19, 1));
+    wider.places.insert(0, None);
+    wider.stray_records.insert(0, 0);
+    wider.stretches = vec![Stretch { start: 19, width: 1, count: 3 }];
+    wider.entries.clear();
+    wider.retract.clear();
+    assert!(matches!(found(&wider), Verdict::Passed(_)), "a wider stretch, the base's last word replaced with itself: {:?}", found(&wider));
+    let mut split = request.clone();
+    split.stretches = vec![Stretch { start: 5, width: 0, count: 0 }, Stretch { start: 20, width: 0, count: 2 }];
+    assert!(matches!(found(&split), Verdict::Passed(_)), "a stretch of nothing ahead of it: {:?}", found(&split));
+    // Another change to the same base.
+    let mut elsewhere = request.clone();
+    elsewhere.stretches = vec![Stretch { start: 19, width: 0, count: 2 }];
+    assert_eq!(found(&elsewhere), Verdict::NotFound, "the same runs a position early");
+    // A member of another base, and one holding other words there.
+    dialer.world().docs.get_mut(&member.to_string()).unwrap().shot_base = Some(E.to_string());
+    assert_eq!(found(&request), Verdict::NotFound, "born of another base");
+    {
+        let mut w = dialer.world();
+        let d = w.docs.get_mut(&member.to_string()).unwrap();
+        d.shot_base = Some(format!("{E}.1"));
+        d.runs = vec![run(E, 1, 19), run(Z, 1, 3), run(E, 23, 7), run(O, 1, 5)];
+    }
+    assert_eq!(found(&request), Verdict::NotFound, "another writer's words in the same stretch");
+}
+
+/// A ONE-WORD PUBLICATION OF A DRAFT OF 5,000 RUNS sends its change. The
+/// draft arranges the base's 5,000 runs — the edition's words at every
+/// second address, none I-adjacent to the next — and one word typed among
+/// them: the request carries ONE run and one stretch, the body's pieces are
+/// that word's, and the one `publish` frame names no run of the 5,000 (the
+/// mutant that sends the whole draft names 5,001). The member is the whole
+/// arrangement, and the link the publication copies onto its new word, its
+/// end counted over the request's own one run, is stored on the word.
+#[test]
+fn a_one_word_publication_of_a_draft_of_5_000_runs_sends_one_run_and_one_stretch() {
+    let (mut world, _) = base_at_depth(0);
+    let count = 5_000u64;
+    let held: Vec<Run> = (1..=count).map(|k| run(E, 100 + 2 * k, 1)).collect();
+    world.text(E, 100, &"x".repeat(2 * count as usize + 4));
+    let first = format!("{E}.1");
+    world.docs.get_mut(&first).unwrap().runs = held.clone();
+    world.docs.get_mut(&first).unwrap().placed = Some(count);
+    world.docs.get_mut(E).unwrap().runs = held.clone();
+    // The draft: the base's runs, and one word typed before its position
+    // 2,500, a mark of the draft's own on it.
+    let mut arranged = held.clone();
+    arranged.insert(2_499, run(P9, 1, 1));
+    world.text(P9, 1, "w");
+    world.doc(P9, false, ACCOUNT, arranged.clone());
+    world.stage(P9, E);
+    let mark = world.typed(P9, vec![], vec![ispan(P9, 1, 1)], T_STRONG);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = plain_inputs((&first, count), arranged.clone());
+    let e = enumerate(&p, &inputs).expect("enumerated");
+    let pn = panel(&p, &inputs, &e).expect("the panel");
+    let mut confirmed = Confirmed::default();
+    confirmed.switches.on.insert(a(P9));
+    dialer.clear();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &pn, &confirmed).expect("built") else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(P9, 1, 1)], "the change's one run");
+    assert_eq!(request.stretches, vec![Stretch { start: 2_500, width: 0, count: 1 }], "before the base's position 2,500");
+    assert_eq!((request.places.clone(), request.pieces.len()), (vec![Some(2_500)], 1));
+    let entry = request.entries.iter().find(|entry| e.candidates[entry.candidate].link.to_string() == mark).expect("the mark's entry");
+    assert_eq!(entry.to, End::Member(vec![(1, 1)]), "its end on the new word, the first position of the request's own runs");
+    let priced = dialer.frames("publish_cost");
+    assert_eq!((priced.len(), priced[0]["runs"].as_array().map(Vec::len), priced[0]["stretches"].clone()), (1, Some(1), json!([{"start": "2500", "width": "0", "count": "1"}])), "the board prices the request as it will be sent");
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 1, "one frame: {:?}", dialer.ops());
+    assert_eq!(frames[0]["runs"].as_array().map(Vec::len), Some(1), "one run sent, and none of the 5,000");
+    let member = dialer.world().docs[&ack.member.to_string()].clone();
+    assert_eq!(member.runs.len(), count as usize + 1);
+    let fresh = member.runs[2_499].clone();
+    assert_eq!((fresh.origin.to_string(), fresh.width), (E.to_string(), 1), "the word re-minted under the edition, at its place");
+    let mut whole = held.clone();
+    whole.insert(2_499, fresh.clone());
+    assert_eq!(member.runs, whole, "the member is the whole arrangement");
+    let copy = dialer.world().links.iter().find(|l| l.home == ack.member.to_string() && l.ty.first().is_some_and(|ty| ty.0 == T_STRONG)).expect("the mark's copy").to.clone();
+    assert_eq!(copy, vec![ispan(E, fresh.i_start, 1)], "stored on the word the draft's became");
+}

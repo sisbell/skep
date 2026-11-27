@@ -145,17 +145,16 @@ fn version_snapshot_shares_the_map_preserving_multiplicity() {
 }
 
 #[test]
-fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
-    // §7: the amplification `Vstream::version`'s cost note names. The
-    // arrangement half is O(1) (structural im share); the R half is one
-    // freshly-built span per source run, permanent (P2). The record that
-    // commands it is two addresses WHATEVER the source holds, so M2's
-    // MAX_TXN_BYTES weighs those two addresses and bounds the expansion
-    // not at all — and replay re-reads the same two addresses to re-do it.
-    // `ContentPlace` appends to R by the same mechanism and carries its
-    // runs, so it is priced for them; that contrast is the finding, and it
-    // is measured here rather than remembered. Corpus seed for the
-    // fuzzing tier.
+fn a_fork_names_its_sources_list_in_r_and_appends_no_span() {
+    // §7: a snapshot's two halves are both O(1) at the fold. The
+    // arrangement is a structural share, and R↾new is that same list NAMED
+    // — one more handle on the vector — with no span appended, whatever the
+    // source holds: the record is two addresses, and it commands two
+    // handles. What R↾new answers is unchanged — one span a run of the
+    // list as it stood — and what the document places afterwards is
+    // appended beside it. `ContentPlace` carries its runs and appends a
+    // span for each, so it is priced for them; the contrast is measured
+    // here rather than remembered.
     //
     // Non-adjacent starts, so nothing coalesces and the source really
     // holds one run per placed address.
@@ -172,20 +171,41 @@ fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
             forked.content_runs(&vdoc()).collect::<Vec<_>>(),
             s.content_runs(&doc1()).collect::<Vec<_>>()
         );
+        // Nothing appended at the snapshot, and the count of what R↾new
+        // walks is the named list's runs — once, never those runs again as
+        // spans.
+        assert_eq!(forked.provenance.appended_span_count(&vdoc()), 0, "a snapshot appends no span");
+        assert_eq!(forked.recorded_span_count(&vdoc()), count as usize);
+        // What the fork places afterwards is recorded beside the name, and
+        // what it then removes is still what it ever contained.
+        let edited = place(&forked, &vdoc(), 1, vec![run(&vca(9), 1)]);
+        assert_eq!(edited.provenance.appended_span_count(&vdoc()), 1);
+        assert_eq!(edited.recorded_span_count(&vdoc()), count as usize + 1);
+        let emptied = edited.apply_m5(Seq(2), &M5Rec::ContentRemove {
+            doc: vdoc(),
+            from: n(1),
+            width: n(count + 1),
+        });
+        let deleted = emptied.deletions(&vdoc());
+        assert!(
+            runs(count).iter().flat_map(Run::addrs).all(|a| deleted.denotes(a.tumbler())),
+            "every address the fork was born holding is in R↾fork by name"
+        );
+        assert!(deleted.denotes(vca(9).tumbler()), "and so is the one it placed since");
         (
             s.content_runs(&doc1()).len(),
             fork_bytes,
             forked.provenance.ever_contained(&vdoc()).len(),
         )
     };
-    // One R span per source run, at both sizes…
+    // One span of R↾fork per source run, at both sizes…
     assert_eq!(fork(2), (2, fork(2).1, 2));
     let (source_run_count, fork_bytes, r_span_count) = fork(64);
     assert_eq!((source_run_count, r_span_count), (64, 64));
     // …from a record whose size did not move between them.
     assert_eq!(fork_bytes, fork(2).1);
-    // And the record that PAYS for what it commands, for contrast: the
-    // same spans into R, carried.
+    // And the record that carries what it places, for contrast: the same
+    // runs into R as spans.
     let placing_bytes = bincode::serialize(&M5Rec::ContentPlace {
         doc: doc1(),
         at: n(1),
@@ -195,8 +215,8 @@ fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
     .len();
     assert!(
         fork_bytes * 10 < placing_bytes,
-        "a fork commands {r_span_count} permanent R spans in {fork_bytes} bytes; \
-         placing the same spans costs {placing_bytes}"
+        "a fork names {r_span_count} runs in R in {fork_bytes} bytes; \
+         placing the same runs costs {placing_bytes}"
     );
 }
 
@@ -303,13 +323,14 @@ fn every_address_a_document_arranged_is_recorded_in_r() {
 }
 
 #[test]
-fn only_placement_and_version_append_to_r() {
+fn only_a_placement_appends_to_r_and_only_a_snapshot_names_in_it() {
     // §4/§6/§8: DELETE, REARRANGE and link seating leave R alone — P2 is
     // about never LOSING a pair, and J-LV uncouples link placement from R
-    // altogether. No public read can witness this: R's denotation is the
-    // set-union of its pairs, so a redundant append answers every query
-    // identically and shows up only as unbounded growth. R itself has to
-    // be compared directly.
+    // altogether — and so does the shot's placing record, whose member's
+    // arrangement is its own record. No public read can witness this: R's
+    // denotation is the set-union of its pairs, so a redundant append
+    // answers every query identically and shows up only as unbounded
+    // growth. R itself has to be compared directly.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 4)]);
     let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
     for r in [
@@ -333,15 +354,8 @@ fn only_placement_and_version_append_to_r() {
             "{r:?} must not append to R"
         );
     }
-    // The three that DO append, so the comparisons above cannot pass
-    // vacuously — a `provenance` that had stopped changing at all would
-    // satisfy them.
-    let placed = s.apply_m5(Seq(1), &M5Rec::ContentPlace {
-        doc: doc2(),
-        at: n(1),
-        runs: vec![run(&ca(1), 1)],
-    });
-    assert_ne!(placed.provenance, s.provenance);
+    // The shot's record places a member's runs and leaves R as it stands:
+    // nothing is appended and nothing named for the member it mints.
     let shot = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 1)],
@@ -349,15 +363,31 @@ fn only_placement_and_version_append_to_r() {
             placed: n(1),
             base_extent: None,
             base: None,
+            stretches: Vec::new(),
+            chain_depth: 0,
         },
         draft: None,
     });
-    assert_ne!(shot.provenance, s.provenance);
+    assert_eq!(shot.content_count(&vdoc()), n(1), "the member is placed");
+    assert_eq!(shot.provenance, s.provenance, "a shot's member stores no span");
+    // The two that DO move R, so the comparisons above cannot pass
+    // vacuously — a `provenance` that had stopped changing at all would
+    // satisfy them: a placement appends a span a run, and a snapshot names
+    // the list it shares and appends none.
+    let placed = s.apply_m5(Seq(1), &M5Rec::ContentPlace {
+        doc: doc2(),
+        at: n(1),
+        runs: vec![run(&ca(1), 1)],
+    });
+    assert_ne!(placed.provenance, s.provenance);
+    assert_eq!(placed.provenance.appended_span_count(&doc2()), 1);
     let forked = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
     assert_ne!(forked.provenance, s.provenance);
+    assert_eq!(forked.provenance.appended_span_count(&vdoc()), 0, "named, never appended");
+    assert!(forked.provenance.is_recorded(&vdoc()));
 }
 
 #[test]
@@ -385,7 +415,7 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
     let born = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
-        terms: ShotTerms { placed: n(3), base_extent: None, base: None },
+        terms: ShotTerms { placed: n(3), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
         draft: None,
     });
     assert_eq!(born.birth_extent(&vdoc()), Some(&n(3)));
@@ -419,7 +449,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
     let mint = |doc: &Address| M5Rec::ShotPlace {
         doc: doc.clone(),
         runs: vec![run(&ca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: None, base: None },
+        terms: ShotTerms { placed: n(2), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
         draft: None,
     };
     let mut s = M5State::genesis();
@@ -490,7 +520,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     let minted_empty = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![],
-        terms: ShotTerms { placed: n(0), base_extent: None, base: None },
+        terms: ShotTerms { placed: n(0), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
         draft: None,
     });
     assert_eq!(minted_empty.birth_extent(&vdoc()), Some(&n(0)), "noted at zero by the mint");
@@ -498,7 +528,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     assert!(!minted_empty.provenance.is_recorded(&vdoc()), "no R entry");
     assert_eq!(
         minted_empty.shot_terms(&vdoc()),
-        Some(&ShotTerms { placed: n(0), base_extent: None, base: None }),
+        Some(&ShotTerms { placed: n(0), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 }),
         "the terms are noted all the same: the count zero, the birth bit"
     );
     let deposited = place(&minted_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
@@ -507,38 +537,44 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
 }
 
 #[test]
-fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
-    // D25's (c′): the shot's record splices at ordinal 1 and appends to R
-    // exactly as `ContentPlace` at ordinal 1 does, and notes the birth
-    // extent and the member's TERMS — neither of which an insert's or
-    // copy's placement does, a placement minting nothing. The terms ride the
-    // checkpoint with the rest of the slice. And the two records keep their
-    // indices — `ContentPlace` 0, `ShotPlace` 5 — as every variant does
-    // (`M5Rec`'s card), the shot's record writing its fields in order with
-    // its terms nested in place, no framing of their own. The member is
-    // doc1's birth version, its base the memberless doc1 itself, taken at
-    // two positions.
-    let runs = vec![run(&ca(1), 3), run(&pca(1), 2)];
-    let by_place = place(&M5State::genesis(), &vdoc(), 1, runs.clone());
-    let terms = ShotTerms { placed: n(4), base_extent: Some(n(2)), base: Some(doc1()) };
+fn shot_place_builds_the_member_from_its_base_and_notes_the_terms() {
+    // D25's (c′): the shot's record carries the runs the shot placed and
+    // its terms, and the fold builds the member from the BASE's list, read
+    // at the record's own slot: the base's positions `[1, base_extent]`
+    // replaced by the runs, its positions past the extent left standing —
+    // the carried tail, which no run of the record holds. It appends
+    // nothing to R, and notes the birth extent and the member's TERMS —
+    // neither of which an insert's or copy's placement does, a placement
+    // minting nothing. The terms ride the checkpoint with the rest of the
+    // slice. And the two records keep their indices — `ContentPlace` 0,
+    // `ShotPlace` 5 — as every variant does (`M5Rec`'s card), the shot's
+    // record writing its fields in order with its terms nested in place,
+    // no framing of their own. The member is doc1's birth version, its
+    // base the memberless doc1 itself, holding four positions and taken at
+    // two.
+    let base = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 4)]);
+    let runs = vec![run(&vca(1), 3), run(&pca(1), 2)];
+    let by_place = place(&base, &vdoc(), 1, runs.clone());
+    let terms = ShotTerms { placed: n(5), base_extent: Some(n(2)), base: Some(doc1()), stretches: Vec::new(), chain_depth: 0 };
     let shot = M5Rec::ShotPlace {
         doc: vdoc(),
         runs: runs.clone(),
         terms: terms.clone(),
         draft: None,
     };
-    let by_shot = M5State::genesis().apply_m5(Seq(1), &shot);
+    let by_shot = base.apply_m5(Seq(1), &shot);
     assert_eq!(
-        by_shot.content_runs(&vdoc()).collect::<Vec<_>>(),
-        by_place.content_runs(&vdoc()).collect::<Vec<_>>(),
-        "the same splice"
+        by_shot.content_runs(&vdoc()).cloned().collect::<Vec<_>>(),
+        vec![run(&vca(1), 3), run(&pca(1), 2), run(&ca(3), 2)],
+        "the runs placed, then the base's positions past the extent its copy took"
     );
-    assert_eq!(by_shot.provenance, by_place.provenance, "the same R-append");
-    assert_eq!(by_shot.birth_extent(&vdoc()), Some(&n(5)), "the whole placement is the birth");
+    assert_eq!(by_shot.provenance, base.provenance, "nothing appended to R, nothing named");
+    assert_eq!(by_shot.recorded_span_count(&vdoc()), 3, "R↾member is its arrangement, run for run");
+    assert_eq!(by_shot.birth_extent(&vdoc()), Some(&n(7)), "the whole member is the birth");
     assert_eq!(
         by_shot.shot_terms(&vdoc()),
         Some(&terms),
-        "the shot's three client terms, as the record carried them"
+        "the shot's client terms, as the record carried them"
     );
     assert_eq!(by_place.shot_terms(&vdoc()), None, "a `ContentPlace` notes no terms");
     assert_eq!(
@@ -558,10 +594,55 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
     );
     assert_eq!(
         bincode::serialize(&shot).expect("encodes"),
-        bincode::serialize(&(5u32, vdoc(), &runs, n(4), Some(n(2)), Some(doc1()), None::<Address>))
-            .expect("encodes"),
-        "`ShotPlace` is index 5, then its fields in order, the terms' three flat in place — the \
-         count, the extent, the base — the rendering draft last"
+        bincode::serialize(&(
+            5u32,
+            vdoc(),
+            &runs,
+            n(5),
+            Some(n(2)),
+            Some(doc1()),
+            Vec::<(Nat, Nat, Nat)>::new(),
+            0u64,
+            None::<Address>
+        ))
+        .expect("encodes"),
+        "`ShotPlace` is index 5, then its fields in order, the terms' five flat in place — the \
+         count, the extent, the base, the stretches (none: the whole form) and the depth — the \
+         rendering draft last"
+    );
+    // A record with a stretch list writes each stretch as its three counts.
+    let places = M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&pca(1), 2)],
+        terms: ShotTerms {
+            placed: n(2),
+            base_extent: Some(n(4)),
+            base: Some(doc1()),
+            stretches: vec![Stretch { start: n(2), width: n(1), placed: n(2) }],
+            chain_depth: 1,
+        },
+        draft: None,
+    };
+    assert_eq!(
+        bincode::serialize(&places).expect("encodes"),
+        bincode::serialize(&(
+            5u32,
+            vdoc(),
+            vec![run(&pca(1), 2)],
+            n(2),
+            Some(n(4)),
+            Some(doc1()),
+            vec![(n(2), n(1), n(2))],
+            1u64,
+            None::<Address>
+        ))
+        .expect("encodes"),
+        "a stretch is its start, its width and its placed count, in that order"
+    );
+    assert_eq!(
+        base.apply_m5(Seq(1), &places).content_runs(&vdoc()).cloned().collect::<Vec<_>>(),
+        vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(3), 2)],
+        "the base whole, its one stretch replaced"
     );
 }
 
@@ -697,7 +778,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     let mint = M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
-        terms: ShotTerms { placed: n(3), base_extent: None, base: None },
+        terms: ShotTerms { placed: n(3), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
         draft: None,
     };
     let born = M5State::genesis().apply_m5(Seq(1), &mint);
@@ -765,6 +846,8 @@ fn every_field_held() -> M5State {
                 placed: n(placed),
                 base_extent: base.as_ref().map(|(_, extent)| n(*extent)),
                 base: base.map(|(member, _)| member),
+                stretches: Vec::new(),
+                chain_depth: 0,
             },
             draft: None,
         }
@@ -890,16 +973,19 @@ type RawDraftBase = (Tumbler, Nat, Tumbler, Option<RawMarker>, Vec<RawMarker>);
 /// pin sees the slice's eight field names alone, so a field gained, lost or
 /// reordered *beneath* them — a draft base's marker or stamps, a marker's
 /// position, a shot's terms, a run — moves the World's bytes with every name
-/// unchanged. This pin sees it: the twin is the eight maps in declaration
-/// order, each a `Vec` of pairs in address order (bincode writes a map
+/// unchanged. This pin sees it: the twin is the eight fields in declaration
+/// order — nine maps, R being two — each a `Vec` of pairs in address order
+/// (bincode writes a map
 /// exactly so), every address its bare tumbler, every entry its fields in
 /// order — a document's arrangement its content runs then its link runs,
-/// R's spans each run's I-extent in placing order, a shot's terms its
-/// count, extent and base, a draft base its base, extent, source, marker
+/// R's appended spans each run's I-extent in placing order and then its
+/// named lists each a run-list, a shot's terms its
+/// count, extent, base, stretches and depth, a draft base its base, extent,
+/// source, marker
 /// and stamps. The twin decodes back to the fixture, so it is the slice's
 /// form and not merely bytes alike.
 #[test]
-fn the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields() {
+fn the_slice_serializes_as_its_nine_maps_down_to_each_entry_s_fields() {
     let tumbler = |address: Address| address.tumbler().clone();
     let raw_run = |start: Address, width: u32| -> RawRun { (tumbler(start), n(width)) };
     let extent = |start: Address, reach: Address| {
@@ -910,21 +996,25 @@ fn the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields() {
     };
     let arrangements: Vec<(Tumbler, RawArrangement)> = vec![
         (tumbler(doc1()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![raw_run(la(1), 1)])),
-        (tumbler(vdoc()), (vec![raw_run(ca(1), 2)], vec![])),
+        // The shot's member: its two positions, then doc1's past the one
+        // its copy took — the base's list, its first position replaced.
+        (tumbler(vdoc()), (vec![raw_run(ca(1), 2), raw_run(ca(2), 2), raw_run(vca(1), 1)], vec![])),
         (tumbler(doc2()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![])),
         (tumbler(pca_member()), (vec![raw_run(pca(1), 1)], vec![])),
     ];
-    let provenance: Vec<(Tumbler, Vec<Span>)> = vec![
-        (tumbler(doc1()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))]),
-        (tumbler(vdoc()), vec![extent(ca(1), ca(3))]),
-        (tumbler(doc2()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))]),
-        (tumbler(pca_member()), vec![extent(pca(1), pca(2))]),
-    ];
+    // R's two maps: the spans appended — the placements' alone, a shot's
+    // member storing none — then the lists named, the snapshot's.
+    let appended: Vec<(Tumbler, Vec<Span>)> =
+        vec![(tumbler(doc1()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))])];
+    let named: Vec<(Tumbler, Vec<RawRun>)> =
+        vec![(tumbler(doc2()), vec![raw_run(ca(1), 3), raw_run(vca(1), 1)])];
+    let provenance = (appended, named);
     let birth_extents: Vec<(Tumbler, Nat)> =
-        vec![(tumbler(vdoc()), n(2)), (tumbler(pca_member()), n(1))];
-    let shot_terms: Vec<(Tumbler, (Nat, Option<Nat>, Option<Tumbler>))> = vec![
-        (tumbler(vdoc()), (n(2), Some(n(1)), Some(tumbler(doc1())))),
-        (tumbler(pca_member()), (n(1), None, None)),
+        vec![(tumbler(vdoc()), n(5)), (tumbler(pca_member()), n(1))];
+    type RawTerms = (Nat, Option<Nat>, Option<Tumbler>, Vec<(Nat, Nat, Nat)>, u64);
+    let shot_terms: Vec<(Tumbler, RawTerms)> = vec![
+        (tumbler(vdoc()), (n(2), Some(n(1)), Some(tumbler(doc1())), vec![], 0)),
+        (tumbler(pca_member()), (n(1), None, None, vec![], 0)),
     ];
     let fork_sources: Vec<(Tumbler, Tumbler)> = vec![(tumbler(doc2()), tumbler(doc1()))];
     let arranged_at: Vec<(Tumbler, u64)> = vec![
@@ -965,7 +1055,7 @@ fn the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields() {
     let state = every_field_held();
     assert!(
         bincode::serialize(&state).expect("the slice serializes") == twin,
-        "M5's slice serialized as something other than its eight maps in declaration order, \
+        "M5's slice serialized as something other than its nine maps in declaration order, \
          each in address order and each entry its fields as the twin spells them: those bytes \
          are M2's hashed checkpoint body, a slice of the engine's World layout and the engine's \
          world dump — a change to them owes the engine's WORLD_FORMAT bump (or, under the \
@@ -1056,7 +1146,7 @@ fn only_a_version_record_notes_a_fork_source() {
     let shot = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: None, base: None },
+        terms: ShotTerms { placed: n(2), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
         draft: None,
     });
     assert_eq!(shot.fork_source(&vdoc()), None, "a shot member");
@@ -1169,13 +1259,13 @@ fn m5rec_survives_a_bincode_round_trip() {
         M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&ca(1), 2), run(&pca(1), 1)],
-            terms: ShotTerms { placed: n(3), base_extent: Some(n(1)), base: Some(doc1()) },
+            terms: ShotTerms { placed: n(3), base_extent: Some(n(1)), base: Some(doc1()), stretches: Vec::new(), chain_depth: 0 },
             draft: None,
         },
         M5Rec::ShotPlace {
             doc: a(&[1, 0, 1, 0, 64, 1]),
             runs: vec![],
-            terms: ShotTerms { placed: n(0), base_extent: None, base: None },
+            terms: ShotTerms { placed: n(0), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
             draft: Some(doc2()),
         },
         M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(5), source: doc1(), merge: None },
@@ -1241,7 +1331,7 @@ fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_
     assert_eq!(s.arranged_at(&a(&[1, 0, 2, 0, 1])), Some(Seq(13)), "…and its fork is noted all the same");
     assert_eq!(s.arranged_at(&doc2()), None, "an empty source never arranged stays so");
     // The shot's placement: the member at the shot, placed or empty.
-    let terms = ShotTerms { placed: n(1), base_extent: None, base: None };
+    let terms = ShotTerms { placed: n(1), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 };
     let s = s.apply_m5(
         Seq(17),
         &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone(), draft: None },
@@ -1358,7 +1448,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         Seq(5),
         &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc(), merge: None },
     );
-    let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) };
+    let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()), stretches: Vec::new(), chain_depth: 0 };
     // The shot that renders doc2 into pdoc's first member, placing two runs
     // of three positions in all.
     let rendered = s.apply_m5(
@@ -1392,7 +1482,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![],
-            terms: ShotTerms { placed: n(0), base_extent: Some(n(2)), base: Some(pdoc()) },
+            terms: ShotTerms { placed: n(0), base_extent: Some(n(2)), base: Some(pdoc()), stretches: Vec::new(), chain_depth: 0 },
             draft: Some(doc2()),
         },
     );
@@ -1407,7 +1497,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&ca(1), 3)],
-            terms: ShotTerms { placed: n(3), base_extent: None, base: None },
+            terms: ShotTerms { placed: n(3), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
             draft: Some(pdoc()),
         },
     );
@@ -1439,7 +1529,7 @@ fn the_draft_bases_ride_the_checkpoint_seventh_and_replay_re_derives_them() {
             &M5Rec::ShotPlace {
                 doc: vdoc(),
                 runs: vec![run(&ca(1), 3)],
-                terms: ShotTerms { placed: n(3), base_extent: Some(n(3)), base: Some(doc1()) },
+                terms: ShotTerms { placed: n(3), base_extent: Some(n(3)), base: Some(doc1()), stretches: Vec::new(), chain_depth: 0 },
                 draft: Some(doc2()),
             },
         )
@@ -1569,7 +1659,7 @@ fn a_snapshot_notes_the_count_its_copy_took_and_nothing_moves_it() {
         &M5Rec::ShotPlace {
             doc: pca_member(),
             runs: vec![run(&pca(1), 1)],
-            terms: ShotTerms { placed: n(1), base_extent: None, base: None },
+            terms: ShotTerms { placed: n(1), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 },
             draft: Some(doc2()),
         },
     );
@@ -1711,7 +1801,7 @@ fn the_marker_is_stamped_at_the_fold_cleared_by_the_shot_and_kept_by_the_rewindo
         &M5Rec::ShotPlace {
             doc: vdoc(),
             runs: vec![run(&pca(1), 2)],
-            terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) },
+            terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()), stretches: Vec::new(), chain_depth: 0 },
             draft: Some(doc2()),
         },
     );
@@ -1783,7 +1873,7 @@ fn the_stamps_keep_every_marker_stamped_and_the_restore_installs_one_as_carried(
     let shot = |draft: Option<Address>| M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&pca(1), 2)],
-        terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()) },
+        terms: ShotTerms { placed: n(2), base_extent: Some(n(2)), base: Some(pdoc()), stretches: Vec::new(), chain_depth: 0 },
         draft,
     };
     let published = restored.apply_m5(Seq(17), &shot(Some(doc2())));
@@ -1900,4 +1990,45 @@ fn a_re_windows_record_that_does_not_fit_its_draft_is_folded_without_a_panic() {
     // adjacent pieces as one run.
     let pieces = Splice { at: n(2), width: n(2), runs: vec![run(&pca(1), 1), run(&pca(2), 1)] };
     assert_eq!(folded(&base, vec![pieces]), (vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(4), 3)], 2));
+}
+
+#[test]
+fn a_shots_fold_reads_each_run_of_its_base_once_whatever_its_stretches() {
+    // The fold builds a shot's member in ONE walk of its base's list: each
+    // run of the base read once, each stretch made once, each placed run
+    // placed once — `#runs + #stretches + Σ #runs placed`, whether the shot
+    // names one stretch or four thousand. Made a stretch at a time, each
+    // would walk the whole list again.
+    let base_run_count = 1u32 << 16;
+    let base_runs: Vec<Run> = (1..=base_run_count).map(|k| run(&ca(2 * k), 1)).collect();
+    let base = place(&M5State::genesis(), &doc1(), 1, base_runs.clone());
+    for stretches in [1u32, 64, 4_096] {
+        // Each stretch replaces one position of the base by one run, the
+        // stretches spread evenly over it.
+        let spread = base_run_count / stretches;
+        let terms = ShotTerms {
+            placed: n(stretches),
+            base_extent: Some(n(base_run_count)),
+            base: Some(doc1()),
+            stretches: (0..stretches).map(|i| Stretch { start: n(1 + i * spread), width: n(1), placed: n(1) }).collect(),
+            chain_depth: 1,
+        };
+        let runs: Vec<Run> = (1..=stretches).map(|i| run(&pca(2 * i), 1)).collect();
+        let mut steps = 0u64;
+        let member = base.shot_member_list(&runs, &terms, &mut |n| steps += n);
+        assert_eq!(
+            steps,
+            u64::from(base_run_count) + 2 * u64::from(stretches),
+            "{stretches} stretches: every run of the base once, each stretch and each placed run once"
+        );
+        assert_eq!(member.run_count(), base_run_count as usize);
+        let mut expected = base_runs.clone();
+        for i in 0..stretches {
+            expected[(i * spread) as usize] = run(&pca(2 * (i + 1)), 1);
+        }
+        assert!(member.iter().eq(expected.iter()), "{stretches} stretches: the base, each stretch replaced");
+        // The record's fold is that list, installed.
+        let folded = base.apply_m5(Seq(2), &M5Rec::ShotPlace { doc: vdoc(), runs: runs.clone(), terms, draft: None });
+        assert!(folded.content_runs(&vdoc()).eq(expected.iter()));
+    }
 }

@@ -1609,14 +1609,12 @@ fn m6_the_jumps_compare_against_the_daemon() {
     );
     r.print();
 
-    // A head fragmented past MAX_COMPARE_OPERAND_BLOCKS. No SHOT fragments
-    // a member that far: the request envelope caps an array at 4,096
-    // elements, so a `runs` array of 4,100 is `malformed` at the wire ahead
-    // of the arrangement's own run budget — a finding for the design, the
-    // fragmented head reachable only by deposits appended past the extent
-    // or by a transclusion-heavy DRAFT. The case is built as the latter:
-    // 4,100 `copy` ops, each one position of the text at an odd offset, a
-    // run apiece, and the compare's `rho2` that draft.
+    // A head fragmented past MAX_COMPARE_OPERAND_BLOCKS. A shot's `runs`
+    // take the store's 65,536, so a shot may fragment a member that far,
+    // and so may deposits appended past the extent or a transclusion-heavy
+    // DRAFT. The case is built as the last: 4,100 `copy` ops, each one
+    // position of the text at an odd offset, a run apiece, and the
+    // compare's `rho2` that draft.
     let fragmented = board.create(None);
     let t = Instant::now();
     for i in 0..4_100u64 {
@@ -1628,7 +1626,7 @@ fn m6_the_jumps_compare_against_the_daemon() {
     let pairs = pairs_of(&v);
     let mut r = at_most("m6-compare-fragmented-head", "-", pin, took);
     r.measured = format!(
-        "{} ; the head {} runs of width 1 (4,100 copies in {}) → {}; a shot of 4,100 runs is `malformed` at the wire's 4,096-element array cap",
+        "{} ; the head {} runs of width 1 (4,100 copies in {}) → {}",
         report::time(took),
         frag_extent,
         report::time(copied),

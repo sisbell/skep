@@ -53,6 +53,7 @@ fn the_own_image_reads_what_a_published_document_held_before_version_1() {
             origin: pdoc(),
             run: run(&pca(1), 2),
         }],
+        stretches: Vec::new(),
     };
     let (head, _) = Vstream::new(&k)
         .publish(SYS, &pdoc(), &birth, &EVERYONE)

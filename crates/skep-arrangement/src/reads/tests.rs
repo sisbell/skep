@@ -112,23 +112,6 @@ fn the_arrangement_states_which_positions_it_admits() {
 }
 
 #[test]
-fn the_runs_past_an_extent_are_the_arrangements_own_tail() {
-    // PUB-2.42/2.45: the shot carries a base's positions past the extent
-    // its staged copy took, and the arrangement answers which runs those
-    // are — from any extent, across a transclusion seam, the boundary run
-    // clipped, and nothing once the extent reaches the end.
-    let s = arranged(); // ca(1..3) then vca(1..2): n_C = 5
-    let past = |extent: u32| s.content_runs_past(&doc1(), &n(extent)).collect::<Vec<_>>();
-    assert_eq!(past(0), vec![run(&ca(1), 3), run(&vca(1), 2)]);
-    assert_eq!(past(2), vec![run(&ca(3), 1), run(&vca(1), 2)]);
-    assert_eq!(past(3), vec![run(&vca(1), 2)]);
-    assert_eq!(past(4), vec![run(&vca(2), 1)]);
-    assert!(past(5).is_empty(), "an extent at the end carries nothing");
-    assert!(past(9).is_empty(), "nor one past it");
-    assert_eq!(s.content_runs_past(&doc2(), &n(0)).next(), None, "absent doc");
-}
-
-#[test]
 fn the_counts_a_caller_prices_with_are_the_lengths_of_what_they_count() {
     // The quantities the cost statements name, each against the thing it
     // counts: `#runs` per subspace is the length of what `content_runs` /

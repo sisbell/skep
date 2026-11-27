@@ -113,9 +113,19 @@ pub const KEPT_PLACE_BYTES: u64 = 136;
 /// this figure, at [`stored_tumbler_bytes`] of it.
 pub const REWINDOWED_DRAFT_BYTES: u64 = 56;
 
-/// The bytes one run of the member's placement adds to the shot's
-/// `ShotPlace` record: a run's start and width.
+/// The bytes one run of the shot's placement adds to the shot's
+/// `ShotPlace` record: a run's start and width. The record holds the runs
+/// the shot placed and no run of its base, so a shot's bytes follow its
+/// change.
 pub const PLACED_RUN_BYTES: u64 = 104;
+
+/// The bytes one stretch of a shot's stretch list adds to its `ShotPlace`
+/// record: the stretch's start, its width and the positions placed in it,
+/// three naturals of one 32-bit digit each. A natural of nothing — the
+/// width of a placement that removes none, the count of a removal that
+/// places none — is four bytes fewer, so the figure is an upper bound for
+/// every stretch of a base under 2³² positions.
+pub const STRETCH_BYTES: u64 = 36;
 
 /// The bytes the re-insert stages per UNIT, past the unit's own bytes: a
 /// unit is what the commit stages as one mint and one content write
@@ -131,13 +141,21 @@ pub const PLACED_RUN_BYTES: u64 = 104;
 pub const REINSERTED_UNIT_BYTES: u64 = 300;
 
 /// The bytes the shot stages whatever it places: the member's mint and the
-/// `ShotPlace` record holding no run, its terms carrying a base extent and
-/// a base, and its rendering-draft slot empty; the base's own address is
-/// priced beside them, at [`stored_tumbler_bytes`] of it (skep #1111), and
-/// the birth shape, with no base and no extent to carry, is 260. A shot
+/// `ShotPlace` record holding no run, its terms carrying a count and a base
+/// extent of one 32-bit digit each, a base, a stretch list of no entry and
+/// the depth of the chain, and its rendering-draft slot empty; the base's
+/// own address is
+/// priced beside them, at [`stored_tumbler_bytes`] of it (skep #1111). A
+/// count or an extent of nothing is four bytes fewer, and the birth shape,
+/// with no base and no extent to carry, fewer again, so the figure bounds
+/// every shot whose counts are under 2³² and whose member is minted on the
+/// trunk, where it is measured. A member minted as a daughter of its base
+/// carries an address one component longer, twelve bytes in its mint and
+/// twelve in its placing record, and no term prices them. A shot
 /// naming its rendering draft stages the draft's address in that slot
-/// beside them, priced the same way.
-pub const SHOT_BYTES: u64 = 272;
+/// beside them, priced the same way, and one naming stretches each of
+/// them at [`STRETCH_BYTES`].
+pub const SHOT_BYTES: u64 = 292;
 
 /// The bytes the mint form adds: the edition's mint under the account.
 pub const EDITION_MINT_BYTES: u64 = 109;
@@ -326,7 +344,11 @@ pub(super) fn reinsert_tally<W: ReinsertWorld>(
 ///
 /// * the shot's fixed records ([`SHOT_BYTES`]), the address of the base the
 ///   shot names where it names one ([`stored_tumbler_bytes`] of its member,
-///   in the terms' own slot), the address of the draft whose base the shot
+///   in the terms' own slot), each stretch of that base the shot names
+///   ([`STRETCH_BYTES`], the partition its placing record carries in place
+///   of the base's runs — so a shot that names its change is priced at the
+///   runs of the change, and one that sends its whole arrangement at every
+///   run of it), the address of the draft whose base the shot
 ///   moves where it moves one ([`stored_tumbler_bytes`] of
 ///   [`Shot::moves_base_of`], in the placing record's own slot), the
 ///   edition's mint at the mint form,
@@ -472,6 +494,8 @@ pub(super) fn staged_bytes<W: LinkWorld>(
     if let Some(rendering) = shot.moves_base_of() {
         bytes = bytes.saturating_add(stored_tumbler_bytes(rendering.tumbler()));
     }
+    // The partition a shot that names its change journals beside its runs.
+    bytes = bytes.saturating_add((shot.stretches.len() as u64).saturating_mul(STRETCH_BYTES));
     if target.mints() {
         bytes += EDITION_MINT_BYTES;
     }

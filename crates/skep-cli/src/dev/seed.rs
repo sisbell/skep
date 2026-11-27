@@ -779,12 +779,21 @@ impl Seed<'_> {
                         })?;
                         let (e, d, b, win) = (edition.clone(), staging.clone(), birth.clone(), window.clone());
                         s.step(&shot_id, |w| {
-                            let mut placed = placed_values(w.image(&e, 1, n)?, &bytes)?;
+                            // The change against the birth version: the
+                            // window and the appended stretch, each a
+                            // stretch of its own placed past the base's `n`
+                            // positions, the window's first. No run of the
+                            // base is sent and no word of it read.
+                            let mut placed = Vec::new();
+                            let mut stretches = Vec::new();
                             if let Some(win) = &win {
                                 placed.extend(w.image(win, 1, WINDOW_WIDTH)?.into_iter().map(|run| Placed { run, bytes: None }));
+                                stretches.push((n + 1, 0, placed.len()));
                             }
+                            let windows = placed.len();
                             placed.extend(placed_values(w.image(&d, at, m)?, &stretch)?);
-                            let member = w.shot(&e, &d, Some((&b, n)), &placed, &shot_id)?;
+                            stretches.push((n + 1, 0, placed.len() - windows));
+                            let member = w.shot_by_stretches(&e, &d, Some((&b, n)), &stretches, &placed, &shot_id)?;
                             Ok((Some(member), json!({"edition": e, "arm": arm, "appended": {"len": m}, "window": win})))
                         })?
                     }
@@ -792,14 +801,10 @@ impl Seed<'_> {
                         let (start, end) = dropped_range(s.document(i), &cites(&bytes));
                         let (e, d, b) = (edition.clone(), staging.clone(), birth.clone());
                         s.step(&shot_id, |w| {
-                            let mut placed = Vec::new();
-                            if start > 0 {
-                                placed.extend(placed_values(w.image(&e, 1, start as u64)?, &bytes[..start])?);
-                            }
-                            if end < bytes.len() {
-                                placed.extend(placed_values(w.image(&e, end as u64 + 1, (bytes.len() - end) as u64)?, &bytes[end..])?);
-                            }
-                            let member = w.shot(&e, &d, Some((&b, n)), &placed, &shot_id)?;
+                            // The change against the birth version: one
+                            // stretch of it removed, nothing placed.
+                            let stretches = [(start as u64 + 1, (end - start) as u64, 0)];
+                            let member = w.shot_by_stretches(&e, &d, Some((&b, n)), &stretches, &[], &shot_id)?;
                             Ok((Some(member), json!({"edition": e, "arm": arm, "dropped": {"offset": start, "len": end - start}})))
                         })?
                     }
@@ -816,15 +821,12 @@ impl Seed<'_> {
                         })?;
                         let (e, d, b) = (edition.clone(), staging.clone(), birth.clone());
                         s.step(&shot_id, |w| {
-                            let mut placed = Vec::new();
-                            if a > 0 {
-                                placed.extend(placed_values(w.image(&e, 1, a as u64)?, &bytes[..a])?);
-                            }
-                            placed.extend(placed_values(w.image(&d, at, m)?, &stretch)?);
-                            if a + len < bytes.len() {
-                                placed.extend(placed_values(w.image(&e, (a + len) as u64 + 1, (bytes.len() - a - len) as u64)?, &bytes[a + len..])?);
-                            }
-                            let member = w.shot(&e, &d, Some((&b, n)), &placed, &shot_id)?;
+                            // The change against the birth version: the
+                            // sentence's stretch of it replaced by the
+                            // draft's new one.
+                            let placed = placed_values(w.image(&d, at, m)?, &stretch)?;
+                            let stretches = [(a as u64 + 1, len as u64, placed.len())];
+                            let member = w.shot_by_stretches(&e, &d, Some((&b, n)), &stretches, &placed, &shot_id)?;
                             Ok((Some(member), json!({"edition": e, "arm": arm, "replaced": {"offset": a, "len": len}, "with": CHANGED_SENTENCE})))
                         })?
                     }

@@ -39,8 +39,18 @@
 //! trunk's second member; and `edition_claims(D)` for a minting
 //! records-less request, the claims kept where their home's owner is the
 //! person and their stored type is the claim type exactly. A member found
-//! passes where it holds THE RUNS over its first `placed` positions — its
-//! image read in parts, a fragmented member never taken as absence — a COPY
+//! passes where it holds THE RUNS — the test's two cases. A request that
+//! names no stretch is held over the member's first `placed` positions —
+//! its image read in parts, a fragmented member never taken as absence. A
+//! request that names its stretches is held by the member's ARRANGEMENT:
+//! the member's `shot_base` is the request's base at the request's extent,
+//! and the member is that base with the request's stretches replaced —
+//! read where either list's stretches lie ([`hulls`]): the member there,
+//! off the stretch list its own `doc_metadata` serves, and the base between
+//! the request's stretches there. That is a fact of the member and not of
+//! how the change was spelled: a request cut another way finds its own
+//! member, and another writer's member over the same base, holding another
+//! change, is not taken for it. Then, at either case, a COPY
 //! of every `links` entry in that entry's own home at the member's commit
 //! position, found by THE POSITION-FENCED READ (a home's link ordinals rise
 //! with commit position; no read serves a home's frontier, so a galloping
@@ -443,6 +453,213 @@ pub(crate) fn member_at(door: &Door<'_>, p: &Publisher<'_>, trunk: &str, at: u64
     }
 }
 
+/// One stretch as the landed test reads it: the first position of the base
+/// it replaces, how many it replaces, and how many positions replace them.
+pub(crate) type Positions = (u64, u64, u64);
+
+/// What stands at one place of a hull, by a request's stretches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stands {
+    /// Positions of the base no stretch of the request names: `width` of
+    /// them from `from`.
+    Base {
+        /// The first position, in the base.
+        from: u64,
+        /// How many.
+        width: u64,
+    },
+    /// The positions the request's stretch at `index` places.
+    Stretch {
+        /// The stretch's place in the request's list.
+        index: usize,
+    },
+}
+
+/// One stretch of base positions where a member's stretches or a request's
+/// lie, and what each side holds there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hull {
+    /// Where the hull lies in the member: its first position, and how many
+    /// the member holds there.
+    pub(crate) member: (u64, u64),
+    /// What the request says the member holds there, in order.
+    pub(crate) expected: Vec<Stands>,
+}
+
+/// Plans the landed test of a request that names its stretches: where to
+/// read the member, and what the request says stands there.
+///
+/// `member` is the stretch list the member was born by and `request` the
+/// request's, each ascending and apart in the coordinates of the one base
+/// both name. A member and a request that replace the same base alike hold
+/// the base's own positions wherever neither names a stretch, so the two
+/// are compared only inside the HULLS: each the least run of base positions
+/// that holds whole every stretch, of either list, it meets — two stretches
+/// that touch lie in one. For each hull the answer says where its positions
+/// lie in the member, by the member's own stretches, and what the request
+/// places there: its stretches' runs, and the base's positions between
+/// them. `None` where some hull holds one count of positions by the member's
+/// list and another by the request's: the two are not one arrangement, and
+/// nothing need be read to know it.
+///
+/// Arithmetic on the two lists, reading nothing. Lists that are not
+/// ascending and apart, or whose sums pass a machine word, answer `None`.
+pub(crate) fn hulls(member: &[Positions], request: &[Positions]) -> Option<Vec<Hull>> {
+    let reach = |stretch: &Positions| stretch.0.checked_add(stretch.1);
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    // What the member's stretches before the hull placed and replaced.
+    let (mut placed_before, mut replaced_before) = (0u64, 0u64);
+    while i < member.len() || j < request.len() {
+        let lo = match (member.get(i), request.get(j)) {
+            (Some(m), Some(r)) => m.0.min(r.0),
+            (Some(m), None) => m.0,
+            (None, Some(r)) => r.0,
+            (None, None) => break,
+        };
+        let (first_member, first_request) = (i, j);
+        let mut hi = lo;
+        loop {
+            let mut grew = false;
+            while let Some(m) = member.get(i).filter(|m| m.0 <= hi) {
+                if m.0 < lo {
+                    return None;
+                }
+                hi = hi.max(reach(m)?);
+                i += 1;
+                grew = true;
+            }
+            while let Some(r) = request.get(j).filter(|r| r.0 <= hi) {
+                if r.0 < lo {
+                    return None;
+                }
+                hi = hi.max(reach(r)?);
+                j += 1;
+                grew = true;
+            }
+            if !grew {
+                break;
+            }
+        }
+        let sums = |stretches: &[Positions]| -> Option<(u64, u64)> {
+            stretches.iter().try_fold((0u64, 0u64), |(placed, replaced), s| Some((placed.checked_add(s.2)?, replaced.checked_add(s.1)?)))
+        };
+        let (member_placed, member_replaced) = sums(&member[first_member..i])?;
+        let (request_placed, request_replaced) = sums(&request[first_request..j])?;
+        let wide = hi - lo;
+        let held = wide.checked_add(member_placed)?.checked_sub(member_replaced)?;
+        if held != wide.checked_add(request_placed)?.checked_sub(request_replaced)? {
+            return None;
+        }
+        let from = lo.checked_add(placed_before)?.checked_sub(replaced_before)?;
+        let mut expected = Vec::new();
+        let mut cursor = lo;
+        for (index, stretch) in request.iter().enumerate().take(j).skip(first_request) {
+            if stretch.0 < cursor {
+                return None;
+            }
+            if stretch.0 > cursor {
+                expected.push(Stands::Base { from: cursor, width: stretch.0 - cursor });
+            }
+            expected.push(Stands::Stretch { index });
+            cursor = reach(stretch)?;
+        }
+        if cursor < hi {
+            expected.push(Stands::Base { from: cursor, width: hi - cursor });
+        }
+        out.push(Hull { member: (from, held), expected });
+        placed_before = placed_before.checked_add(member_placed)?;
+        replaced_before = replaced_before.checked_add(member_replaced)?;
+    }
+    Some(out)
+}
+
+/// Returns the part of `image`, runs in V-order, over its positions
+/// `[from, from + width)` counted from 0 at its first: each run clipped to
+/// the range.
+pub(crate) fn clipped(image: &[IRun], from: u64, width: u64) -> Vec<IRun> {
+    let (mut at, reach) = (0u64, from.saturating_add(width));
+    let mut out = Vec::new();
+    for held in image {
+        let (lo, hi) = (at.max(from), at.saturating_add(held.width).min(reach));
+        if lo < hi {
+            out.push(IRun { prefix: held.prefix.clone(), first: held.first + (lo - at), width: hi - lo, ordinal: held.ordinal + (lo - at) });
+        }
+        at = at.saturating_add(held.width);
+    }
+    out
+}
+
+/// Reads `member` where its stretches or the request's lie and returns its
+/// runs over the positions the request's own runs take, in the request's
+/// order — or `None` where the member is not the request's base with the
+/// request's stretches replaced.
+///
+/// The landed test's second case (the module's doc). The member's
+/// `shot_base` and `base_extent` are the request's; the hulls of the two
+/// stretch lists are planned ([`hulls`]) — a member born of no list is the
+/// one stretch over its base's positions, its `placed` leading it — and in
+/// each the member's image is compared with what the request places there:
+/// its runs, a named draft's matching any stretch of the trunk's identity of
+/// its width, and the base's own image between them, address for address.
+/// What is read is the hulls: the member's image there, and the base's
+/// between the request's stretches there.
+///
+/// # Errors
+///
+/// The image reads' faults.
+fn holds_change(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &str, meta: &crate::board::answers::Metadata, trunk: &Address) -> Result<Option<Vec<IRun>>, Fault> {
+    let Some((base, extent)) = &request.base else { return Ok(None) };
+    let base = base.to_string();
+    let (Some(placed), Some(member_extent)) = (meta.placed, meta.base_extent) else { return Ok(None) };
+    if meta.shot_base.as_deref() != Some(base.as_str()) || member_extent != *extent {
+        return Ok(None);
+    }
+    // The request's stretches with the positions each places, and where
+    // each one's runs begin among the request's.
+    let mut first_run = Vec::with_capacity(request.stretches.len());
+    let mut taken = 0usize;
+    let asked: Vec<Positions> = request
+        .stretches
+        .iter()
+        .map(|stretch| {
+            first_run.push(taken);
+            let runs = request.runs.iter().skip(taken).take(stretch.count);
+            taken = taken.saturating_add(stretch.count);
+            (stretch.start, stretch.width, runs.map(|run| run.width).sum())
+        })
+        .collect();
+    let born: Vec<Positions> = if meta.stretches.is_empty() { vec![(1, member_extent, placed)] } else { meta.stretches.clone() };
+    let Some(plan) = hulls(&born, &asked) else { return Ok(None) };
+    let mut over_the_change: Vec<Vec<IRun>> = vec![Vec::new(); request.stretches.len()];
+    for hull in plan {
+        let actual = if hull.member.1 == 0 { Vec::new() } else { door.image(member, hull.member.0, hull.member.1)? };
+        let mut expected: Vec<(Run, bool)> = Vec::new();
+        let mut at = 0u64;
+        for stands in &hull.expected {
+            match *stands {
+                Stands::Base { from, width } => {
+                    for held in door.image(&base, from, width)? {
+                        let Some(origin) = trunk_of(&format!("{}.{}", held.prefix, held.first)).and_then(|t| parse_address(&t)) else { return Ok(None) };
+                        expected.push((Run::new(origin, held.first, held.width), false));
+                    }
+                    at = at.saturating_add(width);
+                }
+                Stands::Stretch { index } => {
+                    let runs = request.runs.iter().skip(first_run[index]).take(request.stretches[index].count);
+                    expected.extend(runs.map(|run| (run.clone(), inputs.is_named_draft(&run.origin))));
+                    over_the_change[index] = clipped(&actual, at, asked[index].2);
+                    at = at.saturating_add(asked[index].2);
+                }
+            }
+        }
+        if !holds_marked(&actual, &expected, trunk) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(over_the_change.into_iter().flatten().collect()))
+}
+
 /// Tests one member: the runs, each copy, each retraction.
 fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Address, via: AckVia) -> Result<Verdict, Fault> {
     let member_text = member.to_string();
@@ -452,15 +669,27 @@ fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Add
         Err(e) => return Err(e),
     };
     let Some(placed) = meta.placed else { return Ok(Verdict::NotFound) };
-    let image = door.image(&member_text, 1, placed)?;
     let trunk = trunk_of(&member_text).and_then(|t| parse_address(&t));
     let Some(trunk) = trunk else { return Ok(Verdict::NotFound) };
-    if !holds_runs(&image, &request.runs, inputs, &trunk) {
-        return Ok(Verdict::NotFound);
-    }
+    // The member's runs over the positions the request's runs take: its
+    // first `placed` for a request naming no stretch; for one that names its
+    // stretches, the member read where either list's lie.
+    let image = if request.stretches.is_empty() {
+        let image = door.image(&member_text, 1, placed)?;
+        if !holds_runs(&image, &request.runs, inputs, &trunk) {
+            return Ok(Verdict::NotFound);
+        }
+        image
+    } else {
+        match holds_change(door, inputs, request, &member_text, &meta, &trunk)? {
+            Some(image) => image,
+            None => return Ok(Verdict::NotFound),
+        }
+    };
     let at = meta.at.unwrap_or(0);
     // The member's runs as the request's, with the fresh identity in place of
-    // the draft's, for the member-position ends' resolution.
+    // the draft's, for the member-position ends' resolution: an end counts
+    // positions over the request's own runs.
     let member_runs: Vec<Run> = image.iter().filter_map(|r| Some(Run::new(parse_address(&trunk_of(&format!("{}.{}", r.prefix, r.first))?)?, r.first, r.width))).collect();
     let edition = request.mint.as_ref().map(|_| trunk.clone());
     for (index, entry) in request.entries.iter().enumerate() {
@@ -489,12 +718,24 @@ fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Add
 /// `also` draft's — matches any stretch of the trunk's identity of its
 /// width in its place, every other run by its origin and start.
 pub(crate) fn holds_runs(image: &[IRun], runs: &[Run], inputs: &Inputs, trunk: &Address) -> bool {
+    let marked: Vec<(Run, bool)> = runs.iter().map(|run| (run.clone(), inputs.is_named_draft(&run.origin))).collect();
+    holds_marked(image, &marked, trunk)
+}
+
+/// Returns whether `image` holds `runs`, position for position: a run
+/// marked re-minted matches any stretch of the trunk's identity of its
+/// width in its place, every other by its origin and start.
+///
+/// [`holds_runs`] marks a request's runs by their origin; the landed test of
+/// a request that names its stretches marks them apart from the base's own,
+/// which the member holds address for address whatever their origin.
+pub(crate) fn holds_marked(image: &[IRun], runs: &[(Run, bool)], trunk: &Address) -> bool {
     let trunk_chain = format!("{trunk}.0.1");
     let (mut i, mut j, mut off_i, mut off_j) = (0usize, 0usize, 0u64, 0u64);
     while i < runs.len() && j < image.len() {
-        let (e, a) = (&runs[i], &image[j]);
+        let ((e, native), a) = (&runs[i], &image[j]);
+        let native = *native;
         let stretch = (e.width - off_i).min(a.width - off_j);
-        let native = inputs.is_named_draft(&e.origin);
         let same_chain = if native { a.prefix == trunk_chain } else { a.prefix == e.chain() };
         let same_start = native || e.i_start + off_i == a.first + off_j;
         if !(same_chain && same_start) {

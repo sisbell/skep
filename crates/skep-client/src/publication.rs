@@ -145,12 +145,12 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, enumerate_again, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, BaseImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MERGE_RECORD_TYPE};
+pub use enumerate::{enumerate, enumerate_again, is_formatting, is_formatting_type, is_merge_record, windows, AlsoImage, BaseImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST, MAX_WIRE_RUNS, MERGE_RECORD_TYPE};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use parts::{answers_onto, compose_part, parts_of, renamed, Answer as OriginAnswer, OwedAnswer, Part, PartComposition, PartKey, Window};
 pub use panel::{count, inherited, panel, Count, Destination, FoldCounts, Formatting, Inherited, LineCounts, MergeRecords, Original, Panel, PartCounts, Removal, Row, RowKind, Switches, TypeFold};
 pub use price::{Price, Shape, Term};
-pub use request::{build, build_unpriced, originals_of, price, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Unspellable};
+pub use request::{build, build_unpriced, originals_of, price, reread, AlsoPlaces, Built, Confirmed, End, Entry, EntryHome, Inert, OriginalEntry, Piece, Reread, Request, Restatement, Stretch, Unspellable, WHOLE_FORM_EVERY};
 pub use send::{send, Ack, AckVia, LineageCause, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a

@@ -8,6 +8,7 @@
 //! the shot that moves the base.
 
 use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, EditError, HasM5, InsertError, Marker, SetMerge, Shot, StageError, Vstream};
+use skep_address::SpanSet;
 use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
@@ -253,6 +254,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&d, &z, 1)],
+        stretches: Vec::new(),
     };
     let (e2, _) = vs.publish(P1, &pdoc(), &shot, &readable).expect("version 2");
     assert_eq!(e2, a(&[1, 0, 1, 0, nth_doc(3), 2]), "the trunk's next member");
@@ -280,6 +282,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
+        stretches: Vec::new(),
     };
     let (e3, _) = vs.publish(P1, &pdoc(), &next, &readable).expect("version 3");
     assert_eq!(e3, a(&[1, 0, 1, 0, nth_doc(3), 3]));
@@ -293,7 +296,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
         "version 3 records version 2"
     );
     // A shot naming no draft moves nothing.
-    let unnamed = Shot { base: Some(base(&e3, 4)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 4)] };
+    let unnamed = Shot { base: Some(base(&e3, 4)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 4)], stretches: Vec::new() };
     vs.publish(P1, &pdoc(), &unnamed, &readable).expect("version 4, no draft named");
     assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
@@ -304,7 +307,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
     // chain and never against the record: a shot naming version 1 as its
     // base while the record says version 3 lands as version 1's daughter,
     // as PUB-2.39 has it, and moves the base there.
-    let daughter = Shot { base: Some(base(&e1, 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let daughter = Shot { base: Some(base(&e1, 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() };
     let (e1_1, _) = vs.publish(P1, &pdoc(), &daughter, &readable).expect("a daughter under version 1");
     assert_eq!(e1_1, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
     assert_eq!(
@@ -359,7 +362,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     // document at four: nothing carried, and the head holds a b c z.
     let (s, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the sibling");
     let readable = readable_by(PrincipalId(1));
-    let first = Shot { base: Some(base(&pdoc(), 4)), draft: Some(s.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let first = Shot { base: Some(base(&pdoc(), 4)), draft: Some(s.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() };
     let (e1, _) = vs.publish(P1, &pdoc(), &first, &readable).expect("version 1");
     assert_eq!(e1, vdoc());
     assert_eq!(bytes_of(&k.snapshot(), &e1), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()], "version 1 holds the three alone");
@@ -373,7 +376,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     let (w, _) = vs
         .insert(P1, &d, vp(1, 4), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("the draft's own word");
-    let shot = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&d, &w, 1)] };
+    let shot = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&d, &w, 1)], stretches: Vec::new() };
     let (daughter, _) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the draft begun before version 1 lands beside it");
     assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]), "version 1's daughter");
     {
@@ -404,7 +407,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     }
     // The second draft begun before version 1: the next daughter of version
     // 1, never a trunk member.
-    let second = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d2.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let second = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d2.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() };
     let (daughter2, _) = vs.publish(P1, &pdoc(), &second, &readable).expect("the second such draft lands beside version 1 too");
     assert_eq!(daughter2, a(&[1, 0, 1, 0, nth_doc(3), 1, 2]));
     assert_eq!(bytes_of(&k.snapshot(), &daughter2), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"z".to_vec()]);
@@ -415,7 +418,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     );
     assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 65, 2])), "no trunk member was minted");
     // The birth shape — no base at all — is still refused once a member stands.
-    let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let birth = Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() };
     assert!(matches!(rejected(vs.publish(P1, &pdoc(), &birth, &readable)), skep_arrangement::PublishError::BaseSuperseded));
 }
 
@@ -429,7 +432,7 @@ fn a_draft_the_board_held_no_base_for_gains_one_at_its_own_shot() {
     let vs = insert_abc(&k);
     assert_eq!(k.snapshot().world().m5().draft_base(&doc1()), None, "a plain draft");
     let readable = readable_by(PrincipalId(1));
-    let birth = Shot { base: None, draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&doc1(), &ca(1), 3)] };
+    let birth = Shot { base: None, draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&doc1(), &ca(1), 3)], stretches: Vec::new() };
     let (e1, _) = vs.publish(P1, &pdoc(), &birth, &readable).expect("the birth version, from the draft");
     assert_eq!(e1, vdoc());
     assert_eq!(
@@ -437,7 +440,7 @@ fn a_draft_the_board_held_no_base_for_gains_one_at_its_own_shot() {
         Some(&DraftBase { base: e1.clone(), extent: n(3), source: e1.clone(), merge: None, stamped: vec![] }),
         "the member rendered, its base and its source"
     );
-    let next = Shot { base: Some(base(&e1, 3)), draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let next = Shot { base: Some(base(&e1, 3)), draft: Some(doc1()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() };
     let (e2, _) = vs.publish(P1, &pdoc(), &next, &readable).expect("the second version");
     assert_eq!(e2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     assert_eq!(
@@ -498,7 +501,7 @@ fn an_alternative_inherits_the_marker_at_its_own_mint_and_the_shot_clears_it() {
     // The shot from the marked draft: the base to the member, the marker
     // cleared — the merge is the member's now.
     let readable = readable_by(PrincipalId(1));
-    let shot = Shot { base: Some(base(&e1, 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(2), 2)] };
+    let shot = Shot { base: Some(base(&e1, 3)), draft: Some(d.clone()), also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(2), 2)], stretches: Vec::new() };
     let (e2, _) = vs.publish(P1, &pdoc(), &shot, &readable).expect("version 2");
     assert_eq!(e2, a(&[1, 0, 1, 0, nth_doc(3), 2]));
     assert_eq!(
@@ -556,6 +559,7 @@ fn a_publication_of_the_draft_ends_its_stamps_and_a_shot_keeping_its_base_keeps_
         also: vec![],
         keep_base,
         runs: runs.clone(),
+        stretches: Vec::new(),
     };
     let (e2, _) = vs.publish(P1, &pdoc(), &shot(&kept, &e1, 3, true), &readable).expect("a shot keeping the base");
     vs.publish(P1, &pdoc(), &shot(&moved, &e2, 2, false), &readable).expect("the draft's own publication");
@@ -619,6 +623,7 @@ fn a_shot_keeping_its_drafts_base_re_inserts_its_words_and_moves_no_record() {
         also: vec![],
         keep_base,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&d, &z, 1)],
+        stretches: Vec::new(),
     };
     assert_eq!(shot(&e2, 3, true).moves_base_of(), None, "the request names no draft whose base moves");
     let (e3, _) = vs.publish(P1, &pdoc(), &shot(&e2, 3, true), &readable).expect("the shot keeping the base");
@@ -648,6 +653,7 @@ fn a_shot_keeping_its_drafts_base_re_inserts_its_words_and_moves_no_record() {
         also: vec![],
         keep_base: true,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &w, 1)],
+        stretches: Vec::new(),
     };
     vs.publish(P1, &pdoc(), &free, &readable).expect("a plain draft's words, its base kept");
     assert_eq!(k.snapshot().world().m5().draft_base(&doc1()), None, "no record made");
@@ -718,4 +724,60 @@ fn a_stage_is_one_commit_and_takes_the_plain_arm_whatever_handle_it_is_called_on
     let (_, s_version) = attested.version(PrincipalId(2), &doc1(), None).expect("the attested handle's version");
     assert_eq!(k.attestation_at(s_stage).unwrap(), None, "a stage is never publish-class: the slot stays empty");
     assert_eq!(k.attestation_at(s_version).unwrap(), Some(tag), "the same handle's version fills it");
+}
+
+/// A SNAPSHOT APPENDS NOTHING TO R. A stage — and a `version` — shares its
+/// source's list and names that list as what the new document contained at
+/// its mint: the count of what the provenance reads walk for it is the
+/// list's runs, once, never those runs again as spans; what the draft
+/// places afterwards is recorded beside the name; and what it then removes
+/// is still what it ever contained, the named words and the placed alike.
+#[test]
+fn a_stage_and_a_version_name_their_sources_list_and_append_no_span() {
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let six: Vec<skep_content::Val> = (0..6).map(|_| val(b"x")).collect();
+    vs.insert(P1, &pdoc(), vp(1, 1), six, declared(), now(&k)).expect("the edition's values");
+    // A first member of three runs, none adjacent to the next.
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1), shot_run(&pdoc(), &pca(5), 1)],
+        stretches: Vec::new(),
+    };
+    let (member, _) = vs.publish(P1, &pdoc(), &birth, &readable_by(PrincipalId(1))).expect("the birth shot");
+    let (draft, _) = vs.stage(PrincipalId(1), &member).expect("the stage commits");
+    let (fork, _) = vs.version(PrincipalId(2), &member, None).expect("another account's version of it");
+    {
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        for minted in [&draft, &fork] {
+            assert_eq!(m5.content_run_count(minted), 3);
+            assert_eq!(m5.recorded_span_count(minted), 3, "the named list's three runs, and no span beside them");
+            assert!(m5.deletions(minted).is_empty());
+        }
+        let first = SpanSet::singleton(skep_arrangement::Run::new(pca(1), n(1)).expect("a run").iextent());
+        assert_eq!(
+            m5.docs_ever_containing(&first),
+            vec![pdoc(), member.clone(), draft.clone(), fork.clone()],
+            "each of them a candidate, in tumbler order: by a span, by its arrangement, by its name"
+        );
+    }
+    // What the draft places afterwards is recorded, one span a run placed.
+    let (placed, _) = vs
+        .insert(P1, &draft, vp(1, 1), vec![val(b"q")], Deposit::Undeclared, now(&k))
+        .expect("the draft takes a value");
+    assert_eq!(k.snapshot().world().m5().recorded_span_count(&draft), 4);
+    // And R↾draft outlives its arrangement: every position removed, the
+    // three named words and the one placed are what it deleted.
+    vs.delete(P1, &draft, vp(1, 1), n(4), now(&k)).expect("the draft empties");
+    let s = k.snapshot();
+    let deleted = s.world().m5().deletions(&draft);
+    for address in [pca(1), pca(3), pca(5), placed] {
+        assert!(deleted.denotes(address.tumbler()), "{address:?} is in R↾draft");
+    }
+    assert!(!deleted.denotes(pca(2).tumbler()), "and nothing it never held");
+    assert_eq!(s.world().m5().recorded_span_count(&draft), 4, "a removal takes nothing out of R");
 }

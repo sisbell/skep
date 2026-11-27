@@ -293,6 +293,27 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         Some(skep_identity::ShotBase { member: &base_member, extent: 3 }),
     );
     let supersede = publish_supersede(shot, &doc, &addr("1.0.1.0.1.1.1"));
+    // The `publish` THAT NAMES ITS STRETCHES: the fixed shot's own pieces
+    // over the same base, parted into two stretches — the base's second
+    // position replaced by two values, and a value and the window placed
+    // past its three — each stretch's end among the pieces, closing the
+    // open value stretch, and the stretch row behind the base group; a NEW
+    // row, the fixed `publish` and the birth shape unmoved: a shot naming
+    // no stretch list spells no row.
+    let stretches = entry_body_publish(
+        [
+            ShotSegmentPiece::Value(b"x"),
+            ShotSegmentPiece::Value(b"y"),
+            ShotSegmentPiece::Stretch { start: 2, width: 1 },
+            ShotSegmentPiece::Value(b"z"),
+            ShotSegmentPiece::Window {
+                start: &window,
+                width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
+            },
+            ShotSegmentPiece::Stretch { start: 4, width: 0 },
+        ],
+        Some(skep_identity::ShotBase { member: &base_member, extent: 3 }),
+    );
     let [insert, link, publish, deposits, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit, well_known] =
         fixed_frames(alg);
     // The fifteen come under `fixed_frames`' own names, the names the
@@ -301,7 +322,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
     let named = |(name, bytes): (&'static str, Vec<u8>), len: usize, hash: &'static str| {
         (name, bytes, len, hash)
     };
-    let shapes: [(&str, Vec<u8>, usize, &str); 20] = [
+    let shapes: [(&str, Vec<u8>, usize, &str); 21] = [
         named(insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
         named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
@@ -311,6 +332,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ("publish, the birth shape", frame(&birth), 168, "8c0111de93a35b6abcd3362bbefc99432c97a6c91ac2cf81b00e1bb72a97b7d7"),
         named(deposits, 648, "df814feba40bc24e302ac6595a1baf45fe13d0b1083bfb8de5658dff1c8baad7"),
         ("publish, with a supersession claim", frame(&supersede), 345, "2016da46840c01f1c4932e008586d55ad708eb8d38e166343968cfcf1a1f33c6"),
+        ("publish, naming its stretches", frame(&stretches), 288, "948b03a0d912d4d65892907e9a7e6dd92d99b258281a7a389e099a993d007df1"),
         named(enroll, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),

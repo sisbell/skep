@@ -125,7 +125,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::Publish {
                 target: PublishTarget::Document(doc()),
-                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+                shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
                 places: vec![],
                 also_places: vec![],
                 deposits: PublishDeposits::default(),
@@ -215,6 +215,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
                     also: vec![addr(&[1, 0, 1, 0, 3])],
                     keep_base: false,
                     runs: vec![],
+                    stretches: Vec::new(),
                 },
                 places: vec![],
                 also_places: vec![],
@@ -388,7 +389,7 @@ fn doc_arguments_run_in_declaration_order() {
     // `also` draft, in the request's order — and no draft named, none.
     let priced = |draft: Option<Address>, also: Vec<Address>| Op::PublishCost {
         target: PublishTarget::Document(doc()),
-        shot: Shot { base: None, draft, also, keep_base: false, runs: vec![] },
+        shot: Shot { base: None, draft, also, keep_base: false, runs: vec![], stretches: Vec::new() },
         places: vec![],
         also_places: vec![],
         deposits: PublishDeposits::default(),
@@ -468,7 +469,7 @@ fn the_read_by_identity_and_the_price_read_derive_documents_and_a_spans_shape_is
     let original = |old: &[u32]| skep_links::OriginalEntry { old: addr(old), rest: vec![] };
     let op = Op::PublishCost {
         target: PublishTarget::Document(doc()),
-        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+        shot: Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
         places: vec![],
         also_places: vec![],
         deposits: PublishDeposits {

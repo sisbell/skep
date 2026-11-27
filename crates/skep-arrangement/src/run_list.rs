@@ -843,7 +843,11 @@ impl RunList {
     /// range walk is, so a consumer with a budget of its own stops the walk at
     /// it; an `ord` past the arranged end yields nothing, and so does a list
     /// holding nothing. The same clip as the range walk's, asked without a
-    /// bound.
+    /// bound. No read of the slice asks it — a shot's member is built from
+    /// its base's list whole, so nothing walks a base's tail — and it stands
+    /// for this module's tests, which hold the unbounded clip to the bounded
+    /// one.
+    #[cfg(test)]
     pub(crate) fn iter_resolve_from(&self, ord: &Nat) -> impl Iterator<Item = Run> + '_ {
         self.clipped_runs(std::cmp::max(ord.clone(), Nat::one()), None)
     }

@@ -395,6 +395,7 @@ fn the_shots_admission_needs_only_the_registry_and_the_arrangement() {
         also: vec![],
         keep_base: false,
         runs,
+        stretches: Vec::new(),
     };
     let window = ShotRun {
         origin: doc1(),

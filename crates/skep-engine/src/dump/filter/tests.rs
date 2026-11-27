@@ -75,7 +75,8 @@ fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
     let mut paths = vec![
         (vec!["authoritative", "content", "map"], Shape::Map),
         (vec!["authoritative", "arrangement", "arrangements"], Shape::Map),
-        (vec!["authoritative", "arrangement", "provenance"], Shape::Map),
+        (vec!["authoritative", "arrangement", "provenance", "appended"], Shape::Map),
+        (vec!["authoritative", "arrangement", "provenance", "named"], Shape::Map),
         (vec!["authoritative", "arrangement", "fork_sources"], Shape::Map),
         (vec!["authoritative", "arrangement", "arranged_at"], Shape::Map),
         (vec!["authoritative", "arrangement", "draft_bases"], Shape::Map),
@@ -336,7 +337,7 @@ fn the_guest_filter_drops_a_draft_s_entries_and_keeps_the_namespace_slice_and_gr
     for path in [
         &["authoritative", "content", "map"][..],
         &["authoritative", "arrangement", "arrangements"],
-        &["authoritative", "arrangement", "provenance"],
+        &["authoritative", "arrangement", "provenance", "appended"],
         &["authoritative", "links", "links"],
         &["publication"],
         &["hints", "links.audit"],
@@ -412,6 +413,7 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
             origin: draft.clone(),
             run: Run::new(start, Nat::from(1u32)).expect("the draft's one value"),
         }],
+        stretches: Vec::new(),
     };
     let (shot_member, _) = engine
         .vstream()
@@ -424,6 +426,7 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         also: vec![],
         keep_base: false,
         runs: vec![],
+        stretches: Vec::new(),
     };
     let (based_member, _) = engine
         .vstream()

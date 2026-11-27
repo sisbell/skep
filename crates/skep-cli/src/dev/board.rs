@@ -672,10 +672,7 @@ impl<'b> Writer<'b> {
     ///
     /// # Errors
     ///
-    /// Returns a halt for a window of width 0 or one whose I-start is no
-    /// address — the tool's fault, nothing written — and for a `base` member
-    /// that is no address; the halt the attest or the write comes to; and
-    /// one where its ack names no address.
+    /// [`Board::shot_by_stretches`]'s.
     pub fn shot(
         &mut self,
         doc: &str,
@@ -684,12 +681,50 @@ impl<'b> Writer<'b> {
         placed: &[Placed],
         id: &str,
     ) -> Result<String, Halt> {
+        self.shot_by_stretches(doc, draft, base, &[], placed, id)
+    }
+
+    /// Publishes the shot as [`Board::shot`] does, naming the stretches of
+    /// its base its runs replace.
+    ///
+    /// Each of `stretches` is `(start, width, count)`: `width` positions of
+    /// the base from `start` on replaced by the next `count` entries of
+    /// `placed`, the counts taking every entry in order. The member is the
+    /// base with those stretches replaced, and the body signed closes a
+    /// segment at each stretch's end and carries the stretch row behind its
+    /// base group. With none it is the whole form: `placed` the member's
+    /// whole arrangement, the body the one [`Board::shot`] signs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt for a window of width 0 or one whose I-start is no
+    /// address — the tool's fault, nothing written — and for a `base` member
+    /// that is no address; the halt the attest or the write comes to; and
+    /// one where its ack names no address.
+    pub fn shot_by_stretches(
+        &mut self,
+        doc: &str,
+        draft: &str,
+        base: Option<(&str, u64)>,
+        stretches: &[(u64, u64, usize)],
+        placed: &[Placed],
+        id: &str,
+    ) -> Result<String, Halt> {
         let starts: Vec<Option<Address>> = placed
             .iter()
             .map(|p| if p.bytes.is_none() { parse_address(&p.run.i_start) } else { None })
             .collect();
+        // Where each stretch's entries end among `placed`: its piece closes
+        // the segment there.
+        let mut ends = stretches.iter().scan(0usize, |reach, stretch| {
+            *reach += stretch.2;
+            Some((*reach, stretch.0, stretch.1))
+        }).peekable();
         let mut pieces: Vec<ShotSegmentPiece<'_>> = Vec::new();
-        for (p, start) in placed.iter().zip(&starts) {
+        for (index, (p, start)) in placed.iter().zip(&starts).enumerate() {
+            while let Some((_, start, width)) = ends.next_if(|(reach, _, _)| *reach <= index) {
+                pieces.push(ShotSegmentPiece::Stretch { start, width });
+            }
             match (&p.bytes, start) {
                 (Some(bytes), _) => pieces
                     .extend(bytes.iter().map(|b| ShotSegmentPiece::Value(std::slice::from_ref(b)))),
@@ -712,6 +747,7 @@ impl<'b> Writer<'b> {
                 }
             }
         }
+        pieces.extend(ends.map(|(_, start, width)| ShotSegmentPiece::Stretch { start, width }));
         let member = base.map(|(m, _)| address(m)).transpose()?;
         let shot_base =
             base.zip(member.as_ref()).map(|((_, extent), member)| ShotBase { member, extent });
@@ -725,6 +761,7 @@ impl<'b> Writer<'b> {
             doc: Some(doc),
             draft: Some(draft),
             base,
+            stretches,
             runs: &runs,
             ..frames::PublishFrame::default()
         });

@@ -160,6 +160,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
                 origin: draft.clone().unwrap_or_else(|| h.clone()),
                 run: Run::new(cell_at.clone(), Nat::from(1u32)).expect("one position"),
             }],
+            stretches: Vec::new(),
         },
         places: Vec::new(),
         also_places: Vec::new(),
@@ -222,6 +223,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
                 origin: draft2.clone(),
                 run: Run::new(real_at.clone(), Nat::from(1u32)).expect("one position"),
             }],
+            stretches: Vec::new(),
         },
         places: Vec::new(),
         also_places: Vec::new(),
@@ -408,6 +410,7 @@ fn a_shot_past_either_reinsert_budget_meets_no_arm_and_past_the_positions_reads_
             also: vec![],
             keep_base: false,
             runs: vec![ShotRun { origin: draft.clone(), run: Run::new(first.clone(), Nat::from(width)).expect("one position or more") }],
+            stretches: Vec::new(),
         };
         let mut walked = 0u64;
         let answer = publish_arm(world, &PublishTarget::Document(h.clone()), &shot, SYSTEM_PRINCIPAL, &gate, &mut |pieces| walked += pieces);
@@ -430,6 +433,7 @@ fn a_shot_past_either_reinsert_budget_meets_no_arm_and_past_the_positions_reads_
         also: vec![],
         keep_base: false,
         runs: vec![ShotRun { origin: short.clone(), run: Run::new(first_short, Nat::from(3u32)).expect("three positions") }],
+        stretches: Vec::new(),
     };
     assert_eq!(publish_arm(snap.world(), &PublishTarget::Document(h), &shot, SYSTEM_PRINCIPAL, &gate, &mut |_| {}), None);
     assert_eq!(engine.kernel().current_seq(), snap.seq(), "the door commits nothing");

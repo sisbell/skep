@@ -1401,11 +1401,19 @@ pub fn read_with_in(links: &LinkState, home: &Address, edition: &Address, set: &
 
 // ──────────────────── the member-position end's one function ────────────────────
 
-/// Returns the member's positions `[1, placed]` as the request's runs hold
-/// them: each run in `runs`' order, a draft-native run by its draft
-/// addresses — the identity keys the commit mints fresh identity for, one
-/// per draft identity, so two positions hold one key here exactly where
-/// they hold one fresh address in the member.
+/// Returns the positions `[1, placed]` a member-position end counts, as
+/// the request's runs hold them: each run in `runs`' order, a draft-native
+/// run by its draft addresses — the identity keys the commit mints fresh
+/// identity for, one per draft identity, so two positions hold one key here
+/// exactly where they hold one fresh address in the member.
+///
+/// THE ORDINALS COUNT THE SHOT'S OWN RUNS, under either form of the shot.
+/// For a shot naming no stretch list `runs` is the member's whole
+/// arrangement, so the positions are the member's own leading ones. For a
+/// shot naming `stretches` `runs` holds the change alone, and position `k`
+/// is the `k`-th position of the change — which stands in the member at
+/// its stretches' images (`ShotTerms::images`), not at ordinal `k`: an end
+/// on words the change does not carry is spelled by its I-spans.
 ///
 /// The image a signer composes a member-position end over before the
 /// commit, and the one the plan canonicalizes it against.
@@ -1413,13 +1421,19 @@ pub fn request_image(shot: &Shot) -> Vec<Run> {
     shot.runs.iter().map(|r| r.run.clone()).collect()
 }
 
-/// Returns the member's positions `[1, placed]` as the minted member holds
-/// them: each run in `runs`' order, a draft-native run replaced by the
-/// fresh runs the pairing placed for it, in placement order.
+/// Returns the positions `[1, placed]` a member-position end counts, as
+/// the minted member holds them: each run in `runs`' order, a draft-native
+/// run replaced by the fresh runs the pairing placed for it, in placement
+/// order.
 ///
 /// The image the composite resolves a member-position end through, once
-/// [`stage_publish`](skep_arrangement::stage_publish) has minted the member;
-/// a verifier holding the member reads the same off `image(member, [1..placed])`.
+/// [`stage_publish`](skep_arrangement::stage_publish) has minted the member.
+/// The ordinals count the shot's own runs ([`request_image`]): a verifier
+/// holding a member whose shot named no stretch list reads the same off
+/// `image(member, [1..placed])`, and one holding a member whose shot named
+/// `stretches` reads it off the member at the stretches' images, image
+/// after image — the same I-spans either way, the fresh identity being
+/// minted alike under both forms.
 pub fn member_image(shot: &Shot, pairing: &Pairing) -> Vec<Run> {
     let mut out = Vec::with_capacity(shot.runs.len());
     for (index, stated) in shot.runs.iter().enumerate() {

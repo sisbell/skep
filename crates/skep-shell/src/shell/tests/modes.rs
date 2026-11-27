@@ -341,7 +341,8 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// Every kind of wire.md's checked set is judged and acked under the signed
 /// session — the composer is the daemon's twin, so each kind the cell above
 /// leaves unsent goes to the daemon here: a shot with a base group and a
-/// window segment, `fork`, `version`, `nullify`, `assert_sup`, `edit_link`
+/// window segment, a shot that names its change against that member by two
+/// stretches, `fork`, `version`, `nullify`, `assert_sup`, `edit_link`
 /// with its successor's type in each of the wire's two forms,
 /// `{"addrs": […]}` and `{"resolve": […]}`, a `make_link` and an
 /// `edit_link` whose ends are in the I-span form, `{"spans": […]}` — the
@@ -432,6 +433,29 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     assert_eq!(signed.call("op", &json!({"session": signed_session, "frame": with_base})).unwrap_err().name(), "publish_is_a_call");
     let acked = shot(with_base);
     assert_eq!(acked["resp"], "ack_addr", "a shot with a base and a window: {acked}");
+    // The shot that names its change against that member, in two stretches:
+    // position 1 replaced by a window, positions 4 and 5 by another. The
+    // composer closes a segment at each stretch and spells the stretch row
+    // after the base group, as the daemon's does; one that spelled the
+    // frame's runs as a whole arrangement is refused
+    // `attestation_invalid:signature`. The member it mints serves the list
+    // in its own terms, one landing deep.
+    let second = addr(acked);
+    let by_stretches = json!({
+        "op": "publish", "doc": doc, "base": second, "base_extent": "5",
+        "stretches": [{"start": "1", "width": "1", "count": "1"}, {"start": "4", "width": "2", "count": "1"}],
+        "runs": [{"origin": other_member, "i_start": other_run["i_start"], "width": "1"}, {"origin": doc, "i_start": member_run["i_start"], "width": "3"}],
+    });
+    bare_write("a shot naming its stretches", &by_stretches);
+    assert_eq!(signed.call("op", &json!({"session": signed_session, "frame": by_stretches})).unwrap_err().name(), "publish_is_a_call");
+    let acked = shot(by_stretches);
+    assert_eq!(acked["resp"], "ack_addr", "a shot naming its stretches: {acked}");
+    let third = write(skep_client::board::frames::doc_metadata(&addr(acked)));
+    assert_eq!(
+        (third["shot_base"].as_str(), third["chain_depth"].as_u64(), &third["stretches"]),
+        (Some(second.as_str()), Some(1), &json!([{"start": "1", "width": "1", "placed": "1"}, {"start": "4", "width": "2", "placed": "3"}])),
+        "{third}"
+    );
     let cells = [
         ("fork", json!({"op": "fork", "published": true})),
         ("version", json!({"op": "version", "d_src": doc})),

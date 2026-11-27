@@ -255,7 +255,7 @@ fn a_shot_too_large_for_one_request_is_refused_with_its_size() {
     let mut w = draft_landing_world();
     w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, wide)]);
     w.staged(S, &format!("{D}.1"), 11);
-    let (dialer, board, signer) = open(w);
+    let (dialer, board, signer) = open(w.whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     dialer.clear();
@@ -276,7 +276,7 @@ fn a_shot_too_large_for_one_request_is_refused_with_its_size() {
     for k in 1..=3 {
         w.values.insert((S.to_string(), k), Val::Atom("x".repeat(3 << 20)));
     }
-    let (dialer, board, signer) = open(w);
+    let (dialer, board, signer) = open(w.whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     dialer.clear();
@@ -309,7 +309,7 @@ fn tail_of(shot: &Value) -> Value {
 /// writes nothing.
 #[test]
 fn a_draft_word_a_record_names_goes_by_reference_with_its_place_and_lands_once() {
-    let (dialer, board, signer) = open(draft_landing_world());
+    let (dialer, board, signer) = open(draft_landing_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     assert_eq!(m_runs(&merged), draft_m(), "the premise: S's typed words are M's last run");
@@ -400,7 +400,7 @@ fn a_retry_that_reads_the_shots_own_records_keeps_its_ids_and_writes_no_second_a
 /// record keeps the list as sent.
 #[test]
 fn already_published_at_the_shot_reads_again_and_sends_once_by_reference() {
-    let (dialer, board, signer) = open(draft_landing_world());
+    let (dialer, board, signer) = open(draft_landing_world().whole_form_due());
     let session = sign_in(&board, &signer);
     let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
     let to = format!("{E}.0.1.3");

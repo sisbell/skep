@@ -48,9 +48,11 @@
 //!   dispatch building through one function each, under the daemon's
 //!   serialization lock, over the base the transaction opens on, so the
 //!   signed row and the stored endset agree by construction; and for
-//!   `publish` the count, the runs the client placed in the address form and
-//!   the base (the design record §2.5's cell; signed-ops D25): the runs as
-//!   the commit will place them, M5's own classing (`Shot::address_form`) —
+//!   `publish` the count, the runs the client placed in the address form,
+//!   the base and — for a shot that names its change against its base — the
+//!   stretch row (the design record §2.5's cell; signed-ops D25): the runs as
+//!   the commit will place them, M5's own classing (`Shot::address_form`),
+//!   which joins no window across two stretches —
 //!   a run the commit copies in (the trunk's own I-space, the staging
 //!   draft's) by its values, read off the snapshot by M4's run read
 //!   (`pieces`) in run order; a window onto another document by its address
@@ -58,6 +60,11 @@
 //!   the shot's own, `Shot::base`'s member and extent as the request named
 //!   them, empty in the birth shape — the member's address read off the
 //!   request and never minted here, so the frame stays position-free; the
+//!   stretches the shot's own in the member's terms (`Shot::stretch_terms`:
+//!   each start, each width, and each count of runs read as the positions
+//!   those runs hold), each closing the body's open segment where its runs
+//!   end, and no row at all for a shot that names no list, whose body is
+//!   byte for byte the one it was; the
 //!   kept places a `publish` carries beside its shot (`Op::Publish`'s
 //!   `places` and `also_places`, the link-sets design §5.7) are no part of
 //!   it, outside the preimage as `draft`, `also` and `keep_base` are, so a
@@ -552,6 +559,15 @@ fn every_copied_run_origin_readable(
 /// the shot's base — the member and the extent the request named,
 /// `Shot::base`, which the signer composed from the same request.
 ///
+/// **Stretch by stretch.** Where the shot names a stretch list, `segments`
+/// hold each stretch's runs after the last's, none spanning two
+/// (`Shot::address_form`), and the stretches in the member's terms
+/// (`Shot::stretch_terms`) say how many positions each holds: the segments
+/// of each stretch are pushed and the stretch closed
+/// ([`PublishBody::stretch`]), which ends the body's open value stretch and
+/// adds the stretch to the row behind the base group. A shot with no list
+/// closes none, and its body carries no row.
+///
 /// **The body's grain stays per value.** The values are read by M4's run
 /// read, one lookup per piece, and a piece of a stretch — a run of
 /// single-byte values — pushes *one row per byte*, since the body is the
@@ -633,8 +649,15 @@ fn publish_body(
         }
         ReinsertedUnits::Missing(_) => return Err(ComposeFault::MissingValue),
     }
+    // The stretches as the row spells them, each term in its eight bytes —
+    // spelled before a value is read, as the count is.
+    let stretches = shot
+        .stretch_terms()
+        .iter()
+        .map(|stretch| Ok((spelled(&stretch.start)?, spelled(&stretch.width)?, spelled(&stretch.placed)?)))
+        .collect::<Result<Vec<(u64, u64, u64)>, ComposeFault>>()?;
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base).map_err(refused)?;
-    for segment in segments {
+    let push = |mut body: PublishBody, segment: &SegmentRun| -> Result<PublishBody, ComposeFault> {
         match segment {
             SegmentRun::Value(run) => {
                 // One row per *value* (the function's doc): a stretch's piece
@@ -654,6 +677,7 @@ fn publish_body(
                 if !pieces.covered() {
                     return Err(ComposeFault::MissingValue);
                 }
+                Ok(body)
             }
             SegmentRun::Window(run) => {
                 // A window here is a `Run`, whose width is at least one
@@ -662,9 +686,25 @@ fn publish_body(
                 let width = NonZeroU64::new(spelled(run.width())?).expect(
                     "publish_body's premise: a window here is a Run, whose width is at least one",
                 );
-                body = body.window(run.i_start(), width).map_err(refused)?;
+                body.window(run.i_start(), width).map_err(refused)
             }
         }
+    };
+    let mut segments = segments.iter();
+    // Each stretch's segments, then its close: the runs the address form
+    // holds for it are the next that cover its positions, none spanning two
+    // stretches. A shot with no list has no stretch to close.
+    for (start, width, placed) in stretches {
+        let mut held = 0u64;
+        while held < placed {
+            let Some(segment) = segments.next() else { break };
+            held = held.saturating_add(spelled(segment.run().width())?);
+            body = push(body, segment)?;
+        }
+        body = body.stretch(start, width).map_err(refused)?;
+    }
+    for segment in segments {
+        body = push(body, segment)?;
     }
     Ok(body.finish())
 }

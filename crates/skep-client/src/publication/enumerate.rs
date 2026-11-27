@@ -242,6 +242,14 @@ use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publis
 /// priced by it; `price` pins it to the board's.
 pub const MAX_WIRE_LIST: usize = 4096;
 
+/// The most runs one frame may place — the codec's own cap on a shot's
+/// `runs`, the store's number for what one request places, 65,536: a
+/// request's `runs`, and its `places` beside them, are parsed to it where
+/// every other list is parsed to [`MAX_WIRE_LIST`]. A frame past it does
+/// not parse, so the board cannot be asked: the copy is held equal to the
+/// store's by the publication suite.
+pub const MAX_WIRE_RUNS: usize = 1 << 16;
+
 /// The journal designation, `3.22` (the registry's vocabulary): a record, never
 /// a candidate.
 const T_JOURNAL_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";

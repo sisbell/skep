@@ -369,8 +369,10 @@ pub enum Response {
     /// account); `birth` is the [`BirthVersion`] of a document whose chain
     /// has a member, absent for one with none; `terms` are the [`ShotTerms`]
     /// of the address named — the count the shot that minted that member
-    /// placed, the base its request named and the base extent its copy took
-    /// — answered for a version member the shot minted, and absent
+    /// placed, the base its request named, the base extent its copy took,
+    /// the stretches of that base its runs replaced (none for a shot that
+    /// sent its whole arrangement) and the depth of the member's chain of
+    /// bases — answered for a version member the shot minted, and absent
     /// otherwise: for the trunk document itself, and for a member an owned
     /// `version` minted, a birth version among them. The base is the one the
     /// board recorded at the shot (skep #1111), served as `shot_base`, which

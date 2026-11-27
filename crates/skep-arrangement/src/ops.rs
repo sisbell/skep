@@ -183,22 +183,39 @@ pub use substitute::{stage_substitute, Replacement, Substitution};
 /// at a time — COPY's lazy resolution of each spec, REINSTATE's and the
 /// edit's walks of the client's list, an edit's count taken over all its
 /// changes with each change's minted values one run, the shot's walk of its
-/// base's carried tail — so the cap
+/// own runs — so the cap
 /// also stops the walk: an over-budget request is refused at the cap rather
 /// than built in full and measured afterwards. For a shot, what it places is
-/// its whole placement — the client's runs and the base's carried tail
-/// together, counted in runs — and never the shot term
-/// [`placed`](crate::ShotTerms::placed), which counts the client's positions
-/// alone.
+/// its placement — the client's runs as the store places them, each
+/// stretch's accumulated apart, counted in runs — and never the shot term
+/// [`placed`](crate::ShotTerms::placed), which counts positions. No run of
+/// the shot's base is in it: the member is built from the base's own list
+/// when the placing record is folded, so the positions of the base no
+/// stretch names — its carried tail among them — are read there and held by
+/// no accumulator here.
 ///
 /// **The remedy differs between the edits and the shot.** A copy or a
 /// reinstate needing more runs than this is split by the caller, exactly as
-/// an over-budget transaction already is. A shot cannot be split: the member
-/// it produces is born whole, from the whole arrangement the client rendered
-/// plus the base's carried deposits. For a shot the refusal is therefore a
-/// ceiling on the run count of the member one shot produces — the client's
-/// runs as the accumulator coalesces them, plus the base's deposit runs — and
-/// a retry of the same arrangement is refused the same way.
+/// an over-budget transaction already is. A shot cannot be split: its member
+/// is born in one commit. For a shot the refusal is a ceiling on the runs
+/// ONE SHOT PLACES — the client's runs as each stretch's accumulator
+/// coalesces them — and a retry of the same runs is refused the same way.
+/// It is no ceiling on a member's run count: a shot that names its change
+/// places the change's runs and mints its base's list with them spliced in,
+/// so a member of more runs than this is reached by shots each inside it,
+/// and only a shot that sends its whole arrangement holds its member — the
+/// carried tail apart — to this number.
+///
+/// **A transport's door holds the request's own list to this number.** A
+/// codec that bounds every request array by a span budget reads that budget
+/// onto a list of runs by reuse, which the span budget's argument does not
+/// cover; this card's does — a placed run is a run held live and about a
+/// hundred bytes of the transaction, priced here at `2^16`. So the wire's
+/// door takes this constant for a shot's `runs` and for the runs of an
+/// edit's changes together (skepd's `MAX_WIRE_RUNS`), judged on the request
+/// before a run is parsed, and the store judges the placement as it
+/// accumulates: one number at two places, the second seeing what the first
+/// cannot — a draft-native run re-inserted in pieces is more than one.
 ///
 /// **What it does not bind** is the work of resolving: each COPY spec's
 /// prefix-sum walk of its source's run-list to reach the span,

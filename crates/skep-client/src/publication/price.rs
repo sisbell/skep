@@ -35,7 +35,7 @@
 
 use skep_address::Address;
 
-use super::enumerate::MAX_WIRE_LIST;
+use super::enumerate::{MAX_WIRE_LIST, MAX_WIRE_RUNS};
 use super::Run;
 use crate::board::PublishCost;
 
@@ -46,9 +46,9 @@ pub const REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// One term of the price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Term {
-    /// The `runs` list against the wire-list cap.
+    /// The `runs` list against the cap on what one frame places.
     Runs,
-    /// The `places` list against the wire-list cap.
+    /// The `places` list, which rides `runs`' cap.
     Places,
     /// The `links` list against the wire-list cap.
     Links,
@@ -97,8 +97,11 @@ impl Shape {
     pub fn over(&self) -> Vec<(Term, u64)> {
         let mut over = Vec::new();
         for (term, n) in [Term::Runs, Term::Places, Term::Links, Term::Retract, Term::ReadWith, Term::Originals].into_iter().zip(self.lists) {
-            if n > MAX_WIRE_LIST {
-                over.push((term, (n - MAX_WIRE_LIST) as u64));
+            // The runs, and the places beside them, take the cap on what
+            // one frame places; every other list the list cap.
+            let cap = if matches!(term, Term::Runs | Term::Places) { MAX_WIRE_RUNS } else { MAX_WIRE_LIST };
+            if n > cap {
+                over.push((term, (n - cap) as u64));
             }
         }
         if self.body > REQUEST_BODY_BYTES {

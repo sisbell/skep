@@ -1,7 +1,7 @@
 //! The GOLDEN BYTE FIXTURE (the encoding report's §7; `SKJ4`/`SKC4`, the
 //! chain's salt): one journal segment, one checkpoint and one world dump per
 //! boundary, produced BY THE OPS of [`Fixture::build_golden`] — the hazard
-//! suite's eleven extended by the nine that reach every journal variant and
+//! suite's eleven extended by the eleven that reach every journal variant and
 //! leaf form — under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's
 //! salt is a pure function of the seed and the transaction, so the bytes
 //! reproduce), and committed under `tests/golden/` as `seg-1.wal`,
@@ -86,7 +86,20 @@
 //!   fixture's ops gain one, the edit at 20, which reaches it past the
 //!   checkpoint, so the segment grows by that commit's frames and one dump
 //!   is added at its boundary; the checkpoint and every dump before it do
-//!   not move.
+//!   not move;
+//! - M5's shot record carries the runs a shot placed and the stretches of
+//!   its base they replace, where it carried the member's whole
+//!   arrangement, and its member is built from its base at the fold; each
+//!   shot member's terms hold that stretch list and the depth of its chain
+//!   of bases; and M5's provenance is two maps — the spans appended, and
+//!   the run-lists named for the documents a snapshot minted, a snapshot
+//!   appending no span and a shot's member storing none: the fixture's ops
+//!   gain two, the shots at 21 and 22 — a birth, and a shot off it naming
+//!   one stretch — which reach the record in both its shapes past the
+//!   checkpoint, so the segment grows by their frames and two dumps are
+//!   added; the checkpoint's body and every dump move, the provenance
+//!   rendering in each and the cross-owner version's spans becoming its
+//!   named list.
 
 use std::collections::BTreeMap;
 use std::fs;

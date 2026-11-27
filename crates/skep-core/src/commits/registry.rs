@@ -229,6 +229,7 @@ impl Commits {
                 also: Vec::new(),
                 keep_base: false,
                 runs: vec![ShotRun { origin: draft, run }],
+                stretches: Vec::new(),
             };
             let Some(member) = seed.publish(registry.clone(), shot, &refused) else {
                 return seed.cut_short(written, stood, first);

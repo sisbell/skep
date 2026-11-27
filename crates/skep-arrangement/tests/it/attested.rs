@@ -63,6 +63,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
+        stretches: Vec::new(),
     };
     let readable = readable_by(PrincipalId(1));
     let (member, s_pub) = Vstream::attested(&k, Some(&tag3))
@@ -118,6 +119,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
+        stretches: Vec::new(),
     };
     vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1))).unwrap();
     vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared(), now(&k)).unwrap();

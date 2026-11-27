@@ -9,7 +9,8 @@
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
     head_lock_key, reading_surface, seat_link, stage_publish, trunk_head, Base, Deposit, DraftBase,
-    HasM5, M5State, MintedRun, PublishError, Run, SegmentRun, Shot, ShotTerms, VSpec, Vstream,
+    HasM5, M5State, MintedRun, PublishError, Run, SegmentRun, Shot, ShotRun, ShotStretch,
+    ShotTerms, VSpec, Vstream,
 };
 use skep_content::{ContentStore, HasContent};
 use skep_namespace::{HasM3, M3State, PrincipalId};
@@ -77,6 +78,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
+        stretches: Vec::new(),
     };
     let before = k.current_seq();
     let (member, seq) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the shot commits");
@@ -151,6 +153,7 @@ fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&doc1(), &ca(1), 3)],
+                stretches: Vec::new(),
             },
             &readable_by(PrincipalId(1)),
         )
@@ -180,7 +183,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() },
             &readable,
         )
         .expect("the first member");
@@ -194,6 +197,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1)],
+        stretches: Vec::new(),
     };
     // Shot A off the head member1 → the trunk's next member.
     let (member2, _) = vs.publish(P1, &pdoc(), &staged(&member1), &readable).expect("A commits");
@@ -241,7 +245,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() },
             &readable,
         )
         .expect("the head");
@@ -267,6 +271,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
+                stretches: Vec::new(),
             },
             &readable,
         )
@@ -283,6 +288,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
+        stretches: Vec::new(),
     };
     let (daughter, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
     assert_eq!(daughter, a(&[1, 0, 1, 0, nth_doc(3), 1, 1]));
@@ -291,7 +297,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -317,7 +323,7 @@ fn the_birth_shape_carries_no_tail_and_a_memberless_base_carries_its_deposits() 
             .publish(
                 P1,
                 &pdoc(),
-                &Shot { base: base_named, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+                &Shot { base: base_named, draft: None, also: vec![], keep_base: false, runs: vec![shot_run(&pdoc(), &pca(1), 3)], stretches: Vec::new() },
                 &readable_by(PrincipalId(1)),
             )
             .expect("the birth shot commits");
@@ -360,6 +366,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
                 also: vec![],
                 keep_base: false,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 1)],
+                stretches: Vec::new(),
             },
             &readable_by(PrincipalId(1)),
         )
@@ -385,6 +392,8 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
                 placed: n(4),
                 base_extent: Some(n(3)),
                 base: Some(pdoc()),
+                stretches: Vec::new(),
+                chain_depth: 0,
             }),
             "the client placed four; the fifth is the carried deposit"
         );
@@ -416,7 +425,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![] },
+            &Shot { base: None, draft: None, also: vec![], keep_base: false, runs: vec![], stretches: Vec::new() },
             &readable_by(PrincipalId(1)),
         )
         .expect("an empty birth version, in the birth shape");
@@ -426,7 +435,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         assert_eq!(s.world().m5().birth_extent(&member), Some(&n(0)), "noted at zero by the mint");
         assert_eq!(
             s.world().m5().shot_terms(&member),
-            Some(&ShotTerms { placed: n(0), base_extent: None, base: None }),
+            Some(&ShotTerms { placed: n(0), base_extent: None, base: None, stretches: Vec::new(), chain_depth: 0 }),
             "the terms: nothing placed, no base — the birth bit"
         );
     }
@@ -475,6 +484,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
             shot_run(&doc1(), &ca(1), 1),
             shot_run(&pdoc(), &pca(1), 2),
         ],
+        stretches: Vec::new(),
     };
     let requested = shot.address_form(&pdoc());
     assert_eq!(
@@ -489,12 +499,12 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     let s = k.snapshot();
     let (m5, content) = (s.world().m5(), s.world().content());
     let terms = m5.shot_terms(&member).expect("the shot's member carries its terms");
-    assert_eq!(*terms, ShotTerms { placed: n(5), base_extent: Some(n(2)), base: Some(pdoc()) });
+    assert_eq!(*terms, ShotTerms { placed: n(5), base_extent: Some(n(2)), base: Some(pdoc()), stretches: Vec::new(), chain_depth: 0 });
     // The member: [doc2 d e][pdoc a′ (fresh)][pdoc a b c] — the tail merged
     // into the last own run, so three runs where the client named four.
     assert_eq!(m5.content_run_count(&member), 3);
     assert_eq!(m5.content_count(&member), n(6));
-    let at_member = m5.address_form_of(&member, &terms.placed);
+    let at_member = m5.address_form_of(&member);
     let values_of = |segment_run: &SegmentRun| -> Vec<Vec<u8>> {
         segment_run
             .run()
@@ -524,18 +534,10 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         matches!(&at_member[2], SegmentRun::Value(v) if *v.i_start() == pca(1) && *v.width() == n(2)),
         "the last own run clipped from three to the two the client placed: {at_member:?}"
     );
-    // Asked past the client's positions, the member answers what it has —
-    // the whole run, the tail included; asked of nothing, nothing.
-    assert!(
-        matches!(&m5.address_form_of(&member, &n(9))[2], SegmentRun::Value(v) if *v.width() == n(3))
-    );
-    assert!(m5.address_form_of(&member, &n(0)).is_empty());
-    assert!(
-        m5.address_form_of(&doc2(), &n(2))
-            .iter()
-            .all(|segment_run| matches!(segment_run, SegmentRun::Value(_))),
-        "a document's own runs are spelled by value, read at the address named"
-    );
+    // The positions read are the member's own terms': a document no shot
+    // minted carries none, and answers nothing.
+    assert!(m5.address_form_of(&doc2()).is_empty());
+    assert!(m5.address_form_of(&pdoc()).is_empty(), "the trunk answers its own terms, never its head's");
 }
 
 #[test]
@@ -564,6 +566,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
             shot_run(&doc2(), &w, 1),
             shot_run(&doc1(), &ca(1), 2),
         ],
+        stretches: Vec::new(),
     };
     let requested = shot.address_form(&pdoc());
     let (member, _) = vs
@@ -571,10 +574,8 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
         .expect("the shot commits");
     let s = k.snapshot();
     let (m5, content) = (s.world().m5(), s.world().content());
-    let terms = m5
-        .shot_terms(&member)
-        .expect("the shot's member carries its terms");
-    let at_member = m5.address_form_of(&member, &terms.placed);
+    assert!(m5.shot_terms(&member).is_some(), "the shot's member carries its terms");
+    let at_member = m5.address_form_of(&member);
     // The runs differ: four runs asked for, three held — the own `a b`
     // merged, and the draft's text re-inserted at pca(4..5).
     assert_eq!(requested.len(), 4, "{requested:?}");
@@ -630,6 +631,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
             shot_run(&doc2(), &w, 1),
             shot_run(&doc1(), &ca(2), 1),
         ],
+        stretches: Vec::new(),
     };
     assert_eq!(
         shot.reinserted_runs().cloned().collect::<Vec<_>>(),
@@ -751,6 +753,7 @@ fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and
             shot_run(&doc1(), &ca(2), 2),
             shot_run(&doc1(), &ca(1), 3),
         ],
+        stretches: Vec::new(),
     };
     assert_eq!(shot.reinserted_values(), n(3), "three distinct positions over the two runs");
     let readable = readable_by(PrincipalId(1));
@@ -808,6 +811,7 @@ fn a_shot_reinserts_a_draft_run_whose_extent_holds_a_key_off_its_chain() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
+        stretches: Vec::new(),
     };
     let stored = k.snapshot().world().content().len();
     let (member, _) = vs
@@ -851,6 +855,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
         also: vec![],
         keep_base: false,
         runs: vec![shot_run(&pdoc(), &pca(1), 3)],
+        stretches: Vec::new(),
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &head_shot, &readable)
@@ -874,6 +879,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
             shot_run(&doc2(), &w, 1),
             shot_run(&doc1(), &ca(3), 1),
         ],
+        stretches: Vec::new(),
     };
     assert_eq!(
         shot.reinserted_values(),
@@ -912,10 +918,8 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     );
     assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(5)));
     assert_eq!(s.world().m3().next_content_address(&head), Some(vca(2)));
-    let terms = m5
-        .shot_terms(&member)
-        .expect("the shot's member carries its terms");
-    let at_member = spelled(&m5.address_form_of(&member, &terms.placed), content);
+    assert!(m5.shot_terms(&member).is_some(), "the shot's member carries its terms");
+    let at_member = spelled(&m5.address_form_of(&member), content);
     assert_eq!(
         at_member,
         vec![
@@ -984,6 +988,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
                     shot_run(&pdoc(), &pca(1), 3),
                     shot_run(&doc2(), &doc2_ca(2), 1),
                 ],
+                stretches: Vec::new(),
             },
             &readable,
         )
@@ -1045,6 +1050,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
                 also: vec![],
                 keep_base: false,
                 runs: sequence.iter().map(|&i| menu[i].1.clone()).collect(),
+                stretches: Vec::new(),
             };
             let placed: u32 = sequence.iter().map(|&i| menu[i].2).sum();
             let requested = shot.address_form(&pdoc());
@@ -1059,6 +1065,8 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
                     placed: n(placed),
                     base_extent: Some(n(extent)),
                     base: Some(base_member.clone()),
+                    stretches: Vec::new(),
+                    chain_depth: 0,
                 }),
                 "{label}"
             );
@@ -1069,7 +1077,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
             );
             assert_eq!(
                 spelled(&requested, content),
-                spelled(&m5.address_form_of(&member, &n(placed)), content),
+                spelled(&m5.address_form_of(&member), content),
                 "{label}: the request spells the member's body"
             );
             ending_on_a_window += usize::from(sequence.last().is_some_and(|&i| i >= first_window));
@@ -1080,4 +1088,268 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
         3 * (2 + 10 + 50),
         "the family ends shots on windows"
     );
+}
+
+/// The positions a run-list holds, an address a position.
+fn positions_of(runs: &[Run]) -> Vec<Address> {
+    runs.iter().flat_map(Run::addrs).collect()
+}
+
+/// `positions` as a shot's runs: consecutive positions that are I-adjacent
+/// joined, each run stated with the origin its own start settles.
+fn shot_runs_over(positions: &[Address]) -> Vec<ShotRun> {
+    // An address as its chain and its ordinal: the next position of a run
+    // shares the chain and follows the ordinal.
+    let split = |address: &Address| {
+        let mut chain: Vec<skep_address::Nat> = address.tumbler().iter().cloned().collect();
+        let ordinal = chain.pop().expect("a tumbler is nonempty");
+        (chain, ordinal)
+    };
+    let mut runs: Vec<(Address, u32)> = Vec::new();
+    for position in positions {
+        let (chain, ordinal) = split(position);
+        match runs.last_mut() {
+            Some((start, width)) if split(start) == (chain, ordinal - n(*width)) => *width += 1,
+            _ => runs.push((position.clone(), 1)),
+        }
+    }
+    runs.iter()
+        .map(|(start, width)| {
+            let origin = skep_address::document_of(start).expect("a content address has a document");
+            shot_run(&skep_arrangement::trunk_of(&origin), start, *width)
+        })
+        .collect()
+}
+
+/// One change to a list of positions: `width` positions from the 1-based
+/// `start` on replaced by `placed`.
+type Hunk = (u32, u32, Vec<ShotRun>);
+
+/// `base` with every hunk made, the hunks ascending and apart in `base`'s
+/// own coordinates: what a member born from `base` by those stretches holds.
+fn with_hunks(base: &[Address], hunks: &[Hunk]) -> Vec<Address> {
+    let mut out: Vec<Address> = Vec::new();
+    let mut at = 0usize;
+    for (start, width, placed) in hunks {
+        let from = *start as usize - 1;
+        out.extend_from_slice(&base[at..from]);
+        out.extend(placed.iter().flat_map(|stated| stated.run.addrs()));
+        at = from + *width as usize;
+    }
+    out.extend_from_slice(&base[at..]);
+    out
+}
+
+/// A shot off `base` at `extent` that names `hunks` as its stretch list.
+fn places_shot(base_member: &Address, extent: u32, hunks: &[Hunk]) -> Shot {
+    Shot {
+        base: Some(base(base_member, extent)),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: hunks.iter().flat_map(|(_, _, placed)| placed.iter().cloned()).collect(),
+        stretches: hunks
+            .iter()
+            .map(|(start, width, placed)| ShotStretch { start: n(*start), width: n(*width), count: placed.len() })
+            .collect(),
+    }
+}
+
+/// pdoc with a first member of `count` runs, none I-adjacent to the next —
+/// the edition's own values at every second ordinal, placed by a birth shot
+/// — and doc2, a private draft of the same owner, holding eight values a
+/// window can name. Returns the stream and the member.
+fn fragmented_edition(k: &skep_kernel::Kernel<World>, count: u32) -> (Vstream<'_, World>, Address) {
+    let vs = Vstream::new(k);
+    let values = |many: u32| -> Vec<skep_content::Val> { (0..many).map(|_| val(b"x")).collect() };
+    vs.insert(P1, &pdoc(), vp(1, 1), values(2 * count + 8), declared(), now(k))
+        .expect("the edition's own values, deposited while it holds no member");
+    vs.insert(P1, &doc2(), vp(1, 1), values(8), Deposit::Undeclared, now(k)).expect("doc2's values");
+    let birth = Shot {
+        base: None,
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: (1..=count).map(|i| shot_run(&pdoc(), &pca(2 * i), 1)).collect(),
+        stretches: Vec::new(),
+    };
+    let (member, _) = vs.publish(P1, &pdoc(), &birth, &readable_by(PrincipalId(1))).expect("the birth shot");
+    assert_eq!(k.snapshot().world().m5().content_run_count(&member), count as usize);
+    (vs, member)
+}
+
+#[test]
+fn a_member_born_by_stretches_is_run_for_run_the_member_the_whole_form_mints() {
+    // The two forms of one shot mint one member. Over a first member of
+    // 5,000 runs, each change is published twice off that one base — as a
+    // stretch list with the runs of the change alone, and as the whole
+    // arrangement with no list — and the two members are compared run for
+    // run. The stretch member's record carries the change's runs and
+    // nothing of the base; its fold builds the member from the base's own
+    // list. The cases: one stretch; several — a placement before a
+    // position, a replacement, a removal alone; a stretch reaching the
+    // base's last position and a placement past it; and a base that took a
+    // deposit after the copy, whose position past the extent stands in both
+    // members where the base holds it.
+    let k = mem_kernel();
+    let count = 5_000u32;
+    let (vs, first) = fragmented_edition(&k, count);
+    let readable = readable_by(PrincipalId(1));
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
+    // The deposit the render post-dates: the head takes one position past
+    // the extent every shot below names.
+    vs.insert(P1, &pdoc(), vp(1, count + 1), vec![val(b"z")], declared(), now(&k))
+        .expect("a declared deposit lands in the head");
+    let base_positions = positions_of(&content_runs_of(&k.snapshot(), &first));
+    assert_eq!(base_positions.len(), count as usize + 1, "the head holds its runs and the deposit");
+    let cases: Vec<(&str, Vec<Hunk>)> = vec![
+        ("one stretch", vec![(10, 2, vec![shot_run(&doc2(), &doc2_ca(1), 1)])]),
+        (
+            "several stretches",
+            vec![
+                (5, 0, vec![shot_run(&pdoc(), &pca(1), 1)]),
+                (100, 3, vec![shot_run(&doc2(), &doc2_ca(3), 2), shot_run(&pdoc(), &pca(3), 1)]),
+                (2_000, 10, vec![]),
+            ],
+        ),
+        (
+            "a stretch at the base's end, and a placement past it",
+            vec![
+                (count - 1, 2, vec![shot_run(&doc2(), &doc2_ca(5), 1)]),
+                (count + 1, 0, vec![shot_run(&doc2(), &doc2_ca(7), 2)]),
+            ],
+        ),
+    ];
+    for (label, hunks) in cases {
+        let by_places = places_shot(&first, count, &hunks);
+        assert_eq!(by_places.stretch_fault(), None, "{label}");
+        let expected = with_hunks(&base_positions[..count as usize], &hunks);
+        let whole = Shot {
+            base: Some(base(&first, count)),
+            draft: None,
+            also: vec![],
+            keep_base: false,
+            runs: shot_runs_over(&expected),
+            stretches: Vec::new(),
+        };
+        let (placed_member, _) = vs.publish(P1, &pdoc(), &by_places, &readable).expect("the stretch form commits");
+        let (whole_member, _) = vs.publish(P1, &pdoc(), &whole, &readable).expect("the whole form commits");
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        let (by_stretches, by_whole) = (content_runs_of(&s, &placed_member), content_runs_of(&s, &whole_member));
+        assert_eq!(by_stretches.len(), by_whole.len(), "{label}: one run count");
+        assert_eq!(by_stretches, by_whole, "{label}: one member, run for run");
+        // …and that member is the base with its stretches replaced, the
+        // deposit past the extent standing after it.
+        let mut held = expected.clone();
+        held.push(base_positions[count as usize].clone());
+        assert_eq!(positions_of(&by_stretches), held, "{label}: the base, its stretches replaced");
+        // The record's terms: the stretches in positions, and the depth —
+        // one stretch member over a whole-form base.
+        let terms = m5.shot_terms(&placed_member).expect("terms");
+        assert_eq!(terms.stretches, by_places.stretch_terms(), "{label}");
+        assert_eq!(terms.chain_depth, 1, "{label}");
+        assert_eq!(m5.shot_terms(&whole_member).expect("terms").chain_depth, 0, "{label}");
+        assert!(m5.shot_terms(&whole_member).expect("terms").stretches.is_empty(), "{label}");
+        // The request's address form is the member's, read at its images.
+        assert_eq!(
+            spelled(&by_places.address_form(&pdoc()), s.world().content()),
+            spelled(&m5.address_form_of(&placed_member), s.world().content()),
+            "{label}: the request spells the member's body"
+        );
+    }
+}
+
+#[test]
+fn two_i_adjacent_windows_of_two_stretches_stay_two_runs_in_the_record_and_land_where_each_was_placed() {
+    // One edition's words placed at two places of a file are I-adjacent
+    // wherever a change has two hunks: doc2's first two values, each a
+    // window, in two stretches hundreds of positions apart. The placement's
+    // accumulator restarts at the stretch boundary, so the record holds two
+    // runs and each stretch's count of positions finds its own; joined into
+    // one run they would both land at the first stretch and none at the
+    // second. And where two stretches touch, the member's list holds the two
+    // windows as ONE run across the seam — the fold's merge — while the
+    // address form still answers two, one a stretch, on both sides.
+    let k = mem_kernel();
+    let count = 5_000u32;
+    let (vs, first) = fragmented_edition(&k, count);
+    let readable = readable_by(PrincipalId(1));
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, nth_doc(2), 0, 1, ordinal]);
+    let base_positions = positions_of(&content_runs_of(&k.snapshot(), &first));
+    let hunks: Vec<Hunk> = vec![
+        (20, 1, vec![shot_run(&doc2(), &doc2_ca(1), 1)]),
+        (400, 1, vec![shot_run(&doc2(), &doc2_ca(2), 1)]),
+        // Two stretches that touch: a placement before position 600, then
+        // position 600 replaced.
+        (600, 0, vec![shot_run(&doc2(), &doc2_ca(5), 1)]),
+        (600, 1, vec![shot_run(&doc2(), &doc2_ca(6), 1)]),
+    ];
+    let by_places = places_shot(&first, count, &hunks);
+    let expected = with_hunks(&base_positions, &hunks);
+    let whole = Shot {
+        base: Some(base(&first, count)),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: shot_runs_over(&expected),
+        stretches: Vec::new(),
+    };
+    let (placed_member, _) = vs.publish(P1, &pdoc(), &by_places, &readable).expect("the stretch form commits");
+    let (whole_member, _) = vs.publish(P1, &pdoc(), &whole, &readable).expect("the whole form commits");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    let by_stretches = content_runs_of(&s, &placed_member);
+    assert_eq!(positions_of(&by_stretches), expected, "each window at the stretch that placed it");
+    assert_eq!(by_stretches, content_runs_of(&s, &whole_member), "and the whole form's member, run for run");
+    assert!(
+        by_stretches.contains(&Run::new(doc2_ca(5), n(2)).expect("a run")),
+        "the touching stretches' two windows are one run of the member"
+    );
+    // The address form answers a window a stretch — four, never three or
+    // two — for the request and for the member alike.
+    let requested = by_places.address_form(&pdoc());
+    assert_eq!(requested.len(), 4, "no window joined across a stretch boundary: {requested:?}");
+    assert_eq!(requested, m5.address_form_of(&placed_member), "the member reads back the same four");
+    assert_eq!(
+        m5.shot_terms(&placed_member).expect("terms").images(),
+        vec![(n(20), n(1)), (n(400), n(1)), (n(600), n(1)), (n(601), n(1))],
+        "each stretch's image, moved by what the stretches before it added and removed"
+    );
+}
+
+#[test]
+fn the_depth_of_a_chain_of_bases_counts_the_stretch_shots_back_to_a_whole_arrangement() {
+    // The depth a member carries is how many shots that named a stretch
+    // list stand between it and a base none minted: one more than its
+    // base's at each such shot, and zero again at a shot that sends its
+    // whole arrangement, whatever it was made against.
+    let k = mem_kernel();
+    let (vs, first) = fragmented_edition(&k, 8);
+    let readable = readable_by(PrincipalId(1));
+    let depth = |member: &Address| k.snapshot().world().m5().shot_terms(member).expect("terms").chain_depth;
+    assert_eq!(depth(&first), 0, "a birth names no list");
+    let one_word = |base_member: &Address, extent: u32| {
+        places_shot(base_member, extent, &[(1, 0, vec![shot_run(&pdoc(), &pca(1), 1)])])
+    };
+    let mut head = first;
+    for expected in 1..=3u64 {
+        let extent = 8 + expected as u32 - 1;
+        let (next, _) = vs.publish(P1, &pdoc(), &one_word(&head, extent), &readable).expect("a stretch shot");
+        assert_eq!(depth(&next), expected);
+        head = next;
+    }
+    let whole = Shot {
+        base: Some(base(&head, 11)),
+        draft: None,
+        also: vec![],
+        keep_base: false,
+        runs: shot_runs_over(&positions_of(&content_runs_of(&k.snapshot(), &head))),
+        stretches: Vec::new(),
+    };
+    let (anchored, _) = vs.publish(P1, &pdoc(), &whole, &readable).expect("the whole form, with its base");
+    assert_eq!(depth(&anchored), 0, "a whole arrangement ends the chain");
+    assert_eq!(content_runs_of(&k.snapshot(), &anchored), content_runs_of(&k.snapshot(), &head));
+    let (after, _) = vs.publish(P1, &pdoc(), &one_word(&anchored, 11), &readable).expect("a stretch shot");
+    assert_eq!(depth(&after), 1, "and the count starts again from it");
 }

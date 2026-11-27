@@ -650,6 +650,7 @@ fn the_publish_shot_publishes_a_new_member_and_leaves_its_staging_draft_a_draft(
             origin: draft_home.clone(),
             run: Run::new(start, nat(1)).expect("the draft's one value"),
         }],
+        stretches: Vec::new(),
     };
     let (member, _) = engine
         .vstream()

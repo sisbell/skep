@@ -29,7 +29,9 @@ use std::time::Duration;
 use crate::mutilate::seg_file;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::AsOf;
-use skep_arrangement::{Caller, Change, Deposit, Edit, Placed, Run, ShotRun, VPos, VSpec};
+use skep_arrangement::{
+    Base, Caller, Change, Deposit, Edit, Placed, Run, Shot, ShotRun, ShotStretch, VPos, VSpec,
+};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, World};
@@ -181,15 +183,17 @@ enum Extent {
     /// (`Allocate` + `ContentWrite`, the `Value` entry, which the per-byte
     /// inserts no longer reach), a multi-run `ContentPlace` (a copy from a
     /// range the pivot fragmented), `ContentReorder` in both its shapes
-    /// (three and four ordinals), and `ContentEdit` (an edit of two changes,
-    /// one minting and one placing a run by identity).
+    /// (three and four ordinals), `ContentEdit` (an edit of two changes,
+    /// one minting and one placing a run by identity), and `ShotPlace` in
+    /// its two shapes (a birth shot, which names its whole arrangement and
+    /// no stretch, and a shot off that member naming one stretch of it).
     Golden,
 }
 
 /// The op index of a golden fixture's commits — eleven hazard ops and the
-/// nine golden ones; the hazard fixture stops at the first figure.
+/// eleven golden ones; the hazard fixture stops at the first figure.
 pub const HAZARD_OPS: usize = 11;
-pub const GOLDEN_OPS: usize = 20;
+pub const GOLDEN_OPS: usize = 22;
 
 /// A node component above 2³²: two base-`u32` digits, the `Nat` form the
 /// hazard ops never reach.
@@ -363,7 +367,7 @@ impl Fixture {
             // 13: a PUBLISHED document — `Allocate { published: true }`, the
             //     bit the draft mint above journals as `false`. Left empty: a
             //     published document takes no in-place edit (PUB-2.11).
-            engine
+            let (edition, _) = engine
                 .namespace()
                 .create_new_document(USER, &acct, Some(true))
                 .expect("create the published document");
@@ -395,7 +399,7 @@ impl Fixture {
             //     `Allocate` + `ContentWrite` pair and the one `Value` entry
             //     the golden holds, since every per-byte insert above is a
             //     stretch.
-            engine
+            let (atom, _) = engine
                 .vstream()
                 .insert(OWNER, &doc2, vp(1, 4), vec![Val::new(b"atom".to_vec())], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
                 .expect("insert the atom");
@@ -435,7 +439,7 @@ impl Fixture {
             //     first byte is placed by identity before its fourth, so the
             //     record's changes carry a run the commit minted and one it
             //     did not.
-            let placed = ShotRun { origin: doc2.clone(), run: Run::new(xyz, n(1)).expect("one position") };
+            let placed = ShotRun { origin: doc2.clone(), run: Run::new(xyz.clone(), n(1)).expect("one position") };
             let changes = vec![
                 Change { at: vp(1, 1), width: n(1), placed: Placed::Values(vec![Val::new(vec![b'q'])]) },
                 Change { at: vp(1, 4), width: n(0), placed: Placed::Runs(vec![placed]) },
@@ -444,6 +448,39 @@ impl Fixture {
                 .vstream()
                 .edit(OWNER, &doc, Edit { changes, head: None, base: None, merge: None }, AsOf::Typed(engine.kernel().current_seq()))
                 .expect("edit doc");
+            capture(&engine, &mut boundaries);
+
+            // 21: a SHOT into the published document, in the birth shape —
+            //     its first member, born from the request's whole
+            //     arrangement: the `ShotPlace` of no stretch list the golden
+            //     holds, its terms the birth's, and the member's mint beside
+            //     it. The runs window the second document's three bytes.
+            let anyone = |_: &skep_engine::World, _: &Address| true;
+            let birth = Shot {
+                base: None,
+                draft: None,
+                also: vec![],
+                keep_base: false,
+                runs: vec![ShotRun { origin: doc2.clone(), run: Run::new(xyz, n(3)).expect("three positions") }],
+                stretches: vec![],
+            };
+            let (member, _) = engine.vstream().publish(OWNER, &edition, &birth, &anyone).expect("the birth shot");
+            capture(&engine, &mut boundaries);
+
+            // 22: a SHOT BY ITS STRETCHES off that member — the middle of its
+            //     three positions replaced by the atom: the `ShotPlace` that
+            //     carries a stretch and the runs of the change alone, its
+            //     member built from its base at the fold, one deep in its
+            //     chain of bases.
+            let change = Shot {
+                base: Some(Base { member, extent: n(3) }),
+                draft: None,
+                also: vec![],
+                keep_base: false,
+                runs: vec![ShotRun { origin: doc2.clone(), run: Run::new(atom, n(1)).expect("one position") }],
+                stretches: vec![ShotStretch { start: n(2), width: n(1), count: 1 }],
+            };
+            engine.vstream().publish(OWNER, &edition, &change, &anyone).expect("the shot by its stretches");
             capture(&engine, &mut boundaries);
         }
 

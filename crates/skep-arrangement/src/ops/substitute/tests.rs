@@ -7,7 +7,8 @@
 //! answers is the earliest in the order given, never the lowest by place;
 //! the gate answers ahead of every entry; a run put in is judged as
 //! REINSTATE judges one; the places are one record whatever they hold; and
-//! the check walks the draft's list once however many places it is asked.
+//! the check reads the draft's list at its places alone, however many runs
+//! the draft holds.
 
 use std::sync::Arc;
 
@@ -25,10 +26,6 @@ use crate::shot::ShotRun;
 use crate::state::M5State;
 use crate::testutil::{a, ca, doc1, doc2, la, mem_kernel_of, n, nth_doc, pca, pdoc, run, seeded_m3, vp};
 use crate::vspace::ordinal_vspan;
-
-/// The work the body may ask for each run of the draft, each piece and each
-/// entry: the bound on its own steps.
-const WORK_PER_UNIT: u64 = 2;
 
 /// Returns doc2's content element at `ordinal`.
 fn ca2(ordinal: u32) -> Address {
@@ -58,7 +55,7 @@ fn entry(index: usize, at: u32, pieces: Vec<Replacement>) -> Substitution {
 
 /// Whether `doc` arranges exactly `pieces`, in sequence, over the positions
 /// that open at `at`, each place resolved from the head of the list: the
-/// check the re-window made before the one walk, kept here to judge it by.
+/// check the re-window made before the one pass, kept here to judge it by.
 fn arranged_at<'r>(m5: &M5State, doc: &Address, at: &VPos, pieces: impl IntoIterator<Item = &'r Run>) -> bool {
     let pieces: Vec<&Run> = pieces.into_iter().collect();
     let width: Nat = pieces.iter().map(|piece| piece.width().clone()).sum();
@@ -422,16 +419,18 @@ fn the_places_are_one_record_whatever_they_hold() {
     assert_eq!(k.current_seq(), before, "no entry stages nothing");
 }
 
-/// ONE WALK, COUNTED. `entries` places spread over a draft of 65,536 runs,
-/// two pieces each: the body's own steps are each run the walk reads, each
-/// entry twice and each piece twice — within the bound whatever the places
-/// number, held as the count grows, so a place checked from the head of
-/// the list stops the call at once.
+/// The check, counted. `entries` places spread over a draft of 65,536
+/// runs, two pieces each: the body's own steps are each entry judged, the
+/// check's descent to each place and its comparison there, and each piece
+/// probed — within the card's bound, which the draft's run count does not
+/// enter, and held as the count grows, so a place checked by a walk from
+/// the head of the list stops the call at once.
 #[test]
-fn the_check_walks_the_draft_once_however_many_places_it_is_asked() {
+fn the_check_descends_to_each_place_and_reads_no_run_between_them() {
     const RUNS: u32 = 65_536;
     for entries in [1u32, 16, 256, 4_096] {
         let k = world(&[(doc1(), (0..RUNS).map(|j| run(&ca(1 + 4 * j), 3)).collect())], 3 * entries);
+        let height = k.snapshot().world().m5().content_list(&doc1()).height() as u64;
         // Entry `j` replaces the whole of run `at_run(j)`, as a piece of one
         // position and a piece of two.
         let at_run = |j: u32| ((2 * u64::from(j) + 1) * u64::from(RUNS) / (2 * u64::from(entries))) as u32;
@@ -442,7 +441,7 @@ fn the_check_walks_the_draft_once_however_many_places_it_is_asked() {
             })
             .collect();
         let pieces = 2 * entries;
-        let budget = WORK_PER_UNIT * u64::from(RUNS + pieces + entries);
+        let budget = u64::from(entries) * (2 * (height + 1) + 21) + 4 * u64::from(pieces);
         let mut own = 0u64;
         k.transact(&[M3State::content_lock_key(&doc1())], |stg| {
             stage_substitute(stg, P1, &doc1(), &asked, &mut |steps| {
@@ -451,10 +450,10 @@ fn the_check_walks_the_draft_once_however_many_places_it_is_asked() {
             })
         })
         .expect("the places land");
-        // The walk stops with the last place: it reads the runs up to it.
-        let read = u64::from(at_run(entries - 1) + 1);
-        assert_eq!(own, read + 2 * u64::from(entries) + 2 * u64::from(pieces), "{entries} entries: each run read once, each entry judged and walked, each piece compared and probed");
-        assert!(own >= u64::from(entries + pieces), "a walk that charges nothing proves nothing");
+        assert!(own >= u64::from(entries + pieces), "a check that charges nothing proves nothing");
+        if entries <= 256 {
+            assert!(own < u64::from(RUNS) / 4, "{entries} entries: {own} steps follow the draft's 65,536 runs");
+        }
         assert_eq!(k.snapshot().world().m5().content_run_count(&doc1()), RUNS as usize, "a run replaced by one run");
     }
 }

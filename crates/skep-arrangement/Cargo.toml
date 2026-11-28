@@ -26,12 +26,13 @@ test-hooks = []
 # keyed the same way), the birth extents the fold derives
 # (im::OrdMap<Address, Nat>, keyed by each trunk's birth version), and the
 # shot terms the shot journals (im::OrdMap<Address, ShotTerms>, keyed by each
-# member it mints) — plus the RunList's v1 physical backing im::Vector<Run>
-# (Open build decision #1 default). The serde feature because all four fields
-# are fully serialized in checkpoints (no skip-serialize; rebuild_derived is
-# identity): im's `Serialize` writes them, and their decode is this crate's
-# own (src/decode.rs), entry by entry, since im's visitor reserves room for
-# the count a checkpoint body declares.
+# member it mints). A run list is none of them: it is this crate's own
+# counted tree (src/run_list/tree.rs), and im::Vector<Run> backs only the
+# vector-backed list the unit tests keep as their oracle. The serde feature
+# because the maps are fully serialized in checkpoints (no skip-serialize;
+# rebuild_derived is identity): im's `Serialize` writes them, and their
+# decode is this crate's own (src/decode.rs), entry by entry, since im's
+# visitor reserves room for the count a checkpoint body declares.
 im.workspace = true
 # Nat::zero()/one()/is_zero() are trait fns the ordinal math keeps in scope.
 num-traits.workspace = true

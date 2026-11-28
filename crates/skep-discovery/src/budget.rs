@@ -2,7 +2,7 @@
 //! truncations: [`MAX_IMAGE_RUNS`], held at the four reads of a document's
 //! runs — the region family's image, the pointwise pair, the delete-orphan
 //! preview — each over the run count its own work multiplies, with its
-//! square [`MAX_JOIN_STEPS`] for the two joins no run count prices; and
+//! square [`MAX_JOIN_STEPS`] for the one join no run count prices; and
 //! [`MAX_ANSWER_SPANS`], which bounds what an answer built of spans carries.
 //! Each read applies its own; the numbers and their argument live here
 //! because the region family, the pointwise pair and the preview all apply
@@ -61,34 +61,26 @@
 /// It is also M7's `MAX_SLOT_SPANS`, the ceiling a STORED slot is held to,
 /// and M10's per-array wire cap, so a FLAT region of 4096 spans each
 /// resolving to one run — the largest region the transport admits — passes
-/// the run count unchanged. It passes the walk (below) too over any reading
-/// surface of at most 4096 content runs; over a more fragmented surface the
-/// walk decides, and it refuses such a region when its spans reach far along
-/// the run-list.
+/// the run count unchanged, however fragmented the surface it reads and
+/// wherever along it the spans reach: M5 reaches a span by a descent of the
+/// run-list, a node a level of its tree, and reads from there the runs the
+/// span yields, so the runs a region RETURNS are the whole of what its
+/// resolution reads, and a span past a document's end reads none.
 ///
 /// What it refuses is the shape no wire cap prices: the region×image product,
 /// where each admitted span resolves to the whole of a fragmented document.
 ///
-/// Its SQUARE, `2^24`, holds the two joins whose other side no run count
+/// Its SQUARE, `2^24`, holds the one join whose other side no run count
 /// reaches, and M6's COMPARE budget is its argument: an operand budget
 /// squares, and `2^12` a side bounds one query at `2^24` steps, order a
-/// second of one worker.
-///
-/// * The RUN-LIST WALK behind [`crate::image_on`]. M5 reaches a span by
-///   walking the run-list from its first run — as M5 states on
-///   `iter_resolve`'s card, one call passes every run left of the span's
-///   opening ordinal whatever it yields — so a region walks up to
-///   `|region| × #runs(d)` runs, and a span past the end of a fragmented
-///   document walks every run and returns none. The count above prices runs
-///   RETURNED and never sees that walk; the square prices it, ahead of the
-///   first pull.
-/// * The TOUCH TEST behind [`crate::addressably_discoverable_from_on`]: every
-///   span of a link's coverage against every run, where a link's WHOLE
-///   coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
-///   three times the square. Its product is WORK and only work — a boolean
-///   `any` that stops at its first overlap, over each span's bounds, derived
-///   ONCE as M6's COMPARE stores each block's reach, so a step is at most two
-///   tumbler comparisons and builds nothing: the step the square prices.
+/// second of one worker. It is the TOUCH TEST behind
+/// [`crate::addressably_discoverable_from_on`]: every
+/// span of a link's coverage against every run, where a link's WHOLE
+/// coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
+/// three times the square. Its product is WORK and only work — a boolean
+/// `any` that stops at its first overlap, over each span's bounds, derived
+/// ONCE as M6's COMPARE stores each block's reach, so a step is at most two
+/// tumbler comparisons and builds nothing: the step the square prices.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the
@@ -97,7 +89,7 @@ pub const MAX_IMAGE_RUNS: usize = 1 << 12;
 
 /// [`MAX_IMAGE_RUNS`] squared: the most steps one join of a side the request
 /// supplies against a document's runs may take. [`MAX_IMAGE_RUNS`] states the
-/// two joins it holds and the budget behind it; crate-private because it is
+/// join it holds and the budget behind it; crate-private because it is
 /// that square and nothing of its own.
 pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 

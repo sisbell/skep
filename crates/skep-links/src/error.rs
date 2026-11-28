@@ -73,17 +73,13 @@ pub enum MakeLinkError {
         /// The span's position within the slot.
         index: usize,
     },
-    /// A slot is over one of the two per-slot budgets.
+    /// A slot is over the per-slot budget.
     ///
     /// It holds more than [`crate::MAX_SLOT_SPANS`] spans in whichever form
     /// built it — a `Resolve` slot resolved past the budget, an `Addrs`
-    /// list naming more addresses than it, or a `Spans` list carrying more
-    /// — or, for a `Resolve` slot, its
-    /// specs command more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list
-    /// steps. One rejection for both, because both are the same answer to
-    /// the caller — this slot asks for more than a slot may have — and one
-    /// `Display` text, which names both numbers. Why the request that carried
-    /// a slot bounds neither is the two constants' own account.
+    /// list naming more addresses than it, or a `Spans` list carrying more.
+    /// The `Display` text names the number. Why the request that carried
+    /// a slot does not bound it is the constant's own account.
     SlotTooLarge,
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`).
     ///
@@ -778,12 +774,9 @@ impl fmt::Display for MakeLinkError {
                 f,
                 "makelink: span {index} of slot {slot} is not a content I-span (a content-subspace element start and an ordinal width of at least 1)"
             ),
-            MakeLinkError::SlotTooLarge => write!(
-                f,
-                "makelink: a slot carries more than {} spans, or its specs command more than {} resolve steps",
-                crate::budget::MAX_SLOT_SPANS,
-                crate::budget::MAX_SLOT_RESOLVE_STEPS
-            ),
+            MakeLinkError::SlotTooLarge => {
+                write!(f, "makelink: a slot carries more than {} spans", crate::budget::MAX_SLOT_SPANS)
+            }
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")
             }

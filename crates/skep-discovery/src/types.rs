@@ -254,9 +254,8 @@ pub struct OrphanReport {
 ///   inherits — splits: the budgets are per call, so the region can be asked
 ///   in parts, down to single positions, and the parts recomposed by UNION —
 ///   a count by counting the union, never by adding counts. A single
-///   position is refused only over a reading surface of more than
-///   `MAX_IMAGE_RUNS²` content runs. The paged image
-///   ([`crate::image_page_on`]) raises it for the walk's square alone: the
+///   position resolves one run and is never refused. The paged image
+///   ([`crate::image_page_on`]) never raises it: the
 ///   runs its region resolves past the budget it answers in pages;
 /// * a pointwise `ImageTooLarge` — a fact about `d`'s runs and `a`'s
 ///   coverage — and an `EndsetsTooLarge` over one position do not: those
@@ -305,8 +304,7 @@ pub enum QueryError {
     PageMoved,
     /// The read would materialize or join more arrangement I-runs than
     /// [`crate::MAX_IMAGE_RUNS`] admits, or exceed the product its own join is
-    /// held to: the square for the run-list walk behind the region family and
-    /// for the touch test of a link's whole coverage, and
+    /// held to: the square for the touch test of a link's whole coverage, and
     /// [`crate::MAX_ANSWER_SPANS`] for the projection. Each of the three reads
     /// that hold it counts the runs its own work multiplies, which the
     /// constant states. The runs are the side of a join the request supplies;
@@ -333,7 +331,7 @@ impl fmt::Display for QueryError {
                 "query: the arrangement a continuation names has changed since its page was read"
             }
             QueryError::ImageTooLarge => {
-                "query: the arrangement runs the request would materialize or walk, or the product of the join against them, are past this read's budget"
+                "query: the arrangement runs the request would materialize, or the product of the join against them, are past this read's budget"
             }
             QueryError::EndsetsTooLarge => {
                 "query: the endsets touching the region are past the answer's span budget"

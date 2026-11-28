@@ -1,5 +1,5 @@
 //! §D COMPARE's refusals: the gate's `(operand, region, index)` attribution,
-//! and the operand, walk and pair budgets — each a refusal, never a
+//! and the operand and pair budgets — each a refusal, never a
 //! truncation, and outranked by every gate fault.
 
 use skep_address::Span;
@@ -226,8 +226,7 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
     // whether or not it yields a block — a span opening past the arranged
     // extent yields none — so a block count alone would admit any number of
     // empty-resolving spans, from a nested region×span request the body cap
-    // alone sizes. Over doc1's one run the walk budget prices each such span
-    // at a single step and admits them all, so the SPAN count is what refuses
+    // alone sizes. So the SPAN count is what refuses
     // it, before either operand resolves past the budget, naming the operand.
     let k = mem_kernel();
     insert3(&k); // doc1 holds three positions
@@ -307,46 +306,32 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
 }
 
 #[test]
-fn compare_refuses_an_operand_whose_spans_would_walk_past_the_walk_budget() {
-    // The walk budget: M5 reaches a span by walking the run list from its
-    // first run, so a span opening past the end of a fragmented document walks
-    // every run and yields no block — one span on the span count, nothing on
-    // the block count. The walk budget is the operand budget's square, so over
-    // doc2's 8192 runs one span more than `MAX_COMPARE_OPERAND_BLOCKS² / 8192`
-    // such spans is past it, and the operand is refused before any span is
-    // walked, naming the operand.
+fn compare_answers_an_operand_of_spans_past_the_end_of_a_fragmented_document() {
+    // What reaching a span costs is no budget's: M5 reaches a span by a
+    // descent of the run list, so a span opening past the end of a fragmented
+    // document reads no run and yields no block — one span on the span
+    // count, nothing on the block count. Over doc2's 8192 runs one span more
+    // than `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such spans, a product past
+    // the budget's square, is inside the operand budget's span count and is
+    // answered, in either operand.
     let k = mem_kernel();
     fragmented_doc2(&k); // doc2 = 8192 one-position runs, every one ca1
     let s = k.snapshot();
     let q = Query::new(&s);
     let run_count = s.world().m5().content_run_count(&doc2());
     assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
+    let many = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
     let one = || vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
-    let over = vec![region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])];
-    assert_eq!(
-        err_of(q.compare(&over, &one())),
-        CompareError::TooManyBlocks {
-            operand: Operand::First
-        }
-    );
-    assert_eq!(
-        err_of(q.compare(&one(), &over)),
-        CompareError::TooManyBlocks {
-            operand: Operand::Second
-        }
-    );
-    // The control: a span at doc2's first position walks two runs, so the
-    // operand budget's whole 4096 are priced well inside the walk budget and
-    // answered — one pair per block, every block holding ca1.
-    let near = vec![region_spec(
-        doc2(),
-        vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS],
-    )];
-    assert_eq!(
-        ok_of(q.compare(&near, &one())).len(),
-        MAX_COMPARE_OPERAND_BLOCKS
-    );
+    let over = vec![region_spec(doc2(), vec![vspan(1, 8193, 1); many])];
+    assert!(ok_of(q.compare(&over, &one())).is_empty());
+    assert!(ok_of(q.compare(&one(), &over)).is_empty());
+    // Spans that do resolve are held to the operand budget alone, wherever
+    // along doc2 they reach: its whole 4096 at doc2's first position and at
+    // its last are answered — one pair per block, every block holding ca1.
+    for at in [1u32, 8192] {
+        let near = vec![region_spec(doc2(), vec![vspan(1, at, 1); MAX_COMPARE_OPERAND_BLOCKS])];
+        assert_eq!(ok_of(q.compare(&near, &one())).len(), MAX_COMPARE_OPERAND_BLOCKS, "at position {at}");
+    }
 }
 
 #[test]

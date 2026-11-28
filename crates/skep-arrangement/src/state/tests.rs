@@ -14,6 +14,52 @@ fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
     })
 }
 
+/// The six maps the slice writes after R, in the order it writes them,
+/// the first `kept` of them.
+fn maps_after_r(s: &M5State, kept: usize) -> Vec<u8> {
+    let maps = [
+        bincode::serialize(&s.birth_extents),
+        bincode::serialize(&s.shot_terms),
+        bincode::serialize(&s.fork_sources),
+        bincode::serialize(&s.arranged_at),
+        bincode::serialize(&s.draft_bases),
+        bincode::serialize(&s.source_copied),
+    ];
+    maps.into_iter().take(kept).flat_map(|map| map.expect("a map serializes")).collect()
+}
+
+/// The slice's checkpoint form cut short after the first `kept` of the six
+/// maps it writes after R: the body a build wrote before the others joined
+/// the slice.
+fn cut_after(s: &M5State, kept: usize) -> Vec<u8> {
+    let bytes = bincode::serialize(s).expect("state serializes");
+    let lists = bytes.len() - maps_after_r(s, 6).len();
+    [&bytes[..lists], &maps_after_r(s, kept)].concat()
+}
+
+/// Holds the slice's fields to their order in both its forms.
+///
+/// The checkpoint form `bytes` ends with the six maps after R as they
+/// stand, in declaration order — what stands before them, the node table,
+/// the arrangements and R, is the byte pin's — and the run-sequence form is
+/// the eight fields in declaration order, each as it writes itself.
+#[track_caller]
+fn assert_field_order(s: &M5State, bytes: &[u8], said: &str) {
+    assert!(bytes.ends_with(&maps_after_r(s, 6)), "{said}");
+    let fields = bincode::serialize(&(
+        &s.arrangements,
+        &s.provenance,
+        &s.birth_extents,
+        &s.shot_terms,
+        &s.fork_sources,
+        &s.arranged_at,
+        &s.draft_bases,
+        &s.source_copied,
+    ))
+    .expect("the fields serialize");
+    assert_eq!(bincode::serialize(&s.as_run_sequences()).expect("the run-sequence form serializes"), fields, "{said}");
+}
+
 #[test]
 fn content_place_splices_and_appends_provenance_in_one_fold() {
     // §3: J1★ by construction — the same fold updates M and R, so one
@@ -884,12 +930,12 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // a reservation before the entries it counts have arrived — past
     // `isize::MAX` bytes the reservation panics, and short of it a count the
     // allocator cannot grant aborts the process where the load must refuse.
-    // Every collection the slice holds — the arrangement map, each document's
-    // content and link run-lists, R's map and each document's spans, the
-    // birth extents, the shot terms, the fork sources, the arranged-at
+    // Every collection the slice holds — the node table and each node's
+    // entries, the arrangement map, R's two maps and each document's spans,
+    // the birth extents, the shot terms, the fork sources, the arranged-at
     // positions, the draft bases and each base's stamps, the copied counts —
     // decodes through
-    // `decode`'s doors or reserves cautiously, and so does every sequence
+    // `decode`'s doors, the table's own or reserves cautiously, and so does every sequence
     // beneath them (a marker's sides, an address's components, a natural's
     // digits). So `u64::MAX` written over ANY eight bytes
     // of a body holding every one of them is decoded or refused, and never
@@ -943,15 +989,24 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     assert_eq!(
         refused_at.first(),
         Some(&0),
-        "the arrangement map's count, the body's first eight bytes, is refused"
+        "the node table's count, the body's first eight bytes, is refused"
     );
 }
 
 /// A run as the slice writes it: its start, then its width.
 type RawRun = (Tumbler, Nat);
 
-/// A document's arrangement as the slice writes it: content, then links.
+/// A document's arrangement as the run-sequence form writes it: content,
+/// then links.
 type RawArrangement = (Vec<RawRun>, Vec<RawRun>);
+
+/// A leaf of the node table as the checkpoint form writes it: the variant's
+/// index, 0, then its runs.
+type RawLeaf = (u32, Vec<RawRun>);
+
+/// A list as the checkpoint form writes it: its root's id in the node
+/// table, none for the empty list.
+type RawRoot = Option<u64>;
 
 /// A marker as the slice writes it.
 ///
@@ -964,28 +1019,32 @@ type RawMarker = (Vec<Tumbler>, Tumbler, Nat, u64);
 /// Its base, extent and source, then its marker and its stamps.
 type RawDraftBase = (Tumbler, Nat, Tumbler, Option<RawMarker>, Vec<RawMarker>);
 
-/// The slice's bytes down to each entry's fields, against a plain twin.
+/// The slice's bytes down to each entry's fields, against a plain twin, in
+/// both its forms.
 ///
-/// The twin is spelled in plain types from the fixture's literals, never
-/// read off the state. The bytes are a format: M2 hashes them into a
-/// checkpoint's header, the engine's `World` lays them down as one slice of
-/// its layout, and the engine's world dump renders them. The engine's own
-/// pin sees the slice's eight field names alone, so a field gained, lost or
-/// reordered *beneath* them — a draft base's marker or stamps, a marker's
-/// position, a shot's terms, a run — moves the World's bytes with every name
-/// unchanged. This pin sees it: the twin is the eight fields in declaration
-/// order — nine maps, R being two — each a `Vec` of pairs in address order
-/// (bincode writes a map
-/// exactly so), every address its bare tumbler, every entry its fields in
-/// order — a document's arrangement its content runs then its link runs,
-/// R's appended spans each run's I-extent in placing order and then its
-/// named lists each a run-list, a shot's terms its
-/// count, extent, base, stretches and depth, a draft base its base, extent,
-/// source, marker
-/// and stamps. The twin decodes back to the fixture, so it is the slice's
-/// form and not merely bytes alike.
+/// The twins are spelled in plain types from the fixture's literals, never
+/// read off the state. The checkpoint form's bytes are a format: M2 hashes
+/// them into a checkpoint's header and the engine's `World` lays them down
+/// as one slice of its layout. The engine's own pin sees the slice's field
+/// names alone, so a field gained, lost or reordered *beneath* them — a
+/// draft base's marker or stamps, a marker's position, a shot's terms, a
+/// run, a node of the table — moves the World's bytes with every name
+/// unchanged. This pin sees it. The checkpoint twin is the node table and
+/// then the eight fields in declaration order: the table a `Vec` of nodes,
+/// each list's root written at its first meeting — a document's content
+/// list, then its link list, the documents in address order, then R's named
+/// lists — and a list two documents share written once; the arrangements a
+/// `Vec` of pairs in address order (bincode writes a map exactly so), each
+/// a document's two root ids; R's appended spans each run's I-extent in
+/// placing order and then its named lists each a root id; and the six maps
+/// after R every entry its fields in order — a shot's terms its count,
+/// extent, base, stretches and depth, a draft base its base, extent,
+/// source, marker and stamps. The run-sequence twin is the eight fields
+/// with every list its runs in V-order, the form the engine's world dump
+/// renders. Each twin decodes back to the fixture through its own door, so
+/// it is the slice's form and not merely bytes alike.
 #[test]
-fn the_slice_serializes_as_its_nine_maps_down_to_each_entry_s_fields() {
+fn the_slice_serializes_as_its_node_table_and_nine_maps_down_to_each_entry_s_fields() {
     let tumbler = |address: Address| address.tumbler().clone();
     let raw_run = |start: Address, width: u32| -> RawRun { (tumbler(start), n(width)) };
     let extent = |start: Address, reach: Address| {
@@ -994,21 +1053,32 @@ fn the_slice_serializes_as_its_nine_maps_down_to_each_entry_s_fields() {
     let raw_marker = |sides: Vec<Address>, head: Address, copied: u32, at: u64| -> RawMarker {
         (sides.into_iter().map(tumbler).collect(), tumbler(head), n(copied), at)
     };
+    // The lists, each a leaf: doc1's content, which its snapshot doc2 and
+    // doc2's named list share; doc1's link; the shot's member — its two
+    // positions, then doc1's past the one its copy took, the base's list
+    // with its first position replaced; and the birth member's.
+    let doc1_content = || vec![raw_run(ca(1), 3), raw_run(vca(1), 1)];
+    let doc1_link = || vec![raw_run(la(1), 1)];
+    let member = || vec![raw_run(ca(1), 2), raw_run(ca(2), 2), raw_run(vca(1), 1)];
+    let birth = || vec![raw_run(pca(1), 1)];
+    let nodes: Vec<RawLeaf> = vec![(0, doc1_content()), (0, doc1_link()), (0, member()), (0, birth())];
+    let rooted: Vec<(Tumbler, (RawRoot, RawRoot))> = vec![
+        (tumbler(doc1()), (Some(0), Some(1))),
+        (tumbler(vdoc()), (Some(2), None)),
+        (tumbler(doc2()), (Some(0), None)),
+        (tumbler(pca_member()), (Some(3), None)),
+    ];
     let arrangements: Vec<(Tumbler, RawArrangement)> = vec![
-        (tumbler(doc1()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![raw_run(la(1), 1)])),
-        // The shot's member: its two positions, then doc1's past the one
-        // its copy took — the base's list, its first position replaced.
-        (tumbler(vdoc()), (vec![raw_run(ca(1), 2), raw_run(ca(2), 2), raw_run(vca(1), 1)], vec![])),
-        (tumbler(doc2()), (vec![raw_run(ca(1), 3), raw_run(vca(1), 1)], vec![])),
-        (tumbler(pca_member()), (vec![raw_run(pca(1), 1)], vec![])),
+        (tumbler(doc1()), (doc1_content(), doc1_link())),
+        (tumbler(vdoc()), (member(), vec![])),
+        (tumbler(doc2()), (doc1_content(), vec![])),
+        (tumbler(pca_member()), (birth(), vec![])),
     ];
     // R's two maps: the spans appended — the placements' alone, a shot's
     // member storing none — then the lists named, the snapshot's.
-    let appended: Vec<(Tumbler, Vec<Span>)> =
-        vec![(tumbler(doc1()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))])];
-    let named: Vec<(Tumbler, Vec<RawRun>)> =
-        vec![(tumbler(doc2()), vec![raw_run(ca(1), 3), raw_run(vca(1), 1)])];
-    let provenance = (appended, named);
+    let appended = || -> Vec<(Tumbler, Vec<Span>)> { vec![(tumbler(doc1()), vec![extent(ca(1), ca(4)), extent(vca(1), vca(2))])] };
+    let named_roots: Vec<(Tumbler, RawRoot)> = vec![(tumbler(doc2()), Some(0))];
+    let named_runs: Vec<(Tumbler, Vec<RawRun>)> = vec![(tumbler(doc2()), doc1_content())];
     let birth_extents: Vec<(Tumbler, Nat)> =
         vec![(tumbler(vdoc()), n(5)), (tumbler(pca_member()), n(1))];
     type RawTerms = (Nat, Option<Nat>, Option<Tumbler>, Vec<(Nat, Nat, Nat)>, u64);
@@ -1041,32 +1111,49 @@ fn the_slice_serializes_as_its_nine_maps_down_to_each_entry_s_fields() {
         ),
     ];
     let source_copied: Vec<(Tumbler, Nat)> = vec![(tumbler(doc2()), n(4))];
-    let twin = bincode::serialize(&(
-        arrangements,
-        provenance,
-        birth_extents,
-        shot_terms,
-        fork_sources,
-        arranged_at,
-        draft_bases,
-        source_copied,
-    ))
-    .expect("the twin encodes");
+    let maps = (&birth_extents, &shot_terms, &fork_sources, &arranged_at, &draft_bases, &source_copied);
+    let twin = bincode::serialize(&(nodes, rooted, (appended(), named_roots), maps)).expect("the twin encodes");
     let state = every_field_held();
     assert!(
         bincode::serialize(&state).expect("the slice serializes") == twin,
-        "M5's slice serialized as something other than its nine maps in declaration order, \
-         each in address order and each entry its fields as the twin spells them: those bytes \
-         are M2's hashed checkpoint body, a slice of the engine's World layout and the engine's \
-         world dump — a change to them owes the engine's WORLD_FORMAT bump (or, under the \
-         owner's no-stamp ruling, a line in its list of the layouts its count names) and a \
-         dump-filter disposition"
+        "M5's slice serialized as something other than its node table and then its nine maps in declaration \
+         order, each in address order and each entry its fields as the twin spells them: those bytes are M2's \
+         hashed checkpoint body and a slice of the engine's World layout — a change to them owes the engine's \
+         WORLD_FORMAT bump (or, under the owner's no-stamp ruling, a line in its list of the layouts its count \
+         names)"
     );
     assert_eq!(
         bincode::deserialize::<M5State>(&twin).expect("the twin decodes"),
         state,
         "the twin's bytes are the fixture's slice"
     );
+    // The run-sequence form: the eight fields, every list its runs.
+    let by_runs = bincode::serialize(&(arrangements, (appended(), named_runs), maps)).expect("the twin encodes");
+    assert!(
+        bincode::serialize(&state.as_run_sequences()).expect("the form serializes") == by_runs,
+        "M5's run-sequence form serialized as something other than its nine maps in declaration order, each \
+         list its runs in V-order: the engine's world dump renders it — a change to it owes a dump-filter \
+         disposition"
+    );
+    let read_back = {
+        use bincode::Options;
+        let options = bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes();
+        M5State::from_run_sequences(&mut bincode::Deserializer::from_slice(&by_runs, options)).expect("the twin decodes")
+    };
+    assert_eq!(read_back, state, "the run-sequence twin's bytes are the fixture's slice");
+    // One list, three handles: the snapshot's document, its source and its
+    // named list are one root in the fixture, and one again once decoded
+    // from the checkpoint form — where the run-sequence form, which writes
+    // each list whole, reads them back apart.
+    for (label, held, shared) in [
+        ("the fold's", &state, true),
+        ("the checkpoint form's", &bincode::deserialize::<M5State>(&twin).expect("the twin decodes"), true),
+        ("the run-sequence form's", &read_back, false),
+    ] {
+        let named = held.provenance.named_list(&doc2()).expect("the snapshot's named list");
+        assert_eq!(held.content_list(&doc2()).shares_root_with(held.content_list(&doc1())), shared, "{label} snapshot and its source");
+        assert_eq!(named.shares_root_with(held.content_list(&doc1())), shared, "{label} named list and its source");
+    }
 }
 
 /// Another account's document, `[1,0,2,0,1]`: where a cross-owner fork of
@@ -1212,18 +1299,7 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
     // A checkpoint written before the map misreads every field after it,
     // and decodes no default (the engine's World door holds that refusal;
     // the field order is pinned here).
-    let fields = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-        &live.draft_bases,
-        &live.source_copied,
-    ))
-    .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, before `arranged_at`");
+    assert_field_order(&live, &bytes, "`fork_sources` is written after `shot_terms`, before `arranged_at`");
 }
 
 #[test]
@@ -1371,28 +1447,10 @@ fn the_arranged_at_positions_ride_the_checkpoint_sixth_and_replay_re_derives_the
     assert_eq!(back, live);
     assert_eq!(back.arranged_at(&doc1()), Some(Seq(9)), "the checkpoint carries it");
     assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
-    let fields = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-        &live.draft_bases,
-        &live.source_copied,
-    ))
-    .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`arranged_at` is written after `fork_sources`, before `draft_bases`");
+    assert_field_order(&live, &bytes, "`arranged_at` is written after `fork_sources`, before `draft_bases`");
     // A body cut short of the map — a checkpoint written before it — does
     // not decode: the no-default rule.
-    let without: Vec<u8> = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-    ))
-    .expect("the five fields serialize");
+    let without = cut_after(&live, 3);
     assert!(
         bincode::deserialize::<M5State>(&without).is_err(),
         "a checkpoint body without the map must fail to decode, never read as never arranged"
@@ -1542,32 +1600,10 @@ fn the_draft_bases_ride_the_checkpoint_seventh_and_replay_re_derives_them() {
     assert_eq!(back.draft_base(&doc2()), live.draft_base(&doc2()), "the checkpoint carries it");
     assert_eq!(back.clone().rebuild_derived(), back);
     assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
-    let fields = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-        &live.draft_bases,
-        &live.source_copied,
-    ))
-    .expect("the fields serialize");
-    assert_eq!(
-        fields, bytes,
-        "`draft_bases` is written after `arranged_at`, before `source_copied`"
-    );
+    assert_field_order(&live, &bytes, "`draft_bases` is written after `arranged_at`, before `source_copied`");
     // A body cut short of the map — a checkpoint written before it — does
     // not decode: the no-default rule.
-    let without: Vec<u8> = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-    ))
-    .expect("the six fields serialize");
+    let without = cut_after(&live, 4);
     assert!(
         bincode::deserialize::<M5State>(&without).is_err(),
         "a checkpoint body without the map must fail to decode, never read as no base"
@@ -1700,30 +1736,10 @@ fn the_copied_counts_ride_the_checkpoint_last_and_replay_re_derives_them() {
     assert_eq!(back.fork_source_copied(&fork_doc()), Some(&n(3)), "the checkpoint carries it");
     assert_eq!(back.clone().rebuild_derived(), back);
     assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
-    let fields = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-        &live.draft_bases,
-        &live.source_copied,
-    ))
-    .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`source_copied` is written after `draft_bases`, last");
+    assert_field_order(&live, &bytes, "`source_copied` is written after `draft_bases`, last");
     // A body cut short of the map — a checkpoint written before it — does
     // not decode: the no-default rule.
-    let without: Vec<u8> = bincode::serialize(&(
-        &live.arrangements,
-        &live.provenance,
-        &live.birth_extents,
-        &live.shot_terms,
-        &live.fork_sources,
-        &live.arranged_at,
-        &live.draft_bases,
-    ))
-    .expect("the seven fields serialize");
+    let without = cut_after(&live, 5);
     assert!(
         bincode::deserialize::<M5State>(&without).is_err(),
         "a checkpoint body without the map must fail to decode, never read as no count"
@@ -1953,10 +1969,10 @@ fn the_edits_record_splices_its_changes_appends_what_it_places_and_always_moves_
 /// THE SHAPE A RE-WINDOW STAGES, OUTSIDE ITS INPUT CLASS. A publication's
 /// kept places are one edit record: a change a place, as wide as the runs
 /// it puts in, a run a piece. Where such a record does not fit the list it
-/// is folded over, the fold answers without a panic and by the one-walk
-/// splice's clamps: a place past the end is made at the end; a place
-/// reaching past the end removes what is there; of two places that overlap,
-/// or stand out of order, the later is made where the walk stands; and a
+/// is folded over, the fold answers without a panic and by the splice's
+/// clamps: a place past the end is made at the end; a place reaching past
+/// the end removes what is there; of two places that overlap, or stand out
+/// of order, the later is made where the build stands; and a
 /// record replayed over a shorter draft, or an absent one, places every run
 /// it carries. Each fold appends a span for every run of the record and
 /// moves the arranged-at position.
@@ -1993,15 +2009,16 @@ fn a_re_windows_record_that_does_not_fit_its_draft_is_folded_without_a_panic() {
 }
 
 #[test]
-fn a_shots_fold_reads_each_run_of_its_base_once_whatever_its_stretches() {
-    // The fold builds a shot's member in ONE walk of its base's list: each
-    // run of the base read once, each stretch made once, each placed run
-    // placed once — `#runs + #stretches + Σ #runs placed`, whether the shot
-    // names one stretch or four thousand. Made a stretch at a time, each
-    // would walk the whole list again.
+fn a_shots_fold_reads_its_base_at_its_stretches_alone_and_shares_the_rest() {
+    // The fold builds a shot's member from its base's tree: each stretch
+    // found by a descent, its runs placed, and every node of the base no
+    // stretch reaches shared with the member. The count is the stretches'
+    // and the placed runs' — a bound the base's 65,536 runs do not enter —
+    // whether the shot names one stretch or four thousand.
     let base_run_count = 1u32 << 16;
     let base_runs: Vec<Run> = (1..=base_run_count).map(|k| run(&ca(2 * k), 1)).collect();
     let base = place(&M5State::genesis(), &doc1(), 1, base_runs.clone());
+    let base_list = base.content_list(&doc1()).clone();
     for stretches in [1u32, 64, 4_096] {
         // Each stretch replaces one position of the base by one run, the
         // stretches spread evenly over it.
@@ -2016,11 +2033,17 @@ fn a_shots_fold_reads_each_run_of_its_base_once_whatever_its_stretches() {
         let runs: Vec<Run> = (1..=stretches).map(|i| run(&pca(2 * i), 1)).collect();
         let mut steps = 0u64;
         let member = base.shot_member_list(&runs, &terms, &mut |n| steps += n);
-        assert_eq!(
-            steps,
-            u64::from(base_run_count) + 2 * u64::from(stretches),
-            "{stretches} stretches: every run of the base once, each stretch and each placed run once"
-        );
+        let bound = (u64::from(stretches) + 1) * base_list.cut_steps() + u64::from(stretches);
+        assert!(steps <= bound, "{stretches} stretches: {steps} steps past {bound}");
+        if stretches < 4_096 {
+            assert!(steps < u64::from(base_run_count) / 8, "{stretches} stretches: {steps} steps follow the base");
+        }
+        // The member holds the base's nodes but for the stretches' paths:
+        // a leaf a stretch, and the nodes above it.
+        member.check().expect("the member's tree holds");
+        let (leaves, inner) = member.made_anew(&[&base_list]);
+        assert_eq!(leaves, stretches as usize, "{stretches} stretches: one leaf made anew a stretch");
+        assert!(inner <= stretches as usize * base_list.height(), "{stretches} stretches: {inner} inner nodes made anew");
         assert_eq!(member.run_count(), base_run_count as usize);
         let mut expected = base_runs.clone();
         for i in 0..stretches {
@@ -2032,3 +2055,219 @@ fn a_shots_fold_reads_each_run_of_its_base_once_whatever_its_stretches() {
         assert!(folded.content_runs(&vdoc()).eq(expected.iter()));
     }
 }
+
+#[test]
+fn the_fold_leaves_each_list_sharing_what_its_record_did_not_change() {
+    // Each arm that makes a list from another leaves the two sharing every
+    // node the record did not reach, by address. A snapshot's document, its
+    // source and the list R names for it are three handles on one root. An
+    // edit's list holds its document's old one but for the paths to its
+    // changes. Ten edits in a row, a snapshot kept after each, keep ten
+    // such paths beside the first list, not ten lists. And a shot that
+    // carries its whole arrangement shares nothing with its base and reads
+    // none of it.
+    let runs = 1u32 << 16;
+    let base_runs: Vec<Run> = (1..=runs).map(|k| run(&ca(2 * k), 1)).collect();
+    let mut state = place(&M5State::genesis(), &doc1(), 1, base_runs.clone());
+    let first = state.content_list(&doc1()).clone();
+    let height = first.height();
+    let mut kept: Vec<Address> = Vec::new();
+    for j in 0..10u32 {
+        // One position of the draft replaced by one run of another origin.
+        let at = 1 + j * (runs / 10) + 7;
+        let edit = M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(at), width: n(1), runs: vec![run(&pca(2 * j + 1), 1)] }] };
+        let before = state.content_list(&doc1()).clone();
+        state = state.apply_m5(Seq(u64::from(2 * j + 2)), &edit);
+        let edited = state.content_list(&doc1());
+        assert_eq!(edited.made_anew(&[&before]), (1, height), "edit {j}: its leaf and the node above it at each level");
+        // The snapshot: the new document, its source and the named list,
+        // one root.
+        let version = a(&[1, 0, 2, 0, 100 + j]);
+        state = state.apply_m5(Seq(u64::from(2 * j + 3)), &M5Rec::VersionSnapshot { source: doc1(), new: version.clone() });
+        let source = state.content_list(&doc1());
+        assert!(state.content_list(&version).shares_root_with(source), "version {j}: the document and its source");
+        assert!(state.provenance.named_list(&version).expect("named").shares_root_with(source), "version {j}: the named list and its source");
+        kept.push(version);
+    }
+    // Every version still holds the list its edit left, and they hold
+    // between them the first list's nodes and ten paths.
+    let lists: Vec<&RunList> = kept.iter().map(|doc| state.content_list(doc)).chain([&first]).collect();
+    let named: Vec<&RunList> = kept.iter().map(|doc| state.provenance.named_list(doc).expect("named")).collect();
+    for (version, named) in kept.iter().zip(&named) {
+        assert!(state.content_list(version).shares_root_with(named), "a named list stands as its version does");
+    }
+    let alone = RunList::nodes_among(&[&first]);
+    let together = RunList::nodes_among(&lists);
+    assert_eq!(together - alone, 10 * (height + 1), "ten versions: ten leaves and ten paths beside the first list's {alone} nodes");
+    assert_eq!(RunList::nodes_among(&named), RunList::nodes_among(&lists[..10]), "the named lists hold no node the versions do not");
+    // The source edited once more: the last version and its named list
+    // keep the list as it stood, reached from the version and from R.
+    let last = kept.last().expect("a version");
+    let before = state.content_list(last).clone();
+    let edited = state.apply_m5(Seq(99), &M5Rec::ContentRemove { doc: doc1(), from: n(1), width: n(runs / 2) });
+    assert!(edited.content_list(last).shares_root_with(&before));
+    assert!(edited.provenance.named_list(last).expect("named").shares_root_with(&before));
+    assert!(!edited.content_list(&doc1()).shares_root_with(&before));
+    // A shot carrying its whole arrangement over a base: one change over
+    // the base's extent. Its member is the bulk build of its runs: no node
+    // of the base is opened, none is shared, and the count is the placed
+    // runs' alone.
+    let whole: Vec<Run> = (1..=runs).map(|k| run(&pca(2 * k), 1)).collect();
+    let terms = ShotTerms { placed: n(runs), base_extent: Some(n(runs)), base: Some(doc1()), stretches: Vec::new(), chain_depth: 1 };
+    let mut steps = 0u64;
+    let member = state.shot_member_list(&whole, &terms, &mut |by| steps += by);
+    assert_eq!(steps, 1 + u64::from(runs), "the whole form: its one change and each run placed, no step of the base's");
+    let base_list = state.content_list(&doc1());
+    let (leaves, inner) = member.made_anew(&[base_list]);
+    assert_eq!(leaves + inner, RunList::nodes_among(&[&member]), "the whole form shares no node with its base");
+    assert!(member.iter().eq(whole.iter()));
+    assert_eq!(member.fill(), RunList::from_runs(whole.clone()).fill(), "the member is the bulk build of its runs");
+    // …and where the base grew past the extent the copy took, the tail is
+    // kept after the runs placed, by a descent to it.
+    let grown = state.apply_m5(Seq(100), &M5Rec::ContentPlace { doc: doc1(), at: n(runs + 1), runs: vec![run(&vca(1), 3)] });
+    let mut steps = 0u64;
+    let member = grown.shot_member_list(&whole, &terms, &mut |by| steps += by);
+    assert!(member.iter().eq(whole.iter().chain([&run(&vca(1), 3)])), "the base's tail past the extent stands after the runs placed");
+    assert!(steps <= 1 + u64::from(runs) + grown.content_list(&doc1()).cut_steps(), "the tail kept by one descent: {steps} steps");
+}
+
+/// Every run-list `s` holds: both lists of every document, then every list
+/// R names — the roots its checkpoint form writes, in the order it takes
+/// them.
+fn every_list(s: &M5State) -> Vec<&RunList> {
+    s.arrangements.values().flat_map(|arrangement| [&arrangement.content, &arrangement.link]).chain(s.provenance.named_lists()).collect()
+}
+
+/// How many nodes the slice's checkpoint form writes: the table's count,
+/// which leads its bytes.
+fn table_nodes(bytes: &[u8]) -> usize {
+    u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes")) as usize
+}
+
+/// A draft of `runs` runs, then `versions` rounds of one change and a
+/// snapshot kept, and a second document sharing nothing with it.
+fn a_document_and_its_versions(runs: u32, versions: u32) -> M5State {
+    let base_runs: Vec<Run> = (1..=runs).map(|k| run(&ca(2 * k), 1)).collect();
+    let mut state = place(&M5State::genesis(), &doc1(), 1, base_runs);
+    for j in 0..versions {
+        let at = 1 + j * (runs / versions) + 7;
+        let edit = M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(at), width: n(1), runs: vec![run(&pca(2 * j + 1), 1)] }] };
+        state = state.apply_m5(Seq(u64::from(2 * j + 2)), &edit);
+        state = state.apply_m5(Seq(u64::from(2 * j + 3)), &M5Rec::VersionSnapshot { source: doc1(), new: a(&[1, 0, 2, 0, 100 + j]) });
+    }
+    place(&state, &doc2(), 1, (1..=300).map(|k| run(&vca(2 * k), 1)).collect())
+}
+
+#[test]
+fn the_checkpoint_form_writes_each_node_the_slices_lists_share_once() {
+    // A document of 65,536 runs, ten versions each a change on from the
+    // last — each a document of its own and a list R names — and a second
+    // document sharing nothing: twenty-three lists, of which twenty-one hold
+    // the first document's runs, whole. The checkpoint form writes exactly
+    // the nodes those lists hold between them, each once, and is far under
+    // the lists written whole; decoded, the slice is equal, shares every
+    // node it shared, and holds as many nodes as the table has.
+    let state = a_document_and_its_versions(1 << 16, 10);
+    let lists = every_list(&state);
+    assert_eq!(lists.iter().filter(|list| !list.is_empty()).count(), 22, "the document, its ten versions and their ten named lists, and the second document");
+    let distinct = RunList::nodes_among(&lists);
+    let bytes = bincode::serialize(&state).expect("the slice serializes");
+    assert_eq!(table_nodes(&bytes), distinct, "the table holds each node the lists hold, once");
+    // The lists' own bytes in each form. Written whole, a list is a count
+    // and 104 bytes a run of these lists; in the checkpoint form it is a
+    // root — one byte for the empty list, nine for any other — and its
+    // nodes' share of the table. Everything else the two forms write alike.
+    let by_runs = bincode::serialize(&state.as_run_sequences()).expect("the run-sequence form serializes");
+    let whole: usize = lists.iter().map(|list| 8 + 104 * list.run_count()).sum();
+    let roots: usize = lists.iter().map(|list| if list.is_empty() { 1 } else { 9 }).sum();
+    let table = bytes.len() - (by_runs.len() - whole) - roots;
+    let one_list = 8 + (1usize << 16) * 104;
+    assert!(whole > 21 * one_list, "the lists written whole: {whole} bytes");
+    assert!(table < one_list + one_list / 20, "the table: {table} bytes against one list's {one_list}");
+    eprintln!("slice: 21 lists of 65,536 runs and one of 300: a table of {distinct} nodes in {table} bytes, {whole} bytes written whole");
+    // Decoded: equal, and sharing as written — across the document, its
+    // versions and the lists R names.
+    let back: M5State = bincode::deserialize(&bytes).expect("the slice decodes");
+    assert_eq!(back, state);
+    assert_eq!(RunList::nodes_among(&every_list(&back)), distinct, "the decoded lists hold between them the table's nodes");
+    for j in 0..10u32 {
+        let version = a(&[1, 0, 2, 0, 100 + j]);
+        let named = back.provenance.named_list(&version).expect("the version's named list");
+        assert!(named.shares_root_with(back.content_list(&version)), "version {j} and its named list are one root after the decode");
+        assert_eq!(back.content_list(&version).fill(), state.content_list(&version).fill(), "version {j} has the shape that was written");
+    }
+    assert!(back.content_list(&doc1()).shares_root_with(back.content_list(&a(&[1, 0, 2, 0, 109]))), "the document and its last version are one root");
+    // A list R names whose version has since been edited away from it is
+    // reached from R alone: it is in the table, and decodes equal.
+    let first = a(&[1, 0, 2, 0, 100]);
+    let moved_on = state.apply_m5(Seq(90), &M5Rec::ContentRemove { doc: first.clone(), from: n(1), width: n(40_000) });
+    let named = moved_on.provenance.named_list(&first).expect("named").clone();
+    assert!(!named.shares_root_with(moved_on.content_list(&first)));
+    let back: M5State = bincode::deserialize(&bincode::serialize(&moved_on).expect("the slice serializes")).expect("the slice decodes");
+    assert_eq!(back, moved_on);
+    assert_eq!(back.provenance.named_list(&first), Some(&named), "the named list stands as it stood");
+    assert_eq!(RunList::nodes_among(&every_list(&back)), RunList::nodes_among(&every_list(&moved_on)));
+}
+
+#[test]
+fn the_checkpoint_form_is_a_function_of_the_records_folded() {
+    // M2 names a checkpoint by the hash of its body, so the slice's bytes
+    // are one byte string however the state was reached: folded twice from
+    // one record stream; decoded and written again; decoded part way and
+    // folded on, against a fold of the whole; and with a change made and
+    // then reversed, whose path of nodes is new in memory and equal in
+    // content to the one it replaced.
+    let records = |upto: u32| -> Vec<(u64, M5Rec)> {
+        let mut records = vec![(1, M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: (1..=3_000u32).map(|k| run(&ca(2 * k), 1)).collect() })];
+        for j in 0..upto {
+            let at = 1 + (j * 211) % 2_900;
+            let rec = match j % 5 {
+                0 => M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(at), width: n(1), runs: vec![run(&pca(2 * j + 1), 2)] }] },
+                1 => M5Rec::VersionSnapshot { source: doc1(), new: a(&[1, 0, 2, 0, 100 + j]) },
+                2 => M5Rec::ContentRemove { doc: doc1(), from: n(at), width: n(3) },
+                3 => M5Rec::ContentPlace { doc: doc1(), at: n(at), runs: vec![run(&vca(2 * j + 1), 1), run(&vca(2 * j + 9), 1)] },
+                _ => M5Rec::ContentReorder { doc: doc1(), cut_ordinals: vec![n(at), n(at + 5), n(at + 40)] },
+            };
+            records.push((u64::from(j) + 2, rec));
+        }
+        records
+    };
+    let folded = |from: M5State, records: &[(u64, M5Rec)]| records.iter().fold(from, |s, (at, rec)| s.apply_m5(Seq(*at), rec));
+    let all = records(60);
+    // One record stream folded twice: one body.
+    let (first, second) = (folded(M5State::genesis(), &all), folded(M5State::genesis(), &all));
+    let bytes = bincode::serialize(&first).expect("the slice serializes");
+    assert_eq!(bincode::serialize(&second).expect("the slice serializes"), bytes, "two folds of one record stream");
+    assert!(first.content_list(&doc1()).height() >= 2, "the premise: a list of several levels");
+    // Decoded and written again with no record between: the same body.
+    let back: M5State = bincode::deserialize(&bytes).expect("the slice decodes");
+    assert_eq!(bincode::serialize(&back).expect("the slice serializes"), bytes, "decoded and written again");
+    // Decoded part way and folded on, against the fold of the whole — at
+    // every cut of the stream.
+    for cut in [1usize, 2, 7, 23, 40, 59] {
+        let part = bincode::serialize(&folded(M5State::genesis(), &all[..cut])).expect("the slice serializes");
+        let opened: M5State = bincode::deserialize(&part).expect("the slice decodes");
+        assert_eq!(
+            bincode::serialize(&folded(opened, &all[cut..])).expect("the slice serializes"),
+            bytes,
+            "opened after {cut} records and folded on, against the fold of the whole"
+        );
+    }
+    // A change and its reversal: the document's list is the one a version
+    // kept, in content, on nodes of its own along one path. The table
+    // writes that path once.
+    let kept = first.apply_m5(Seq(100), &M5Rec::VersionSnapshot { source: doc1(), new: a(&[1, 0, 2, 0, 99]) });
+    let was = kept.content_list(&doc1()).point(&n(500)).expect("arranged");
+    let changed = kept.apply_m5(Seq(101), &M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(500), width: n(1), runs: vec![run(&pca(9_001), 1)] }] });
+    let reverted = changed.apply_m5(Seq(102), &M5Rec::ContentEdit { doc: doc1(), changes: vec![Splice { at: n(500), width: n(1), runs: vec![Run::new(was, n(1)).expect("a run")] }] });
+    let (list, version) = (reverted.content_list(&doc1()), reverted.content_list(&a(&[1, 0, 2, 0, 99])));
+    assert_eq!(list, version, "the change reversed leaves the version's runs");
+    assert!(!list.shares_root_with(version) && list.made_anew(&[version]).0 >= 1, "the premise: on nodes of its own");
+    assert_eq!(
+        table_nodes(&bincode::serialize(&reverted).expect("the slice serializes")),
+        table_nodes(&bincode::serialize(&kept).expect("the slice serializes")),
+        "nodes equal in content at two addresses are one entry"
+    );
+    assert!(RunList::nodes_among(&every_list(&reverted)) > RunList::nodes_among(&every_list(&kept)));
+}
+

@@ -1,7 +1,8 @@
 //! COPY's in-crate claims, in a world whose arrangement and content store are
 //! seeded INDEPENDENTLY — a state no engine reaches: its content-side
-//! referential gate (S3★), its run budget over many specs and over one, its
-//! walk budget, and the published-target refusal ahead of every source read.
+//! referential gate (S3★), its run budget over many specs and over one,
+//! what its specs cost, and the published-target refusal ahead of every
+//! source read.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
@@ -9,6 +10,7 @@ use skep_kernel::{Kernel, Seq};
 use skep_namespace::PrincipalId;
 
 use super::*;
+use crate::run_list::RunList;
 use crate::state::M5State;
 use crate::testutil::{
     ca, doc1, doc2, mem_kernel_of, n, pdoc, rejected, run, seeded_m3, vp, vspan,
@@ -239,18 +241,17 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
 }
 
 #[test]
-fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
-    // §5: a spec's resolution walks every run left of its opening ordinal —
-    // all of them for a spec aimed past its source's end, which keeps
-    // nothing — so what a copy's specs command under the applier lock is not
-    // what they place. Each spec is charged its source's WHOLE run count
-    // ahead of its walk, the charges summed in spec order, and a copy whose
-    // sum passes `MAX_COPY_RESOLVE_STEPS` is refused `TooManyRuns`, whatever
-    // its specs would keep and before the crossing spec is walked — which the
-    // source's one absent start makes visible, a walk reaching it answering
-    // `DanglingSource`. The charge is the worst case, so a spec opening at the
-    // source's first position is charged as one opening past its last; and at
-    // the budget the copy is walked and placed.
+fn a_copys_specs_cost_a_descent_each_and_are_refused_for_what_they_place_alone() {
+    // §5: a spec's resolution descends its source's run-list to the span —
+    // a node a level, whatever the source holds left of it — and reads from
+    // there the runs it yields, so what a copy's specs command under the
+    // applier lock is what they place, and the placement budget is the one
+    // budget of the copy. A copy of many specs over a fragmented source,
+    // each keeping one run, is walked and placed whatever the product of
+    // its spec count and the source's run count; a spec aimed past the
+    // source's end reads no node and keeps nothing; and every spec is
+    // resolved, which the source's one absent start makes visible, a spec
+    // reaching it answering `DanglingSource`.
     let p1 = Caller::Principal(PrincipalId(1));
     let source_run_count: usize = 1024;
     // Non-adjacent starts, so nothing coalesces and the source really holds
@@ -259,21 +260,18 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
         .map(|k| run(&ca(2 * k), 1))
         .collect();
     // The store holds every start but the LAST: a spec reaching that run is
-    // refused `DanglingSource` — if it is walked.
+    // refused `DanglingSource`.
     let present: Vec<u32> = (1..source_run_count as u32).map(|k| 2 * k).collect();
     let k = gate_kernel_arranging(runs, &present);
     assert_eq!(
         k.snapshot().world().m5().content_run_count(&doc1()),
         source_run_count
     );
-    let at_budget = MAX_COPY_RESOLVE_STEPS / source_run_count;
-    assert_eq!(
-        at_budget * source_run_count,
-        MAX_COPY_RESOLVE_STEPS,
-        "premise: whole charges"
-    );
-    // A spec naming the source's first position walks one run; one opening
-    // past its end walks them all and keeps nothing. Both are charged alike.
+    let height = k.snapshot().world().m5().content_list(&doc1()).height() as u64;
+    // As many specs as the source has runs, and one more: the product of
+    // the two passes a million, and each spec costs one descent.
+    let many = source_run_count + 1;
+    assert!(many * source_run_count > 1 << 20, "premise: the specs' count times the source's runs");
     let first = VSpec {
         source: doc1(),
         span: vspan(1, 1, 1),
@@ -292,45 +290,39 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
             .collect()
     };
     let before = k.current_seq();
-    // One spec past the budget, however little each walks.
+    // A spec that reaches the absent start is resolved, and refused for
+    // the hole — the last of many as the only one.
+    let mut onto_the_hole = specs(&first, many);
+    onto_the_hole.push(last.clone());
+    for specs in [&onto_the_hole, &specs(&last, 1)] {
+        assert!(matches!(
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), specs, AsOf::Typed(k.current_seq()))),
+            CopyError::DanglingSource
+        ));
+    }
+    // A spec past the end keeps nothing, alone and after many — and reads
+    // no node of the source.
+    let entered = RunList::nodes_entered();
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget + 1), AsOf::Typed(k.current_seq()))),
-        CopyError::TooManyRuns
-    ));
-    // The budget's specs, then one aimed past the end: the crossing spec is
-    // refused ahead of the walk it would make, keeping nothing.
-    let mut crossing = specs(&first, at_budget);
-    crossing.push(past_the_end.clone());
-    assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing, AsOf::Typed(k.current_seq()))),
-        CopyError::TooManyRuns
-    ));
-    // AHEAD of the walk, visibly: a crossing spec that would walk onto the
-    // absent start is refused `TooManyRuns`, never `DanglingSource`.
-    let mut crossing_onto_the_hole = specs(&first, at_budget);
-    crossing_onto_the_hole.push(last.clone());
-    assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing_onto_the_hole, AsOf::Typed(k.current_seq()))),
-        CopyError::TooManyRuns
-    ));
-    // Under the budget the same spec is walked, and refused for the hole.
-    assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&last, 1), AsOf::Typed(k.current_seq()))),
-        CopyError::DanglingSource
-    ));
-    // Under the budget a spec past the end is walked, and keeps nothing.
-    assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&past_the_end, 1), AsOf::Typed(k.current_seq()))),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&past_the_end, many), AsOf::Typed(k.current_seq()))),
         CopyError::EmptyResult
     ));
+    assert_eq!(RunList::nodes_entered(), entered, "a span past the end is found past it by the root's sum");
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");
-    // At the budget the specs are walked, and what they keep is placed.
+    // The many specs, and one more past the end, are walked and placed:
+    // one descent a spec that keeps a run, none for the one that keeps
+    // nothing.
+    let mut placing = specs(&first, many);
+    placing.push(past_the_end.clone());
+    let entered = RunList::nodes_entered();
     Vstream::new(&k)
-        .copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget), AsOf::Typed(k.current_seq()))
-        .expect("a copy charged exactly the budget is walked");
+        .copy(p1, &doc2(), vp(1, 1), &placing, AsOf::Typed(k.current_seq()))
+        .expect("a copy of many specs over a fragmented source is walked and placed");
+    let descents = RunList::nodes_entered() - entered;
+    assert!(descents <= many as u64 * (height + 1), "{descents} nodes entered by {many} specs over a tree of height {height}");
     assert_eq!(
         k.snapshot().world().m5().content_count(&doc2()),
-        n(at_budget as u32)
+        n(many as u32)
     );
 }
 

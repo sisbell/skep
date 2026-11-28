@@ -61,7 +61,7 @@ use crate::state::LinkRec;
 use crate::LinkWorld;
 
 // MAKELINK in both forms: the slot argument, the endset a slot builds under
-// both budgets, the record half — the one op family that seats.
+// the slot budget, the record half — the one op family that seats.
 mod makelink;
 // Emit_K, the managed surface's gated emission, and `emit_tuple`, the tuple
 // it deposits.

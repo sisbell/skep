@@ -906,9 +906,9 @@ pub enum Op {
 /// [`Op::FollowLink`]'s `slot` is already in), and `index` the offending
 /// spec's or span's position within it.
 ///
-/// A slot is also held to M7's two per-slot budgets — the spans it keeps
-/// ([`MAX_SLOT_SPANS`]) and the run-list steps its resolution walks — and
-/// over either answers `SlotTooLarge`, naming the slot and no index, the slot
+/// A slot is also held to M7's per-slot budget — the spans it keeps
+/// ([`MAX_SLOT_SPANS`]) — and
+/// over it answers `SlotTooLarge`, naming the slot and no index, the slot
 /// rather than one spec being at fault. Where both homes are registered
 /// documents the caller owns — the write the door judges — the refusal is
 /// M10's, raised as the slot crosses, once every spec reached so far has
@@ -918,7 +918,7 @@ pub enum Op {
 /// never turns on what a source the caller may not read holds; should that
 /// gate pass after all — a home registered in the window between M10's
 /// snapshot and the commit — it is M7 that answers `SlotTooLarge`, with no
-/// site, and a successor under both budgets commits as built, its sources
+/// site, and a successor under the budget commits as built, its sources
 /// never consulted ([`OperationSurface::execute`] states that window). The
 /// two name forms are the exception: an address-form type slot's count and
 /// an I-span slot's count are the request's own, so each is held to the span

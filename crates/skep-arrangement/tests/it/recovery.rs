@@ -1,9 +1,10 @@
 //! M2-driven recovery: the slice survives checkpoint load and tail replay,
 //! byte for byte.
 
-use skep_address::Span;
+use skep_address::{Address, Span};
 use skep_arrangement::{
-    reading_surface, seat_link, Deposit, DraftBase, HasM5, Marker, SetMerge, Shot, Vstream,
+    reading_surface, seat_link, Caller, Change, Deposit, DraftBase, Edit, HasM5, Marker, Placed,
+    SetMerge, Shot, VSpec, Vstream,
 };
 use skep_kernel::Kernel;
 use skep_namespace::{HasM3, PrincipalId};
@@ -181,3 +182,90 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], Deposit::Undeclared, now(&k))
         .expect("post-recovery insert commits");
 }
+
+/// The first part of a board's life: a draft fragmented into 2,000 runs,
+/// two cross-owner forks of it a removal apart, and a pivot. Returns the
+/// later fork.
+fn fragment_and_fork(k: &Kernel<World>) -> Address {
+    let vs = Vstream::new(k);
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, now(k)).expect("insert commits");
+    // Every third spec names doc1's `a`, `b` or `c` in turn, so no two
+    // neighbours are I-adjacent: 2,000 runs, a tree of several levels.
+    let specs: Vec<VSpec> = (0..2_000u32).map(|i| VSpec { source: doc1(), span: vspan(1, 3 - i % 3, 1) }).collect();
+    vs.copy(P1, &doc2(), vp(1, 1), &specs, now(k)).expect("the copy commits");
+    vs.version(PrincipalId(2), &doc2(), Some(false)).expect("the first fork");
+    vs.delete(P1, &doc2(), vp(1, 700), n(9), now(k)).expect("delete commits");
+    let (fork, _) = vs.version(PrincipalId(2), &doc2(), Some(false)).expect("the second fork");
+    vs.rearrange(P1, &doc2(), &[vp(1, 100), vp(1, 300), vp(1, 1_200)], now(k)).expect("rearrange commits");
+    fork
+}
+
+/// The second part: an edit of several changes to the draft, an insert into
+/// the later fork, and a third fork taken after them.
+fn edit_on(k: &Kernel<World>, fork: &Address) {
+    let vs = Vstream::new(k);
+    let changes = [40u32, 900, 1_500]
+        .into_iter()
+        .map(|at| Change { at: vp(1, at), width: n(2), placed: Placed::Values(vec![val(b"x"), val(b"y")]) })
+        .collect();
+    vs.edit(P1, &doc2(), Edit { changes, head: None, base: None, merge: None }, now(k)).expect("the edit lands");
+    vs.insert(Caller::Principal(PrincipalId(2)), fork, vp(1, 1_000), vec![val(b"z")], Deposit::Undeclared, now(k))
+        .expect("the fork's own insert commits");
+    vs.version(PrincipalId(3), &doc2(), Some(false)).expect("the third fork");
+}
+
+#[test]
+fn a_checkpoints_body_is_one_byte_string_after_an_open_and_after_a_replay() {
+    // M2 names a checkpoint by the hash of its body. The slice writes its
+    // run-lists as the nodes they are held as, so the hash holds only if a
+    // list's nodes are the same however the board reached it: checkpointed,
+    // opened and checkpointed again with no record between; opened and
+    // written on, against a board that folded the whole with no checkpoint
+    // between; and replayed from genesis, against the board that folded
+    // live.
+    let hash_at = |k: &Kernel<World>| {
+        let at = k.checkpoint().expect("checkpoint");
+        (at, k.checkpoint_header(at).expect("the checkpoint just written").body_hash)
+    };
+    // One board, checkpointed part way.
+    let dir = tempdir().expect("tempdir");
+    let (fork, first) = {
+        let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
+        let fork = fragment_and_fork(&k);
+        assert!(k.snapshot().world().m5().content_run_count(&doc2()) > 1_900, "the premise: a list of several levels");
+        (fork, hash_at(&k))
+    };
+    let whole = {
+        let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
+        assert_eq!(hash_at(&k), first, "opened and checkpointed again, no record between");
+        edit_on(&k, &fork);
+        hash_at(&k)
+    };
+    assert_ne!(whole, first);
+    {
+        // Opened from the later checkpoint, and again with nothing new.
+        let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
+        assert_eq!(hash_at(&k), whole, "the later checkpoint, opened and written again");
+    }
+    // Another board folding the same life with no checkpoint between: its
+    // lists were never decoded.
+    let live = tempdir().expect("tempdir");
+    {
+        let k = Kernel::<World>::open(cfg_fsync(live.path()), genesis()).expect("open");
+        let fork_again = fragment_and_fork(&k);
+        assert_eq!(fork_again, fork);
+        edit_on(&k, &fork);
+        assert_eq!(hash_at(&k), whole, "folded live, against opened part way and written on");
+    }
+    // And a third replayed from genesis: closed with no checkpoint, opened,
+    // and only then checkpointed.
+    let replayed = tempdir().expect("tempdir");
+    {
+        let k = Kernel::<World>::open(cfg_fsync(replayed.path()), genesis()).expect("open");
+        fragment_and_fork(&k);
+        edit_on(&k, &fork);
+    }
+    let k = Kernel::<World>::open(cfg_fsync(replayed.path()), genesis()).expect("replay from genesis");
+    assert_eq!(hash_at(&k), whole, "replayed from genesis, against opened part way and written on");
+}
+

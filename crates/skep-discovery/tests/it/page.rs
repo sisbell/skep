@@ -4,8 +4,8 @@
 //! continuation answered from the arrangement its first page read — a
 //! draft's only while the draft stands as it did, a member's whatever has
 //! landed since — and held to the arrangement and the place its go-on names;
-//! the walk's square kept; and the region family, which reads through
-//! `image_on` and is refused past the budget.
+//! no refusal for where its spans reach; and the region family, which reads
+//! through `image_on` and is refused past the budget.
 
 use crate::common;
 use crate::heap::settled_heap_bytes;
@@ -408,36 +408,29 @@ fn several_spans_are_paged_in_region_order() {
     assert_eq!((second.runs, second.next), (all[MAX_IMAGE_RUNS + 100..][..800].to_vec(), None));
 }
 
-/// The walk's square still refuses the paged image, first page and
-/// continuation alike: a region whose walk of the run-list is past the
-/// square of the run budget is refused though it resolves few runs or none.
+/// The paged image is never refused for where its spans reach, first page
+/// and continuation alike: a region of the budget's spans at the end of a
+/// draft one run past the budget is a page of its runs, and one of spans
+/// past the draft's end is the empty page, whatever runs stand left of them.
 #[test]
-fn the_walks_square_still_refuses_the_paged_image() {
+fn the_paged_image_is_never_refused_for_where_its_spans_reach() {
     let k = draft_of(MAX + 1);
     let reads = Reads(&k);
     // `MAX` spans, each one position: the draft's last, and one past its end.
     let flat_at_end: Vec<Span> = vec![vspan(1, MAX + 1, 1); MAX_IMAGE_RUNS];
     let past_end: Vec<Span> = vec![vspan(1, MAX + 2, 1); MAX_IMAGE_RUNS];
-    for region in [&flat_at_end, &past_end] {
-        for own in [false, true] {
-            assert_eq!(
-                reads.image_page(&doc2(), region, own, None),
-                Err(QueryError::ImageTooLarge)
-            );
-        }
+    for own in [false, true] {
+        let page = reads.image_page(&doc2(), &flat_at_end, own, None).expect("a page of the budget's runs");
+        assert_eq!((page.runs.len(), page.next), (MAX_IMAGE_RUNS, None), "each span's one run, and nothing left");
+        let page = reads.image_page(&doc2(), &past_end, own, None).expect("the empty page");
+        assert_eq!((page.runs.len(), page.next), (0, None), "spans past the end resolve no run");
     }
-    assert_eq!(
-        reads.image_page(&doc2(), &flat_at_end[..1], false, None).map(|page| page.runs.len()),
-        Ok(1),
-        "one walk is never refused for its reach"
-    );
+    // A continuation whose rest is that same region is answered as a first
+    // page of it is.
     let next = reads.image_page(&doc2(), &[vspan(1, 1, MAX + 1)], false, None).expect("a page");
     let next = next.next.expect("a go-on");
-    assert_eq!(
-        reads.image_page(&doc2(), &flat_at_end, false, Some(&next)),
-        Err(QueryError::ImageTooLarge),
-        "a continuation's walk is priced as a first page's"
-    );
+    let page = reads.image_page(&doc2(), &flat_at_end, false, Some(&next)).expect("the continuation");
+    assert_eq!((page.runs.len(), page.next), (MAX_IMAGE_RUNS, None));
 }
 
 /// The region family keeps its refusal past the run budget: `image_on`

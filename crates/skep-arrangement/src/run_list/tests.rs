@@ -1,13 +1,35 @@
+use std::cell::{Cell, RefCell};
+
 use super::*;
 use skep_address::{validate, Tumbler};
 
 use crate::testutil::{a, ca, n, run, vca};
 
+/// What one kept stretch and the seam before it may open of a tree of
+/// `height`, in steps: `c` of [`RunList::spliced`]'s card.
+fn cut_bound(height: usize) -> u64 {
+    6 * (height as u64 + 1) + 81
+}
+
+/// What a descent to one ordinal may read of a tree of `height`: a node a
+/// level, and a leaf's runs.
+fn descent_bound(height: usize) -> u64 {
+    height as u64 + 1 + 16
+}
+
+/// Returns `f`'s answer beside how many nodes its read walks entered: the
+/// count of a read that takes no `steps`.
+fn entered<T>(f: impl FnOnce() -> T) -> (T, u64) {
+    let before = tree::ENTERED.with(Cell::get);
+    let answer = f();
+    (answer, tree::ENTERED.with(Cell::get) - before)
+}
+
 /// A list through the coalesce every `RunList` passes, so a fixture holds the
 /// maximally-merged decomposition the type promises of every list in the
 /// process.
 fn list(runs: Vec<Run>) -> RunList {
-    RunList(coalesced(runs))
+    RunList::from_runs(runs)
 }
 
 /// The whole of a resolution, for the assertions whose subject is WHICH
@@ -222,26 +244,25 @@ fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width
 #[test]
 fn decoding_a_list_re_establishes_the_maximal_merge_the_reads_publish() {
     // §1/M12: `content_runs` and `link_runs` publish the unique
-    // maximally-merged decomposition, and a checkpoint carries these
-    // lists whole — so the decode path establishes the invariant as the
-    // mutators do. Without that door a recovered list could hold two
-    // I-adjacent runs, and every read publishing canonicality would
-    // answer off it: M6's COMPARE would see a different block structure
-    // for the same document after a restart, and M7's slot endsets would
-    // count more spans against `MAX_SLOT_SPANS`. Nothing faults, because
-    // the denotation is intact — which is why the door repairs rather
-    // than refuses, and why only a comparison of run STRUCTURE sees it.
+    // maximally-merged decomposition, and a list read back from its run
+    // sequence — the form a slice is written in outside a checkpoint —
+    // goes through a door that establishes the invariant as the mutators
+    // do. Without that door a list so read could hold two I-adjacent
+    // runs, and every read publishing canonicality would answer off it:
+    // M6's COMPARE would see a different block structure for the same
+    // document, and M7's slot endsets would count more spans against
+    // `MAX_SLOT_SPANS`. Nothing faults, because the denotation is intact —
+    // which is why the door repairs rather than refuses, and why only a
+    // comparison of run STRUCTURE sees it. A checkpoint's node table has a
+    // door of its own, held to the same rule in `table/tests.rs`.
     //
-    // The bytes are made by encoding the shadow's own shape, which is the
-    // exact form a checkpoint would present.
+    // The bytes are made by encoding the shadow's own shape, a sequence of
+    // runs.
     #[derive(Serialize)]
-    struct Wire(im::Vector<Run>);
-    let wire = |runs: Vec<Run>| {
-        bincode::serialize(&Wire(runs.into_iter().collect::<im::Vector<Run>>()))
-            .expect("the shadow encodes")
-    };
+    struct Wire(Vec<Run>);
+    let wire = |runs: Vec<Run>| bincode::serialize(&Wire(runs)).expect("the shadow encodes");
     // Two I-adjacent runs — `shift(ca(1), 2) = ca(3)` — which no fold
-    // could have written apart, since every mutator here coalesces.
+    // could have written apart, since every mutator here joins its seams.
     let split = wire(vec![run(&ca(1), 2), run(&ca(3), 1)]);
     let decoded: RunList = bincode::deserialize(&split).expect("a run sequence decodes");
     assert_eq!(
@@ -609,18 +630,17 @@ fn made_one_at_a_time(l: &RunList, changes: &[Splice]) -> RunList {
     })
 }
 
-/// The one-walk splice of `changes`, held to the two mutators' answer and
-/// to its count: one step a run read, a change made and a run placed.
+/// The splice of `changes`, held to the two mutators' answer, to the tree's
+/// invariants and to its count: within the card's bound, which the list's
+/// run count does not enter.
 fn spliced_as_the_mutators(l: &RunList, changes: &[Splice], label: &str) -> RunList {
     let mut count = 0u64;
     let got = l.spliced(changes, &mut |steps| count += steps);
     assert_eq!(got, made_one_at_a_time(l, changes), "{label}: equal to the mutators' list");
+    got.check().unwrap_or_else(|fault| panic!("{label}: {fault}"));
     let placed: usize = changes.iter().map(|c| c.runs.len()).sum();
-    assert_eq!(
-        count,
-        (l.run_count() + changes.len() + placed) as u64,
-        "{label}: each run read, each change made and each run placed, once"
-    );
+    let bound = (changes.len() as u64 + 1) * cut_bound(l.height()) + placed as u64;
+    assert!(count <= bound, "{label}: {count} steps past the card's {bound}");
     got
 }
 
@@ -728,7 +748,7 @@ fn positions(l: &RunList) -> Vec<Address> {
 }
 
 #[test]
-fn the_one_walk_splice_joins_every_seam_its_changes_make() {
+fn the_splice_of_changes_joins_every_seam_they_make() {
     // A removal between two runs of one document brings them together.
     let l = list(vec![run(&ca(1), 3), run(&vca(1), 2), run(&ca(4), 3)]);
     let joined = spliced_as_the_mutators(&l, &[change(4, 2, vec![])], "a removal between two I-adjacent runs");
@@ -778,7 +798,7 @@ fn the_one_walk_splice_joins_every_seam_its_changes_make() {
 }
 
 #[test]
-fn the_one_walk_splice_equals_todays_mutators_on_generated_lists() {
+fn the_splice_of_changes_equals_the_two_mutators_on_generated_lists() {
     let mut gen = Gen(0x9e37_79b9_7f4a_7c15);
     for (runs, changes) in [(0, 1), (1, 1), (1, 3), (7, 1), (7, 5), (40, 16), (64, 64), (300, 16), (300, 256), (1_500, 256)] {
         for ends in [false, true] {
@@ -794,10 +814,9 @@ fn the_one_walk_splice_equals_todays_mutators_on_generated_lists() {
 }
 
 #[test]
-fn the_one_walk_splice_equals_todays_mutators_at_the_wires_most_changes() {
-    // 4,096 changes, the most one frame names, into a list of 1,024 runs:
-    // the mutators rebuild the list twice a change, which is what bounds
-    // the list this cell can hold them to.
+fn the_splice_of_changes_equals_the_two_mutators_at_the_wires_most_changes() {
+    // 4,096 changes, the most one frame names, into a list of 1,024 runs,
+    // each made again by the two mutators in turn.
     let mut gen = Gen(0x2545_f491_4f6c_dd1d);
     let l = generated_list(&mut gen, 1_024);
     let set = generated_changes(&mut gen, &positions(&l), 4_096, true);
@@ -824,16 +843,8 @@ fn a_change_outside_the_folds_input_class_is_made_without_a_panic() {
     assert_eq!(over.runs(), vec![run(&ca(1), 4)]);
 }
 
-#[test]
-fn the_counted_width_reads_each_run_once() {
-    let l = list(vec![run(&ca(1), 3), run(&vca(1), 2), run(&ca(9), 4)]);
-    let mut count = 0u64;
-    assert_eq!(l.total_width_stepped(&mut |steps| count += steps), n(9));
-    assert_eq!(count, 3);
-    assert_eq!(l.total_width(), n(9));
-}
 
-/// The one walk's answer for `sites`, each an ordinal and the runs asked of
+/// The check's answer for `sites`, each an ordinal and the runs asked of
 /// it, with the steps it charged.
 fn held_at(l: &RunList, sites: &[(u32, Vec<Run>)]) -> (Vec<bool>, u64) {
     let ordinals: Vec<Nat> = sites.iter().map(|(at, _)| n(*at)).collect();
@@ -869,22 +880,37 @@ fn a_site_is_held_where_the_list_arranges_exactly_its_runs_whatever_the_run_boun
 }
 
 #[test]
-fn the_one_walk_reads_each_run_once_and_stops_with_its_last_site() {
+fn the_check_descends_to_each_site_and_reads_no_run_it_does_not_compare() {
+    // A list of one leaf: a site costs its own step, the one node, the
+    // leaf's runs up to the one it opens in, and a step a run asked; a
+    // site that opens where the comparison before it ended is reached by
+    // one run read, with no descent.
     let l = list(vec![run(&ca(1), 4), run(&vca(1), 2), run(&ca(9), 3)]);
-    // Two sites, the second in the last run: three runs read, two sites,
-    // two runs compared.
+    // Two sites apart, the second in the last run: each its step, the node
+    // and the runs up to its own, and its one run asked.
     let (held, count) = held_at(&l, &[(2, vec![run(&ca(2), 2)]), (7, vec![run(&ca(9), 1)])]);
-    assert_eq!((held, count), (vec![true, true], 3 + 2 + 2));
-    // One site in the first run: the walk reads that run and no other.
+    assert_eq!((held, count), (vec![true, true], (1 + 1 + 1 + 1) + (1 + 1 + 3 + 1)));
+    // One site in the first run: that run read and no other.
     let (held, count) = held_at(&l, &[(1, vec![run(&ca(1), 1), run(&ca(2), 1)])]);
-    assert_eq!((held, count), (vec![true], 1 + 1 + 2));
-    // Two sites in one run read it once.
+    assert_eq!((held, count), (vec![true], 1 + 1 + 1 + 2));
+    // Two sites in one run: the run in hand answers the second.
     let (held, count) = held_at(&l, &[(1, vec![run(&ca(1), 1)]), (3, vec![run(&ca(3), 2)])]);
-    assert_eq!((held, count), (vec![true, true], 1 + 2 + 2));
+    assert_eq!((held, count), (vec![true, true], (1 + 1 + 1 + 1) + (1 + 1)));
+    // A site opening where the one before it ended, in the next run: one
+    // run read on, no descent.
+    let (held, count) = held_at(&l, &[(1, vec![run(&ca(1), 4)]), (5, vec![run(&vca(1), 2)])]);
+    assert_eq!((held, count), (vec![true, true], (1 + 1 + 1 + 1) + (1 + 1 + 1)));
+    // The same two far sites over 65,536 runs cost what they cost over
+    // three, but for the height: no run between them is read.
+    let wide = list((0..65_536u32).map(|k| run(&at_doc(10, 1 + 3 * k), 2)).collect());
+    let last = 2 * 65_535 + 1;
+    let (held, count) = held_at(&wide, &[(1, vec![run(&at_doc(10, 1), 2)]), (last, vec![run(&at_doc(10, 1 + 3 * 65_535), 2)])]);
+    assert_eq!(held, vec![true, true]);
+    assert!(count <= 2 * (2 * (wide.height() as u64 + 1) + 20) + 3 * 2, "{count} steps over 65,536 runs");
 }
 
 #[test]
-fn the_one_walk_answers_what_a_position_by_position_read_answers_on_generated_lists() {
+fn the_check_of_several_sites_answers_what_a_position_by_position_read_answers_on_generated_lists() {
     let mut gen = Gen(0x0123_4567_89ab_cdef);
     for (runs, sites) in [(1usize, 1usize), (7, 3), (40, 16), (300, 64), (1_500, 256)] {
         let l = generated_list(&mut gen, runs);
@@ -923,10 +949,879 @@ fn the_one_walk_answers_what_a_position_by_position_read_answers_on_generated_li
         assert_eq!(got, want, "{runs} runs, {sites} sites");
         assert!(want.iter().any(|held| *held) && (sites < 8 || want.iter().any(|held| !*held)), "{runs} runs: the case holds both answers");
         let compared: usize = asked.iter().map(|(_, site)| site.len()).sum();
-        assert!(count <= (l.run_count() + sites + compared) as u64, "{runs} runs, {sites} sites: {count} steps");
-        // Each site alone, on a walk of its own, answers the same.
+        let bound = sites as u64 * (2 * (l.height() as u64 + 1) + 20) + 3 * compared as u64;
+        assert!(count <= bound, "{runs} runs, {sites} sites: {count} steps past the card's {bound}");
+        // Each site alone, on a cursor of its own, answers the same.
         for ((at, site), want) in asked.iter().zip(&want) {
             assert_eq!(held_at(&l, &[(*at, site.clone())]).0, vec![*want], "{runs} runs: the site at {at} alone");
         }
     }
+}
+
+// ---- The tree held to the vector-backed list, operation by operation ----
+
+/// An address `by` past `a` in its own chain: `a`'s last component moved.
+/// `None` where that would leave no ordinal.
+fn shifted(a: &Address, by: i64) -> Option<Address> {
+    let comps: Vec<Nat> = a.tumbler().iter().cloned().collect();
+    let (last, lead) = comps.split_last().expect("an address has components");
+    let moved = if by >= 0 {
+        last + Nat::from(by as u64)
+    } else {
+        let back = Nat::from(by.unsigned_abs());
+        if *last <= back {
+            return None;
+        }
+        last - back
+    };
+    let mut next = lead.to_vec();
+    next.push(moved);
+    Some(validate(Tumbler::new(next).expect("nonempty")).expect("a content address shifted is one"))
+}
+
+/// A run of `width` positions from `start`, any width.
+fn wide_run(start: &Address, width: Nat) -> Run {
+    Run::new(start.clone(), width).expect("a content run")
+}
+
+/// The kinds of list the tree is held to the oracle over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// Runs of one document's I-space, most of them continuing the one
+    /// before, so nearly every seam a change makes can merge.
+    OneOrigin,
+    /// Runs of six documents' I-space, of two address lengths.
+    ManyOrigins,
+    /// A few runs placed over and over: the same identities repeated.
+    Repeated,
+    /// Many origins, and runs wider than a machine word among them.
+    PastAWord,
+}
+
+/// The tree-backed list and the vector-backed one, made by the same
+/// operations.
+#[derive(Clone)]
+struct Twin {
+    tree: RunList,
+    oracle: oracle::RunList,
+}
+
+/// One block of the oracle's list: its first ordinal and its run.
+type Seat = (Nat, Run);
+
+/// The vector-backed list of `l`'s runs, placed at once.
+fn vector_backed(l: &RunList) -> oracle::RunList {
+    oracle::RunList::default().splice_in(&Nat::one(), l.iter().cloned())
+}
+
+impl Twin {
+    fn empty() -> Twin {
+        Twin { tree: RunList::default(), oracle: oracle::RunList::default() }
+    }
+
+    /// `tree` beside the vector-backed list of its runs.
+    fn of(tree: RunList) -> Twin {
+        let oracle = vector_backed(&tree);
+        Twin { tree, oracle }
+    }
+
+    /// The oracle's blocks, collected: where each run stands.
+    fn seats(&self) -> Vec<Seat> {
+        self.oracle.iter_blocks().map(|block| (block.v_start.clone(), block.run.clone())).collect()
+    }
+
+    fn end(&self) -> Nat {
+        self.oracle.total_width()
+    }
+
+    fn splice_in(&mut self, ord: &Nat, runs: Vec<Run>) {
+        self.tree = self.tree.splice_in(ord, runs.clone());
+        self.oracle = self.oracle.splice_in(ord, runs);
+    }
+
+    fn append(&mut self, run: Run) {
+        self.tree = self.tree.append(run.clone());
+        self.oracle = self.oracle.append(run);
+    }
+
+    fn remove_range(&mut self, from: &Nat, width: &Nat) {
+        self.tree = self.tree.remove_range(from, width);
+        self.oracle = self.oracle.remove_range(from, width);
+    }
+
+    fn reorder(&mut self, cuts: &[Nat]) {
+        self.tree = self.tree.reorder(cuts);
+        self.oracle = self.oracle.reorder(cuts);
+    }
+
+    fn spliced(&mut self, changes: &[Splice]) {
+        self.tree = self.tree.spliced(changes, &mut |_| {});
+        self.oracle = self.oracle.spliced(changes, &mut |_| {});
+    }
+
+    /// Holds the tree to the oracle: the run sequence, the counts, the
+    /// tree's own invariants, and every read at the ordinals `probes`
+    /// names and at the list's boundaries.
+    fn assert_same(&self, gen: &mut Gen, label: &str) {
+        assert!(self.tree.iter().eq(self.oracle.iter()), "{label}: the run sequences differ");
+        self.tree.check().unwrap_or_else(|fault| panic!("{label}: {fault}"));
+        assert_eq!(self.tree.run_count(), self.oracle.run_count(), "{label}: run count");
+        assert_eq!(self.tree.total_width(), self.oracle.total_width(), "{label}: total width");
+        assert_eq!(self.tree.is_empty(), self.oracle.is_empty(), "{label}: emptiness");
+        assert_eq!(self.tree.iter().len(), self.oracle.iter().len(), "{label}: the walk's length");
+        let seats = self.seats();
+        let end = self.end();
+        // The boundary ordinals, and the first, a middle and the last
+        // position of sampled runs — of every run where the list is short.
+        let mut ordinals = vec![Nat::zero(), Nat::one(), end.clone(), &end + Nat::one(), &end + n(7)];
+        // The vector-backed list answers each read by a walk from its first
+        // run, so the longer the list the fewer runs are sampled.
+        let sampled: Vec<usize> = if seats.len() <= 48 {
+            (0..seats.len()).collect()
+        } else {
+            let some = if seats.len() <= 600 { 12 } else if seats.len() <= 5_000 { 6 } else { 2 };
+            (0..some).map(|_| gen.below(seats.len() as u64) as usize).chain([0, seats.len() - 1]).collect()
+        };
+        for &at in &sampled {
+            let (v_start, run) = &seats[at];
+            ordinals.push(v_start.clone());
+            ordinals.push(v_start + &run.width - Nat::one());
+            ordinals.push(v_start + (&run.width / n(2)));
+        }
+        for ord in &ordinals {
+            assert_eq!(self.tree.locate(ord), self.oracle.locate(ord), "{label}: locate {ord}");
+            assert_eq!(self.tree.point(ord), self.oracle.point(ord), "{label}: point {ord}");
+        }
+        // Range reads opening at those ordinals: one position, a few, to
+        // the end and past it, and none; pulled whole and stopped early.
+        for (k, ord) in ordinals.iter().enumerate() {
+            let counts = [Nat::zero(), Nat::one(), n(1 + gen.below(9) as u32), &end + n(3)];
+            let count = &counts[k % counts.len()];
+            let want: Vec<Run> = self.oracle.iter_resolve_range(ord, count).collect();
+            let got: Vec<Run> = self.tree.iter_resolve_range(ord, count).collect();
+            assert_eq!(got, want, "{label}: the range ({ord}, {count})");
+            let take = gen.below(want.len() as u64 + 1) as usize;
+            assert_eq!(self.tree.iter_resolve_range(ord, count).take(take).collect::<Vec<_>>(), want[..take], "{label}: the range ({ord}, {count}) stopped at {take}");
+        }
+        for ord in ordinals.iter().take(8) {
+            let want: Vec<Run> = self.oracle.iter_resolve_from(ord).take(40).collect();
+            assert_eq!(self.tree.iter_resolve_from(ord).take(40).collect::<Vec<_>>(), want, "{label}: the suffix from {ord}");
+        }
+        // Membership: addresses the list holds, and ones beside them.
+        for &at in sampled.iter().take(12) {
+            let run = &seats[at].1;
+            for probe in [Some(run.i_start().clone()), shifted(run.i_start(), -1), Some(run.addr_at(&run.width))].into_iter().flatten() {
+                assert_eq!(self.tree.holds(&probe), self.oracle.holds(&probe), "{label}: holds {probe:?}");
+            }
+        }
+        // The whole-list reads, where the list is short enough to take
+        // them at every step: the blocks, the image, and the walk backward.
+        if seats.len() <= 600 {
+            assert!(self.tree.iter_blocks().map(|b| (b.v_start, b.run)).eq(self.oracle.iter_blocks().map(|b| (b.v_start, b.run))), "{label}: the blocks");
+            assert_eq!(self.tree.image(), self.oracle.image(), "{label}: the image");
+            assert!(self.tree.iter().rev().eq(self.oracle.iter().rev()), "{label}: the walk backward");
+        }
+        self.assert_same_sites(gen, &seats, label);
+    }
+
+    /// Holds the check of several sites to the oracle's, site for site:
+    /// sites held, not held, straddling runs, reaching past the end, and
+    /// out of order.
+    fn assert_same_sites(&self, gen: &mut Gen, seats: &[Seat], label: &str) {
+        if seats.is_empty() {
+            let asked = [run(&ca(1), 1)];
+            let sites = [(n(1), &asked[..])];
+            let ask = || sites.iter().map(|(at, runs)| (at, runs.iter()));
+            assert_eq!(self.tree.arranges_each(ask(), &mut |_| {}), self.oracle.arranges_each(ask(), &mut |_| {}), "{label}: a site of the empty list");
+            return;
+        }
+        let mut sites: Vec<(Nat, Vec<Run>)> = Vec::new();
+        let mut at = gen.below(seats.len() as u64) as usize;
+        for _ in 0..6 {
+            if at >= seats.len() {
+                break;
+            }
+            let (v_start, first) = &seats[at];
+            // The runs standing from this seat on, as the list holds them,
+            // one to three of them; the site opens at the first's start or
+            // inside it.
+            let take = 1 + gen.below(3) as usize;
+            let mut asked: Vec<Run> = seats[at..].iter().take(take).map(|(_, run)| run.clone()).collect();
+            let inside = if first.width > Nat::one() && gen.below(3) == 0 { &first.width / n(2) } else { Nat::zero() };
+            if !inside.is_zero() {
+                asked[0] = wide_run(&first.addr_at(&inside), &first.width - &inside);
+            }
+            match gen.below(6) {
+                // Not held: the first run asked one address on.
+                0 => {
+                    if let Some(moved) = shifted(asked[0].i_start(), 1) {
+                        asked[0] = wide_run(&moved, asked[0].width().clone());
+                    }
+                }
+                // Not held: one position more than the list has there.
+                1 => {
+                    let last = asked.last().expect("a run asked").clone();
+                    *asked.last_mut().expect("a run asked") = wide_run(last.i_start(), last.width() + Nat::one());
+                }
+                // Held, the first run asked in two pieces.
+                2 if asked[0].width() > &Nat::one() => {
+                    let whole = asked.remove(0);
+                    let half = whole.width() / n(2);
+                    asked.insert(0, wide_run(&whole.addr_at(&half), whole.width() - &half));
+                    asked.insert(0, wide_run(whole.i_start(), half));
+                }
+                // No run asked.
+                3 if gen.below(4) == 0 => asked.clear(),
+                _ => {}
+            }
+            sites.push((v_start + inside, asked));
+            at += take + gen.below(4) as usize;
+        }
+        // Out of order one time in four, and a site past the end, and one
+        // at ordinal 0.
+        if gen.below(4) == 0 && sites.len() > 1 {
+            sites.swap(0, 1);
+        }
+        sites.push((self.end() + n(1 + gen.below(3) as u32), vec![seats[0].1.clone()]));
+        if gen.below(3) == 0 {
+            sites.insert(0, (Nat::zero(), vec![seats[0].1.clone()]));
+        }
+        if gen.below(3) == 0 {
+            // After a seek past the end: a site inside the last run.
+            let (v_start, last) = seats.last().expect("a seat");
+            sites.push((v_start.clone(), vec![last.clone()]));
+        }
+        let ask = || sites.iter().map(|(at, runs)| (at, runs.iter()));
+        let want = self.oracle.arranges_each(ask(), &mut |_| {});
+        assert_eq!(self.tree.arranges_each(ask(), &mut |_| {}), want, "{label}: the sites {:?}", sites.iter().map(|(at, _)| at).collect::<Vec<_>>());
+    }
+}
+
+/// A source of runs of one [`Shape`], and of ordinals worth cutting at.
+struct Source {
+    shape: Shape,
+    /// The next ordinal each origin's fresh runs are taken from.
+    next: [u32; 6],
+}
+
+impl Source {
+    fn new(shape: Shape) -> Source {
+        Source { shape, next: [1; 6] }
+    }
+
+    /// The origin documents' element addresses: five of one length, one of
+    /// another.
+    fn origin(&self, which: usize, ordinal: u32) -> Address {
+        if which == 5 {
+            a(&[1, 0, 1, 0, 64, 1, 0, 1, ordinal])
+        } else {
+            at_doc(10 + which as u32, ordinal)
+        }
+    }
+
+    /// A fresh run of the shape.
+    fn fresh(&mut self, gen: &mut Gen) -> Run {
+        match self.shape {
+            Shape::OneOrigin => {
+                // Continuing where the origin's last run ended four times
+                // in five: I-adjacent to it wherever the two meet.
+                self.next[0] += if gen.below(5) == 0 { 1 + gen.below(3) as u32 } else { 0 };
+                let width = 1 + gen.below(4) as u32;
+                let run = run(&self.origin(0, self.next[0]), width);
+                self.next[0] += width;
+                run
+            }
+            Shape::ManyOrigins | Shape::PastAWord => {
+                let which = gen.below(6) as usize;
+                self.next[which] += if gen.below(3) == 0 { 1 + gen.below(3) as u32 } else { 0 };
+                let start = self.origin(which, self.next[which]);
+                if self.shape == Shape::PastAWord && gen.below(9) == 0 {
+                    // A run wider than a machine word; its origin's later
+                    // runs are taken well past where a word could reach.
+                    let width = (Nat::one() << 70usize) + n(gen.below(5) as u32);
+                    self.next[which] += 1_000;
+                    return wide_run(&start, width);
+                }
+                let width = 1 + gen.below(4) as u32;
+                self.next[which] += width;
+                run(&start, width)
+            }
+            Shape::Repeated => {
+                // One of three runs, over and over.
+                let which = gen.below(3) as u32;
+                run(&self.origin(which as usize, 1 + 10 * which), 1 + which)
+            }
+        }
+    }
+
+    /// One to three runs to place at the boundary before seat `at` of
+    /// `seats`: fresh ones, a run continuing the one before the boundary,
+    /// or a run leading into the one after it.
+    fn placed(&mut self, gen: &mut Gen, seats: &[Seat], at: usize) -> Vec<Run> {
+        let mut runs = Vec::new();
+        for k in 0..1 + gen.below(3) {
+            let choice = gen.below(5);
+            let before = at.checked_sub(1).and_then(|before| seats.get(before)).map(|(_, run)| run);
+            let after = seats.get(at).map(|(_, run)| run);
+            let chosen = match (choice, before, after) {
+                (0, Some(before), _) if k == 0 => wide_run(&before.addr_at(before.width()), n(1 + gen.below(2) as u32)),
+                (1, _, Some(after)) => match shifted(after.i_start(), -1) {
+                    Some(lead) => run(&lead, 1),
+                    None => self.fresh(gen),
+                },
+                _ => self.fresh(gen),
+            };
+            runs.push(chosen);
+        }
+        runs
+    }
+}
+
+/// An ordinal worth cutting `twin` at: a boundary between runs, a position
+/// inside a run, 0, 1, the end, the append boundary, or past it.
+fn cut_at(gen: &mut Gen, twin: &Twin, seats: &[Seat]) -> Nat {
+    let end = twin.end();
+    match gen.below(12) {
+        0 => Nat::zero(),
+        1 => Nat::one(),
+        2 => end,
+        3 => end + Nat::one(),
+        4 => end + n(2 + gen.below(5) as u32),
+        _ if seats.is_empty() => Nat::one(),
+        choice => {
+            let (v_start, run) = &seats[gen.below(seats.len() as u64) as usize];
+            if choice < 8 || run.width() == &Nat::one() {
+                v_start.clone()
+            } else {
+                // Inside the run: any offset but the first, a wide run's
+                // far ones among them.
+                let span = run.width() - Nat::one();
+                let offset = if span > n(1_000) { &span / n(1 + gen.below(7) as u32) } else { n(gen.below(1_000) as u32) % &span };
+                v_start + Nat::one() + offset
+            }
+        }
+    }
+}
+
+/// `count` changes to `twin`'s list, ascending and apart, by `pattern`:
+/// spread over the whole list, clustered in one neighbourhood, or touching
+/// — each change removing up to the next one's site — with two placements
+/// at one ordinal among them and the last at the append boundary where
+/// `to_the_end` asks.
+fn changes_for(gen: &mut Gen, source: &mut Source, twin: &Twin, seats: &[Seat], count: usize, pattern: u64, to_the_end: bool) -> Vec<Splice> {
+    if seats.is_empty() {
+        return vec![Splice { at: Nat::one(), width: Nat::zero(), runs: vec![source.fresh(gen)] }];
+    }
+    // The seats the changes fall at, ascending.
+    let mut at: Vec<usize> = match pattern {
+        0 => (0..count).map(|k| (k * seats.len() / count).min(seats.len() - 1)).collect(),
+        1 => {
+            let from = gen.below(seats.len() as u64) as usize;
+            (0..count).map(|k| (from + k / 2).min(seats.len() - 1)).collect()
+        }
+        _ => (0..count).map(|_| gen.below(seats.len() as u64) as usize).collect(),
+    };
+    at.sort_unstable();
+    let mut changes: Vec<Splice> = Vec::with_capacity(count);
+    let mut reach = Nat::one();
+    for (k, &seat) in at.iter().enumerate() {
+        let (v_start, run) = &seats[seat];
+        // At the run's start, or inside it; never before the change before
+        // it ended.
+        let inside = if run.width() > &Nat::one() && gen.below(3) == 0 { run.width() / n(2) } else { Nat::zero() };
+        let site = std::cmp::max(v_start + inside, reach.clone());
+        // Up to the next change's seat: nothing, a few positions, or all
+        // of it where the changes touch.
+        let room = match at.get(k + 1) {
+            Some(&next) => {
+                let next_start = &seats[next].0;
+                if *next_start > site {
+                    next_start - &site
+                } else {
+                    Nat::zero()
+                }
+            }
+            None => twin.end() + Nat::one() - &site,
+        };
+        let width = match (pattern, gen.below(4)) {
+            (2, _) => room.clone(),
+            (_, 0) => Nat::zero(),
+            (_, 1) => room.clone(),
+            _ => std::cmp::min(room.clone(), n(1 + gen.below(5) as u32)),
+        };
+        let runs = if width.is_zero() || gen.below(3) != 0 { source.placed(gen, seats, seat) } else { Vec::new() };
+        reach = &site + &width;
+        changes.push(Splice { at: site, width, runs });
+    }
+    if to_the_end {
+        changes.push(Splice { at: twin.end() + Nat::one(), width: Nat::zero(), runs: vec![source.fresh(gen)] });
+    }
+    changes
+}
+
+/// One operation of the generated stream, made to both lists of `twin`.
+fn one_operation(gen: &mut Gen, source: &mut Source, twin: &mut Twin) -> String {
+    let seats = twin.seats();
+    match gen.below(16) {
+        0..=3 => {
+            let ord = cut_at(gen, twin, &seats);
+            let seat = seats.iter().position(|(v_start, _)| *v_start >= ord).unwrap_or(seats.len());
+            let runs = source.placed(gen, &seats, seat);
+            twin.splice_in(&ord, runs);
+            format!("splice_in at {ord}")
+        }
+        4..=5 => {
+            let run = match seats.last() {
+                Some((_, last)) if gen.below(2) == 0 => wide_run(&last.addr_at(last.width()), n(1 + gen.below(2) as u32)),
+                _ => source.fresh(gen),
+            };
+            twin.append(run);
+            "append".to_string()
+        }
+        6..=8 => {
+            let from = cut_at(gen, twin, &seats);
+            // Nothing, a few positions, a few runs' worth, or past the end.
+            let width = match gen.below(5) {
+                0 => Nat::zero(),
+                1 => twin.end() + n(9),
+                2 => n(1 + gen.below(40) as u32),
+                _ => n(1 + gen.below(4) as u32),
+            };
+            twin.remove_range(&from, &width);
+            format!("remove_range from {from}, {width} wide")
+        }
+        9..=10 => {
+            // Three or four cuts ascending, as the op stages them — or,
+            // one time in four, any vector: short, long, out of order.
+            let honest = gen.below(4) != 0;
+            let count = if honest { 3 + gen.below(2) as usize } else { gen.below(7) as usize };
+            let mut cuts: Vec<Nat> = (0..count).map(|_| cut_at(gen, twin, &seats)).collect();
+            if honest {
+                cuts.sort();
+            }
+            twin.reorder(&cuts);
+            format!("reorder at {cuts:?}")
+        }
+        11..=14 => {
+            let count = [1usize, 1, 2, 3, 16][gen.below(5) as usize];
+            let (pattern, to_the_end) = (gen.below(3), gen.below(4) == 0);
+            let mut changes = changes_for(gen, source, twin, &seats, count, pattern, to_the_end);
+            // One time in six, outside the fold's input class: the changes
+            // out of order, a site at 0, a removal past the end.
+            if gen.below(6) == 0 {
+                changes.reverse();
+                changes.push(Splice { at: Nat::zero(), width: twin.end() + n(5), runs: vec![source.fresh(gen)] });
+            }
+            twin.spliced(&changes);
+            format!("spliced, {} changes", changes.len())
+        }
+        _ => {
+            // Two placements at one ordinal, the earlier's runs first.
+            let ord = cut_at(gen, twin, &seats);
+            let changes = vec![
+                Splice { at: ord.clone(), width: Nat::zero(), runs: vec![source.fresh(gen)] },
+                Splice { at: ord.clone(), width: Nat::zero(), runs: vec![source.fresh(gen), source.fresh(gen)] },
+            ];
+            twin.spliced(&changes);
+            format!("two placements at {ord}")
+        }
+    }
+}
+
+/// Holds the tree to the list it replaced over one shape of list: five
+/// generated streams of every mutator, inside its precondition and outside
+/// it, each made to both lists; after each operation the run sequences,
+/// every read and the check of several sites answer alike and the tree
+/// holds its invariants. Lists are kept and edited apart, so a list an
+/// operation was made from is held equal again after it.
+fn every_operation_leaves_what_the_vector_backed_list_holds(shape: Shape) {
+    for (seed, start, operations) in [(1u64, 0usize, 220usize), (2, 6, 220), (3, 40, 160), (4, 300, 90), (5, 2_000, 24)] {
+        let mut gen = Gen(0x9e37_79b9_7f4a_7c15 ^ (seed << 32) ^ ((shape as u64 + 1) << 8));
+        let mut source = Source::new(shape);
+        let mut twin = Twin::empty();
+        // The start: runs placed at once, a bulk build.
+        let runs: Vec<Run> = (0..start).map(|_| source.fresh(&mut gen)).collect();
+        twin.splice_in(&Nat::one(), runs);
+        let label = format!("{shape:?}, from {start} runs");
+        twin.assert_same(&mut gen, &label);
+        // Lists kept as they stood, each edited on from time to time.
+        let mut kept: Vec<Twin> = vec![twin.clone()];
+        for step in 0..operations {
+            if gen.below(9) == 0 {
+                let which = gen.below(kept.len() as u64) as usize;
+                twin = kept[which].clone();
+            }
+            let made = one_operation(&mut gen, &mut source, &mut twin);
+            twin.assert_same(&mut gen, &format!("{label}, operation {step}: {made}"));
+            if gen.below(7) == 0 && kept.len() < 12 {
+                kept.push(twin.clone());
+            }
+        }
+        // Every list kept stands as it stood: nothing a later operation
+        // did reached it.
+        for (at, twin) in kept.iter().enumerate() {
+            twin.assert_same(&mut gen, &format!("{label}, the list kept {at}th"));
+        }
+    }
+}
+
+#[test]
+fn runs_of_one_origin_are_left_as_the_vector_backed_list_leaves_them() {
+    every_operation_leaves_what_the_vector_backed_list_holds(Shape::OneOrigin);
+}
+
+#[test]
+fn runs_of_many_origins_are_left_as_the_vector_backed_list_leaves_them() {
+    every_operation_leaves_what_the_vector_backed_list_holds(Shape::ManyOrigins);
+}
+
+#[test]
+fn repeated_identities_are_left_as_the_vector_backed_list_leaves_them() {
+    every_operation_leaves_what_the_vector_backed_list_holds(Shape::Repeated);
+}
+
+#[test]
+fn runs_wider_than_a_machine_word_are_left_as_the_vector_backed_list_leaves_them() {
+    every_operation_leaves_what_the_vector_backed_list_holds(Shape::PastAWord);
+}
+
+#[test]
+fn a_splice_of_many_changes_equals_the_vector_backed_ones_at_every_pattern() {
+    // The splice of one record's changes, at the counts a frame carries:
+    // 1, 16, 256 and 4,096 changes into lists of 4,096 runs of each shape,
+    // built at once and grown a run at a time, and into one of 65,536 —
+    // spread over the list, clustered in one neighbourhood and touching,
+    // the spread ones with a placement at the append boundary.
+    let mut cases = 0usize;
+    for (shape, runs, grown) in [
+        (Shape::ManyOrigins, 4_096usize, false),
+        (Shape::ManyOrigins, 4_096, true),
+        (Shape::OneOrigin, 4_096, false),
+        (Shape::OneOrigin, 4_096, true),
+        (Shape::PastAWord, 4_096, false),
+        (Shape::Repeated, 4_096, true),
+        (Shape::ManyOrigins, 65_536, false),
+    ] {
+        let mut gen = Gen(0x2545_f491_4f6c_dd1d ^ (runs as u64) ^ ((shape as u64 + 1) << 40) ^ u64::from(grown));
+        let mut source = Source::new(shape);
+        let placed: Vec<Run> = (0..runs).map(|_| source.fresh(&mut gen)).collect();
+        let twin = Twin::of(if grown { placed.into_iter().fold(RunList::default(), |list, run| list.append(run)) } else { RunList::from_runs(placed) });
+        let seats = twin.seats();
+        // Every count at every pattern over the first list; over the
+        // others each count once, the patterns in turn.
+        let patterns: &[(usize, u64)] = if shape == Shape::ManyOrigins && runs == 4_096 && !grown {
+            &[(1, 0), (1, 1), (1, 2), (16, 0), (16, 1), (16, 2), (256, 0), (256, 1), (256, 2), (4_096, 0), (4_096, 1), (4_096, 2)]
+        } else {
+            &[(1, 2), (16, 1), (256, 0), (256, 2), (4_096, 1)]
+        };
+        for &(count, pattern) in patterns {
+            let changes = changes_for(&mut gen, &mut source, &twin, &seats, count, pattern, pattern == 0);
+            let mut made = twin.clone();
+            made.spliced(&changes);
+            made.assert_same(&mut gen, &format!("{shape:?}, {runs} runs (grown: {grown}), {count} changes, pattern {pattern}"));
+            cases += 1;
+        }
+    }
+    assert_eq!(cases, 12 + 6 * 5);
+}
+
+// ---- Equality is the run sequence's ----
+
+#[test]
+fn lists_of_one_run_sequence_are_equal_whatever_their_shape() {
+    // One run sequence reached three ways — built at once, grown a run at
+    // a time, and left by a history of splices and removals — is three
+    // trees of three shapes. They are equal, print alike and write the same
+    // run-sequence form; and a list of the same total width holding other
+    // runs is equal to none of them.
+    let runs: Vec<Run> = (0..3_000u32).map(|k| run(&at_doc(10 + k % 4, 1 + 3 * k), 2)).collect();
+    let bulk = RunList::from_runs(runs.clone());
+    let grown = runs.iter().fold(RunList::default(), |list, run| list.append(run.clone()));
+    // Every third run placed first, the rest spliced in where they
+    // belong, then a stretch removed and put back.
+    let mut edited = RunList::from_runs(runs.iter().step_by(3).cloned());
+    for (at, run) in runs.iter().enumerate().filter(|(at, _)| at % 3 != 0) {
+        edited = edited.splice_in(&n(2 * at as u32 + 1), [run.clone()]);
+    }
+    edited = edited.remove_range(&n(1_001), &n(600)).splice_in(&n(1_001), runs[500..800].iter().cloned());
+    for list in [&bulk, &grown, &edited] {
+        list.check().expect("each tree holds");
+        assert!(list.iter().eq(runs.iter()), "each holds the one run sequence");
+    }
+    assert_ne!(bulk.fill(), grown.fill(), "the premise: the bulk build and the grown list are two shapes");
+    assert_ne!(bulk.fill(), edited.fill(), "the premise: the edited list is a third");
+    assert_eq!(bulk, grown);
+    assert_eq!(bulk, edited);
+    assert_eq!(grown, edited);
+    assert_eq!(format!("{bulk:?}"), format!("{grown:?}"));
+    assert_eq!(format!("{bulk:?}"), format!("{edited:?}"));
+    assert_eq!(format!("{bulk:#?}"), format!("{edited:#?}"));
+    let written = bincode::serialize(&bulk).expect("the list encodes");
+    assert_eq!(bincode::serialize(&grown).expect("the list encodes"), written);
+    assert_eq!(bincode::serialize(&edited).expect("the list encodes"), written);
+    // The print is the run sequence's, as a list of runs prints.
+    assert_eq!(format!("{:?}", RunList::from_runs(runs[..2].to_vec())), format!("RunList({:?})", &runs[..2]));
+    // Another sequence of the same width, the same count and the same
+    // first and last runs.
+    let mut other = runs.clone();
+    other.swap(1_000, 1_001);
+    let other = RunList::from_runs(other);
+    assert_eq!((other.total_width(), other.run_count()), (bulk.total_width(), bulk.run_count()));
+    assert_ne!(other, bulk);
+    assert_ne!(other, grown);
+    assert_ne!(RunList::default(), bulk);
+    assert_eq!(RunList::default(), bulk.remove_range(&n(1), &bulk.total_width()));
+}
+
+// ---- A write and a locate do not follow the list's length ----
+
+/// The count a counted call charges its steps to.
+type Charge<'a> = &'a mut dyn FnMut(u64);
+
+/// A list of `runs` runs of width 2, none I-adjacent to the next: built at
+/// once, or grown a run at a time.
+fn fragmented(runs: u32, grown: bool) -> RunList {
+    let each = |k: u32| run(&at_doc(10 + k % 4, 1 + 3 * k), 2);
+    if grown {
+        (0..runs).fold(RunList::default(), |list, k| list.append(each(k)))
+    } else {
+        RunList::from_runs((0..runs).map(each))
+    }
+}
+
+/// `count` changes spread over a list of `runs` runs of width 2: each
+/// replaces one run's second position with a run of another document.
+fn spread_changes(runs: u32, count: u32) -> Vec<Splice> {
+    (0..u64::from(count))
+        .map(|j| {
+            let at_run = ((2 * j + 1) * u64::from(runs) / (2 * u64::from(count))) as u32;
+            change(2 * at_run + 2, 1, vec![run(&at_doc(30, 1 + 2 * j as u32), 1)])
+        })
+        .collect()
+}
+
+#[test]
+fn a_write_and_a_locate_cost_the_cut_paths_whatever_the_list_holds() {
+    // Every write and every read that finds an ordinal, counted on lists
+    // of 4,096, 65,536 and 262,144 runs, built at once and grown a run at
+    // a time: each stays within the bound its card states, the same bound
+    // at every size but for the tree's height. Beside each stands what the
+    // vector-backed list's own count is for the same call at 65,536 —
+    // every run of the list, whatever the call asks.
+    let mut splice_counts: Vec<(u32, bool, u32, u64)> = Vec::new();
+    // Every count taken, for the line printed at the end: the call, its
+    // steps and the bound it was held to.
+    let taken: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    for (runs, grown) in [(4_096u32, false), (4_096, true), (65_536, false), (65_536, true), (262_144, false), (262_144, true)] {
+        let l = fragmented(runs, grown);
+        let height = l.height();
+        let (cut, descent) = (cut_bound(height), descent_bound(height));
+        let label = format!("{runs} runs (grown: {grown}), height {height}");
+        taken.borrow_mut().push(format!("\n  {label}:"));
+        let note = |call: &str, count: u64, bound: u64| taken.borrow_mut().push(format!(" {call} {count}/{bound}"));
+        let end = l.total_width();
+        let counted = |f: &mut dyn FnMut(Charge<'_>)| {
+            let mut count = 0u64;
+            f(&mut |steps| count += steps);
+            count
+        };
+        // The splice of one change, and of 256 spread.
+        for changes in [1u32, 256] {
+            let set = spread_changes(runs, changes);
+            let count = counted(&mut |steps| drop(l.spliced(&set, &mut |by| steps(by))));
+            let bound = (u64::from(changes) + 1) * cut + u64::from(changes);
+            assert!(count <= bound, "{label}: spliced of {changes}: {count} steps past {bound}");
+            note(&format!("spliced({changes})"), count, bound);
+            splice_counts.push((runs, grown, changes, count));
+        }
+        // The four mutators of one site.
+        let middle = n(runs + 1);
+        let count = counted(&mut |steps| drop(l.splice_in_counted(&middle, [run(&at_doc(31, 1), 1)], &mut |by| steps(by))));
+        assert!(count <= 2 * cut + 1, "{label}: splice_in: {count} steps");
+        note("splice_in", count, 2 * cut + 1);
+        let count = counted(&mut |steps| drop(l.remove_range_counted(&middle, &n(5), &mut |by| steps(by))));
+        assert!(count <= 2 * cut, "{label}: remove_range: {count} steps");
+        note("remove_range", count, 2 * cut);
+        let count = counted(&mut |steps| drop(l.remove_range_counted(&n(2), &(&end - n(3)), &mut |by| steps(by))));
+        assert!(count <= 2 * cut, "{label}: remove_range of nearly all: {count} steps");
+        note("remove_range(nearly all)", count, 2 * cut);
+        let count = counted(&mut |steps| drop(l.append_counted(run(&at_doc(31, 1), 1), &mut |by| steps(by))));
+        assert!(count <= 2 * cut, "{label}: append: {count} steps");
+        note("append", count, 2 * cut);
+        let cuts = [n(runs / 2), n(runs), n(runs + runs / 2), n(2 * runs - 5)];
+        let count = counted(&mut |steps| drop(l.reorder_counted(&cuts[..3], &mut |by| steps(by))));
+        assert!(count <= 4 * cut, "{label}: reorder at three cuts: {count} steps");
+        note("reorder(3)", count, 4 * cut);
+        let count = counted(&mut |steps| drop(l.reorder_counted(&cuts, &mut |by| steps(by))));
+        assert!(count <= 5 * cut, "{label}: reorder at four cuts: {count} steps");
+        note("reorder(4)", count, 5 * cut);
+        // A point at the first, a middle and the last ordinal.
+        for ord in [Nat::one(), middle.clone(), end.clone()] {
+            let count = counted(&mut |steps| drop(l.locate_counted(&ord, &mut |by| steps(by))));
+            assert!(count <= descent, "{label}: locate {ord}: {count} steps");
+            note(&format!("locate({ord})"), count, descent);
+            assert!(l.point(&ord).is_some());
+        }
+        // The width, the count and a walk's length: the root's sums.
+        let ((width, count, len), entered_nodes) = entered(|| (l.total_width(), l.run_count(), l.iter().len()));
+        assert_eq!((width, count, len, entered_nodes), (n(2 * runs), runs as usize, runs as usize, 0), "{label}: read off the root");
+        // A range read of one position at the end, and one past it.
+        let steps = Cell::new(0u64);
+        let last: Vec<Run> = l.iter_resolve_range_counted(&end, &Nat::one(), |by| steps.set(steps.get() + by)).collect();
+        assert_eq!(last.len(), 1);
+        assert!(steps.get() <= descent + 1, "{label}: the last position resolved: {} steps", steps.get());
+        note("resolve(the last position)", steps.get(), descent + 1);
+        steps.set(0);
+        assert_eq!(l.iter_resolve_range_counted(&(&end + Nat::one()), &n(9), |by| steps.set(steps.get() + by)).count(), 0);
+        assert_eq!(steps.get(), 0, "{label}: a range past the end reads nothing");
+        // The check of one site at the end, and of 64 sites spread.
+        let asked = |k: u32| (n(2 * k + 1), vec![run(&at_doc(10 + k % 4, 1 + 3 * k), 2)]);
+        for sites in [vec![asked(runs - 1)], (0..64).map(|j| asked(j * (runs / 64))).collect::<Vec<_>>()] {
+            let mut count = 0u64;
+            let held = l.arranges_each(sites.iter().map(|(at, runs)| (at, runs.iter())), &mut |by| count += by);
+            assert!(held.iter().all(|held| *held), "{label}: every site held");
+            let bound = sites.len() as u64 * (2 * (height as u64 + 1) + 20) + 3 * sites.len() as u64;
+            assert!(count <= bound, "{label}: {} sites checked: {count} steps past {bound}", sites.len());
+            note(&format!("arranges_each({})", sites.len()), count, bound);
+        }
+        // The vector-backed list's count for the same calls: every run.
+        if runs == 65_536 && !grown {
+            let old = vector_backed(&l);
+            let set = spread_changes(runs, 1);
+            let mut old_count = 0u64;
+            let old_made = old.spliced(&set, &mut |by| old_count += by);
+            assert_eq!(old_count, u64::from(runs) + 1 + 1, "the vector-backed splice: #runs + #changes + #runs placed");
+            let mut new_count = 0u64;
+            let new_made = l.spliced(&set, &mut |by| new_count += by);
+            assert!(new_made.iter().eq(old_made.iter()));
+            assert!(new_count <= 2 * cut + 1 && new_count * 100 < old_count, "the tree's: {new_count} steps against {old_count}");
+            let (at, runs_asked) = asked(runs - 1);
+            let mut old_count = 0u64;
+            assert_eq!(old.arranges_each([(&at, runs_asked.iter())], &mut |by| old_count += by), vec![true]);
+            assert_eq!(old_count, u64::from(runs) + 1 + 1, "the vector-backed check: #runs + #sites + #runs asked");
+        }
+    }
+    // The splice's count does not follow the list: sixty-four times the
+    // runs cost a level or two of the tree more, a change.
+    let count_at = |runs: u32, changes: u32| splice_counts.iter().find(|(r, grown, c, _)| (*r, *grown, *c) == (runs, false, changes)).expect("counted").3;
+    for changes in [1u32, 256] {
+        let (small, large) = (count_at(4_096, changes), count_at(262_144, changes));
+        assert!(large <= small + 12 * u64::from(changes), "{changes} changes: {small} steps into 4,096 runs, {large} into 262,144");
+    }
+    // Each call's steps over its bound, at each size.
+    eprintln!("steps a call, over the bound it is held to:{}", taken.borrow().concat());
+}
+
+// ---- A version shares what it did not change ----
+
+#[test]
+fn a_changed_list_shares_every_node_its_change_did_not_reach() {
+    // After one change into 65,536 and 262,144 runs, the nodes of the new
+    // list the old one does not hold are the cut path: a leaf or two, and
+    // an inner node a level. After 256 changes spread, 256 such paths less
+    // what they share near the root. A clone holds the root itself.
+    let mut made_a_version = Vec::new();
+    for (runs, grown) in [(65_536u32, false), (65_536, true), (262_144, false), (262_144, true)] {
+        let l = fragmented(runs, grown);
+        let height = l.height();
+        let label = format!("{runs} runs (grown: {grown}), height {height}");
+        assert!(l.clone().shares_root_with(&l), "{label}: a clone is one more handle on the root");
+        // A run replaced by a run: its leaf, and the node above it at each
+        // level, and no other.
+        let replaced = l.spliced(&[change(runs + 1, 2, vec![run(&at_doc(30, 1), 2)])], &mut |_| {});
+        replaced.check().expect("the changed tree holds");
+        assert_eq!(replaced.made_anew(&[&l]), (1, height), "{label}: one run replaced makes its path anew");
+        // A position replaced inside a run, which leaves the list a run
+        // more: where the leaf was full it becomes two, and so may each
+        // node above it — two nodes a level, and a new root over them.
+        let one = l.spliced(&spread_changes(runs, 1), &mut |_| {});
+        one.check().expect("the changed tree holds");
+        let (leaves, inner) = one.made_anew(&[&l]);
+        assert!((1..=2).contains(&leaves) && (height..=2 * height + 1).contains(&inner), "{label}: one change made {leaves} leaves and {inner} inner nodes anew");
+        let many = l.spliced(&spread_changes(runs, 256), &mut |_| {});
+        many.check().expect("the changed tree holds");
+        let (leaves, inner) = many.made_anew(&[&l]);
+        assert!(leaves <= 2 * 256 && inner <= 256 * (height - 1) + 20, "{label}: 256 changes made {leaves} leaves and {inner} inner nodes anew");
+        made_a_version.push((runs, grown, height, one.made_anew(&[&l]), (leaves, inner)));
+        // Each of the other mutators: the cut paths, and nothing else.
+        let middle = n(runs + 1);
+        let made = [
+            ("splice_in", l.splice_in(&middle, [run(&at_doc(31, 1), 1)])),
+            ("remove_range", l.remove_range(&middle, &n(5))),
+            ("append", l.append(run(&at_doc(31, 1), 1))),
+            ("reorder", l.reorder(&[n(runs / 2), n(runs), n(runs + runs / 2)])),
+        ];
+        for (name, list) in &made {
+            list.check().unwrap_or_else(|fault| panic!("{label}: {name}: {fault}"));
+            let (leaves, inner) = list.made_anew(&[&l]);
+            assert!(leaves <= 8 && inner <= 4 * (height + 1), "{label}: {name} made {leaves} leaves and {inner} inner nodes anew");
+        }
+        // Ten changes in a row, each list kept: ten cut paths, not ten
+        // lists.
+        let mut kept: Vec<RunList> = vec![l.clone()];
+        for j in 0..10u32 {
+            let last = kept.last().expect("a list");
+            let at = 2 * (j * (runs / 10) + 7) + 2;
+            kept.push(last.spliced(&[change(at, 1, vec![run(&at_doc(32, 1 + 2 * j), 1)])], &mut |_| {}));
+        }
+        let all: Vec<&RunList> = kept.iter().collect();
+        let before = RunList::nodes_among(&[&l]);
+        let after = RunList::nodes_among(&all);
+        assert!(after - before <= 10 * (2 * height + 3), "{label}: ten versions hold {} nodes beside the first list's {before}", after - before);
+    }
+    // What a version makes anew, at each size: (runs, grown, height, the
+    // leaves and inner nodes of one change, and of 256).
+    eprintln!("nodes made anew a version: {made_a_version:?}");
+}
+
+// ---- The walk from both ends ----
+
+#[test]
+fn the_runs_are_walked_from_either_end_with_their_count_exact() {
+    // Over the empty list, one leaf, and trees of several levels, built at
+    // once and grown: the walk forward and backward, from both ends until
+    // they meet, with its length exact at every step and fused past the
+    // end — each equal to the vector-backed list's own walk.
+    for (runs, grown) in [(0u32, false), (1, false), (7, false), (16, false), (17, true), (200, false), (200, true), (5_000, false), (5_000, true)] {
+        let l = fragmented(runs, grown);
+        let old = vector_backed(&l);
+        let label = format!("{runs} runs (grown: {grown})");
+        assert!(l.iter().eq(old.iter()), "{label}: forward");
+        assert!(l.iter().rev().eq(old.iter().rev()), "{label}: backward");
+        assert_eq!(l.iter().next_back(), old.iter().next_back(), "{label}: the last run first");
+        // Both ends, in a generated order, until they meet.
+        let mut gen = Gen(0x0123_4567_89ab_cdef ^ u64::from(runs));
+        let (mut mine, mut theirs) = (l.iter(), old.iter());
+        let mut left = runs as usize;
+        loop {
+            assert_eq!(mine.len(), left, "{label}: the length, {left} runs from the end");
+            assert_eq!(mine.size_hint(), (left, Some(left)));
+            let (got, want) = if gen.below(2) == 0 { (mine.next(), theirs.next()) } else { (mine.next_back(), theirs.next_back()) };
+            assert_eq!(got, want, "{label}: {left} runs from the end");
+            if got.is_none() {
+                break;
+            }
+            left -= 1;
+        }
+        assert_eq!(left, 0, "{label}: every run yielded once");
+        for _ in 0..3 {
+            assert!(mine.next().is_none() && mine.next_back().is_none(), "{label}: fused at both ends");
+            assert_eq!(mine.len(), 0);
+        }
+    }
+    // The length is the root's count: asking it enters no node, at any
+    // point of the walk.
+    let l = fragmented(65_536, false);
+    let mut runs = l.iter();
+    let ((), walked) = entered(|| {
+        assert_eq!(runs.len(), 65_536);
+    });
+    assert_eq!(walked, 0, "the length of an unpulled walk");
+    runs.next();
+    runs.next_back();
+    let ((), walked) = entered(|| {
+        assert_eq!(runs.len(), 65_534);
+    });
+    assert_eq!(walked, 0, "the length of a walk pulled at both ends");
+    assert_eq!(format!("{runs:?}"), "Runs { .. }");
 }

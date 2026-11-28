@@ -31,19 +31,26 @@
 //! visitor admits is refused. What bounds the loop is the *element*: each
 //! must consume at least one byte, so a count larger than the entries that
 //! follow costs at most one pass over the body. Every element the slice holds
-//! does — an address, a run, a span, a natural, the shot terms, a document's
-//! two run-lists and a document's recorded spans each open with a count of
-//! their own — and an element that decoded from zero bytes would turn a lying
+//! does — an address, a run, a span, a natural, the shot terms and a
+//! document's recorded spans each open with a count of their own, a node of
+//! the run-lists' table with its kind and a list's root with its presence —
+//! and an element that decoded from zero bytes would turn a lying
 //! count into an unbounded loop (M2's obligation states that hazard on
 //! `Record`).
 //!
-//! Every collection the slice decodes comes through here: `M5State`'s four
-//! maps, each run-list behind `RunListShadow`, and R's map and each
-//! document's spans behind `ProvenanceShadow`.
+//! Every map and vector the slice decodes comes through here: `M5State`'s
+//! maps, in its checkpoint form and in its run-sequence form, and R's maps
+//! and each document's spans behind their shadows. A run-list comes through
+//! neither door and is read by the same rule: the checkpoint's node table a
+//! node at a time, each node a run or a child id at a time
+//! (`run_list/table.rs`), and a list written as its run sequence a run at a
+//! time into the tree's builder (`run_list.rs`'s `RunListShadow`).
 //! `the_slice_decodes_or_refuses_whatever_count_its_bytes_declare`
 //! (`state/tests.rs`) writes `u64::MAX` over every eight bytes of a slice
 //! holding all of them, so a collection decoded by `im`'s own visitor — a
-//! field added without its door — fails there.
+//! field added without its door — fails there, and
+//! `a_count_the_body_does_not_carry_reserves_nothing`
+//! (`run_list/table/tests.rs`) holds the table's door to the same sweep.
 
 use std::fmt;
 use std::marker::PhantomData;

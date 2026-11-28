@@ -148,10 +148,9 @@ pub enum Operand {
 /// (well-formedness precondition); `index` names the offending spec.
 ///
 /// The last is the budget refusal, and the only rejection here that names
-/// nothing the gate faults — only the request's size. It names both budgets
-/// it refuses at — the delivery budget and the walk budget — though not which
-/// of them this refusal crossed: a client learns the numbers to size its next
-/// request against.
+/// nothing the gate faults — only the request's size. It names the budget
+/// it refuses at, the delivery budget: a client learns the number to size
+/// its next request against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum RetrieveError {
     DocNotRegistered(Address),
@@ -160,10 +159,8 @@ pub enum RetrieveError {
         fault: SpanFault,
     },
     /// The delivery exceeds [`MAX_DELIVERY_ITEMS`] items — refused as it is
-    /// produced, a delivered run's positions as one batch — or the spec-set's
-    /// walk is PRICED past the walk budget before its first spec is walked,
-    /// each spec priced at an upper bound on its walk, a spec resolving to
-    /// nothing included (crate doc, *What M6 refuses for size*). A document's
+    /// produced, a delivered run's positions as one batch (crate doc, *What
+    /// M6 refuses for size*). A document's
     /// extent is virtual, so one spec may name a delivery no request field
     /// prices; a refusal, never a truncation, so R3, R5 and R8 hold verbatim
     /// for every delivery answered.
@@ -200,10 +197,11 @@ pub enum LinesError {
         /// The position's place in the request's list.
         index: usize,
     },
-    /// The walk of the surface's runs is priced past the walk budget.
+    /// The surface holds more content runs than one line read walks.
     ///
     /// The read walks the reading surface's content runs once, whatever its
-    /// lists hold, so the price is that surface's run count (crate doc,
+    /// lists hold, so its walk is priced at that surface's run count and
+    /// refused past the walk budget (crate doc,
     /// *What M6 refuses for size*). A refusal, never a truncation: no number
     /// is answered from a walk cut short.
     TooManyItems,
@@ -255,9 +253,9 @@ pub enum DeletionsError {
 ///
 /// The last two are the budget refusals COMPARE's superlinear join needs, and
 /// are the only rejections here that name nothing the gate faults — only the
-/// request's size. `TooManyBlocks` names the operand it refuses and both
-/// budgets it refuses at — the operand budget, on either of its two counts,
-/// and the walk budget — though not which of them this refusal crossed;
+/// request's size. `TooManyBlocks` names the operand it refuses and the
+/// budget it refuses at — the operand budget, on either of its two counts,
+/// though not which of them this refusal crossed;
 /// `TooManyPairs` names the pair budget. So a client learns which operand, or
 /// the report, to narrow, and the numbers to size it against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -276,10 +274,8 @@ pub enum CompareError {
     },
     /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
     /// either of its two counts: more spans handed to M5 — one resolution
-    /// apiece, whatever it yields — or more blocks built, than the budget; or
-    /// its spans' walk is PRICED past the walk budget before the operand's
-    /// first span is walked, a span resolving to nothing priced as well (crate
-    /// doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
+    /// apiece, whatever it yields — or more blocks built, than the budget
+    /// (crate doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
     /// per-operand budget is what bounds it; refused as the operand resolves
     /// and before the join runs, with ρ₁ resolved first.
     TooManyBlocks { operand: Operand },
@@ -295,10 +291,10 @@ pub enum CompareError {
 /// (FD-COMPLETE).
 ///
 /// The last is the budget refusal, and the only rejection here that names
-/// nothing the gate faults — only the request's size. It names both budgets
-/// it refuses at — the coverage budget, on either of its two counts, and the
-/// walk budget — though not which of them this refusal crossed: a client
-/// learns the numbers to size its next request against.
+/// nothing the gate faults — only the request's size. It names the budget
+/// it refuses at — the coverage budget, on either of its two counts, though
+/// not which of them this refusal crossed: a client
+/// learns the number to size its next request against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {
     DocNotRegistered(Address),
@@ -309,9 +305,8 @@ pub enum FindError {
     },
     /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
     /// of its two counts: more spans handed to M5 — one resolution apiece,
-    /// whatever it yields — or more coverage spans produced, than the budget;
-    /// or its spans' walk is PRICED past the walk budget before its first span
-    /// is walked, a span resolving to nothing priced as well (crate doc,
+    /// whatever it yields — or more coverage spans produced, than the budget
+    /// (crate doc,
     /// *What M6 refuses for size*). That is the one factor of this operation's
     /// cost that the request owns, and the multiplier it applies to two
     /// world-sized scans. Refused BEFORE the candidate scan runs; a refusal,
@@ -353,8 +348,8 @@ impl fmt::Display for RetrieveError {
             RetrieveError::TooManyItems => write!(
                 f,
                 "retrieve_v: the delivery runs past the delivery budget of \
-                 {MAX_DELIVERY_ITEMS} items (MAX_DELIVERY_ITEMS), or its specs are priced past \
-                 {MAX_WALK_STEPS} run-list steps; narrow its spans or split the request"
+                 {MAX_DELIVERY_ITEMS} items (MAX_DELIVERY_ITEMS); narrow its spans or split \
+                 the request"
             ),
         }
     }
@@ -378,8 +373,8 @@ impl fmt::Display for LinesError {
             ),
             LinesError::TooManyItems => write!(
                 f,
-                "line_numbers: the document's runs are priced past {MAX_WALK_STEPS} run-list \
-                 steps; ask a version of fewer runs"
+                "line_numbers: the document holds more than {MAX_WALK_STEPS} content runs, \
+                 the most one line read walks; ask a version of fewer runs"
             ),
         }
     }
@@ -461,8 +456,7 @@ impl fmt::Display for CompareError {
                 f,
                 "compare: {operand} resolves past the operand budget of \
                  {MAX_COMPARE_OPERAND_BLOCKS} spans or {MAX_COMPARE_OPERAND_BLOCKS} blocks \
-                 (MAX_COMPARE_OPERAND_BLOCKS), or its spans are priced past \
-                 {MAX_WALK_STEPS} run-list steps; narrow its spans or split the request"
+                 (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request"
             ),
             CompareError::TooManyPairs => write!(
                 f,
@@ -492,8 +486,7 @@ impl fmt::Display for FindError {
                 f,
                 "find_docs_containing: the request resolves past the coverage budget of \
                  {MAX_FIND_COVERAGE_SPANS} spans or {MAX_FIND_COVERAGE_SPANS} coverage spans \
-                 (MAX_FIND_COVERAGE_SPANS), or its spans are priced past {MAX_WALK_STEPS} \
-                 run-list steps; narrow its spans or split the request"
+                 (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the request"
             ),
         }
     }

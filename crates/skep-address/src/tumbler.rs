@@ -60,15 +60,19 @@ impl Error for EmptySequence {}
 /// `Vec<Nat>` shape; `Deserialize` is a mint path and routes through
 /// [`Tumbler::new`] via the `try_from` shadow, re-checking T0 nonemptiness at
 /// the trust boundary (design preamble: validating deserialization, never a
-/// bare derive).
+/// bare derive). The shadow also re-makes each decoded component so that a
+/// decoded tumbler holds what a built one of its value holds
+/// (`held_as_built`).
 ///
 /// **Open decision.** Storage is a plain contiguous `Vec<Nat>` — the simplest
-/// contiguous form, which the `&[Nat]` field projections (§B) rely on. The
-/// design's small-length inline-buffer refinement and the `im::Vector`
-/// alternative are profiling-gated options, not defaults; `im` earns its keep
-/// on span-sets, not on the short flat tumbler.
+/// contiguous form, which the `&[Nat]` field projections (§B) rely on: one
+/// allocation a tumbler, a component of one machine word held inside it and
+/// a wider one on the heap beside it, built or decoded alike. The design's
+/// small-length inline-buffer refinement and the `im::Vector` alternative
+/// are profiling-gated options, not defaults; `im` earns its keep on
+/// span-sets, not on the short flat tumbler.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "Vec<Nat>")]
+#[serde(try_from = "Decoded")]
 pub struct Tumbler(Vec<Nat>);
 
 #[allow(clippy::len_without_is_empty)] // len ≥ 1 by invariant: is_empty would be constantly false, and the interface does not declare it
@@ -190,10 +194,10 @@ impl<'a> IntoIterator for &'a Tumbler {
     }
 }
 
-/// The deserialization mint path, routed through [`Tumbler::new`] (T0).
+/// A component sequence admitted through [`Tumbler::new`] (T0).
 ///
-/// It takes `Vec<Nat>` → `Tumbler`, so no journal replay can mint an empty
-/// tumbler.
+/// It takes `Vec<Nat>` → `Tumbler`: the checked conversion of a sequence
+/// its caller built.
 ///
 /// # Errors
 ///
@@ -201,6 +205,47 @@ impl<'a> IntoIterator for &'a Tumbler {
 impl TryFrom<Vec<Nat>> for Tumbler {
     type Error = EmptySequence;
     fn try_from(comps: Vec<Nat>) -> Result<Tumbler, EmptySequence> {
+        Tumbler::new(comps)
+    }
+}
+
+/// Re-makes a decoded component so it holds what a built one holds.
+///
+/// A [`Nat`] built from a machine word holds its one digit inside itself
+/// and nothing on the heap. One decoded from a sequence of digits keeps the
+/// vector it was decoded into, where the decoder sized that vector to the
+/// digits exactly: a heap block of one digit, eight bytes, for every nonzero
+/// component, and so for every component of every address, run and span a
+/// checkpoint decodes. A component of one digit or none is built again from
+/// its word, which frees that block; a wider one stands as decoded, its
+/// vector already as long as its digits. The cost a component is one length
+/// read, and for a narrow one a word copied.
+fn held_as_built(comp: &mut Nat) {
+    if comp.bits() <= u64::from(u64::BITS) {
+        *comp = Nat::from(comp.iter_u64_digits().next().unwrap_or(0));
+    }
+}
+
+/// The deserialization mint path's shadow: the component sequence as the
+/// decoder made it.
+///
+/// It reads exactly the bare `Vec<Nat>` shape a [`Tumbler`] writes, and
+/// enters [`Tumbler::new`] with each component re-made
+/// ([`held_as_built`]), so no journal replay and no checkpoint load can
+/// mint an empty tumbler, or one that holds more than a built one does.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct Decoded(Vec<Nat>);
+
+/// The deserialization mint path, routed through [`Tumbler::new`] (T0).
+///
+/// # Errors
+///
+/// Returns [`EmptySequence`] when the decoded sequence is empty.
+impl TryFrom<Decoded> for Tumbler {
+    type Error = EmptySequence;
+    fn try_from(Decoded(mut comps): Decoded) -> Result<Tumbler, EmptySequence> {
+        comps.iter_mut().for_each(held_as_built);
         Tumbler::new(comps)
     }
 }

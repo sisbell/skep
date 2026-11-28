@@ -99,7 +99,15 @@
 //!   checkpoint, so the segment grows by their frames and two dumps are
 //!   added; the checkpoint's body and every dump move, the provenance
 //!   rendering in each and the cross-owner version's spans becoming its
-//!   named list.
+//!   named list;
+//! - M5's slice writes its run-lists as one table of the nodes they are held
+//!   as — each node once, a leaf its runs and an inner node its children's
+//!   ids — and every list, a document's two and each one the provenance
+//!   relation names, as the id of its root, where it wrote each list as its
+//!   runs: the checkpoint's body moves, the cross-owner version's list, its
+//!   source's and its named list written as one node; the segment, the
+//!   fixture's ops and every dump — which renders a list as its runs — do
+//!   not.
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -917,10 +917,13 @@ fn a_make_link_signed_over_a_stale_resolution_is_refused_and_the_re_signed_frame
 /// `edit_link` whose successor names an UNREGISTERED source →
 /// `source_not_registered`, and one whose spec is ILL-FORMED (a link-subspace
 /// span) → `ill_formed_spec` (`SuccessorRefused`); a `make_link` whose
-/// `from` is 4,096 V-specs — the most the wire admits — over a draft of
-/// sixty-five runs, which command more run-list steps than M7's work
-/// budget admits → `slot_too_large` (`SlotTooLarge`; the span budget is
-/// unreachable through the wire, whose list cap is M7's span cap). The three
+/// `from` is sixty-four V-specs, each over the whole of a draft of
+/// sixty-five runs, which resolve to more spans than M7's span budget
+/// admits → `slot_too_large` (`SlotTooLarge`: the wire's list cap is M7's
+/// span cap, and a spec over several runs keeps a span a run). Beside it, a
+/// `from` of 4,096 V-specs — the most the wire admits — each keeping one
+/// span of that draft is a slot AT the budget: its row is composed, however
+/// many runs the draft holds, and its attestation judged. The three
 /// `publish` faults are paired by their own cells: `dangling_source`
 /// (`MissingValue`; `publish.rs`), `base_extent_too_large` /
 /// `dangling_source` (`Unspellable`;
@@ -983,16 +986,29 @@ fn each_pass_through_of_the_composer_is_paired_with_the_refusal_it_defers_to() {
         "permanent",
         "an edit_link whose successor spec is ill-formed",
     );
-    // A slot past M7's work budget: 4,096 specs, each over the fragmented
-    // draft's first position, command 4,096 × 65 run-list steps — past the
-    // 64 × 4,096 M7 admits — while keeping one span each.
-    let spec = format!(r#"{{"source":"{fragmented}","span":{{"start":"1.1","width":"0.1"}}}}"#);
-    let from = format!("[{}]", vec![spec; skep_links::MAX_SLOT_SPANS].join(","));
+    // A slot past M7's span budget: sixty-four specs, each over the whole
+    // of the fragmented draft, resolve to 64 × 65 spans — past the 4,096 a
+    // slot keeps — from a list far inside the wire's own cap.
+    let whole = format!(r#"{{"source":"{fragmented}","span":{{"start":"1.1","width":"0.66"}}}}"#);
+    let from = format!("[{}]", vec![whole; 64].join(","));
+    const { assert!(64 * 65 > skep_links::MAX_SLOT_SPANS, "the premise: sixty-four specs of sixty-five runs pass the span budget") };
     paired(
         &link_frame(CLAIMANT_DOC1, &from, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 56)),
         "slot_too_large",
         "permanent",
-        "a make_link whose from passes the per-slot work budget",
+        "a make_link whose from resolves past the per-slot span budget",
+    );
+    // A slot AT the span budget, whatever its source holds: 4,096 specs,
+    // each over the fragmented draft's first position, keep one span each.
+    // Reaching each is a descent of the draft's arrangement, which no budget
+    // prices, so the row is composed and the attestation it carries judged.
+    let spec = format!(r#"{{"source":"{fragmented}","span":{{"start":"1.1","width":"0.1"}}}}"#);
+    let from = format!("[{}]", vec![spec; skep_links::MAX_SLOT_SPANS].join(","));
+    let at_budget = link_frame(CLAIMANT_DOC1, &from, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 57));
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &with_unverifiable_attest(&at_budget))),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "a slot at the span budget over a fragmented source is composed, and its signature judged"
     );
     assert_eq!(head_position(port), before, "nothing committed");
 }

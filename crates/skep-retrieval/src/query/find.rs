@@ -4,10 +4,10 @@
 use skep_address::{Address, Span, SpanSet};
 
 use super::{Query, RetrievalWorld};
-use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS, MAX_WALK_STEPS};
+use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS};
 use crate::error::FindError;
 use crate::types::RegionSpec;
-use crate::vspan::{gate_vspan, walk_price};
+use crate::vspan::gate_vspan;
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — the documents that CURRENTLY
@@ -29,7 +29,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// stays inert downstream (R⁻¹ indexes content provenance only, J-LV),
     /// and a depth-incompatible span resolves to empty coverage
     /// (consulting-state, like RETRIEVEV's R6) — and each still counts toward
-    /// the request's span count and walk price below, like any span.
+    /// the request's span count below, like any span.
     /// Registered-empty contributes nothing.
     ///
     /// WHICH REFUSAL SPEAKS. The gate checks the regions in submitted order and
@@ -42,9 +42,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// refusal below.
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
-    /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
-    /// coverage is the union of the region images, one resolution walk per
-    /// span, each up to `#runs(doc)` steps whether or not it yields coverage;
+    /// `|spans| + |coverage| + |candidates| · #runs(d) · |coverage|`: the
+    /// coverage is the union of the region images, one resolution per
+    /// span, a descent of the document's run-list and then the runs the span
+    /// yields, each a coverage span;
     /// the candidate scan runs that coverage against the whole of M5's R⁻¹
     /// index; and the filter is one `arranges_any` per candidate, each at
     /// worst `#runs(d) · |coverage|` pair tests in the CANDIDATE's own
@@ -56,11 +57,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// the spans past it refused before any span is walked, the coverage past
     /// it as it is produced, so no over-budget request resolves whole before
     /// it is refused; why both are counted, and what the counts stop within
-    /// one span and what they do not, are on the budget's card). The walk
-    /// behind each span — up to `#runs(doc)` steps, whatever the span covers —
-    /// is held, summed over the request, to the walk budget (`TooMuchCoverage`
-    /// too, priced before the first span is walked, a span resolving to
-    /// nothing priced as well; crate doc, *What M6 refuses for size*). Each
+    /// one span and what they do not, are on the budget's card). Each
     /// is a REFUSAL, never a truncation: a request past either gets a typed
     /// rejection and no answer, so FD-COMPLETE holds verbatim for every
     /// request this operation answers — a truncated coverage would silently
@@ -96,7 +93,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// where RETRIEVEV's masked form needs one, and adding one would be a
     /// second check of a discharged obligation. The predicate is asked of
     /// each candidate FIRST, before `arranges_any` is paid (PUB-6.17), and only
-    /// after the gate, the walk budget and both counts of the coverage budget
+    /// after the gate and both counts of the coverage budget
     /// have passed the whole request.
     pub fn find_docs_containing_filtered(
         &self,
@@ -123,18 +120,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // What the request NAMES, refused before its first span is walked: its
         // spans, one resolution apiece — MAX_COMPARE_OPERAND_BLOCKS' card says
         // why they are counted beside the coverage, and why a span M5 folds to
-        // nothing at once counts all the same — and their walks' price against
-        // the address named: the arrangement the walk below resolves, so a
-        // float of this operation moves both passes (MAX_WALK_STEPS' card).
+        // nothing at once counts all the same.
         let mut spans_handed = Count::against(MAX_FIND_COVERAGE_SPANS);
-        let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for r in regions {
-            for span in &r.spans {
-                spans_handed.admit(1).map_err(over)?;
-                steps_priced
-                    .admit(walk_price(m5, &r.doc, span))
-                    .map_err(over)?;
-            }
+            spans_handed.admit(r.spans.len()).map_err(over)?;
         }
         // Phase 1: resolve to content I-coverage — the union of every region
         // span's image, each resolved run lifted by `Run::iextent`, raw and

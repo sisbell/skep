@@ -209,9 +209,9 @@
 //! runs, each over the run count its own work multiplies; the constant states
 //! the four counts and how their refusals relate. The one read it cuts
 //! short is [`image_page_on`], whose answer names no link and says, on
-//! itself, that it is a page and where the rest begins. Its SQUARE holds the two
-//! joins a run count alone does not price — the run-list walk [`image_on`]
-//! asks of M5, and the touch test of a link's whole coverage behind
+//! itself, that it is a page and where the rest begins. Its SQUARE holds the one
+//! join a run count alone does not price — the touch test of a link's whole
+//! coverage behind
 //! [`addressably_discoverable_from_on`]. [`MAX_ANSWER_SPANS`] bounds what an
 //! answer built of spans carries: a RETRIEVEENDSETS pair set, and the V-spans
 //! [`project_on`] makes M5 build, whose count is that read's join product —
@@ -262,31 +262,28 @@
 //! is part of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
 //! this list to naming every read the crate publishes. Of what a line says a
 //! read walks, a test holds only what the heap shows: that the touch test
-//! builds nothing per pair, that `image_on`'s run budget and its square,
+//! builds nothing per pair, that `image_on`'s run budget,
 //! both pointwise budgets and the preview's refusal of a `d` whose own runs
 //! are past the budget each refuse before the work they exist to refuse, and
 //! that a region read, a descriptor, a window and the lineage pair pay
 //! nothing for the links of an unreadable home, the window nothing past the
 //! homes it passes. The rest, no test can check.
 //!
-//! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
-//!   surface's content, which reads no run, and then, per region span, one
-//!   M5 `iter_resolve` pulled lazily — a walk of the reading surface's
-//!   run-list from its first run — whose runs are counted as they arrive: the
-//!   region's whole walk held to `MAX_IMAGE_RUNS²` ahead of the first pull,
-//!   and the runs it pulls to `MAX_IMAGE_RUNS`, the one past that refused
-//!   before the next is built.
-//! * [`image_page_on`] — [`image_on`]'s reads and its square, over the
+//! * [`image_on`] — no link-store read; per region span, one M5
+//!   `iter_resolve` pulled lazily — a descent of the reading surface's
+//!   run-list to the span, a node a level of its tree, and then the runs the
+//!   span yields — whose runs are counted as they arrive and held to
+//!   `MAX_IMAGE_RUNS`, the one past that refused before the next is built.
+//! * [`image_page_on`] — [`image_on`]'s reads, over the
 //!   arrangement it reads — `d`'s reading surface, `d`'s own, or the one a
-//!   continuation names: one read of M5's `#runs` for that arrangement's
-//!   content and, per region span, one lazy `iter_resolve` of its run-list,
-//!   the walk held to the same square, the pull stopped at the run past
+//!   continuation names: per region span, one lazy `iter_resolve` of its
+//!   run-list, the pull stopped at the run past
 //!   `MAX_IMAGE_RUNS`, which ends the page, and for a short page one lookup
 //!   of M5's `arranged_at`. A continuation adds one M3 registration lookup
 //!   and at most two publication reads, and one `arranged_at` lookup where
 //!   the arrangement takes in-place edits. A page deep in a fragmented
-//!   document walks every run left of it, so a whole image read in pages
-//!   walks the run-list once a page.
+//!   document is reached by a descent, so a whole image read in pages reads
+//!   each run once and a path of the run-list's tree a page.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
 //!   extents at the three v1 slots, then, per candidate home, one test of

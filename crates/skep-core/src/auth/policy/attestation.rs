@@ -134,7 +134,7 @@ use skep_engine::World;
 ///    `too_many_values`, no row of its body built — the positions told by
 ///    request arithmetic, the units by M5's own count of the draft's stored
 ///    pieces, which the store asks again over the same base; a `make_link`
-///    or an `emit` whose slot is over either of M7's per-slot budgets passes
+///    or an `emit` whose slot is over M7's per-slot budget passes
 ///    unattested to M7's own `slot_too_large`, the slot never resolved past
 ///    the budget;
 ///    a `make_link` or `edit_link` whose V-spec names a source the principal

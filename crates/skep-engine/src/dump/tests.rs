@@ -92,6 +92,97 @@ fn the_authoritative_section_renders_every_slice() {
     }
 }
 
+/// The field `name` of the struct or map node `tree`.
+fn field<'t>(tree: &'t SerdeTree, name: &str) -> &'t SerdeTree {
+    let SerdeTree::Map(entries) = tree else {
+        panic!("`{name}` is asked of a node that is no map")
+    };
+    entries
+        .iter()
+        .find_map(|(key, value)| matches!(key, SerdeTree::Str(key) if key == name).then_some(value))
+        .unwrap_or_else(|| panic!("no field `{name}`"))
+}
+
+/// A dump is a function of each list's run sequence, never of how the list
+/// is held. M5's checkpoint form writes its run-lists as one table of the
+/// nodes they are held as, and how a list's nodes are grouped follows the
+/// records it was folded from: a list grown an insert at a time and the
+/// same runs placed at once are equal lists in two shapes, and write two
+/// tables. The dump renders M5 by its run sequences, so the two worlds —
+/// equal as states — dump byte-equal, each list renders as its runs in
+/// V-order, and the rendered slice reads back, through the transcode's way
+/// back and M5's own doors, as the slice it was rendered from.
+#[test]
+fn a_dump_renders_each_run_list_as_its_runs_whatever_its_shape() {
+    use serde::Deserialize;
+    use skep_arrangement::{M5State, Run};
+
+    use crate::canon::TreeDe;
+
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (doc, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, Some(false))
+        .expect("the delegated owner may create a document");
+    // Forty values, each inserted before everything the draft holds: forty
+    // runs, none I-adjacent to the next, in a list grown a splice at a time.
+    for byte in 0..40u8 {
+        engine
+            .vstream()
+            .insert(
+                Caller::Principal(USER),
+                &doc,
+                VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
+                vec![Val::new(vec![b'a' + byte % 26])],
+                Deposit::Undeclared,
+                AsOf::Typed(engine.kernel().current_seq()),
+            )
+            .expect("insert succeeds");
+    }
+    let grown = engine.kernel().snapshot().world().clone();
+    assert_eq!(grown.arrangement.content_run_count(&doc), 40, "the premise: forty runs");
+
+    // The same slice read back from its run-sequence rendering: every list
+    // built at once from its runs.
+    let rendered = to_tree(&grown.arrangement.as_run_sequences());
+    let read_back = M5State::from_run_sequences(TreeDe(&rendered)).expect("the rendered slice reads back through M5's doors");
+    assert_eq!(read_back, grown.arrangement, "the slice read back is the slice rendered");
+    let at_once = World { arrangement: read_back, ..grown.clone() };
+    assert_ne!(
+        render_of(&to_tree(&at_once.arrangement)),
+        render_of(&to_tree(&grown.arrangement)),
+        "the premise: the two slices hold the list in two shapes, so their checkpoint forms differ"
+    );
+
+    // Equal states, two shapes, one dump.
+    assert_eq!(dump(&at_once), dump(&grown), "equal worlds dump byte-equal whatever shape their lists have");
+    assert_eq!(
+        render_of(&authoritative_tree(&at_once)),
+        render_of(&authoritative_tree(&grown)),
+        "…and so does the authoritative section alone"
+    );
+
+    // The list renders as its runs in V-order: the draft's entry of the
+    // arrangements map, its content a sequence the length of its runs, each
+    // element a run through `Run`'s own door.
+    let authoritative = authoritative_tree(&grown);
+    let arrangements = field(field(&authoritative, "arrangement"), "arrangements");
+    let SerdeTree::Map(entries) = arrangements else {
+        panic!("the arrangements render as a map by document")
+    };
+    let (_, of_doc) = entries
+        .iter()
+        .find(|(key, _)| Address::deserialize(TreeDe(key)).ok().as_ref() == Some(&doc))
+        .expect("the draft's arrangement is rendered");
+    let SerdeTree::Seq(content) = field(of_doc, "content") else {
+        panic!("a content list renders as a sequence of runs")
+    };
+    let runs: Vec<Run> = content.iter().map(|run| Run::deserialize(TreeDe(run)).expect("each element is a run")).collect();
+    assert!(grown.arrangement.content_runs(&doc).eq(runs.iter()), "the rendered sequence is the list's runs in V-order");
+    assert!(matches!(field(of_doc, "link"), SerdeTree::Seq(links) if links.is_empty()), "an empty list renders as the empty sequence");
+}
+
 /// The term that dominates a dump's cost, pinned where the cost is
 /// claimed: a content byte is a whole serialized ELEMENT, not a byte of a
 /// blob. serde has no byte specialization for `[u8]`, so M4's `Val` walks

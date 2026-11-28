@@ -17,13 +17,19 @@
 //!
 //! A slice reaches the authoritative section through its serde checkpoint
 //! form rather than through an enumeration: M3's covers its publication map
-//! alone, and M4's (`ContentStore::iter`), M5's and M7's go the same way so
-//! that one seam serves all four. It is the
+//! alone, and M4's (`ContentStore::iter`) and M7's go the same way so
+//! that one seam serves them. It is the
 //! bytes-level seam M2's checkpoints already depend on, down to serde's
 //! human-readable flag, which the transcode answers the way bincode does — so
 //! a branching `Serialize` impl renders the branch the journal stores, and a
 //! `#[serde(skip)]` field is excluded here exactly as the checkpoint excludes
-//! it.
+//! it. M5's slice is the one exception, and for the determinism above: its
+//! checkpoint form writes its run-lists as one table of the nodes they are
+//! held as, and how a list's nodes are grouped follows the records it was
+//! folded from, not its run sequence — two equal slices reached two ways
+//! write two tables. So M5's entry is its run-sequence form
+//! (`M5State::as_run_sequences`): the same eight fields, every list its runs
+//! in V-order, a function of the slice's value.
 //!
 //! The four sections — two authoritative (`authoritative`, `publication`)
 //! and two derived (`grants`, `hints`), the pair a rebuild can move — each
@@ -189,11 +195,15 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// World's fifth serialized slice, is not rendered here or anywhere in the
 /// dump, so two worlds differing in it alone dump byte-equal.
 ///
-/// What each entry carries is that slice's checkpoint form and nothing else:
+/// What each entry carries is that slice's checkpoint form and nothing else
+/// — for M5, its run-sequence form, the checkpoint form's fields with every
+/// run-list as its runs in V-order where the checkpoint writes a table of
+/// nodes (the module doc says why):
 /// M3's four serde fields (the node registry, the principals, the
 /// per-namespace frontier counts and the publication map), M4's content map,
-/// M5's eight — its arrangements, whose resident form is the canonical
-/// maximally-merged decomposition maintained by M5's fold; its provenance R;
+/// M5's eight — its arrangements, each list the canonical
+/// maximally-merged decomposition maintained by M5's fold; its provenance R,
+/// its named lists run sequences too;
 /// its birth memo, each birth member's content count at its mint, frozen
 /// there and checkpointed because nothing else M5 holds can recompute it,
 /// which the per-class filter keeps whole; its shot terms, kept whole on the
@@ -219,7 +229,7 @@ fn authoritative_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(vec![
         (key("namespace"), to_tree(&world.namespace)),
         (key("content"), to_tree(&world.content)),
-        (key("arrangement"), to_tree(&world.arrangement)),
+        (key("arrangement"), to_tree(&world.arrangement.as_run_sequences())),
         (key("links"), to_tree(&world.links)),
     ])
 }

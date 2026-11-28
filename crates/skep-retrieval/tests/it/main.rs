@@ -8,7 +8,7 @@
 //! declaration with its line, the order, and each item named by its home
 //! module — that one file alone names the content store, that one alone
 //! compares a count to a budget, that no query asks M5 an eager read, and
-//! that each budgeted query prices the walks it pulls;
+//! that the line read prices the walk it pulls;
 //! each other module holds the claims about one operation, or about one rule
 //! that crosses the operations, and the module names are the table of
 //! contents.

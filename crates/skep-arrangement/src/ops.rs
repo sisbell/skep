@@ -88,12 +88,12 @@
 //! claim above on `delete`, `rearrange` and the
 //! shot's admission; `ops/copy/tests.rs`, `ops/reinstate/tests.rs`,
 //! `ops/publish/tests.rs`, `ops/edit/tests.rs` and
-//! `ops/set_arrangement/tests.rs` hold the four ops' own claims — COPY's
-//! walk budget, REINSTATE's every-address probe, the edit's lock hold by a
-//! count and the refusal order of the landing's terms among them — and
+//! `ops/set_arrangement/tests.rs` hold the four ops' own claims — what a
+//! COPY's specs cost, REINSTATE's every-address probe, the edit's lock hold
+//! by a count and the refusal order of the landing's terms among them — and
 //! `ops/substitute/tests.rs` the substitution's — one pass against a
-//! replacement made one piece at a time, the entry that answers, its one
-//! walk by a count — which need a world no engine reaches.
+//! replacement made one piece at a time, the entry that answers, its
+//! descents by a count — which need a world no engine reaches.
 
 use std::fmt;
 use std::sync::Arc;
@@ -217,13 +217,16 @@ pub use substitute::{stage_substitute, Replacement, Substitution};
 /// accumulates: one number at two places, the second seeing what the first
 /// cannot — a draft-native run re-inserted in pieces is more than one.
 ///
-/// **What it does not bind** is the work of resolving: each COPY spec's
-/// prefix-sum walk of its source's run-list to reach the span,
-/// `Θ(#runs(source))` for a span near the end however narrow the answer.
-/// COPY's has a ceiling of its own, [`MAX_COPY_RESOLVE_STEPS`]; the shot's
-/// per-run work is stated on [`Vstream::publish`]. Nor does it bind the
-/// runs a substitution puts in ([`stage_substitute`]): they are pieces its
-/// caller built before the call, so no accumulator here grows with them.
+/// **What it need not bind** is the work of reaching a span: each COPY
+/// spec's resolution descends its source's run-list to the span's first
+/// position — one node of the list's tree a level and the runs of one
+/// leaf, whatever the source holds left of it — and from there reads the
+/// runs it yields, each counted here as it is accumulated. So what one
+/// spec costs beyond the runs it places is a descent, and a spec that
+/// keeps nothing reads no run at all. The shot's per-run work is stated on
+/// [`Vstream::publish`]. Nor does it bind the runs a substitution puts in
+/// ([`stage_substitute`]): they are pieces its caller built before the
+/// call, so no accumulator here grows with them.
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// The most distinct positions one publish shot may re-insert.
@@ -326,37 +329,6 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 20;
 /// A shot cannot be split to meet it: the remedy is
 /// [`MAX_REINSERTED_VALUES`]'s, successive shots.
 pub const MAX_REINSERTED_UNITS: usize = 1 << 17;
-
-/// The most run-list steps one COPY's specs may command.
-///
-/// That is the work its resolution does, which [`MAX_PLACED_RUNS`] does not
-/// bound, since what a spec keeps does not bound what it walks. Resolving a
-/// span walks every run left of its opening ordinal, one `Nat` addition and
-/// comparison apiece ([`iter_resolve`](crate::M5State::iter_resolve) states
-/// it), so a spec aimed at its source's end — or past it, keeping nothing —
-/// costs the source's whole run count however narrow its answer, and a
-/// request's spec list multiplies that. Every step runs inside COPY's
-/// transaction, under M2's applier lock, where it stalls every writer in the
-/// engine and not the caller alone.
-///
-/// Charged as M7 charges a MAKELINK slot's specs (its
-/// `MAX_SLOT_RESOLVE_STEPS`): each spec at its source's whole run count
-/// ([`content_run_count`](crate::M5State::content_run_count), one map lookup
-/// reading no run), summed over the specs in order and refused
-/// `TooManyRuns` where the sum crosses, ahead of that spec's walk. The worst
-/// case rather than the steps taken, and the one ceiling that holds whatever
-/// backs the run-list: a span's reach bounds today's walk too
-/// ([`iter_resolve`](crate::M5State::iter_resolve)'s card), but only
-/// today's, so it is not charged — and the bound is conservative in the one
-/// safe direction: a narrow early span over a fragmented source is refused
-/// for work it would not have done.
-///
-/// `2^20` steps: at order 50 ns a step, ~50 ms of applier-lock hold, the
-/// order of a three-slot MAKELINK's walks (three slots of `2^18` steps). It
-/// admits the wire's 4096 specs over a 256-run source, or one spec over a
-/// source of a million runs; a copy past it is split by its caller, as one
-/// past [`MAX_PLACED_RUNS`] is.
-pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 
 /// The document state an edit was typed against (skep #442).
 ///

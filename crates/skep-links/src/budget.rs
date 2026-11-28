@@ -1,15 +1,18 @@
-//! The two per-slot budgets caller-shaped slots are held to, and the
+//! The per-slot budget caller-shaped slots are held to, and the
 //! publication's budget on the reads it makes under the lock.
 //!
-//! They are the spans a slot keeps ([`MAX_SLOT_SPANS`]), which every
-//! caller-shaped slot is held to, and the run-list steps a `Resolve` slot's
-//! specs command ([`MAX_SLOT_RESOLVE_STEPS`]) — its result and its work,
-//! neither of which bounds the other. MAKELINK enforces both, and `emit` and
-//! `editlink` the first, each refusing an over-budget slot `SlotTooLarge`;
-//! the rejections' `Display` text names the numbers. The third,
+//! The first is the spans a slot keeps ([`MAX_SLOT_SPANS`]), which every
+//! caller-shaped slot is held to: MAKELINK, `emit` and `editlink` each
+//! refuse an over-budget slot `SlotTooLarge`, and the rejections' `Display`
+//! text names the number. It is the one budget of a slot. A `Resolve`
+//! slot's work is its result's: each spec's resolution descends its
+//! source's run-list to the span — a node a level of the list's tree,
+//! whatever the source holds — and then reads the runs it yields, each a
+//! span kept and counted, so no second budget prices a walk to the span.
+//! The second,
 //! [`MAX_PUBLICATION_READS`], bounds the reads a publication's composite
-//! makes under the serialization lock and the run-list steps of its
-//! re-window, priced ahead of the lock by
+//! makes under the serialization lock and the run-list steps its
+//! re-window is priced at, priced ahead of the lock by
 //! `price_publication_reads` (the publication's module) and refused there by
 //! the daemon; this crate compares against it and refuses nothing itself.
 
@@ -65,11 +68,12 @@
 /// `editlink` successor is built entirely by its caller.
 ///
 /// It bounds a slot's result and, the resolution being pulled a run at a
-/// time and stopped here, the live peak of building it — and nothing else.
-/// The work a `Resolve` slot commands is bounded by its companion
-/// [`MAX_SLOT_RESOLVE_STEPS`], because the result cannot bound it: a spec
-/// aimed past its source's arranged end keeps no span and walks the whole run
-/// list. And skepd's codec, M10's production `Codec`, additionally reuses
+/// time and stopped here, the live peak of building it — and, with them,
+/// the work a `Resolve` slot commands: a spec's resolution reaches its span
+/// by a descent of its source's run-list and reads from there the runs it
+/// yields, so a spec aimed past its source's arranged end keeps no span and
+/// reads no run, and a slot's walks are the spans it keeps and a descent a
+/// spec. And skepd's codec, M10's production `Codec`, additionally reuses
 /// this number as its wire list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
 /// makes it the bound on a query endset's span count too — a use this
 /// argument does not cover: a stab ([`crate::LinkState::stab`]) probes the
@@ -77,46 +81,6 @@
 /// what it pays past them is its hits, which the store's contents set and no
 /// caller chooses.
 pub const MAX_SLOT_SPANS: usize = 4096;
-
-/// The most run-list steps one `Resolve` slot's specs may command.
-///
-/// It is the companion of [`MAX_SLOT_SPANS`], which bounds a slot's result
-/// where this bounds its work.
-///
-/// The two are independent because the result does not bound the work. M5
-/// states the cost at its one clip: resolving a span is
-/// `Θ(#runs left of its opening ordinal)` — one `Nat` addition and one
-/// comparison per run the prefix-sum walk passes over — so resolving the last
-/// position of an n-run list costs n steps however narrow the answer, and a
-/// spec opening past the arranged end keeps nothing at all while walking all
-/// of it. A slot of such specs is therefore unbounded in work at zero span
-/// count, and every step of it runs inside MAKELINK's transact, under M2's
-/// applier lock, where it stalls every writer in the engine rather than only
-/// the caller.
-///
-/// The charge is the source's whole run count
-/// ([`M5State::content_run_count`], one map lookup reading no run), which is
-/// the worst case rather than the actual steps: the runs left of an ordinal
-/// are not derivable from the ordinal, run widths being arbitrary, and M5's
-/// resolution does not report the steps it spent. That makes the bound
-/// conservative in the one direction that is safe — a narrow early span over
-/// a hugely fragmented source is refused for work it would not have done.
-///
-/// It bounds a duration and not a transient: each spec's runs are pulled one
-/// at a time off M5's lazy `iter_resolve`, and the span budget above stops
-/// the walk where the slot crosses it, so a slot's live peak is the spans it
-/// keeps — [`MAX_SLOT_SPANS`]' figure — whatever this constant admits.
-///
-/// `64 × MAX_SLOT_SPANS` steps: the product admits the wire's 4096 specs over
-/// a 64-run source, 64 specs over a 4096-run one, or one spec over a
-/// 262,144-run one. At order 50 ns per `Nat` add-and-compare that is ~13 ms
-/// of applier-lock hold per slot and ~40 ms across a three-slot MAKELINK.
-/// What an operator prices that against is its own documents' fragmentation,
-/// which is what the charge reads, and its tolerance for holding the write
-/// path.
-///
-/// [`M5State::content_run_count`]: skep_arrangement::M5State::content_run_count
-pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 
 /// The most in-lock reads one publication may command (the link-sets design
 /// §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK).
@@ -134,14 +98,13 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 /// `originals` entry, `read_with_in`'s probe per published own home per
 /// `read_with` entry, the claim read per own home per `supersede` entry, and
 /// the twin fence's one stab per re-inserted run. The re-window's term is
-/// run-list steps, and its unit is a run walked a constant few times: the
-/// check by identity walks the draft's run-list once for every kept place
-/// together, and the one record of those places is folded at its push and
-/// again at the seal, each fold a walk and a copy of the list; a piece is
-/// compared on the first walk and placed on the other two. A place that
-/// cuts a run adds nothing: it lengthens the list by at most two runs, on
-/// walks its pieces are charged a step each for already. Like
-/// [`MAX_SLOT_RESOLVE_STEPS`] the charge is an
+/// priced in run-list steps, a step a content run of each re-windowed
+/// draft and a step a piece: the ceiling of a check and two folds that each
+/// read the draft's whole list. The list is held as a tree, so the check
+/// by identity descends to each kept place and each fold of the one record
+/// of those places reads the list at the places' cuts alone; the term
+/// charges every run of the draft all the same, and so prices the
+/// re-window above its work by the runs no place reaches. The charge is an
 /// upper bound read before the work — every own home is charged whether or
 /// not it holds a claim, and every piece at the pairing's bound — so it is
 /// conservative in the one direction that is
@@ -151,13 +114,10 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 /// request refused here would have cost at least this much, and one admitted
 /// may cost a little more.
 ///
-/// `16 × MAX_SLOT_SPANS`, a quarter of the run-list steps one `Resolve`
-/// slot may command under the applier lock: a number kept by choice, and
-/// derived from no measured hold. The two units differ: a run-list step is
-/// a run walked or copied — a copy pass over a list of 65,536 runs was
-/// measured at 115 to 169 ns a run, a placement at the low end and a
-/// removal at the high, and the re-window's one pass, its check and its
-/// record's two folds, has not been measured — while an index probe
+/// `16 × MAX_SLOT_SPANS`: a number kept by choice, and derived from no
+/// measured hold. The two units differ: a run-list step is a run of a
+/// re-windowed draft counted, which the check and the folds read only
+/// where a place cuts it, while an index probe
 /// descends the home's spanfilade and tests its hits, order one
 /// to a few microseconds. What holds the lock longest is neither: the
 /// writes the commit stages — a correspondence record a minted piece, the

@@ -673,7 +673,7 @@ fn a_request_at_both_list_caps_over_4096_runs_is_one_walk_and_is_answered() {
     // surface's run count. doc2 is 4096 one-position runs — `c`, a line
     // break, `a`, over and over, by reference to doc1 — and the request
     // lists 4096 positions and 4096 lines, the transport's cap on each. A
-    // walk apiece would price it at 8193 × 4096 steps, past the walk budget
+    // walk apiece would pull 8193 × 4096 runs, past the walk budget
     // of 2^24; one walk prices it at 4096, and every number matches the
     // delivery's count.
     let k = mem_kernel();

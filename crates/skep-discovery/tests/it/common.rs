@@ -287,8 +287,8 @@ pub fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
 }
 
 /// An ordinal-level depth-2 CONTENT V-span whose REACH ORDINAL is past
-/// `usize` — a well-formed region span the gate admits and whose reach no
-/// walk price can read. [`vspan`] cannot build one: its ordinal is a `u32`.
+/// `usize` — a well-formed region span the gate admits, which resolves
+/// nothing. [`vspan`] cannot build one: its ordinal is a `u32`.
 pub fn vspan_reaching_past_usize(count: u32) -> Span {
     let start = Tumbler::new([n(1), Nat::from(u128::MAX)])
         .expect("a two-component sequence is nonempty");

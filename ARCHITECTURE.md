@@ -1399,7 +1399,10 @@ declaration under `src/` but a `tests` module carries its line, and that
 every file under `src/` and `tests/it/` is declared. `run.rs` is the run;
 beside it, `run_union.rs` holds the union of a run set's I-extents, in
 tumbler order, and `run_list.rs` the run-list, in V-order — two modules
-that share no private item. `ops.rs` is the `Vstream` handle and what its
+that share no private item; beneath `run_list.rs`, `run_list/tree.rs`
+holds the counted tree a list is held as, whose nodes lists share, and
+`run_list/table.rs` the node table `M5State` writes its lists as in a
+checkpoint, each shared node once. `ops.rs` is the `Vstream` handle and what its
 operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
 `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
 `ops/edit.rs`, `ops/version.rs` and `ops/stage.rs` each hold
@@ -1410,8 +1413,8 @@ terms a merge's landing rides it with, the head, the base to record and
 the merge, judged and recorded for the edit that names them.
 `ops/substitute.rs` holds no operation: it is one staging body, the
 identity-checked substitution a publication stages for each draft it
-re-windows — its check of several places on one walk is `run_list.rs`'s,
-and its record the edit's.
+re-windows — its check of several places under one cursor is
+`run_list.rs`'s, and its record the edit's.
 Its `test-hooks`
 feature (default off) compiles in `seat_link`, the test-only twin of the
 link seat; `scripts/gate-full.sh` checks the library and its docs without

@@ -43,17 +43,20 @@ use crate::{Seam, Seq, Step};
 // `body_hash` and the body is canonical, the layout `SKC3`'s, but
 // `chain_head` is a value under the salted preimage, which no `SKC3`
 // header's is; and M7's slice carries no sealed type config, so a body that
-// carries one is not this format's. Two changes stand under the same stamps,
+// carries one is not this format's. Three changes stand under the same stamps,
 // each a format event by the marker doc's own definition: the chain's
 // preimage hashes the signature slot's digest and M5's slice holds a fourth
-// field (the shot terms); and M4's slice holds the stretch entry (each
+// field (the shot terms); M4's slice holds the stretch entry (each
 // content entry a tagged value or stretch) and the engine's record its fifth
-// variant. No served board exists and dev boards regenerate, so the golden
-// fixture is regenerated under the stamps (`tests/golden/`). A checkpoint
-// under another stamp is refused at `load` naming the stamp found; one
-// written under this stamp before either change fails at the body's decode
-// — a skipped base whose account `refused_at_decode` tells from damage — or
-// at the chain, as corruption.
+// variant; and M5's slice writes its run-lists as one table of the nodes
+// they are held as, each shared node once, and every list as the id of its
+// root, where it wrote each list as its runs — the body moves, the journal's
+// records do not. No served board exists and dev boards regenerate, so the
+// golden fixture is regenerated under the stamps (`tests/golden/`). A
+// checkpoint under another stamp is refused at `load` naming the stamp
+// found; one written under this stamp before any of the three fails at the
+// body's decode — a skipped base whose account `refused_at_decode` tells
+// from damage — or at the chain, as corruption.
 const MAGIC: [u8; 4] = *b"SKC4";
 /// The checkpoint's format stamp, as a caller above the kernel names it.
 ///

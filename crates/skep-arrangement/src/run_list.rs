@@ -1,7 +1,7 @@
 //! The implicit-position run-list, per subspace (§1).
 //!
-//! It locates, splices, contracts, reorders and eagerly seam-coalesces
-//! (ASN-0058 M12/M14/M16; ASN-0082 shift-absorption; ASN-0117 P2; ASN-0119
+//! It locates, splices, contracts, reorders and seam-coalesces (ASN-0058
+//! M12/M14/M16; ASN-0082 shift-absorption; ASN-0117 P2; ASN-0119
 //! tile-by-placement).
 //!
 //! A `RunList` is an ordered sequence of [`Run`]s; V-positions are not
@@ -11,22 +11,42 @@
 //! always a prefix sum, so no holes), and insert/delete shift the suffix for
 //! free (the spec's ASN-0082 displacement is never computed).
 //!
-//! **Open decision #1** (default taken): the physical persistent structure is
-//! `im::Vector<Run>` — free structural sharing (VERSION's O(1) fork share,
-//! cheap state clones), O(#runs) locate/splice, fine because #runs scales
-//! with transclusions/edit-sessions, not characters. The width-measured tree
-//! and `im::OrdMap<ordinal, Run>` alternatives are profiling-gated.
+//! **Decision #1**: the physical persistent structure is a counted tree
+//! (`tree`), each node carrying the width and the run count beneath it and
+//! shared between the lists that hold it. The reason is what a flat
+//! persistent vector of runs costs. A write rebuilds it whole — a splice
+//! reads every run to find its site and writes every run back — and that
+//! rebuild runs under M2's applier lock, so a write holds every writer for
+//! every run of the document. A list so rebuilt shares nothing with the one
+//! it was made from, so each version, landing and edit keeps a whole list of
+//! its own. And an ordinal is found by summing widths from the first run.
+//! On the tree a write makes anew only the nodes on the paths to its cuts
+//! and shares the rest, an ordinal is found by a descent, and a checkpoint
+//! writes each shared node once (`table`).
 
 use std::fmt;
+use std::sync::Arc;
 
 use num_traits::{One, Zero};
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use skep_address::{Address, Nat, SpanSet};
 
-use crate::decode::element_by_element;
 use crate::run::Run;
 #[cfg(test)]
 use crate::run_union::RunUnion;
+
+// The vector-backed list the tree replaced, kept as the tests' oracle.
+#[cfg(test)]
+mod oracle;
+// The node table: every list of a slice written as one table of nodes, each
+// shared node once, and the decode door that rebuilds them shared.
+pub(crate) mod table;
+// The counted tree a list is held as: the node, the one builder, the
+// descents and the walk.
+mod tree;
+
+use tree::{Builder, Node, Walk};
 
 /// Returns whether the run at `right_start` is I-adjacent to `left` (ASN-0058).
 ///
@@ -85,73 +105,6 @@ pub(crate) fn extend_or_push_run(runs: &mut Vec<Run>, run: Run) {
     runs.push(run);
 }
 
-/// Returns `runs` maximally merged (§1, Open decision #8 default).
-///
-/// It is the eager coalesce: one pass accumulating through
-/// [`extend_or_push_run`], so the merge condition is applied by the one
-/// element that owns it. Behaviorally identical to seam-only coalescing
-/// given the inductive invariant (the resident list is always maximally
-/// merged, so only touched seams can newly merge); a full pass cannot miss a
-/// seam. The resident form is then the unique maximally-merged decomposition
-/// (ASN-0058 M12), so queries read run structure directly.
-fn coalesced(runs: Vec<Run>) -> im::Vector<Run> {
-    let mut out: Vec<Run> = Vec::with_capacity(runs.len());
-    for run in runs {
-        extend_or_push_run(&mut out, run);
-    }
-    out.into_iter().collect()
-}
-
-/// Splits a run sequence at the ordinal boundary before `ord`.
-///
-/// The prefix covers ordinals `[1, ord)`, the suffix `[ord, total]`. The
-/// append boundary `ord = total + 1` — INSERT/COPY's `J = N + 1` and the
-/// link-seat append `n_L(d) + 1` — returns (all, empty), so a splice
-/// concatenates at the tail (§1). `ord ≤ 1` returns (empty, all) — the
-/// defensive clamp under which a split at 0 and at 1 coincide (ASN-0119
-/// tile-by-placement note). An interior `ord` splits the boundary run
-/// `Run(a, w) → Run(a, kept), Run(a ⊕ kept, w − kept)` via
-/// [`Run::addr_at`](crate::Run::addr_at).
-///
-/// Over an iterator, not a `RunList`: the ops that split more than once
-/// (contract, transpose) split a `Vec<Run>` an earlier split produced, and a
-/// splitter that demanded a `RunList` would make each of them rebuild one.
-/// The V-positions it judges each run at are the blocks' ([`blocks_of`]), so
-/// it sums no width for itself.
-fn split_runs<'a>(runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
-    if *ord <= Nat::one() {
-        return (Vec::new(), runs.cloned().collect());
-    }
-    let mut left: Vec<Run> = Vec::new();
-    let mut blocks = blocks_of(runs);
-    while let Some(block) = blocks.next() {
-        if *ord == block.v_start {
-            // Boundary before this block.
-            let mut right: Vec<Run> = vec![block.run.clone()];
-            right.extend(blocks.map(|b| b.run.clone()));
-            return (left, right);
-        }
-        if *ord < block.v_reach() {
-            // Interior: keep `ord − v_start` elements on the left
-            // (1 ≤ kept ≤ width − 1 here).
-            let kept = ord - &block.v_start;
-            let right_first = Run {
-                i_start: block.run.addr_at(&kept),
-                width: &block.run.width - &kept,
-            };
-            left.push(Run {
-                i_start: block.run.i_start.clone(),
-                width: kept,
-            });
-            let mut right: Vec<Run> = vec![right_first];
-            right.extend(blocks.map(|b| b.run.clone()));
-            return (left, right);
-        }
-        left.push(block.run.clone());
-    }
-    (left, Vec::new()) // ord ≥ total + 1: the append boundary
-}
-
 /// One positional change to a run-list: positions removed, runs placed (§1).
 ///
 /// `width` positions are removed from ordinal `at` on, and `runs` are placed
@@ -198,89 +151,215 @@ fn part_of(run: &Run, from: &Nat, to: &Nat) -> Run {
     }
 }
 
+/// Returns the offset before ordinal `ord`: `ord − 1`, and 0 for ordinal 0.
+///
+/// An offset counts the positions left of a boundary, so the boundary
+/// before ordinal 1 and the defensive clamp of ordinal 0 are both offset 0
+/// (ASN-0119 tile-by-placement note), and the append boundary `n + 1` is
+/// offset `n`, the list's width.
+fn offset_before(ord: &Nat) -> Nat {
+    if ord.is_zero() {
+        Nat::zero()
+    } else {
+        ord - Nat::one()
+    }
+}
+
 /// The per-subspace run-list (§Core data model).
 ///
-/// All mutators are persistent (`&self → RunList`); the `im::Vector` backing
-/// keeps clones O(1) (VERSION's structural fork share) while the v1 surgery
-/// below is Vec-based O(#runs).
+/// All mutators are persistent (`&self → RunList`). The list is a handle on
+/// the root of a counted tree (`tree`): a clone is one more handle (VERSION's
+/// structural fork share), and a mutator's answer holds every node of the
+/// receiver its change did not reach.
 ///
 /// **Maximal merge is the invariant**: the resident form is the unique
 /// maximally-merged decomposition (ASN-0058 M12), so
 /// [`content_runs`](crate::M5State::content_runs) and
 /// [`link_runs`](crate::M5State::link_runs) publish canonical run structure
-/// and `resolve` serves it. Two doors keep it. Every mutator here rebuilds
-/// through [`coalesced`] — or, the one-walk [`spliced`](RunList::spliced),
-/// through the accumulator `coalesced` is a pass of — and the serde shadow
-/// below establishes it on the decode path — a checkpoint carries these
-/// lists whole, so without that door a recovered list could hold two
-/// I-adjacent runs and every read publishing canonicality would answer off
-/// it, silently and across restarts.
+/// and `resolve` serves it. It holds across leaves and subtrees as inside a
+/// leaf. Every mutator here builds its answer through the tree's one builder,
+/// which tests each seam the change makes as it is made — and no other,
+/// the receiver holding the invariant already — and both decode doors
+/// establish it: this type's own, which reads a list as its runs in V-order,
+/// and the node table's (`table`), which reads the lists of a checkpoint.
+/// Without them a recovered list could hold two I-adjacent runs and every
+/// read publishing canonicality would answer off it, silently and across
+/// restarts.
 ///
-/// The decode door repairs rather than refuses, which is what distinguishes
-/// it from [`Run`]'s and `Provenance`'s: a non-merged list denotes exactly the
-/// right V→I map, and `coalesced` is total, idempotent and
-/// denotation-preserving, so establishing the invariant is what a constructor
-/// is for. Refusing would turn a fully recoverable store into a dead one for
-/// no gain. The reads therefore rest on the type, not on M2's checksum.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The decode doors repair rather than refuse, which is what distinguishes
+/// them from [`Run`]'s and `Provenance`'s: a non-merged list denotes exactly
+/// the right V→I map, and the merge is total, idempotent and
+/// denotation-preserving, so establishing the invariant is what a
+/// constructor is for. Refusing would turn a fully recoverable store into a
+/// dead one for no gain. The reads therefore rest on the type, not on M2's
+/// checksum.
+///
+/// **Equality is the run sequence's**, never the tree's shape: two lists of
+/// one run sequence are equal however their nodes are grouped, and `Debug`
+/// prints the sequence. A shape is a fact about how a list was reached — a
+/// bulk build, a history of splices — and no read answers off it.
+///
+/// **Its serde form here is its runs in V-order**: a sequence of [`Run`]s,
+/// what a list reads as wherever it is written alone. A checkpoint does not
+/// write a list so — `M5State`'s own form writes every list it holds as a
+/// root of one node table — and the form here is the one a rendering of the
+/// slice by its run sequences takes
+/// ([`M5State::as_run_sequences`](crate::M5State::as_run_sequences)).
+#[derive(Clone, Default, Deserialize)]
 #[serde(from = "RunListShadow")]
-pub(crate) struct RunList(im::Vector<Run>);
+pub(crate) struct RunList {
+    /// The root of the list's tree, `None` for the empty list.
+    root: Option<Arc<Node>>,
+}
 
-/// The deserialization mint path: the serde shadow, with `from`.
+impl PartialEq for RunList {
+    fn eq(&self, other: &RunList) -> bool {
+        match (&self.root, &other.root) {
+            (None, None) => true,
+            (Some(mine), Some(theirs)) => {
+                Arc::ptr_eq(mine, theirs)
+                    || (mine.count() == theirs.count() && mine.width() == theirs.width() && self.iter().eq(other.iter()))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RunList {}
+
+/// Formats the run sequence, as a list of runs prints.
+impl fmt::Debug for RunList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct InOrder<'l>(&'l RunList);
+        impl fmt::Debug for InOrder<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list().entries(self.0.iter()).finish()
+            }
+        }
+        f.debug_tuple("RunList").field(&InOrder(self)).finish()
+    }
+}
+
+/// Writes the list as its runs in V-order: a sequence, each run through
+/// `Run`'s own form.
+impl Serialize for RunList {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        struct InOrder<'l>(&'l RunList);
+        impl Serialize for InOrder<'_> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_seq(self.0.iter())
+            }
+        }
+        serializer.serialize_newtype_struct("RunList", &InOrder(self))
+    }
+}
+
+/// The deserialization mint path of a list written as its runs.
 ///
-/// [`Run`] and `Provenance` each carry one too; this one takes `from` rather
-/// than `try_from` because the conversion is total. The decoded runs re-enter
-/// [`coalesced`], so the maximal-merge invariant holds for every `RunList` in
-/// the process rather than for every one the folds built.
+/// [`Run`] and `Provenance` each carry a shadow too; this one takes `from`
+/// rather than `try_from` because the conversion is total. The decoded runs
+/// enter the tree's builder one by one, each tested against the run before
+/// it, so the maximal-merge invariant holds for every `RunList` in the
+/// process rather than for every one the folds built, and the list comes
+/// out in the shape a bulk build gives it.
 ///
-/// It reads exactly what a `RunList` writes — the same newtype over the same
-/// vector, which bincode encodes as its inner value — and `Serialize` is
-/// derived on `RunList` itself, so the shadow costs the encoding nothing. The
-/// vector is read run by run ([`element_by_element`]), each run through
-/// `Run`'s own door, so no count a checkpoint body declares sizes a
-/// reservation.
+/// It reads exactly what a `RunList` writes — a sequence of runs — run by
+/// run, each through `Run`'s own door, so no count the bytes declare sizes
+/// a reservation.
 #[derive(Deserialize)]
-struct RunListShadow(#[serde(deserialize_with = "element_by_element")] im::Vector<Run>);
+struct RunListShadow(#[serde(deserialize_with = "run_by_run")] RunList);
 
 impl From<RunListShadow> for RunList {
-    fn from(s: RunListShadow) -> RunList {
-        RunList(coalesced(s.0.into_iter().collect()))
+    fn from(shadow: RunListShadow) -> RunList {
+        shadow.0
     }
+}
+
+/// Decodes a sequence of runs into a list, one run at a time, in order.
+///
+/// Reserves nothing; each run is decoded by its own `Deserialize` and handed
+/// to the tree's builder, which merges it into the run before it where the
+/// two are I-adjacent.
+///
+/// # Errors
+///
+/// Returns `D::Error` where a run does not decode, including where the input
+/// runs out before the count its bytes declare.
+fn run_by_run<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RunList, D::Error> {
+    struct InOrder;
+
+    impl<'de> Visitor<'de> for InOrder {
+        type Value = RunList;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a sequence of runs")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut runs: A) -> Result<RunList, A::Error> {
+            let mut out = Builder::new();
+            while let Some(run) = runs.next_element()? {
+                out.place(run, &mut |_| {});
+            }
+            Ok(RunList { root: out.finish(&mut |_| {}) })
+        }
+    }
+
+    deserializer.deserialize_seq(InOrder)
 }
 
 /// Borrowed runs of one subspace's run-list, in V-order.
 ///
 /// They are what [`M5State::content_runs`](crate::M5State::content_runs) and
 /// [`link_runs`](crate::M5State::link_runs) lend. Opaque, as M1's `Spans` is,
-/// so the `im::Vector` backing (Open decision #1) stays this module's own.
+/// so the list's backing (Decision #1) stays this module's own.
 ///
-/// Opacity hides the container, never the walk's capabilities, which are
-/// forwarded below: the exact length is `#runs`, answered without reading a
-/// run, and the reverse walk and the fused guarantee come with it. `Clone` is
-/// withheld for the reason M1 states on `Spans`: `im`'s vector iterator is not
-/// cloneable, so a caller wanting two cursors asks the arrangement for two.
+/// Opacity hides the container, never the walk's capabilities: the exact
+/// length is `#runs`, read off the tree's root without reading a run; the
+/// walk runs from either end, each end descending its own side of the tree
+/// when it is first pulled, the two meeting on the count; and it is fused.
+/// `Clone` is withheld, as M1 withholds it on `Spans`: a caller wanting two
+/// cursors asks the arrangement for two.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct Runs<'a>(<&'a im::Vector<Run> as IntoIterator>::IntoIter);
+pub struct Runs<'a> {
+    /// The tree walked, `None` for the empty list.
+    root: Option<&'a Node>,
+    /// How many runs neither end has yielded.
+    left: usize,
+    /// The walk from the first run on, once the front is pulled.
+    front: Option<Walk<'a>>,
+    /// The walk from the last run back, once the back is pulled.
+    back: Option<Walk<'a>>,
+}
 
 impl<'a> Iterator for Runs<'a> {
     type Item = &'a Run;
     fn next(&mut self) -> Option<&'a Run> {
-        self.0.next()
+        if self.left == 0 {
+            return None;
+        }
+        let root = self.root?;
+        self.left -= 1;
+        self.front.get_or_insert_with(|| Walk::from_first(root, &mut |_| {})).next(&mut |_| {})
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        (self.left, Some(self.left))
     }
 }
 
 impl<'a> DoubleEndedIterator for Runs<'a> {
     fn next_back(&mut self) -> Option<&'a Run> {
-        self.0.next_back()
+        if self.left == 0 {
+            return None;
+        }
+        let root = self.root?;
+        self.left -= 1;
+        self.back.get_or_insert_with(|| Walk::from_last(root)).back()
     }
 }
 
 impl ExactSizeIterator for Runs<'_> {
     fn len(&self) -> usize {
-        self.0.len()
+        self.left
     }
 }
 
@@ -288,9 +367,8 @@ impl std::iter::FusedIterator for Runs<'_> {}
 
 /// Formats the cursor, not the runs.
 ///
-/// The backing's iterator is neither `Clone` nor `Debug`, so there is no way
-/// to show what is left without spending it, and the arrangement it was lent
-/// from is `Debug` already.
+/// There is no way to show what is left without spending it, and the
+/// arrangement it was lent from is `Debug` already.
 impl fmt::Debug for Runs<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Runs").finish_non_exhaustive()
@@ -321,8 +399,8 @@ pub(crate) struct Block<'a> {
 impl Block<'_> {
     /// Returns the first V-ordinal past the block, `v_start + width`.
     ///
-    /// It is the V-side twin of [`Run::reach`]; what `locate`'s bound, the
-    /// clip and the splitter's interior test each ask.
+    /// It is the V-side twin of [`Run::reach`].
+    #[cfg(test)]
     fn v_reach(&self) -> Nat {
         &self.v_start + &self.run.width
     }
@@ -330,10 +408,9 @@ impl Block<'_> {
 
 /// Returns the mapping blocks of a run sequence held any way.
 ///
-/// Each run stands at the running prefix sum + 1, so the list's own runs and
-/// a `Vec<Run>` a split produced walk alike. This is the one prefix-sum walk:
-/// [`RunList::iter_blocks`] is this over the list, and [`split_runs`] asks it
-/// rather than summing widths for itself.
+/// Each run stands at the running prefix sum + 1. This is the one prefix-sum
+/// walk of every run: [`RunList::iter_blocks`] is this over the list's own
+/// runs, for the reads that answer off every block.
 fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Block<'a>> {
     let mut v_start = Nat::one();
     runs.map(move |run| {
@@ -346,20 +423,22 @@ fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Bl
     })
 }
 
-/// The forward cursor of one walk of a run-list: the run in hand, at its
-/// V-start.
+/// The cursor of one check of a run-list at several sites: the run in hand,
+/// at its V-start, and the way on from it.
 ///
 /// It is what [`RunList::arranges_each`] judges every site on. The cursor
-/// reads the list's runs in V-order and never moves back, so the runs it
-/// has read are the walk's whole cost however many positions it is asked.
+/// never moves back: a site left of the run in hand is not held. It moves
+/// on by the list's own order where the next position asked is the run in
+/// hand's reach, and by a descent from the root anywhere farther, so the
+/// runs between two far sites are never read.
 struct Cursor<'l> {
-    /// The runs the walk has not read yet.
-    runs: Runs<'l>,
+    /// The tree walked, `None` for the empty list.
+    root: Option<&'l Node>,
     /// The run in hand and the ordinal it stands at: none before the first
-    /// run is read.
+    /// seek.
     hand: Option<(&'l Run, Nat)>,
-    /// The ordinal the next run read stands at: the one prefix sum.
-    next: Nat,
+    /// The walk standing just past the run in hand.
+    walk: Option<Walk<'l>>,
 }
 
 impl<'l> Cursor<'l> {
@@ -367,62 +446,144 @@ impl<'l> Cursor<'l> {
     /// offset in it.
     ///
     /// `None` where the list ends before `ord`, and where the cursor
-    /// already stands past it. `steps` is charged one for every run read.
+    /// already stands past it. A seek past the list's end leaves the last
+    /// run in hand, and one of ordinal 0 the first, as a walk run by run
+    /// would. `steps` is charged one for every node opened and one for
+    /// every run read: one run where the cursor moves on to the next, and
+    /// a descent — the tree's height plus one in nodes, a leaf's runs at
+    /// most — where it jumps.
     fn seek(&mut self, ord: &Nat, steps: &mut impl FnMut(u64)) -> Option<(&'l Run, Nat)> {
         loop {
             if let Some((run, v_start)) = &self.hand {
                 if ord < v_start {
                     return None;
                 }
-                if *ord < v_start + &run.width {
+                let v_reach = v_start + &run.width;
+                if *ord < v_reach {
                     return Some((*run, ord - v_start));
                 }
+                if *ord == v_reach {
+                    // The next run: one step along the list's own order.
+                    let next = self.walk.as_mut()?.next(steps)?;
+                    self.hand = Some((next, v_reach));
+                    continue;
+                }
             }
-            let run = self.runs.next()?;
-            steps(1);
-            let v_reach = &self.next + &run.width;
-            let v_start = std::mem::replace(&mut self.next, v_reach);
-            self.hand = Some((run, v_start));
+            let root = self.root?;
+            if ord.is_zero() {
+                // Ordinal 0 lies before every run: the first comes to hand.
+                let mut walk = Walk::from_first(root, steps);
+                let first = walk.next(steps)?;
+                self.hand = Some((first, Nat::one()));
+                self.walk = Some(walk);
+                continue;
+            }
+            match Walk::seek(root, &(ord - Nat::one()), steps) {
+                Some((walk, run, before)) => {
+                    self.hand = Some((run, before + Nat::one()));
+                    self.walk = Some(walk);
+                }
+                None => {
+                    // Past the end: the last run comes to hand, as it would
+                    // by reading on to it.
+                    let (walk, last) = Walk::at_last(root, steps)?;
+                    self.hand = Some((last, root.width() - &last.width + Nat::one()));
+                    self.walk = Some(walk);
+                    return None;
+                }
+            }
         }
     }
 }
 
+/// The clip's walk: the runs over the offsets `[from, to)`, cut at the two
+/// ends, pulled one at a time.
+///
+/// Nothing is read before the first pull, which descends to `from`; each
+/// later pull reads the next run of the list's own order.
+struct Clipped<'l, F> {
+    state: Clip<'l>,
+    /// The offset of the first position kept.
+    from: Nat,
+    /// The offset past the last position kept; `None` for the list's end.
+    to: Option<Nat>,
+    steps: F,
+}
+
+/// Where a [`Clipped`] walk stands.
+enum Clip<'l> {
+    /// Not pulled yet: the descent to the first position is still to make.
+    Unopened(&'l Node),
+    /// Pulled: the walk past the run last yielded, and the offset the next
+    /// run stands at.
+    Open { walk: Walk<'l>, at: Nat },
+    /// Past the range, or past the list.
+    Done,
+}
+
+impl<F: FnMut(u64)> Iterator for Clipped<'_, F> {
+    type Item = Run;
+
+    fn next(&mut self) -> Option<Run> {
+        let (run, at) = match std::mem::replace(&mut self.state, Clip::Done) {
+            Clip::Done => return None,
+            Clip::Unopened(root) => {
+                let (walk, run, at) = Walk::seek(root, &self.from, &mut self.steps)?;
+                self.state = Clip::Open { walk, at: &at + &run.width };
+                (run, at)
+            }
+            Clip::Open { mut walk, at } => {
+                if self.to.as_ref().is_some_and(|to| *to <= at) {
+                    return None;
+                }
+                let run = walk.next(&mut self.steps)?;
+                self.state = Clip::Open { walk, at: &at + &run.width };
+                (run, at)
+            }
+        };
+        let reach = &at + &run.width;
+        let first = std::cmp::max(&at, &self.from) - &at;
+        let past = self.to.as_ref().map_or(&reach, |to| std::cmp::min(&reach, to)) - &at;
+        Some(part_of(run, &first, &past))
+    }
+}
+
 impl RunList {
-    /// Returns `n(d)` for this subspace: the total arranged width.
-    pub(crate) fn total_width(&self) -> Nat {
-        self.total_width_stepped(&mut |_| {})
+    /// Returns the list of `runs` in order, maximally merged.
+    ///
+    /// The bulk build: the runs handed to the tree's builder one by one, so
+    /// two I-adjacent neighbours come out one run, leaves and inner nodes
+    /// are packed full from the left, and the last two of a level share
+    /// what is left so neither is short.
+    #[cfg(test)]
+    pub(crate) fn from_runs(runs: impl IntoIterator<Item = Run>) -> RunList {
+        let mut out = Builder::new();
+        for run in runs {
+            out.place(run, &mut |_| {});
+        }
+        RunList { root: out.finish(&mut |_| {}) }
     }
 
-    /// Returns [`total_width`](RunList::total_width), its walk counted.
+    /// Returns `n(d)` for this subspace: the total arranged width.
     ///
-    /// The sum visits every run, and `steps` is charged one for each: the
-    /// form a caller under M2's applier lock asks, so a test can hold the
-    /// call to one walk of the list however many positions it then judges
-    /// against the count.
-    pub(crate) fn total_width_stepped(&self, steps: &mut impl FnMut(u64)) -> Nat {
-        self.0
-            .iter()
-            .map(|run| {
-                steps(1);
-                run.width()
-            })
-            .sum()
+    /// Read off the tree's root, which carries the sum: no run is read.
+    pub(crate) fn total_width(&self) -> Nat {
+        self.root.as_ref().map_or_else(Nat::zero, |root| root.width().clone())
     }
 
     /// Returns `#runs`, how many runs the list holds.
     ///
-    /// It is the fragmentation every `O(#runs)` walk and splice here is priced
-    /// in. O(1): the backing vector knows its own length.
+    /// It is the fragmentation every walk of the whole list here is priced
+    /// in. Read off the tree's root, which carries the count.
     pub(crate) fn run_count(&self) -> usize {
-        self.0.len()
+        self.root.as_ref().map_or(0, |root| root.count())
     }
 
     /// Returns whether the list holds no runs, and so no positions.
     ///
-    /// Every run has `width ≥ 1`. O(1), where `total_width().is_zero()` sums
-    /// every width to learn the same bit.
+    /// Every run has `width ≥ 1`, and the empty list has no root.
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.root.is_none()
     }
 
     /// Returns the run holding ordinal `ord`, lent, and `ord`'s offset in it.
@@ -430,16 +591,22 @@ impl RunList {
     /// The offset is 0-based; `None` when `ord` is 0 or past the last arranged
     /// ordinal (§1 locate). The run itself rather than its index, so a caller
     /// holds what it asked for and never re-fetches it by a coordinate this
-    /// walk already resolved. Answered off
-    /// [`iter_blocks`](RunList::iter_blocks): the one prefix-sum walk, which
-    /// hands each run back at its V-start.
+    /// read already resolved. A descent on the tree's width sums: it opens
+    /// one node a level and reads the runs of one leaf, whatever the list
+    /// holds left of `ord`.
     pub(crate) fn locate(&self, ord: &Nat) -> Option<(&Run, Nat)> {
+        self.locate_counted(ord, &mut |_| {})
+    }
+
+    /// Returns [`locate`](RunList::locate), its descent counted.
+    ///
+    /// `steps` is charged one for every node opened and one for every run
+    /// read: at most `height + 1` nodes and 16 runs.
+    fn locate_counted(&self, ord: &Nat, steps: &mut impl FnMut(u64)) -> Option<(&Run, Nat)> {
         if ord.is_zero() {
-            return None; // ordinal 0 lies before every run; the offset would underflow
+            return None; // ordinal 0 lies before every run
         }
-        self.iter_blocks()
-            .find(|block| *ord < block.v_reach())
-            .map(|block| (block.run, ord - &block.v_start))
+        tree::locate(self.root.as_deref()?, &(ord - Nat::one()), steps)
     }
 
     /// Returns `M(d)(p)` for this subspace: the I-address at ordinal `ord`.
@@ -456,9 +623,10 @@ impl RunList {
     /// [`point`](RunList::point), which answer the same membership question
     /// from the V-side: an address interior to a coalesced run counts, runs
     /// being contiguous I-extents rather than enumerated addresses. CL-UNIQ
-    /// asks this of a document's link list.
+    /// asks this of a document's link list. The tree is ordered by V and
+    /// says nothing of I, so this reads every run until one holds `a`.
     pub(crate) fn holds(&self, a: &Address) -> bool {
-        self.0.iter().any(|r| r.iextent().contains(a.tumbler()))
+        self.iter().any(|r| r.iextent().contains(a.tumbler()))
     }
 
     /// Returns whether this list holds every address of `run`.
@@ -471,57 +639,118 @@ impl RunList {
     /// `ops/publish.rs`).
     #[cfg(test)]
     fn covers(&self, run: &Run) -> bool {
-        RunUnion::of(self.0.iter()).covers(run)
-    }
-
-    /// Splits this list's runs at the boundary before `ord`: [`split_runs`].
-    fn split_at(&self, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
-        split_runs(self.0.iter(), ord)
+        RunUnion::of(self.iter()).covers(run)
     }
 
     /// Returns the list with `new_runs` spliced in at `ord` (§1).
     ///
-    /// It splits, inserts, concatenates and coalesces. The suffix's implicit
-    /// positions shift by `+Σ width(new_runs)` — the uniform forward shift,
-    /// for free. Takes the runs by value, as `Vec::extend` does: the placing
-    /// fold hands over clones of the record it borrows, and
-    /// [`append`](RunList::append) hands over the one run it owns.
+    /// The runs left of the boundary before `ord` are kept, the new runs
+    /// placed, and the runs from the boundary on kept after them. The
+    /// suffix's implicit positions shift by `+Σ width(new_runs)` — the
+    /// uniform forward shift, for free. `ord ≤ 1` places before everything —
+    /// the defensive clamp under which a splice at 0 and at 1 coincide
+    /// (ASN-0119 tile-by-placement note) — and `ord` past the append
+    /// boundary `n + 1` places after everything. An interior `ord` cuts the
+    /// run it falls in, `Run(a, w) → Run(a, kept), Run(a ⊕ kept, w − kept)`.
+    /// Takes the runs by value, as `Vec::extend` does: the placing fold
+    /// hands over clones of the record it borrows.
+    ///
+    /// **What it makes anew.** The nodes on the path to the boundary and
+    /// the leaves the placed runs fill; every other node of the receiver is
+    /// shared. Its two seams — the run kept before the placement against the
+    /// first run placed, and the last placed against the run kept after —
+    /// are tested as they are made, and a run that joins one across a leaf's
+    /// edge is merged into it there.
     #[must_use = "splice_in returns the new run-list; it does not modify the receiver"]
     pub(crate) fn splice_in(&self, ord: &Nat, new_runs: impl IntoIterator<Item = Run>) -> RunList {
-        let (mut acc, right) = self.split_at(ord);
-        acc.extend(new_runs);
-        acc.extend(right);
-        RunList(coalesced(acc))
+        self.splice_in_counted(ord, new_runs, &mut |_| {})
+    }
+
+    /// Returns [`splice_in`](RunList::splice_in), its walk counted.
+    ///
+    /// `steps` is charged one for every node opened, one for every run of an
+    /// opened leaf read and one for every run placed: at most
+    /// `2 · c + #runs placed`, `c` as [`spliced`](RunList::spliced) states
+    /// it, whatever the list holds.
+    fn splice_in_counted(&self, ord: &Nat, new_runs: impl IntoIterator<Item = Run>, steps: &mut impl FnMut(u64)) -> RunList {
+        let at = offset_before(ord);
+        let mut out = Builder::new();
+        if let Some(root) = &self.root {
+            out.keep(root, &Nat::zero(), Some(&at), steps);
+        }
+        for run in new_runs {
+            out.place(run, steps);
+        }
+        if let Some(root) = &self.root {
+            out.keep(root, &at, None, steps);
+        }
+        RunList { root: out.finish(steps) }
     }
 
     /// Returns the list with `run` added after everything it already holds.
     ///
-    /// That is the append boundary `total + 1`, which [`split_runs`] names,
-    /// the content ops reach through `admits_content_boundary`, and the link
-    /// seat targets (§8's `n_L(d) + 1`). Where the end lies is this list's
-    /// knowledge, so a caller meaning "after everything" says that rather than
-    /// computing it. Coalesces with the last run when I-adjacent, as any
-    /// splice does.
+    /// That is the append boundary `total + 1`, which the content ops reach
+    /// through `admits_content_boundary` and the link seat targets (§8's
+    /// `n_L(d) + 1`). Where the end lies is this list's knowledge, so a
+    /// caller meaning "after everything" says that rather than computing it:
+    /// the receiver's tree is kept whole, no ordinal is found, and the run is
+    /// placed after its last. Coalesces with the last run when I-adjacent, as
+    /// any splice does.
     #[must_use = "append returns the new run-list; it does not modify the receiver"]
     pub(crate) fn append(&self, run: Run) -> RunList {
-        self.splice_in(&(self.total_width() + Nat::one()), [run])
+        self.append_counted(run, &mut |_| {})
+    }
+
+    /// Returns [`append`](RunList::append), its walk counted.
+    ///
+    /// `steps` is charged as [`splice_in_counted`](RunList::splice_in_counted)
+    /// charges, within the same bound: the nodes of the right spine the
+    /// run's leaf is made beside, and that leaf's runs.
+    fn append_counted(&self, run: Run, steps: &mut impl FnMut(u64)) -> RunList {
+        let mut out = Builder::new();
+        if let Some(root) = &self.root {
+            out.keep(root, &Nat::zero(), None, steps);
+        }
+        out.place(run, steps);
+        RunList { root: out.finish(steps) }
     }
 
     /// Returns the list with ordinals `[from, from + width)` removed (§1).
     ///
-    /// It splits at `from` and `from + width`, drops the middle and
-    /// concatenates prefix + suffix. Suffix positions shift left for free; the
-    /// gap closes by construction (ASN-0117 P2).
+    /// The runs left of `from` are kept and the runs from `from + width` on
+    /// kept after them; the runs the two ends fall in are cut there. Suffix
+    /// positions shift left for free; the gap closes by construction
+    /// (ASN-0117 P2). `from ≤ 1` removes from the first position, and a
+    /// removal running past the end removes what is there.
+    ///
+    /// **What it makes anew.** The nodes on the paths to the two ends. No
+    /// node wholly inside the removed range is opened, and every node
+    /// outside the two paths is shared. Its one seam — the run kept before
+    /// the gap against the run kept after — is tested, and the two merge
+    /// where they are I-adjacent, across a leaf's edge as inside a leaf.
     #[must_use = "remove_range returns the new run-list; it does not modify the receiver"]
     pub(crate) fn remove_range(&self, from: &Nat, width: &Nat) -> RunList {
-        let (mut left, rest) = self.split_at(from);
-        // The removed range is rest-relative ordinals [1, width].
-        let (_dropped, right) = split_runs(rest.iter(), &(width + &Nat::one()));
-        left.extend(right);
-        RunList(coalesced(left))
+        self.remove_range_counted(from, width, &mut |_| {})
     }
 
-    /// Returns the list with every change of `changes` made, in one walk (§1).
+    /// Returns [`remove_range`](RunList::remove_range), its walk counted.
+    ///
+    /// `steps` is charged one for every node opened and one for every run of
+    /// an opened leaf read: at most `2 · c`, `c` as
+    /// [`spliced`](RunList::spliced) states it, whatever the list and the
+    /// removed range hold.
+    fn remove_range_counted(&self, from: &Nat, width: &Nat, steps: &mut impl FnMut(u64)) -> RunList {
+        let Some(root) = &self.root else {
+            return RunList::default();
+        };
+        let first = offset_before(from);
+        let mut out = Builder::new();
+        out.keep(root, &Nat::zero(), Some(&first), steps);
+        out.keep(root, &(first + width), None, steps);
+        RunList { root: out.finish(steps) }
+    }
+
+    /// Returns the list with every change of `changes` made (§1).
     ///
     /// Each change removes its `width` positions from its `at` on and places
     /// its `runs` where they stood ([`Splice`]). The changes name ordinals of
@@ -529,24 +758,40 @@ impl RunList {
     /// [`remove_range`](RunList::remove_range) and
     /// [`splice_in`](RunList::splice_in) leave when each change is made by
     /// the two in turn from the last change down — the order in which no
-    /// change moves the positions of one still to make — but for one pass
-    /// over the runs where that costs two rebuilds of the whole list a
-    /// change. The suffix past each site shifts for free, as a splice's and
-    /// a removal's does.
+    /// change moves the positions of one still to make. The suffix past each
+    /// site shifts for free, as a splice's and a removal's does.
     ///
-    /// **One walk.** The list's runs are read once, in V-order. A run no
-    /// change touches is carried over whole; the run a site falls in is cut
-    /// at the site, and the run a removal ends in at its reach. Each piece
-    /// goes through the one accumulator ([`extend_or_push_run`]), so every
-    /// seam the changes make is tested as it is made — the kept run before a
-    /// site against the first run placed there, the last placed against the
-    /// run kept after, and the two sides of a removal that places nothing —
-    /// and the answer is maximally merged (M12) with no pass of its own.
-    /// Nothing of the receiver is shared: the answer is a fresh vector.
+    /// **One pass over the changes, and the list read at its cuts alone.**
+    /// The answer is built in V-order: the stretch of the list kept before
+    /// each change, the runs the change places, and after the last change
+    /// the stretch kept to the end. A kept stretch is found by a descent to
+    /// each of its ends; the run an end falls in is cut there, and a node
+    /// lying whole inside the stretch is shared, never read. So the answer
+    /// holds every node of the receiver no change reaches, and makes anew
+    /// the nodes on the paths to the changes' cuts and the leaves the placed
+    /// runs fill. A change that removes the whole list and places every run
+    /// — a landing in its whole form — opens no node of the receiver and
+    /// shares none: its answer is the bulk build of its runs.
     ///
-    /// `steps` is charged one for every run of the list the walk reads, one
-    /// for every change it makes and one for every run it places: `#runs +
-    /// #changes + Σ #runs placed` in all, whatever the changes hold.
+    /// **The seams.** Two a change, each tested as it is made: the run kept
+    /// before a site against the first run placed there, and the last
+    /// placed against the run kept after — or, where a change places
+    /// nothing, the two sides of its removal against each other; where two
+    /// changes touch, the later's first run against the earlier's last.
+    /// Every placed run is tested against the one before it, so the placed
+    /// runs need hold no merge among themselves. A seam that joins runs
+    /// across a leaf's or a subtree's edge merges them, and the answer is
+    /// maximally merged (M12) with no pass of its own.
+    ///
+    /// `steps` is charged one for every change, one for every run placed,
+    /// one for every node opened and one for every run of an opened leaf
+    /// read: at most `(#changes + 1) · c + Σ #runs placed`, where
+    /// `c = 6 · (height + 1) + 81` bounds what one kept stretch and the
+    /// seam before it open — the two paths to the stretch's ends, the path
+    /// a joined seam takes a leaf back by, the path of nodes opened where
+    /// the levels before them were short, the path the last level's close
+    /// repairs, and the runs of the five leaves those paths end in —
+    /// whatever the list holds. The list's run count does not enter it.
     ///
     /// **Precondition.** `changes` are ascending and apart — each `at` at or
     /// past `at + width` of the change before it — the first `at` is at
@@ -557,75 +802,42 @@ impl RunList {
     /// ([`Vstream::edit`](crate::Vstream::edit), by its changes' shapes;
     /// [`stage_substitute`](crate::stage_substitute), whose places it holds
     /// apart before the record is built).
-    /// Outside it the walk is total all the same, as the fold's panic-free
+    /// Outside it the answer is total all the same, as the fold's panic-free
     /// promise requires ([`apply_m5`](crate::M5State::apply_m5)): a change
-    /// whose site the walk has passed is made where the walk stands, one
-    /// whose site lies past the list is made at its end, and a removal
-    /// running past the end removes what is there.
+    /// whose site an earlier change's removal has passed is made where that
+    /// removal ended, one whose site lies past the list is made at its end,
+    /// and a removal running past the end removes what is there.
     #[must_use = "spliced returns the new run-list; it does not modify the receiver"]
     pub(crate) fn spliced(&self, changes: &[Splice], steps: &mut impl FnMut(u64)) -> RunList {
-        let placed: usize = changes.iter().map(|change| change.runs.len()).sum();
-        let mut out: Vec<Run> = Vec::with_capacity(self.0.len() + placed + changes.len());
-        let mut pending = changes.iter().peekable();
-        // Positions of the removal in hand the walk has still to pass over.
-        let mut removing = Nat::zero();
-        // The ordinal the run in hand stands at: the one prefix sum.
-        let mut v_start = Nat::one();
-        for run in self.0.iter() {
+        if changes.is_empty() {
+            return self.clone();
+        }
+        let mut out = Builder::new();
+        // The offset of the first position of the list no change has
+        // passed: what stands from here on is still to keep or remove.
+        let mut passed = Nat::zero();
+        for change in changes {
             steps(1);
-            let v_reach = &v_start + &run.width;
-            // No removal reaches into this run and no site falls in it: the
-            // run is carried over as it stands.
-            if removing.is_zero() && pending.peek().is_none_or(|change| change.at >= v_reach) {
-                extend_or_push_run(&mut out, run.clone());
-                v_start = v_reach;
-                continue;
-            }
-            // The first ordinal of the run the walk has not yet passed.
-            let mut here = v_start.clone();
-            while here < v_reach {
-                if !removing.is_zero() {
-                    let passed = std::cmp::min(removing.clone(), &v_reach - &here);
-                    here += &passed;
-                    removing -= passed;
-                    continue;
+            let site = offset_before(&change.at);
+            if site > passed {
+                if let Some(root) = &self.root {
+                    out.keep(root, &passed, Some(&site), steps);
                 }
-                match pending.peek().copied() {
-                    Some(change) if change.at <= here => {
-                        steps(1 + change.runs.len() as u64);
-                        for placed in &change.runs {
-                            extend_or_push_run(&mut out, placed.clone());
-                        }
-                        removing = change.width.clone();
-                        pending.next();
-                    }
-                    next => {
-                        // Kept up to the next site in this run, or its end.
-                        let stop = match next {
-                            Some(change) if change.at < v_reach => change.at.clone(),
-                            _ => v_reach.clone(),
-                        };
-                        let kept = part_of(run, &(&here - &v_start), &(&stop - &v_start));
-                        extend_or_push_run(&mut out, kept);
-                        here = stop;
-                    }
-                }
+                passed = site;
             }
-            v_start = v_reach;
-        }
-        // The changes at the append boundary, and any past it.
-        for change in pending {
-            steps(1 + change.runs.len() as u64);
-            for placed in &change.runs {
-                extend_or_push_run(&mut out, placed.clone());
+            for run in &change.runs {
+                out.place(run.clone(), steps);
             }
+            passed += &change.width;
         }
-        RunList(out.into_iter().collect())
+        if let Some(root) = &self.root {
+            out.keep(root, &passed, None, steps);
+        }
+        RunList { root: out.finish(steps) }
     }
 
     /// Returns, for each site of `sites`, whether the list arranges exactly
-    /// the site's runs over the positions that open at its ordinal — every
-    /// site answered in one walk (§1).
+    /// the site's runs over the positions that open at its ordinal (§1).
     ///
     /// A site is an ordinal and the runs asked of it, in order. It is held
     /// where the positions from the ordinal on, as many as the runs are
@@ -639,21 +851,24 @@ impl RunList {
     /// is no arrangement. Neither is one that opens at ordinal 0, or reaches
     /// past the last arranged position.
     ///
-    /// **One walk.** The list's runs are read once, in V-order, on one
-    /// cursor that only moves forward: it reads on to the run a site opens
-    /// in, compares the site's runs there, and stands where the comparison
-    /// ended for the next site. A site judged from the head of the list —
-    /// the prefix-sum walk [`locate`](RunList::locate) and the clip make a
-    /// call — costs the runs left of it, so that way a list of sites costs
-    /// runs × sites; here the walk stops with the last site, and reads no
-    /// run past it.
+    /// **One cursor, forward only, and a descent to each site.** The cursor
+    /// descends to the run a site opens in, compares the site's runs there
+    /// run by run along the list's own order, and stands where the
+    /// comparison ended for the next site, which it reaches by a descent of
+    /// its own — or by one step, where that site opens at the very position
+    /// the comparison ended. So no run left of the first site is read, none
+    /// between two sites apart, and none past the last.
     ///
-    /// `steps` is charged one for every run of the list the walk reads, one
-    /// for every site and one for every run of a site it compares: at most
-    /// `#runs + #sites + Σ #runs asked`, whatever the sites hold.
+    /// `steps` is charged one for every site, one for every run of a site it
+    /// compares, one for every node opened and one for every run of the list
+    /// read: at most `#sites · (2 · (height + 1) + 20) + 3 · Σ #runs asked`
+    /// — for each site its own step, one descent and the walk on from it;
+    /// for each run asked its own step and the run or two of the list it is
+    /// compared against — whatever the list holds. The list's run count
+    /// does not enter it.
     ///
     /// **Precondition.** `sites` are ascending and apart — each ordinal at
-    /// or past the reach of the site before it. Outside it the walk is
+    /// or past the reach of the site before it. Outside it the check is
     /// total all the same: a site the cursor has passed is answered not
     /// held, whatever the list arranges there.
     pub(crate) fn arranges_each<'r, S>(
@@ -664,7 +879,7 @@ impl RunList {
     where
         S: IntoIterator<Item = &'r Run>,
     {
-        let mut cursor = Cursor { runs: self.iter(), hand: None, next: Nat::one() };
+        let mut cursor = Cursor { root: self.root.as_deref(), hand: None, walk: None };
         let mut held = Vec::new();
         for (at, asked) in sites {
             steps(1);
@@ -698,7 +913,7 @@ impl RunList {
 
     /// Returns the list transposed at the cuts' ordinals (§1; ASN-0119).
     ///
-    /// The transpose is cut-determined and value-blind: split at each of the
+    /// The transpose is cut-determined and value-blind: cut at each of the
     /// cut sequence's ordinals `ord(cⱼ)` and **tile by placement** —
     /// `[exterior-left][β][μ?][α][exterior-right]` — never offset arithmetic,
     /// so the bijection is structural (no swap-α offset bug, ASN-0084 Q14).
@@ -706,100 +921,115 @@ impl RunList {
     /// (α = [c₀,c₁), μ = [c₁,c₂), β = [c₂,c₃); outer two exchange, middle
     /// stays).
     ///
-    /// Pivot and swap are one computation. Splitting off the exterior-right
-    /// first and then descending through the remaining ordinals peels the
-    /// interior regions off right-to-left — β, then μ where there is one, then
-    /// α — so emitting them in the order they were peeled is the exchange,
-    /// whatever the region count.
+    /// Pivot and swap are one computation: the stretch left of the first
+    /// cut is kept, then the stretches between the cuts from the last pair
+    /// down to the first — β, then μ where there is one, then α — then the
+    /// stretch from the last cut on, which is the exchange whatever the
+    /// region count.
+    ///
+    /// **What it makes anew.** The nodes on the paths to its cuts; a node
+    /// lying whole inside one stretch is shared where it lands. One seam at
+    /// each stretch's opening — three for a pivot, four for a swap — is
+    /// tested as it is made, and the two runs merge where the exchange
+    /// brings I-adjacent runs side by side.
     ///
     /// **The 3|4 clause is the op's obligation**, discharged at staging by
     /// [`Vstream::rearrange`](crate::Vstream::rearrange)'s `BadCutCount`, and
     /// it is not re-asked here. The tiling is total for any vector instead:
-    /// with fewer than three ordinals there is no interior region to move and
-    /// the list comes back unchanged, and with more the peel runs to the end.
-    /// That totality is what [`apply_m5`](crate::M5State::apply_m5)'s
-    /// panic-free promise requires of this method, a corrupt cut vector being
-    /// something the replay path must tile rather than stop on.
+    /// each cut is held to the list — `ord ≤ 1` the boundary before
+    /// everything, one past the end the boundary after it — and to the cut
+    /// after it, read from the last cut down, so with fewer than three
+    /// ordinals there is no interior region to move and the list comes back
+    /// as it stands, and with more every stretch between two cuts is kept
+    /// once. That totality is what
+    /// [`apply_m5`](crate::M5State::apply_m5)'s panic-free promise requires
+    /// of this method, a corrupt cut vector being something the replay path
+    /// must tile rather than stop on.
     #[must_use = "reorder returns the new run-list; it does not modify the receiver"]
     pub(crate) fn reorder(&self, cut_ordinals: &[Nat]) -> RunList {
-        let Some((last, remaining)) = cut_ordinals.split_last() else {
-            return self.clone();
-        };
-        // Descending splits on the prefix keep absolute coordinates.
-        let (mut prefix, exterior_right) = self.split_at(last);
-        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(remaining.len());
-        for cut in remaining.iter().rev() {
-            let (left, region) = split_runs(prefix.iter(), cut);
-            regions.push(region);
-            prefix = left;
-        }
-        let mut out = prefix; // what lies left of the first cut
-        for region in regions {
-            out.extend(region);
-        }
-        out.extend(exterior_right);
-        RunList(coalesced(out))
+        self.reorder_counted(cut_ordinals, &mut |_| {})
     }
 
-    /// Returns the runs covering ordinals `[lo, hi_excl)`, boundaries clipped.
+    /// Returns [`reorder`](RunList::reorder), its walk counted.
     ///
-    /// With no bound given the range is `[lo, total]`. The runs are yielded
-    /// lazily: nothing outside the range is cloned, and a consumer that stops
-    /// early stops the walk with it (`take_while` short-circuits). This is the
-    /// one clip, which the range walk and the suffix walk both ask, so the
-    /// boundary arithmetic and its proof are written once.
+    /// `steps` is charged one for every cut, one for every node opened and
+    /// one for every run of an opened leaf read: at most `(#cuts + 1) · c`,
+    /// `c` as [`spliced`](RunList::spliced) states it, whatever the list
+    /// holds.
+    fn reorder_counted(&self, cut_ordinals: &[Nat], steps: &mut impl FnMut(u64)) -> RunList {
+        let (Some(root), Some((last, earlier))) = (&self.root, cut_ordinals.split_last()) else {
+            return self.clone();
+        };
+        // The offsets the cuts fall at, the last first: each held to the
+        // list and to the cut after it.
+        steps(1);
+        let mut at = std::cmp::min(offset_before(last), root.width().clone());
+        let mut cuts = vec![at.clone()];
+        for cut in earlier.iter().rev() {
+            steps(1);
+            at = std::cmp::min(offset_before(cut), at);
+            cuts.push(at.clone());
+        }
+        let mut out = Builder::new();
+        // What lies left of the first cut.
+        out.keep(root, &Nat::zero(), cuts.last(), steps);
+        // The regions between the cuts, from the last pair down.
+        for pair in cuts.windows(2) {
+            out.keep(root, &pair[1], Some(&pair[0]), steps);
+        }
+        // What lies from the last cut on.
+        out.keep(root, &cuts[0], None, steps);
+        RunList { root: out.finish(steps) }
+    }
+
+    /// Returns the runs covering the offsets `[from, to)`, boundaries
+    /// clipped, with the walk's steps charged to `steps`.
+    ///
+    /// With no `to` the range runs to the list's end. The runs are yielded
+    /// lazily: nothing outside the range is cloned, nothing is read before
+    /// the first pull, and a consumer that stops early stops the walk with
+    /// it. This is the one clip, which the range walk and the suffix walk
+    /// both ask, so the boundary arithmetic and its proof are written once.
     ///
     /// **What this costs**, since a resolution's caller is a per-spec loop —
     /// COPY's, M7's slot endsets, M6's RETRIEVEV — and a request's spec count
-    /// multiplies whatever one call costs. Pulling the whole range is
-    /// `Θ(#runs left of lo) + Θ(#runs in the range)`: the prefix-sum walk has
-    /// to reach `lo`, two `Nat` additions, a `Nat` clone and up to two
-    /// comparisons per run it passes over, so resolving the last position of
-    /// an n-run list costs n steps however narrow the answer. That term is the
-    /// `im::Vector<Run>` backing's (Open decision #1); what laziness removes is
-    /// the other term, the materialization of runs a bounded consumer will
-    /// never look at. The first term is charged by the loops that run it
-    /// inside a write, each spec at its source's whole run count: COPY's
-    /// against [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS), M7's
-    /// slots against its own.
+    /// multiplies whatever one call costs. The first pull descends the
+    /// tree's width sums to the range's first position: one node a level
+    /// and the runs of one leaf, whatever the list holds left of it. Each
+    /// later pull reads the next run of the list's own order. So pulling
+    /// the whole range is `Θ(height) + Θ(#runs in the range)`, resolving
+    /// the last position of an n-run list costs a descent however large n
+    /// is, and a range that yields nothing — one opening past the arranged
+    /// end — reads no run at all. What a caller bounds is therefore the
+    /// runs it pulls, as it pulls them.
     ///
-    /// **Precondition.** `lo < hi_excl` when bounded. Every emitted run then
-    /// has `width ≥ 1` and a start that is a full element position: a run
-    /// reaching the push has `lo < v_reach` and, when bounded,
-    /// `v_start < hi_excl`; `v_start < v_reach` because a run's width is at
-    /// least one; so `first < past`, and the start is
-    /// [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run — an
-    /// ordinal shift that keeps the element field's two components. Both `Nat`
-    /// subtractions are therefore over ordered operands and cannot underflow.
-    /// A run the range keeps whole is cloned rather than rebuilt: no shift and
-    /// no validation for a run the clip does not touch, which is every
-    /// interior run of a wide range and every run but the first of a suffix.
+    /// `steps` is charged one for every node opened and one for every run of
+    /// the list read: at most `height + 1` nodes and 16 runs for the first
+    /// pull, and for each later pull the run it yields and the nodes entered
+    /// where a leaf is used up.
+    ///
+    /// **Precondition.** `from < to` when bounded. Every emitted run then
+    /// has `width ≥ 1` and a start that is a full element position: the
+    /// first run yielded holds `from`, each later one opens before `to`,
+    /// and a run's width is at least one, so `first < past`, and the start
+    /// is [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run
+    /// — an ordinal shift that keeps the element field's two components.
+    /// Both `Nat` subtractions are therefore over ordered operands and
+    /// cannot underflow. A run the range keeps whole is cloned rather than
+    /// rebuilt: no shift and no validation for a run the clip does not
+    /// touch, which is every interior run of a wide range and every run but
+    /// the first of a suffix.
     ///
     /// # Panics
     ///
-    /// Panics where the precondition is broken with `hi_excl < lo` and a run
+    /// Panics where the precondition is broken with `to < from` and a run
     /// spans both: `past − first` underflows.
-    fn clipped_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
-        let stop = hi_excl.clone();
-        self.iter_blocks()
-            .take_while(move |block| stop.as_ref().is_none_or(|hi| &block.v_start < hi))
-            .filter_map(move |block| {
-                let v_reach = block.v_reach(); // the first ordinal past this block
-                if v_reach <= lo {
-                    return None;
-                }
-                let first = std::cmp::max(&block.v_start, &lo); // this block's first kept ordinal
-                // One past its last: the bound, or the block's own reach when
-                // the walk has no bound.
-                let past = hi_excl.as_ref().map_or(&v_reach, |hi| std::cmp::min(&v_reach, hi));
-                if first == &block.v_start && past == &v_reach {
-                    return Some(block.run.clone()); // kept whole
-                }
-                Some(Run {
-                    i_start: block.run.addr_at(&(first - &block.v_start)),
-                    width: past - first,
-                })
-            })
+    fn clipped_runs<'l, F: FnMut(u64) + 'l>(&'l self, from: Nat, to: Option<Nat>, steps: F) -> impl Iterator<Item = Run> + 'l {
+        let state = match self.root.as_deref() {
+            Some(root) => Clip::Unopened(root),
+            None => Clip::Done,
+        };
+        Clipped { state, from, to, steps }
     }
 
     /// Returns the I-runs covering ordinals `[ord, ord + count)`.
@@ -814,10 +1044,15 @@ impl RunList {
     /// form lives, at the level that has consumers wanting a vector.
     ///
     /// The upper clip needs no `total_width`: no run reaches past `total + 1`,
-    /// so clipping each run at `hi_excl` already drops everything beyond the
-    /// arrangement, and asking for the total would be a second walk of the
-    /// whole list to learn a bound the walk enforces anyway.
+    /// so clipping each run at the range's end already drops everything
+    /// beyond the arrangement.
     pub(crate) fn iter_resolve_range(&self, ord: &Nat, count: &Nat) -> impl Iterator<Item = Run> + '_ {
+        self.iter_resolve_range_counted(ord, count, |_| {})
+    }
+
+    /// Returns [`iter_resolve_range`](RunList::iter_resolve_range), its
+    /// walk counted as the clip counts it.
+    fn iter_resolve_range_counted<'l, F: FnMut(u64) + 'l>(&'l self, ord: &Nat, count: &Nat, steps: F) -> impl Iterator<Item = Run> + 'l {
         let lo = std::cmp::max(ord.clone(), Nat::one());
         let hi_excl = ord + count;
         // An empty range names no position, and it is excluded here rather
@@ -825,9 +1060,9 @@ impl RunList {
         // otherwise clip to `past − first = hi_excl − lo`, which underflows
         // where `hi_excl < lo` and is a zero-width run where the two are equal.
         (lo < hi_excl)
-            .then_some((lo, hi_excl))
+            .then(|| self.clipped_runs(lo - Nat::one(), Some(hi_excl - Nat::one()), steps))
             .into_iter()
-            .flat_map(move |(lo, hi_excl)| self.clipped_runs(lo, Some(hi_excl)))
+            .flatten()
     }
 
     /// Returns the I-runs covering ordinals `[max(ord, 1), total]`.
@@ -837,37 +1072,35 @@ impl RunList {
     /// [`iter_resolve_range`](RunList::iter_resolve_range) clips it and every
     /// later run yielded whole. The suffix twin of that range walk, for a
     /// caller that means "everything past a boundary": the list ends where its
-    /// runs end, so no upper bound is named and no total is summed to find one
-    /// — asking the range walk for `total_width()` positions would walk the
-    /// whole list once to learn a bound the walk then never needs. Lazy as the
-    /// range walk is, so a consumer with a budget of its own stops the walk at
-    /// it; an `ord` past the arranged end yields nothing, and so does a list
-    /// holding nothing. The same clip as the range walk's, asked without a
-    /// bound. No read of the slice asks it — a shot's member is built from
-    /// its base's list whole, so nothing walks a base's tail — and it stands
-    /// for this module's tests, which hold the unbounded clip to the bounded
-    /// one.
+    /// runs end, so no upper bound is named. Lazy as the range walk is, so a
+    /// consumer with a budget of its own stops the walk at it; an `ord` past
+    /// the arranged end yields nothing, and so does a list holding nothing.
+    /// The same clip as the range walk's, asked without a bound. No read of
+    /// the slice asks it — a shot's member is built from its base's tree,
+    /// so nothing walks a base's tail — and it stands for this module's
+    /// tests, which hold the unbounded clip to the bounded one.
     #[cfg(test)]
     pub(crate) fn iter_resolve_from(&self, ord: &Nat) -> impl Iterator<Item = Run> + '_ {
-        self.clipped_runs(std::cmp::max(ord.clone(), Nat::one()), None)
+        self.clipped_runs(offset_before(ord), None, |_| {})
     }
 
     /// Returns the mapping blocks in V-order (§1's `iter_runs`).
     ///
     /// It is [`blocks_of`] over the list's own runs, each stored run at its
-    /// implicit V-start, which `locate`, the clip and `project` each ask
-    /// rather than summing widths for themselves.
+    /// implicit V-start: a walk of every run, which `project` asks rather
+    /// than summing widths for itself.
     pub(crate) fn iter_blocks(&self) -> impl Iterator<Item = Block<'_>> + '_ {
-        blocks_of(self.0.iter())
+        blocks_of(self.iter())
     }
 
     /// Returns the canonical run decomposition, lent (maximally merged — M12).
     ///
-    /// It is V-ordered: the runs alone, borrowed from the list rather than
-    /// cloned out of it. [`iter_blocks`](RunList::iter_blocks) is the form
-    /// that also reports each run's implicit V-start — the blocks.
+    /// It is V-ordered: the runs alone, borrowed from the tree's leaves
+    /// rather than cloned out of them. [`iter_blocks`](RunList::iter_blocks)
+    /// is the form that also reports each run's implicit V-start — the
+    /// blocks.
     pub(crate) fn iter(&self) -> Runs<'_> {
-        Runs(self.0.iter())
+        Runs { root: self.root.as_deref(), left: self.run_count(), front: None, back: None }
     }
 
     /// Returns the same decomposition collected.
@@ -875,7 +1108,7 @@ impl RunList {
     /// It is for this module's tests to compare against a literal sequence.
     #[cfg(test)]
     fn runs(&self) -> Vec<Run> {
-        self.0.iter().cloned().collect()
+        self.iter().cloned().collect()
     }
 
     /// Returns the I-image as a SpanSet: `⋃ r.iextent()`.
@@ -884,7 +1117,74 @@ impl RunList {
     /// mixed-length across transcluded origins (§2). M5-internal consumers
     /// apply the level-class discipline.
     pub(crate) fn image(&self) -> SpanSet {
-        self.0.iter().map(Run::iextent).collect()
+        self.iter().map(Run::iextent).collect()
+    }
+}
+
+/// What the suites read of a list's tree: its height, its invariants, and
+/// which of its nodes it shares.
+#[cfg(test)]
+impl RunList {
+    /// Returns the tree's height: 0 for the empty list and for a lone leaf.
+    pub(crate) fn height(&self) -> usize {
+        self.root.as_ref().map_or(0, |root| root.height())
+    }
+
+    /// Returns what one kept stretch and the seam before it may open of
+    /// this list's tree, in steps: `c` of [`spliced`](RunList::spliced)'s
+    /// card.
+    pub(crate) fn cut_steps(&self) -> u64 {
+        6 * (self.height() as u64 + 1) + 81
+    }
+
+    /// Holds the tree to every invariant of its module's card.
+    ///
+    /// # Errors
+    ///
+    /// Says which invariant the first node to break one broke.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        self.root.as_ref().map_or(Ok(()), |root| tree::tests::check(root))
+    }
+
+    /// Returns whether `self` and `other` are handles on one root.
+    pub(crate) fn shares_root_with(&self, other: &RunList) -> bool {
+        match (&self.root, &other.root) {
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    /// Counts the nodes of this list's tree that no list of `others` holds:
+    /// the leaves, then the inner nodes.
+    pub(crate) fn made_anew(&self, others: &[&RunList]) -> (usize, usize) {
+        let mut held = std::collections::HashSet::new();
+        for root in others.iter().filter_map(|other| other.root.as_ref()) {
+            tree::tests::nodes_of(root, &mut held);
+        }
+        self.root.as_ref().map_or((0, 0), |root| tree::tests::made_anew(root, &mut held))
+    }
+
+    /// Counts the nodes the lists of `lists` hold between them, each once.
+    pub(crate) fn nodes_among(lists: &[&RunList]) -> usize {
+        let mut held = std::collections::HashSet::new();
+        for root in lists.iter().filter_map(|list| list.root.as_ref()) {
+            tree::tests::nodes_of(root, &mut held);
+        }
+        held.len()
+    }
+
+    /// Returns how many nodes this thread's read walks have entered: the
+    /// count of the reads that take no `steps`, for a suite outside this
+    /// module.
+    pub(crate) fn nodes_entered() -> u64 {
+        tree::ENTERED.with(std::cell::Cell::get)
+    }
+
+    /// Returns the tree's fill: how many leaves hold each count of runs,
+    /// and how many inner nodes each count of children.
+    pub(crate) fn fill(&self) -> (std::collections::BTreeMap<usize, usize>, std::collections::BTreeMap<usize, usize>) {
+        self.root.as_ref().map_or_else(Default::default, |root| tree::tests::fill(root))
     }
 }
 

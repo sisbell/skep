@@ -213,14 +213,16 @@ where
     /// distinct origin, the destination's own excepted.
     ///
     /// **Cost, and who owns it.** Under M2's applier lock the call reads
-    /// the draft's content count ONCE, a sum over its runs, and judges
-    /// every change against that count and the reach of the change before
-    /// it by arithmetic — where INSERT's and DELETE's three shape tests,
-    /// asked a change, would each walk the list again. Each run placed by
-    /// identity is probed at every address, as REINSTATE probes. `steps` is
-    /// charged one for every run the count reads, one for every change
-    /// judged and one for every run placed; the fold's splice reads each
-    /// run of the list once more a fold. This op admits any number of
+    /// the draft's content count once, off its list's root with no run
+    /// read, and judges every change against that count and the reach of
+    /// the change before it by arithmetic. Each run placed by identity is
+    /// probed at every address, as REINSTATE probes. `steps` is charged one
+    /// for every change judged and one for every run placed: the call's own
+    /// walks read no run of the draft's list. The fold's splice, twice a
+    /// call, reads the list at its changes' cuts alone
+    /// (`RunList::spliced`), so what the call holds the lock for follows
+    /// its changes and not the draft's run count. This op admits any number
+    /// of
     /// changes and any number of values, as INSERT admits any values: M2's
     /// `MAX_TXN_BYTES` refuses the transaction past its own ceiling, after
     /// the staging, so a route that wants the refusal ahead of that work
@@ -336,9 +338,9 @@ where
         if changes.is_empty() && base.is_none() && merge.is_none() {
             return Err(EditError::EmptyResult { change: None });
         }
-        // n_C, read once a call: every change is judged against it and the
-        // reach of the change before it, by arithmetic.
-        let count = m5.content_count_stepped(doc, steps);
+        // n_C, read once a call off the list's root: every change is judged
+        // against it and the reach of the change before it, by arithmetic.
+        let count = m5.content_count(doc);
         judge_shapes(&changes, &count, steps)?;
         // The runs placed by identity, each judged as REINSTATE judges it
         // and accumulated within its change; a change that mints holds one

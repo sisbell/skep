@@ -1574,6 +1574,55 @@ fn doc_states_the_reinserts_two_budgets_under_one_code_and_what_is_read_by_the_u
     );
 }
 
+/// ONE CAUSE EACH, AND NO PRICED WAY TO A SPAN: §Rejection codes gives
+/// `too_many_runs` one cause, the runs a request places past M5's
+/// `MAX_PLACED_RUNS`, and `slot_too_large` one, the spans a slot keeps past
+/// M7's `MAX_SLOT_SPANS`, each with the store's own figure; says of a copy's
+/// spec and of a slot's that reaching a span is a descent of the source's
+/// arrangement, so neither is refused for the source's fragmentation; says
+/// the same of the three reads that resolve spans and of the region reads;
+/// and keeps one read priced by its document's fragmentation, the line
+/// read, at the figure its refusal renders. The section prices nothing in
+/// run-list steps and names no run-list walk, and the document names
+/// neither budget of steps: a clause that does states a charge no store
+/// makes. The stores' answers are pinned in each crate's own budget cells;
+/// this pins that the contract says so.
+#[test]
+fn doc_states_one_cause_each_for_the_run_and_slot_refusals_and_prices_no_way_to_a_span() {
+    let placed = skep_arrangement::MAX_PLACED_RUNS;
+    let spans = skep_links::MAX_SLOT_SPANS;
+    let walked = skep_retrieval::MAX_COMPARE_OPERAND_BLOCKS * skep_retrieval::MAX_COMPARE_OPERAND_BLOCKS;
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in [
+        format!("`too_many_runs` (a placement — a copy's, a reinstate's, a set_arrangement's or a shot's — past M5's `MAX_PLACED_RUNS` = {placed} runs, its one cause: the runs a request places are all it counts"),
+        "A copy's spec reaches its span by a descent of its source's arrangement, whatever the source holds, so a spec aimed past its source's arranged end places nothing and is never refused for the source's fragmentation".to_string(),
+        format!("`slot_too_large` (a slot past M7's per-slot budget, its one cause: more than `MAX_SLOT_SPANS` = {spans} spans, in any of the three forms"),
+        "The spans a slot keeps are all it counts: a V-spec reaches its span by a descent of its source's arrangement, whatever the source holds, so a spec aimed past its source's arranged end keeps no span and is never refused for the source's fragmentation".to_string(),
+        "more spans handed to the arrangement, one resolution apiece whatever it yields, or more blocks resolved".to_string(),
+        "None of the three operations is refused for the way to its spans".to_string(),
+        "a request of spans that each resolve to nothing — one opening past the arranged end, a depth-incompatible one — is answered, empty, however fragmented the documents it names".to_string(),
+        format!("One read is priced by its document's fragmentation, at `MAX_COMPARE_OPERAND_BLOCKS`² = {walked} runs: a line read answers `too_many_items`"),
+        "neither is refused for how far along its document a region lies, the arrangement reaching each span by a descent".to_string(),
+    ] {
+        assert!(codes.contains(&fact), "§Rejection codes says {fact:?}");
+    }
+    for retired in ["run-list steps", "run-list walk", "whole run count", "RESOLVE_STEPS", "resolution walk"] {
+        assert!(!codes.contains(retired), "§Rejection codes prices no way to a span, and says {retired:?}");
+    }
+    let whole = wire_md();
+    for retired in ["MAX_COPY_RESOLVE_STEPS", "MAX_SLOT_RESOLVE_STEPS"] {
+        assert!(!whole.contains(retired), "wire.md names {retired}, a budget no store charges");
+    }
+    // The stores' own messages carry the one cause, and its figure.
+    let runs = skep_arrangement::CopyError::TooManyRuns.to_string();
+    let slot = skep_links::MakeLinkError::SlotTooLarge.to_string();
+    assert!(runs.contains("run budget") && !runs.contains("step"), "the copy's message names the run budget alone: {runs:?}");
+    assert!(slot.contains(&format!("more than {spans} spans")) && !slot.contains("step"), "the slot's message names the span budget alone: {slot:?}");
+    // The line read's refusal renders the figure the section states.
+    let lines = skep_retrieval::LinesError::TooManyItems.to_string();
+    assert!(lines.contains(&walked.to_string()), "the line read's message renders {walked}: {lines:?}");
+}
+
 /// THE PRICE's CLASS, FOR WHAT IT READS OF A NAMED DRAFT AND OF AN ORIGINAL:
 /// the budget paragraph states that a re-windowed draft's run count is
 /// counted only where the caller may read that draft — one it may not read

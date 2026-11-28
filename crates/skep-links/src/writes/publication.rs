@@ -679,7 +679,8 @@ impl From<EmitCoreError> for PublicationError {
 ///    run held in THAT draft when the client composed the request, outside
 ///    the signed preimage as `draft` is — the check that
 ///    the draft still arranges that run's draft words at that place, every
-///    place checked on one walk of the draft's run-list and the earliest
+///    place checked under one cursor over the draft's run-list, a descent
+///    a place, and the earliest
 ///    failing entry in `runs`' order answering, then
 ///    their replacement there by the published identity, all of the draft's
 ///    places in one record, a run a piece: a
@@ -1007,8 +1008,8 @@ where
 /// Stages one draft's re-window at its kept places: for each `runs` entry
 /// that carries a place in one of `lists`, the check that `draft` still
 /// arranges that run's draft words there, and their replacement there by
-/// the published identity — every place checked on one walk of the draft's
-/// run-list, and all of them staged as one record.
+/// the published identity — every place checked under one cursor over the
+/// draft's run-list, and all of them staged as one record.
 ///
 /// It is the link-sets design's "re-window of `D` at its kept places,
 /// checked by identity — and of every draft the request names beside it,
@@ -1075,11 +1076,13 @@ where
 ///
 /// Cost: per place its pieces found in the pairing, or one stab of the TO
 /// slot across every home for a stray, each hit asked of `readable` once;
-/// then ONE walk of the draft's run-list for every place together, and ONE
+/// then ONE cursor over the draft's run-list for every place together, a
+/// descent a place, and ONE
 /// record ([`M5Rec::ContentEdit`](skep_arrangement::M5Rec::ContentEdit)), a
-/// change a place and a run a piece, which the fold splices in one walk
-/// more and R takes a span a piece from — the draft's runs and the pieces
-/// placed, which [`price_publication_reads`] charges as its re-window term.
+/// change a place and a run a piece, which the fold splices at the places'
+/// cuts and R takes a span a piece from — a descent a place and the pieces
+/// placed, which [`price_publication_reads`] charges from above as its
+/// re-window term, a step a run of the draft and a step a piece.
 ///
 /// # Errors
 ///

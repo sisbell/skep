@@ -48,7 +48,7 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// Each slice's own checkpoint layout, at its TOP LEVEL, pinned to the
 /// World format count that names it. A slice's layout is a World layout
 /// ([`FormatStamp`]), and the author who changes one is a store's, with
-/// no edge to this file: count 1 names fourteen layouts because slices grew
+/// no edge to this file: count 1 names fifteen layouts because slices grew
 /// fields under it. This pin is where such a change meets the count — a
 /// field appended, removed, renamed or reordered on any slice fails here,
 /// and the failure says what it owes. The count is asserted beside the
@@ -58,7 +58,7 @@ fn the_world_serializes_its_slices_in_declaration_order() {
 /// moves the World's bytes with every name here unchanged. A store that
 /// pins its slice's bytes whole meets that change in its own suite — M4's
 /// `the_slice_serializes_as_its_map_alone_in_tumbler_order` and M5's
-/// `the_slice_serializes_as_its_eight_maps_down_to_each_entry_s_fields`,
+/// `the_slice_serializes_as_its_node_table_and_nine_maps_down_to_each_entry_s_fields`,
 /// each message naming the same debt, and `skep-identity`'s checkpoint
 /// encodings (AUTH-1.40) — and M3's and M7's nested forms are held by M2's
 /// golden where its fixture's ops reach them. Nor is the
@@ -95,11 +95,14 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
         // staging act, B3-S10), under the same ruling renewed again — and
         // its eighth, `source_copied`, each forked or staged document's
         // count of its source the copy took (skep #1111), under the same
-        // ruling once more.
+        // ruling once more — and `nodes`, which leads them: the table of
+        // the nodes its run-lists are held as, each list a root of it,
+        // under the same ruling again.
         (
             "arrangement",
             field_names(&world.arrangement),
             &[
+                "nodes",
                 "arrangements",
                 "provenance",
                 "birth_extents",
@@ -475,7 +478,9 @@ fn links_in_a_draft_named(shapes: &[(bool, bool)]) -> (World, Address) {
     (engine.kernel().snapshot().world().clone(), draft)
 }
 
-/// `world`'s bytes as a build from before M5's birth memo wrote them: the
+/// `world`'s bytes as a build from before M5's birth memo wrote them — in
+/// all but M5's lists, which stand as this build writes them, a table of
+/// nodes and a root a list — the
 /// stamp, then each store slice's, with M5's cut short of its six trailing
 /// maps — the memo, after it the shot terms that joined the slice with D25's
 /// (c′), after those the fork sources that joined it with the fork-source
@@ -947,3 +952,66 @@ fn a_base_written_before_the_shot_base_fails_to_decode() {
         );
     }
 }
+
+/// Returns `world`'s bytes as a build before the node table wrote them.
+///
+/// M5's slice with every run-list written as its runs in V-order — a
+/// document's arrangement its two run sequences, each list the provenance
+/// relation names a run sequence — and no table before them, the
+/// fourteenth layout's shape; the rest as this build writes it. Those bytes
+/// are M5's run-sequence form, which is that layout field for field.
+fn written_before_the_node_table(world: &World) -> Vec<u8> {
+    [
+        bincode::serialize(&FormatStamp).expect("the stamp serializes"),
+        bincode::serialize(&world.namespace).expect("M3 serializes"),
+        bincode::serialize(&world.content).expect("M4 serializes"),
+        bincode::serialize(&world.arrangement.as_run_sequences()).expect("M5's run sequences serialize"),
+        bincode::serialize(&world.links).expect("M7 serializes"),
+        bincode::serialize(&world.identity).expect("the identity slice serializes"),
+    ]
+    .concat()
+}
+
+/// A base written before M5's node table fails to decode under a header
+/// this build loads, on each shape its misreading takes.
+///
+/// This build reads the arrangement slice's first count as the table's
+/// length, where such a body holds its arrangement map's. With no document
+/// arranged that count is zero, an empty table, and every count after it is
+/// read one field late: the slice ends eight bytes into M7's, and the
+/// decode stops in the slices after it. With a document arranged, the
+/// table's first node is read off that document's address: a node opens
+/// with its kind's index in four bytes, and an address with the count of
+/// its components in eight, so the index read is the component count — five
+/// or more for any document, where a node's is 0 or 1 — and the decode
+/// stops in the arrangement slice. Each world's own bytes decode beside it,
+/// so the layout and not the fixture is what refuses; every refusal says
+/// the body is in another layout of this format and names the slice it
+/// stopped in, and M2 passes the base over for an older one, or genesis.
+#[test]
+fn a_base_written_before_the_node_table_fails_to_decode() {
+    let lists_held = [
+        ("a draft holding links", links_in_a_draft(&[(true, true), (false, false)])),
+        ("staged drafts, one landed", staged_drafts(&[true, false], 1).0),
+    ];
+    for (shape, world) in &lists_held {
+        bincode::deserialize::<World>(&bincode::serialize(world).expect("a world serializes"))
+            .expect("this build's own bytes decode");
+        assert!(world.arrangement != M5State::genesis(), "{shape}: the premise is a slice that holds a list");
+        assert_eq!(
+            refused_in(&written_before_the_node_table(world), shape),
+            "arrangement",
+            "{shape}: the slice the decode stopped in"
+        );
+    }
+    // No document arranged: the slice's ten counts read off a body that
+    // carries nine, and the decode stops past it.
+    let bare = World::genesis();
+    assert!(bare.arrangement == M5State::genesis(), "the premise: genesis arranges nothing");
+    assert_ne!(
+        refused_in(&written_before_the_node_table(&bare), "genesis, no document arranged"),
+        "arrangement",
+        "an empty slice is read whole, one count late, and the slice after it refuses"
+    );
+}
+

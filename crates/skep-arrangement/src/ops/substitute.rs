@@ -1,6 +1,6 @@
 //! SUBSTITUTE: the identity-checked substitution — at each place of a list,
 //! the runs a draft arranges replaced by the runs given for them, checked
-//! and staged in one walk of the draft's run-list and one record.
+//! on one cursor of the draft's run-list and staged as one record.
 //!
 //! It is a staging body and no operation: a composite stages it under its
 //! own transaction. The publication stages it once for each draft it
@@ -81,7 +81,7 @@ pub struct Replacement {
 /// **Which entry answers.** Each entry's verdict is the first check it
 /// fails, in the order [`SubstituteError`] states them, and the body
 /// answers the verdict of the EARLIEST entry in the order given that fails
-/// one — never the first failing place the walk meets, which is the lowest
+/// one — never the first failing place the check meets, which is the lowest
 /// by position. An entry whose place overlaps the place of an entry before
 /// it in that order is `Moved`: were the places replaced one at a time, the
 /// later would find the earlier's runs standing where it expects its own.
@@ -92,14 +92,15 @@ pub struct Replacement {
 /// first record and a later one by the second, at one place, would chain if
 /// made one at a time, and are refused here.
 ///
-/// **One walk.** The entries are ordered by place and the draft's run-list
-/// is walked once, each place compared on the walk's own cursor. Resolving
-/// a place from the head of the list ([`M5State::iter_resolve`]) costs the
-/// runs left of it, so asked once a place it costs runs × places.
+/// **One cursor.** The entries are ordered by place and each place is
+/// compared on one cursor of the draft's run-list, which descends to the
+/// place and never moves back (`RunList::arranges_each`): no run of the
+/// draft left of the first place, between two places or past the last is
+/// read.
 ///
 /// **One record.** The places are staged as ONE [`M5Rec::ContentEdit`], a
 /// change a place, its runs the pieces' `to` runs — ONE RUN A PIECE, never
-/// coalesced here. The fold splices every change in one walk, coalescing
+/// coalesced here. The fold splices every change in one pass, coalescing
 /// the run-list alone, and appends a provenance span for each run the
 /// record carries (J1★), so R↾doc gains a span a piece whether or not two
 /// pieces' runs are I-adjacent, and the draft's arranged-at position moves
@@ -112,14 +113,17 @@ pub struct Replacement {
 /// empty `entries` stages nothing.
 ///
 /// **Cost, and who owns it.** Under M2's applier lock: `steps` is charged
-/// one for every entry judged, then the walk's own — one for every run of
-/// the list it reads, every place and every piece — then one for every
-/// piece probed: at most `#runs + 2 × #entries + 2 × #pieces`. Ordering the
-/// entries by place is `O(#entries log #entries)` comparisons of positions,
-/// reading no run. Each `to` run is probed at every address, as REINSTATE
-/// probes. The record's fold reads each run of the list once more, at the
-/// push, and M2 folds it again at the seal where the transaction staged
-/// more than this record. The body counts nothing against
+/// one for every entry judged, then the check's own — one for every place,
+/// every piece, every node of the list's tree it opens and every run of the
+/// list it reads — then one for every piece probed: at most
+/// `#entries × (2 × (height + 1) + 21) + 4 × #pieces`, `height` the
+/// height of the draft's tree, whatever the draft holds. The draft's run
+/// count does not enter it. Ordering the entries by place is
+/// `O(#entries log #entries)` comparisons of positions, reading no run.
+/// Each `to` run is probed at every address, as REINSTATE probes. The
+/// record's fold reads the list at its places' cuts alone, at the push, and
+/// M2 folds it again at the seal where the transaction staged more than
+/// this record. The body counts nothing against
 /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS): the pieces are its
 /// caller's, built before the call, and M2's `MAX_TXN_BYTES` refuses the
 /// transaction past its own ceiling; a route that wants the refusal ahead
@@ -198,14 +202,14 @@ where
             }
             kept.insert(at, (reach, pieces));
         }
-        // The check by identity, every kept place on one walk of the list.
+        // The check by identity, every kept place on one cursor of the list.
         let held = m5.content_list(doc).arranges_each(
             kept.iter().map(|(at, (_, pieces))| (*at, pieces.iter().map(|piece| &piece.from))),
             steps,
         );
         let moved: Vec<&Nat> =
             kept.keys().zip(&held).filter(|(_, held)| !**held).map(|(at, _)| *at).collect();
-        // The entries in the order given again, up to the first the walk
+        // The entries in the order given again, up to the first the check
         // found moved: each run put in judged as REINSTATE judges a run.
         for entry in &entries[..kept.len()] {
             let index = entry.index;

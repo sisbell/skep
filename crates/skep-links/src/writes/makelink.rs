@@ -1,7 +1,7 @@
 //! MAKELINK (ASN-0120), the open surface, in its three slot forms.
 //!
 //! [`SlotArg`] is the slot argument; [`slot_endset`] the endset a slot builds
-//! under both per-slot budgets; `stage_record` the record half both MAKELINK
+//! under the per-slot budget; `stage_record` the record half both MAKELINK
 //! forms stage; and [`LinkWriter::makelink`] and
 //! [`LinkWriter::makelink_replacing`] the two forms — the one op family that
 //! seats, so the one block bounded by `HasM5`.
@@ -17,7 +17,7 @@ use super::{
     correspondence_class, emit_core, home_gate, replaces_class, replaces_type, Gate, LinkWriter,
     Visibility,
 };
-use crate::budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
+use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
 use crate::error::MakeLinkError;
@@ -169,21 +169,18 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 
 /// Builds one MAKELINK slot's endset, read off the txn base.
 ///
-/// It is `None` iff the slot is over either per-slot budget: more than
-/// [`MAX_SLOT_SPANS`] spans in whichever form built it, or, for a `Resolve`
-/// slot, specs commanding more than [`MAX_SLOT_RESOLVE_STEPS`] run-list
-/// steps.
+/// It is `None` iff the slot is over the per-slot budget: more than
+/// [`MAX_SLOT_SPANS`] spans in whichever form built it.
 ///
 /// `Resolve`: ρ as content I-extents — readable, level-uniform spans (ML1
 /// coverage-exactness by construction: the runs trace exactly allocated
-/// content, cross-origin runs arrive un-coalesced). Both budgets are charged
-/// as the slot is built, and each stops it: the spans as they are kept,
-/// pulled a run at a time off M5's lazy `iter_resolve` so the span budget
-/// ends the walk itself, and the work before each resolve, so a refusal
-/// precedes the walk it refuses rather than following it. The two are
-/// independent because a spec that keeps nothing still walks its whole source
-/// (see [`MAX_SLOT_RESOLVE_STEPS`]); the span count alone would see such a
-/// slot as empty.
+/// content, cross-origin runs arrive un-coalesced). The budget is charged
+/// as the slot is built and stops it: the spans as they are kept, pulled a
+/// run at a time off M5's lazy `iter_resolve`, so the span budget ends the
+/// walk itself. It is the whole of the slot's work as well: each spec's
+/// resolution reaches its span by a descent of the source's run-list and
+/// reads from there the runs it yields, so a spec that keeps nothing reads
+/// no run, and no charge is taken for a walk to the span.
 ///
 /// `Addrs`: the canonical name encoding, deposited unresolved, one span per
 /// name, counted before the encoding is built and commanding no walk.
@@ -198,8 +195,8 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// slot's row from *the endset this transaction will deposit* — the same
 /// function over the same base, under the daemon's serialization lock ahead
 /// of the transaction — so the signed row and the stored endset agree by
-/// construction, and charges the same two budgets there, passing a slot
-/// over either through to this crate's own refusal of it (`SlotTooLarge`).
+/// construction, and charges the same budget there, passing a slot
+/// over it through to this crate's own refusal of it (`SlotTooLarge`).
 /// It reads the base and stages nothing: a caller that resolves through it
 /// off a snapshot the transaction will not open on composes the base's
 /// endset, not the transaction's.
@@ -207,19 +204,7 @@ pub fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     match arg {
         SlotArg::Resolve(specs) => {
             let mut spans: Vec<Span> = Vec::new();
-            let mut steps: usize = 0;
             for spec in specs {
-                // The work charge, ahead of the work. `content_run_count` is
-                // M5's one-map-lookup accessor, reading no run, published for
-                // a caller that owns admission control over one of these
-                // walks (COPY prices `MAX_COPY_RESOLVE_STEPS` against it), and
-                // the content subspace is the right list to ask: on
-                // makelink's own path, `is_wf_content_spec` ran over every
-                // slot's specs before the first endset was built.
-                steps = steps.saturating_add(m5.content_run_count(&spec.source));
-                if steps > MAX_SLOT_RESOLVE_STEPS {
-                    return None;
-                }
                 for run in m5.iter_resolve(&spec.source, &spec.span) {
                     if spans.len() == MAX_SLOT_SPANS {
                         return None;
@@ -381,10 +366,9 @@ where
     /// to the content clause, slots in declared order and the first
     /// offending span named (`NotContentSpan`). Every slot is then held, as
     /// [`slot_endset`] builds it, to [`MAX_SLOT_SPANS`] spans in any form
-    /// and, for a `Resolve` slot, to [`MAX_SLOT_RESOLVE_STEPS`] run-list
-    /// steps — both refused `SlotTooLarge`, both charged inside this
-    /// transact, under the applier lock the whole engine writes through. The
-    /// two constants say why the request that carried a slot bounds neither.
+    /// — refused `SlotTooLarge`, charged inside this transact, under the
+    /// applier lock the whole engine writes through. The constant says why
+    /// the request that carried a slot does not bound it.
     /// The four sole-writer fences apply here as they do on the managed
     /// surface: a resolved type slot in the `[R]` class
     /// (`RetractionClass`), the `[K_sup]` class (`SupersessionClass`), the

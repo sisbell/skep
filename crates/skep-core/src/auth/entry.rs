@@ -125,12 +125,11 @@
 //!   read, or its units — the atoms and whole byte-runs the store would
 //!   stage — counted by M5's own count off the stored pieces before a row is
 //!   built.
-//! * a `make_link`'s or an `emit`'s slot over either of M7's per-slot
-//!   budgets — the spans a slot keeps, the run-list steps its resolution
-//!   walks ([`ComposeFault::SlotTooLarge`]): the same two budgets M7 charges
-//!   inside the write, charged here as there, so the composer walks no
-//!   further than the transaction would (SO-I9); a slot past either is a
-//!   slot M7 refuses `slot_too_large`.
+//! * a `make_link`'s or an `emit`'s slot over M7's per-slot budget — the
+//!   spans a slot keeps ([`ComposeFault::SlotTooLarge`]): the budget M7
+//!   charges inside the write, charged here as there, so the composer keeps
+//!   no more than the transaction would (SO-I9); a slot past it is a slot
+//!   M7 refuses `slot_too_large`.
 //! * a `make_link`'s or an `edit_link`'s V-spec naming a source the
 //!   principal may not read ([`ComposeFault::UnreadableSlotSource`]): no
 //!   arrangement the read predicate withholds is resolved here, since a
@@ -185,7 +184,7 @@ use skep_engine::World;
 /// values and the link writes' slot arguments ride in the frame, so the
 /// transport's cap bounds them already, and the slots a `make_link`, an
 /// `emit` and an `edit_link` build from them are held to the per-slot
-/// budgets ([`ComposeFault::SlotTooLarge`],
+/// budget ([`ComposeFault::SlotTooLarge`],
 /// [`ComposeFault::SuccessorRefused`]). A shot's body is read off the
 /// store, one value per position its copied runs name (a window costs its
 /// address row alone, whatever its width), and a run may name one stored
@@ -257,14 +256,13 @@ pub(super) enum ComposeFault {
     /// same count before it stages a record, so one this composer builds no
     /// row for.
     PastReinsertBudget,
-    /// A `make_link`'s or `emit`'s slot over either of M7's per-slot budgets.
+    /// A `make_link`'s or `emit`'s slot over M7's per-slot budget.
     ///
-    /// The budgets are `MAX_SLOT_SPANS` spans in whichever form, or a V-spec
-    /// slot commanding more than `MAX_SLOT_RESOLVE_STEPS` run-list steps —
-    /// charged here as M7 charges them inside the write, by M7's own
+    /// The budget is `MAX_SLOT_SPANS` spans in whichever form — charged
+    /// here as M7 charges it inside the write, by M7's own
     /// `slot_endset` for a `make_link` and by M7's own `emit_tuple` for an
     /// `emit`: a slot the store refuses `slot_too_large`. An `edit_link`'s
-    /// slot past a budget is M10's own build refusing it,
+    /// slot past the budget is M10's own build refusing it,
     /// [`ComposeFault::SuccessorRefused`].
     SlotTooLarge,
     /// A V-spec names a source document the principal may not read.
@@ -324,7 +322,7 @@ fn link_slots(link: &Link) -> LinkSlots<&Endset> {
 ///
 /// It is M7's own [`slot_endset`] over this snapshot's M5 — an address-form
 /// slot's unit spans, a V-spec slot's I-extents, an I-span slot's spans
-/// verbatim — under M7's two per-slot budgets. The two name forms consult
+/// verbatim — under M7's per-slot budget. The two name forms consult
 /// nothing: the I-span form's row is the request's own spans, so the
 /// preimage of a write naming positions the principal cannot read is a
 /// function of the request and the home alone (the read check's
@@ -332,7 +330,7 @@ fn link_slots(link: &Link) -> LinkSlots<&Endset> {
 ///
 /// # Errors
 ///
-/// [`ComposeFault::SlotTooLarge`] past either budget, and
+/// [`ComposeFault::SlotTooLarge`] past the budget, and
 /// [`ComposeFault::UnreadableSlotSource`] for a V-spec naming a source the
 /// principal may not read, which is never resolved: the door withholds the
 /// write before the store sees it, and a verdict composed over the source's

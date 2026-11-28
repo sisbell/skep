@@ -95,22 +95,12 @@ impl M5State {
     /// successor slot spans. [`resolve`](M5State::resolve) is this collected,
     /// for a caller that hands the runs onward whole.
     ///
-    /// What pulling does not bound is the walk to the span's opening ordinal,
-    /// whatever the call yields. Its contract is a ceiling: `#runs` of the
-    /// list the span's subspace selects —
-    /// [`content_run_count`](M5State::content_run_count) or
-    /// [`link_run_count`](M5State::link_run_count), one lookup before asking
-    /// — which a span opening past the arranged end reaches, and which holds
-    /// under any backing the run-list takes (Open decision #1). The
-    /// `im::Vector` backing walks from the first run, passing every run that
-    /// ends before the opening ordinal, so it also stops within
-    /// `min(#runs, ord + count)` runs: each run holds at least one position of
-    /// the dense prefix (D-SEQ★), so fewer runs than `ord + count` open before
-    /// the span's reach. That tighter figure is the backing's and not this
-    /// card's: the profiling-gated alternatives Open decision #1 holds in
-    /// reserve locate the opening ordinal in `O(log #runs)` steps whatever its
-    /// reach, so a caller pricing a walk by its reach re-prices when the
-    /// backing changes, and one pricing it at `#runs` does not.
+    /// **The way to the span's opening ordinal is a descent**, whatever the
+    /// call yields: the first pull reads one node a level of the list's tree
+    /// and the runs of one leaf, and no run left of the span, however many
+    /// the list holds there; a span opening past the arranged end reads
+    /// nothing. So what a caller prices is the runs it pulls, as it pulls
+    /// them, and no charge is owed for the list's run count.
     pub fn iter_resolve(&self, doc: &Address, span: &Span) -> impl Iterator<Item = Run> + '_ {
         as_ordinal_vspan(span)
             .and_then(|vspan| {
@@ -176,18 +166,6 @@ impl M5State {
         self.content_list(doc).total_width()
     }
 
-    /// Returns [`content_count`](M5State::content_count), its walk counted.
-    ///
-    /// The count is a sum over every run of `doc`'s content list, and
-    /// `steps` is charged one for each run summed. It is the form the edit
-    /// asks, once a call, under M2's applier lock: every change of the call
-    /// is then judged against the one count by arithmetic, where the three
-    /// admission predicates below, asked a change, would each walk the list
-    /// again.
-    pub(crate) fn content_count_stepped(&self, doc: &Address, steps: &mut impl FnMut(u64)) -> Nat {
-        self.content_list(doc).total_width_stepped(steps)
-    }
-
     /// Returns `n_L(d)`, the arranged link width.
     ///
     /// Absent doc ⇒ 0; the D-SEQ★ reading of
@@ -202,16 +180,14 @@ impl M5State {
     /// That is how many runs [`content_runs`](M5State::content_runs) would
     /// hand back, without handing them back — not
     /// [`content_count`](M5State::content_count), which is the positions those
-    /// runs cover. It is the quantity COPY's resolve walk — which COPY charges
-    /// at this number against
-    /// [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS) —
+    /// runs cover. It is the quantity
     /// [`project`](M5State::project)'s and
     /// [`arranges_any`](M5State::arranges_any)'s joins, the list a VERSION
-    /// names in R, a shot's one walk of its base and
-    /// the shot's carried-run union are priced in, so a caller that owns
+    /// names in R and the shot's carried-run union are priced in — the reads
+    /// that walk every run — so a caller that owns
     /// admission control for one of them reads the number here rather than
-    /// materializing the runs to count them. One map lookup, reading no run;
-    /// absent doc ⇒ 0.
+    /// materializing the runs to count them. One map lookup and the count
+    /// the list's root carries, reading no run; absent doc ⇒ 0.
     pub fn content_run_count(&self, doc: &Address) -> usize {
         self.content_list(doc).run_count()
     }
@@ -267,7 +243,7 @@ impl M5State {
     ///
     /// That is, whether `ord` is a position holding an I-address,
     /// `ord ∈ [1, n_C]`. Answered off the run-list's own locate, which is the
-    /// same walk `point` uses. One short of
+    /// same descent `point` uses. One short of
     /// [`admits_content_boundary`](M5State::admits_content_boundary), which
     /// admits the append boundary as well.
     pub(crate) fn arranges_content_position(&self, doc: &Address, ord: &Nat) -> bool {

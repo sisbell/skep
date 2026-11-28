@@ -31,6 +31,7 @@ mod delete;
 mod edit;
 mod family;
 mod head_float;
+mod heap;
 mod insert;
 mod ownership;
 mod published_target;

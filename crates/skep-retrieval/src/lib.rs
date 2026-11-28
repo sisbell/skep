@@ -117,32 +117,27 @@
 //! counted twice, on the spans handed to M5 and on what they produce;
 //! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
 //!
-//! And all three hold the run-list walk their spans may ask of M5 to a walk
-//! budget of `2^24` steps — per COMPARE operand, per FINDDOCSCONTAINING
-//! request, per RETRIEVEV spec-set — priced before the first of those spans is
-//! walked. Each span is priced at an upper bound on its walk, read off M5's
-//! run counts: the runs of the list its start's subspace selects — of both
-//! lists, for a start in neither subspace — capped at the span's reach
-//! ordinal, so every run for a span opening past the arranged end; and a span
-//! M5's span reader declines, a depth-incompatible one, is priced at that
-//! whole list outright. So the walk refusal answers that PRICE, not the walk
-//! M5 would make: a span that resolves to nothing — R6's silent degradation,
-//! X12's consulting-state window, a foreign-subspace span — is priced like
-//! any other, and enough of them over a fragmented document refuse the
-//! request for its size, though none is ever refused for what it names. A
-//! caller so refused splits the request.
+//! Those budgets are the whole of what the three refuse for size. None
+//! prices the way to a span: M5 reaches a span by a descent of the run-list —
+//! a node a level of its tree, whatever the list holds left of the span — and
+//! reads from there the runs the span yields, so what a resolution reads is
+//! what it produces, and each budget counts that as it is produced. A span
+//! that resolves to nothing — R6's silent degradation, X12's consulting-state
+//! window, a foreign-subspace span, a span opening past the arranged end —
+//! reads no run and counts as one span handed over, and a request of such
+//! spans is never refused for the fragmentation of the documents it names.
 //!
-//! The line read is held to that walk budget and carries no other. It walks
+//! The line read carries a walk budget, `2^24` runs, and no other. It walks
 //! its document's content runs once, whatever its two lists hold, so its
-//! price is the reading surface's content run count, and a step of its walk
-//! is two reads of M4's line-break counts where a step of the other three's
-//! is a comparison. Nothing in its request narrows that price: a caller so
+//! walk is priced, before the first run is pulled, at the reading surface's
+//! content run count; a step of that walk is two reads of M4's line-break
+//! counts. Nothing in its request narrows that price: a caller so
 //! refused asks a version whose arrangement holds fewer runs.
 //!
 //! The four numbers are published, so a caller sizes a request against them
-//! rather than transcribing them; the walk budget is not — as M8's is not, no
-//! answer here reporting the run counts it prices — and its refusal renders
-//! it. All of them are refusals rather than truncations, so every request
+//! rather than transcribing them; the walk budget is not — as M8's join
+//! budget is not, no answer here reporting the run count it prices — and its
+//! refusal renders it. All of them are refusals rather than truncations, so every request
 //! these four operations answer is answered completely. What no number here
 //! bounds is the WORLD's own size — `|R|`, a candidate's fragmentation, the
 //! provenance record and the extents behind a two-address SHOWDELETIONS —
@@ -194,8 +189,8 @@
 
 // The request budgets and their argument — COMPARE's operand and pair
 // budgets, FINDDOCSCONTAINING's coverage budget, RETRIEVEV's delivery budget,
-// and the walk budget those three price their spans against and the line
-// read its one walk — and the `Count` that takes every count against them.
+// and the walk budget the line read prices its one walk against — and the
+// `Count` that takes every count against them.
 mod budget;
 // The typed rejections, one enum per operation, and the two fault
 // vocabularies they carry.
@@ -203,7 +198,7 @@ mod error;
 // The request and result values every operation takes and returns.
 mod types;
 // How M6 reads one request V-span: `Subspace`, the span gate, and the price
-// of its walk against the walk budget (`walk_price`).
+// of the line read's walk against the walk budget (`walk_price`).
 mod vspan;
 // `Query` and what its operations share; the operations' files beneath.
 mod query;

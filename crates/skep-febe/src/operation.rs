@@ -385,9 +385,9 @@ where
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
         // Totality, M10's own half: the locks are non-poisoning (§7); the
         // step-(b) read/write split hands each write arm a proven-bound
-        // principal, so no dispatch arm unwraps an `Option`; and the three
-        // runtime `expect`s assert what no input reaches — `unjudged_fill`'s
-        // that `[1]` is a nonempty sequence, the read by identity's that a
+        // principal, so no dispatch arm unwraps an `Option`; and the two
+        // runtime `expect`s assert what no input reaches — the read by
+        // identity's that a
         // shifted element ordinal stays a T4-valid address, and the content
         // frontier's that a registered document's content chain has a next
         // address (the memo's capacity arrives proven nonzero, in the

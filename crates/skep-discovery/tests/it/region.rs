@@ -1,6 +1,6 @@
 //! §1 — content-region discovery: `image_on`'s gates, order, every placement
-//! answered, and budgets — its walk priced on a published address's trunk
-//! head, and each budget refusing before the work it exists to refuse — and
+//! answered, and budget — the runs a region resolves, however far along a
+//! surface its spans reach, refused before the work it exists to refuse — and
 //! the six region reads that inherit them, with the document gate asked,
 //! where it is one rule, of every read that names a document; and the
 //! retracted-links read's own law beside the active family's. Which
@@ -496,8 +496,8 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
 /// the number its doc gives it, which a symbolic boundary cannot see: the
 /// largest FLAT region the transport admits — one span per wire slot, each
 /// resolving to one run — is admitted unchanged over a document within the
-/// run budget, as this one is. Far along a document past the budget the walk
-/// decides, and the walk's own test pins that.
+/// run budget, as this one is — and far along a document past the budget
+/// as at its front, which the test of a region's reach pins.
 #[test]
 fn the_region_family_refuses_an_image_past_the_run_budget() {
     let k = kernel();
@@ -636,8 +636,8 @@ fn image_refuses_past_the_run_budget_without_resolving_the_rest_of_the_span() {
     seed_content(&k, &doc1(), 1);
     let (fewer, more) = doc2_past_the_run_budget_at_two_run_counts(&k);
     let d = doc2();
-    // Every position doc2 arranges in `more`, its walk inside the square over
-    // both, so the RUN budget is what refuses.
+    // Every position doc2 arranges in `more`: the RUN budget refuses over
+    // both.
     let region = [vspan(1, 1, 2 * MAX_IMAGE_RUNS as u32)];
     let heap_of = |snap: &Snapshot<World>| -> u64 {
         let (answer, bytes) = settled_heap_bytes(|| image_on(snap, &d, &region));
@@ -655,33 +655,25 @@ fn image_refuses_past_the_run_budget_without_resolving_the_rest_of_the_span() {
     );
 }
 
-/// §1 — the RUN-LIST WALK, which the run budget cannot see. M5 reaches every
-/// span by walking the surface's run-list from its first run, so a span past
-/// the end of a fragmented document walks every run and returns none, and a
-/// region of such spans resolves no run for the run budget to count. The walk
-/// is held to that budget's square, ahead of the first pull: `MAX` spans
-/// past the end of a document one run over the budget walk `MAX × (MAX + 1)`
-/// runs and are refused on every entry point, while the same region over a
-/// one-run document — the same reach, a different run count — is answered,
-/// because the walk is priced in runs and never in positions. Beside those:
-/// one span that far over the fragmented document is one walk and answered;
-/// a flat region at its front is the run budget's own case and answered,
-/// while a FLAT region at the end of the surface — each span resolving one
-/// run, so the run count admits it — is the walk's to refuse; and the region
-/// gate still speaks first.
+/// §1 — a region is priced by the runs it RESOLVES and by nothing else: M5
+/// reaches a span by a descent of the surface's run-list, a node a level of
+/// its tree, so where along a surface a span reaches, and how many runs the
+/// surface holds left of it, cost a region nothing. A span past the end of
+/// a fragmented document resolves no run and reads none, and a region of
+/// such spans is answered, empty; a flat region at the very end of a
+/// surface one run past the budget — each span one run — is answered like
+/// one at its front; and the run budget alone refuses, at the run past it.
+/// Each over a document of `MAX + 1` runs, on every entry point, and the
+/// region gate still speaks first.
 ///
-/// Two further shapes, each one a price nothing else here asks for.
-///
-/// A span whose REACH ORDINAL does not fit a `usize` prices at the RUN COUNT,
-/// the most any walk passes, and never at zero. No run budget stands behind
-/// that: such a span resolves NOTHING, so a price of zero admits the region
-/// and M5 pays the whole walk for an empty answer.
-///
-/// What this pins about the SQUARE is only that it is more than the run
-/// budget: every region here is refused with room to spare or admitted with
-/// room to spare. The boundary itself is the next test's.
+/// Two further shapes. A span whose reach ordinal does not fit a `usize`
+/// resolves nothing and is answered so. And a region read of a published
+/// address resolves through the trunk head its readers answer from
+/// (HEAD-FLOAT, PUB-2.53): spans past the end of a head of `MAX + 1` runs
+/// are answered asked of the document as of the head itself, the runs of
+/// neither being read.
 #[test]
-fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
+fn a_region_is_answered_for_the_runs_it_resolves_however_far_its_spans_reach() {
     let k = kernel();
     seed_content(&k, &doc1(), 1); // one run
     // doc2 one run past the budget: one COPY placing doc1's position many
@@ -702,107 +694,89 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
         past_end.iter().cloned().chain([vspan(2, 1, 1)]).collect();
     let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_IMAGE_RUNS];
     // A FLAT region at the end of the fragmented surface: every span names
-    // doc2's last position and resolves exactly one run, so the run count
-    // admits it; the walk — MAX × (MAX + 1) runs — does not.
+    // doc2's last position and resolves exactly one run — the budget's runs
+    // exactly — and one span more is one run past it.
     let flat_at_end: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
-    // Spans whose reach ordinal is past `usize`, so no price can be read off
-    // it — and which resolve nothing, so no run budget stands behind them.
+    let one_run_more: Vec<Span> = flat_at_end.iter().cloned().chain([vspan(1, 1, 1)]).collect();
+    // Spans whose reach ordinal is past `usize`, which resolve nothing.
     let past_usize: Vec<Span> = vec![vspan_reaching_past_usize(1); MAX_IMAGE_RUNS];
     assert_eq!(reads.image(&doc2(), &flat_at_end[..1]), Ok(vec![run(&ca(1), 1)]));
-    assert_eq!(
-        reads.image(&doc2(), &past_end[..1]),
-        Ok(vec![]),
-        "a span past the end resolves no run, whatever it walks"
-    );
+    assert_eq!(reads.image(&doc2(), &past_end), Ok(vec![]), "spans past the end resolve no run");
     assert_eq!(reads.image(&doc1(), &past_end), Ok(vec![]));
+    assert_eq!(reads.image(&doc2(), &past_usize), Ok(vec![]), "a reach past `usize` resolves no run either");
     assert_eq!(
-        reads.image(&doc2(), &past_usize[..1]),
-        Ok(vec![]),
-        "a reach past `usize` resolves no run either"
+        reads.image(&doc2(), &flat_at_end).map(|runs| runs.len()),
+        Ok(MAX_IMAGE_RUNS),
+        "the budget's runs, each resolved at the surface's end"
     );
 
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
             refusal(&doc2(), &past_end),
-            Some(QueryError::ImageTooLarge),
-            "{name}: a walk past the square is refused though it resolves nothing"
+            None,
+            "{name}: spans past the end of a fragmented surface are answered"
         );
         assert_eq!(
             refusal(&doc2(), &past_end_then_malformed),
             Some(QueryError::BadRegion),
-            "{name}: the whole region is judged before the walk is priced"
+            "{name}: the whole region is judged before any span resolves"
         );
-        assert_eq!(
-            refusal(&doc1(), &past_end),
-            None,
-            "{name}: priced in runs — the same reach over one run is answered"
-        );
-        assert_eq!(
-            refusal(&doc2(), &past_end[..1]),
-            None,
-            "{name}: one walk is never refused for its reach"
-        );
+        assert_eq!(refusal(&doc1(), &past_end), None, "{name}: and over one run");
         assert_eq!(
             refusal(&doc2(), &flat),
             None,
-            "{name}: a flat region at the front is the run budget's own case"
+            "{name}: a flat region at the front is inside the run budget"
         );
         assert_eq!(
             refusal(&doc2(), &flat_at_end),
+            None,
+            "{name}: a flat region at the end of a surface past the run budget is inside it too"
+        );
+        assert_eq!(
+            refusal(&doc2(), &one_run_more),
             Some(QueryError::ImageTooLarge),
-            "{name}: a flat region at the end of a surface past the run budget is the walk's to refuse"
+            "{name}: the run past the budget is what refuses"
         );
         assert_eq!(
             refusal(&doc2(), &past_usize),
-            Some(QueryError::ImageTooLarge),
-            "{name}: a reach past `usize` prices at the run count, never at zero"
-        );
-        assert_eq!(
-            refusal(&doc1(), &past_usize),
             None,
-            "{name}: and at the run count — over one run the same spans are answered"
+            "{name}: spans reaching past `usize` resolve nothing and are answered"
         );
-        assert_eq!(
-            refusal(&doc2(), &past_usize[..1]),
-            None,
-            "{name}: one reach past `usize` is one walk"
-        );
+    }
+
+    // Asked of a published address, whose readers answer from its trunk
+    // head: pdoc's own arrangement holds one run and its head `MAX + 1`.
+    let k = fragmented_head_world(MAX_IMAGE_RUNS + 1);
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().content_runs(&phead()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    assert_eq!(snap.world().m5().content_runs(&pdoc()).len(), 1);
+    let reads = Reads(&k);
+    for (name, refusal) in &region_entry_points(reads) {
+        for d in [pdoc(), phead()] {
+            assert_eq!(
+                refusal(&d, &past_end),
+                None,
+                "{name} at {d:?}: spans past the head's end are answered"
+            );
+        }
     }
 }
 
-/// §1 — the walk budget AT its boundary: the square itself is admitted, and
-/// one step past it is refused. The admitted half is the expensive one to
-/// state: a span pays `min(run_count, e − 1)`, and a region priced at the
-/// square normally walks the square it is priced at. It does not here,
-/// because the runs are WIDE — the price counts ORDINALS and the walk counts
-/// RUNS, so spans reaching `2 × MAX` over runs `MAX / 2` positions wide price
-/// the run count apiece and walk four runs. That is the one shape where the
-/// equal case is affordable.
-///
-/// It takes both halves to pin the constant, and neither alone does much: a
-/// region refused with room to spare pins only an upper bound, and one over a
-/// sparse document is priced at its few runs, so it is admitted whatever the
-/// constant says. Together they pin the square to its value AND the
-/// comparison at it — a `>=` refuses the admitted half, a smaller square
-/// refuses it too, and a larger one admits the refused half.
-///
-/// Each span there reaches exactly the run count, so the two sides of
-/// `min(run_count, e − 1)` are one number and the `− 1` decides nothing. One
-/// run more, and the run count passes every reach: the same region is priced
-/// at its reach alone — the square still — and admitted, where a price that
-/// dropped the `− 1` would charge each span a step more and refuse it.
-///
-/// The RUN budget is deliberately left slack: half as many spans as it admits,
-/// each resolving one run, so the verdicts below are the walk budget's alone.
+/// §1 — a surface of WIDE runs, twice the run budget of them: half the
+/// budget's spans and one more, each naming one position far along the
+/// surface and resolving one run, are inside the run budget and answered.
+/// The product of the spans' count and the runs left of them, past the
+/// budget's square, prices nothing.
 #[test]
-fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
+fn a_region_far_along_a_surface_of_many_runs_is_inside_the_run_budget_it_resolves() {
     const WIDTH: u32 = MAX_IMAGE_RUNS as u32 / 2;
     let run_count = 2 * MAX_IMAGE_RUNS;
     let k = kernel();
     seed_content(&k, &doc1(), WIDTH); // one run, WIDTH positions wide
-    // doc2: `2 × MAX` runs of `WIDTH` positions each, none abutting the next,
-    // so the run count reaches every span's reach below while the run-list is
-    // short in the ordinals each span walks.
+    // doc2: `2 × MAX` runs of `WIDTH` positions each, none abutting the next.
     let specs = vec![spec(&doc1(), 1, 1, WIDTH); run_count];
     Vstream::new(&k)
         .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
@@ -813,146 +787,15 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
     );
     let reads = Reads(&k);
 
-    // `MAX / 2` spans each reaching `2 × MAX + 1`, each priced at
-    // `min(2 × MAX, 2 × MAX)`, for `MAX × MAX` — the square exactly.
-    let at_square: Vec<Span> = vec![vspan(1, run_count as u32, 1); MAX_IMAGE_RUNS / 2];
-    // One span pricing 1 more. Widening a span cannot do it: the run count
-    // caps what any one span pays.
-    let past_square: Vec<Span> = at_square
-        .iter()
-        .cloned()
-        .chain([vspan(1, 1, 1)])
-        .collect();
-    // The premise: each span resolves ONE run, so the run budget — which
-    // admits `MAX` — has room to spare either way.
-    assert_eq!(reads.image(&doc2(), &at_square[..1]).map(|r| r.len()), Ok(1));
-
+    // `MAX / 2 + 1` spans, each naming one position `2 × MAX` runs' worth of
+    // ordinals along: their count times the runs left of them is past the
+    // square of the budget, and each resolves one run.
+    let far: Vec<Span> = vec![vspan(1, run_count as u32 * WIDTH, 1); MAX_IMAGE_RUNS / 2 + 1];
+    assert!(far.len() * (run_count - 1) > MAX_IMAGE_RUNS * MAX_IMAGE_RUNS, "premise: the product is past the square");
+    assert_eq!(reads.image(&doc2(), &far[..1]).map(|r| r.len()), Ok(1));
+    assert_eq!(reads.image(&doc2(), &far).map(|r| r.len()), Ok(far.len()));
     for (name, refusal) in &region_entry_points(reads) {
-        assert_eq!(
-            refusal(&doc2(), &at_square),
-            None,
-            "{name}: the square itself is admitted"
-        );
-        assert_eq!(
-            refusal(&doc2(), &past_square),
-            Some(QueryError::ImageTooLarge),
-            "{name}: one step past the square is refused, not truncated"
-        );
-    }
-
-    // One run more, at the front and abutting nothing, and the run count
-    // passes every span's reach: each span is priced now at
-    // `min(2 × MAX + 1, 2 × MAX)`, its reach `e − 1`, where above the two were
-    // one number — and the region is priced at the square still, and admitted.
-    Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, WIDTH)], AsOf::Typed(k.current_seq()))
-        .expect("copy succeeds");
-    assert_eq!(
-        k.snapshot().world().m5().content_runs(&doc2()).len(),
-        run_count + 1
-    );
-    for (name, refusal) in &region_entry_points(reads) {
-        assert_eq!(
-            refusal(&doc2(), &at_square),
-            None,
-            "{name}: priced at each span's reach — the square, still"
-        );
-    }
-}
-
-/// §1 — the run-list walk is refused BEFORE THE FIRST PULL (`image_on`): the
-/// square prices what M5 would walk, so it is asked of the whole region ahead
-/// of any resolution. No verdict shows the order — a region past the square
-/// is refused wherever its price is asked — but asked as the spans are pulled
-/// it refuses only once M5 has walked the run-list for them, the cost it
-/// exists to refuse, on a read the daemon runs with no scan permit. The heap
-/// shows it. Two regions of `MAX` spans over doc2's `MAX + 1` runs are priced
-/// alike, past the square: every span of one names doc2's last position, so
-/// resolving it builds a run, and every span of the other names the position
-/// past it, which builds none. Refused before the first pull, the two cost
-/// the same heap bytes.
-#[test]
-fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
-    Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
-        .expect("copy succeeds");
-    let snap = k.snapshot();
-    assert_eq!(
-        snap.world().m5().content_runs(&doc2()).len(),
-        MAX_IMAGE_RUNS + 1
-    );
-    let d = doc2();
-    let max = MAX_IMAGE_RUNS as u32;
-    // Every span of either prices `min(MAX + 1, e − 1) = MAX + 1`, so `MAX`
-    // of them price `MAX × (MAX + 1)`, past the square.
-    let flat_at_end: Vec<Span> = vec![vspan(1, max + 1, 1); MAX_IMAGE_RUNS];
-    let past_end: Vec<Span> = vec![vspan(1, max + 2, 1); MAX_IMAGE_RUNS];
-    assert_eq!(
-        image_on(&snap, &d, &flat_at_end[..1]),
-        Ok(vec![run(&ca(1), 1)]),
-        "a span at the last position resolves a run"
-    );
-    assert_eq!(
-        image_on(&snap, &d, &past_end[..1]),
-        Ok(vec![]),
-        "a span past it resolves none"
-    );
-    let heap_of = |region: &[Span]| -> u64 {
-        let (answer, bytes) = settled_heap_bytes(|| image_on(&snap, &d, region));
-        assert_eq!(
-            answer,
-            Err(QueryError::ImageTooLarge),
-            "the walk is past the square"
-        );
-        bytes
-    };
-    assert_eq!(
-        heap_of(&flat_at_end),
-        heap_of(&past_end),
-        "a region the walk refuses has no run built for it"
-    );
-}
-
-/// §1 — the walk is priced on the arrangement it WALKS: `d`'s reading
-/// surface, which for a published document with a head is the head, not the
-/// document's own frozen arrangement (HEAD-FLOAT, PUB-2.53). Every other walk
-/// fixture is a private document, where the two are one arrangement, and
-/// `published_world` holds one run on either side, so a walk priced off the
-/// address NAMED — the count the delete preview takes, which reads `d`
-/// because the preview does not float — passes them all. Here pdoc's own
-/// arrangement holds one run and its head `MAX + 1`: `MAX` spans past the
-/// head's end walk `MAX × (MAX + 1)` runs and are refused, asked of pdoc as of
-/// the head itself, where a price off pdoc's one run would admit them and M5
-/// would walk the head's whole run-list per span for an empty answer. A
-/// published document is one a guest may read, and the daemon runs `image`
-/// with no scan permit on the strength of this price.
-#[test]
-fn the_walk_is_priced_on_the_trunk_head_a_published_address_reads() {
-    let k = fragmented_head_world(MAX_IMAGE_RUNS + 1);
-    let snap = k.snapshot();
-    assert_eq!(
-        snap.world().m5().content_runs(&phead()).len(),
-        MAX_IMAGE_RUNS + 1
-    );
-    assert_eq!(snap.world().m5().content_runs(&pdoc()).len(), 1);
-    let reads = Reads(&k);
-    let past_end: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 2, 1); MAX_IMAGE_RUNS];
-    for (name, refusal) in &region_entry_points(reads) {
-        for d in [pdoc(), phead()] {
-            assert_eq!(
-                refusal(&d, &past_end),
-                Some(QueryError::ImageTooLarge),
-                "{name} at {d:?}: priced on the head's MAX + 1 runs"
-            );
-            assert_eq!(
-                refusal(&d, &past_end[..1]),
-                None,
-                "{name} at {d:?}: one walk is never refused for its reach"
-            );
-        }
+        assert_eq!(refusal(&doc2(), &far), None, "{name}: answered, its runs inside the budget");
     }
 }
 

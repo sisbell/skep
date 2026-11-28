@@ -7,7 +7,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 - **The V-stream** — per-document run lists mapping virtual positions
   (what a reader sees) onto immutable content addresses (what is
-  stored); every edit is a new arrangement, never a byte change.
+  stored); every edit is a new arrangement, never a byte change. A run
+  list is a counted tree: each node carries the width and the run count
+  beneath it and is shared by every list that holds it. An edit makes
+  anew only the nodes on the paths to its cuts, a position is found by
+  a descent, and a checkpoint writes each shared node once.
 - **Editing composites** — insert, copy (transclusion — the transcluded
   spans keep their origin identity), delete, rearrange; each a
   kernel transaction composing namespace mints and content writes — a
@@ -50,9 +54,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and lie apart and none moves another's positions; the gate, the
   published check, the typed state and the draft's content count are
   each read once a call, the changes judged in one walk, and the
-  record's fold splices them all into the run-list in one walk
+  record's fold splices them all into the run-list in one build
   (`RunList::spliced`, which joins every seam its changes make as the
-  one-at-a-time mutators would). The record appends to the provenance
+  one-at-a-time mutators would and shares with the list it was made
+  from every node no change reaches). The record appends to the provenance
   relation R every run it places — the values an edit mints and the runs
   a landing places alike, nothing for what it removes — and moves the
   draft's arranged-at position to its commit whatever it holds, an empty
@@ -95,7 +100,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   own: for each place of a list, the runs a draft must arrange there and
   the runs that take their place. The draft's gate answers first — its
   registration, its owner, `PublishedTarget`. Every place is then checked
-  by identity on ONE walk of the draft's run-list
+  by identity under ONE cursor over the draft's run-list, a descent to
+  each place and no run read between them
   (`RunList::arranges_each`: the positions hold exactly those runs'
   addresses, in order, whatever the run boundaries on either side), and a
   refusal is the earliest entry's in the order given: a place the draft
@@ -105,7 +111,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   place and a run a piece, never coalesced in the record, so the
   provenance relation gains a span a piece while the run-list holds
   adjacent pieces as one run. A publication stages it once for each draft
-  it re-windows at its kept places, so a re-window costs the draft's runs
+  it re-windows at its kept places, so a re-window costs a descent a place
   and the pieces placed, and one record, however many places it has.
 - **The publish shot** — `publish` appends the next member of a
   published document's version chain, born published, in ONE commit,
@@ -132,8 +138,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   was made against, the extent its copy took, its stretch list in
   positions and the depth of the member's chain of bases — for every
   member it mints; the fold builds the member from its base's list with
-  every stretch spliced in one walk (`RunList::spliced`), so a shot's
-  journal follows its change. A member the shot minted stores no span
+  every stretch spliced in one build (`RunList::spliced`), which shares
+  every node of the base no stretch reaches, so a shot's journal follows
+  its change and so does what the member keeps. A member the shot minted
+  stores no span
   of provenance — its arrangement only grows, so the provenance reads
   take R↾member off the arrangement — and a snapshot (`stage`,
   `version`) appends none either, naming the list it shares. So

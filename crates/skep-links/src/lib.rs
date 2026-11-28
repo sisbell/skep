@@ -112,8 +112,8 @@ mod class;
 mod registry;
 // The idempotence identity `DedupKey` and the M2 lock section it encodes.
 mod dedup;
-// The two per-slot budgets: the spans a slot keeps, the resolve steps it
-// commands.
+// The per-slot budget, the spans a slot keeps, and the publication's
+// budget on its in-lock reads.
 mod budget;
 // The typed rejections, each enum in its op's precedence order bar two
 // hoists, and FOLLOWLINK's ⊥.
@@ -129,7 +129,7 @@ mod state;
 // deposit, and the publication's with the staging functions it composes.
 mod writes;
 
-pub use budget::{MAX_PUBLICATION_READS, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
+pub use budget::{MAX_PUBLICATION_READS, MAX_SLOT_SPANS};
 pub use class::{coverage_class, CoverageClass};
 pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 // The one caller-identity type of the write-surface ownership gate —

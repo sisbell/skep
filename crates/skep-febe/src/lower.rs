@@ -778,11 +778,11 @@ impl Lower for EditLinkError {
             // M7's own restatement of the per-slot span budget over the
             // finished successor — the same budget and the same leaf
             // MAKELINK's slots take. M10 builds those slots and charges them
-            // against M7's two per-slot budgets, the spans kept and the steps
-            // walked, as it builds them (`successor::successor_slot`),
+            // against M7's per-slot budget, the spans kept, as it builds
+            // them (`successor::successor_slot`),
             // refusing there where the door judged the write. Where the door
-            // deferred to the store's own gate, a slot over either budget is
-            // left one span past the span budget and this arm is the one that
+            // deferred to the store's own gate, a slot over the budget is
+            // left one span past it and this arm is the one that
             // answers it, after M7's home gate — as it is for a successor
             // assembled some other way.
             EditLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),

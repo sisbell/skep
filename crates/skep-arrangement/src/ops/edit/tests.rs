@@ -1,8 +1,8 @@
 //! The edit's in-crate claims, in the world the landing's suite assembles
 //! (`ops/set_arrangement/tests.rs`: M3, M4 and M5 under the real kernel, its
 //! fold counting itself): a call of many changes is one commit of a fixed
-//! number of records, folding the draft's list twice and walking it a
-//! bounded number of times whatever the changes; a refused change leaves
+//! number of records, folding the draft's list twice and reading it at its
+//! changes' cuts alone, whatever the draft holds; a refused change leaves
 //! nothing of its call; the typed state and the record's own position; an
 //! empty list beside a base; every address the call places entering R; the
 //! refusal order and each change's shape verdict, naming the change.
@@ -19,11 +19,6 @@ use crate::ops::{SetMerge, MAX_PLACED_RUNS};
 use crate::run_list::Splice;
 use crate::state::M5State;
 use crate::testutil::{a, doc1, doc2, mem_kernel_of, n, nth_doc, pca, pdoc, rejected, run, seeded_m3, vca, vp};
-
-/// The work one call may ask for each run of the draft, each run it places
-/// and each change it holds: the bound on its own walks and its record's two
-/// folds together.
-const WORK_PER_UNIT: u64 = 8;
 
 /// A world whose draft `doc1` holds `runs` runs of width 3 of the edition's
 /// I-space, no two I-adjacent, built by one fold.
@@ -80,22 +75,25 @@ fn spread(runs: u32, k: u32) -> Vec<Change> {
         .collect()
 }
 
-/// THE LOCK HOLD, COUNTED. A call of `k` changes into a draft of 65,536
-/// runs: its record rebuilds the draft's list twice — at its push and at the
-/// seal — whatever `k`; its own walks and those two rebuilds together read
-/// each run, judge each change and place each run a bounded number of
-/// times; and it stages three records, the range mint, the stretch and the
+/// The lock hold, counted. A call of `k` changes into a draft of 65,536
+/// runs: its record builds the draft's list twice — at its push and at the
+/// seal — whatever `k`; its own walks and those two builds together judge
+/// each change, place each run and open the list's tree at each change's
+/// cuts a bounded number of times, a bound the draft's 65,536 runs do not
+/// enter; and it stages three records, the range mint, the stretch and the
 /// one record of its changes, whatever `k`. The count is held to its budget
-/// as it grows, so a walk asked once a change stops the call at once.
+/// as it grows, so a walk of the list asked once a change stops the call at
+/// once.
 #[test]
-fn a_call_of_many_changes_folds_the_list_twice_and_walks_it_a_bounded_number_of_times() {
+fn a_call_of_many_changes_folds_the_list_twice_and_reads_it_at_its_cuts_alone() {
     const RUNS: u32 = 65_536;
     for changes in [1u32, 16, 256, 4_096] {
         let k = fragmented(RUNS);
         let before = k.snapshot().world().m5().content_list(&doc1()).clone();
         let (seq_before, _) = (k.current_seq(), Folds::take());
-        // P: each change places the one run its two bytes are minted as.
-        let budget = WORK_PER_UNIT * u64::from(RUNS + changes + changes);
+        // P: each change places the one run its two bytes are minted as, so
+        // the call's own walks are a judgment a change and a run a change.
+        let budget = u64::from(changes + changes);
         let mut own = 0u64;
         let edited = Vstream::new(&k)
             .edit_stepped(P1, &doc1(), plain(spread(RUNS, changes)), AsOf::Typed(seq_before), &mut |steps| {
@@ -104,8 +102,8 @@ fn a_call_of_many_changes_folds_the_list_twice_and_walks_it_a_bounded_number_of_
             })
             .expect("the call lands");
         let (records_folded, list_folds) = Folds::take();
-        // (a) The draft's list is rebuilt exactly twice.
-        assert_eq!(list_folds, 2, "{changes} changes: the list rebuilt at the push and at the seal");
+        // (a) The draft's list is built exactly twice.
+        assert_eq!(list_folds, 2, "{changes} changes: the list built at the push and at the seal");
         // (c) One range mint, one stretch, one record of the changes.
         assert_eq!(k.current_seq().0 - seq_before.0, 3, "{changes} changes: three records staged");
         assert_eq!(records_folded, 6, "{changes} changes: each of the three folded twice");
@@ -122,10 +120,14 @@ fn a_call_of_many_changes_folds_the_list_twice_and_walks_it_a_bounded_number_of_
         let spliced = before.spliced(&splices, &mut |steps| walk += steps);
         assert_eq!(&spliced, k.snapshot().world().m5().content_list(&doc1()), "{changes} changes: the record's own splice");
         // (b) The call's own walks and its record's two folds, within the
-        // bound: each run read, each change judged and each run placed.
-        assert_eq!(own, u64::from(RUNS + changes + changes), "{changes} changes: one read of the count, one judgment a change, one run placed a change");
-        assert_eq!(walk, u64::from(RUNS + changes + changes), "{changes} changes: one walk of the list a fold");
-        assert!(own + 2 * walk <= budget, "{changes} changes: {} steps past {budget}", own + 2 * walk);
+        // bound: each change judged and each run placed by the call, and
+        // by each fold the tree opened at each change's cuts.
+        assert_eq!(own, budget, "{changes} changes: one judgment a change, one run placed a change, and no run of the draft read");
+        let fold = (u64::from(changes) + 1) * before.cut_steps() + u64::from(changes);
+        assert!(walk <= fold, "{changes} changes: {walk} steps a fold past the splice's {fold}");
+        if changes <= 256 {
+            assert!(own + 2 * walk < u64::from(RUNS), "{changes} changes: {} steps follow the draft's 65,536 runs", own + 2 * walk);
+        }
         assert_eq!(k.snapshot().world().m5().content_run_count(&doc1()), (RUNS + 2 * changes) as usize);
     }
 }

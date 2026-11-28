@@ -2191,11 +2191,11 @@ element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
 minted, never a well-formed request's refusal), `too_many_runs` (a
 placement — a copy's, a reinstate's, a set_arrangement's or a shot's —
-past M5's `MAX_PLACED_RUNS` = 65536 runs, or a copy whose specs command more than
-`MAX_COPY_RESOLVE_STEPS` = 1048576 run-list steps, each spec charged its
-source's whole run count ahead of its walk, so a spec aimed past its
-source's arranged end is refused for the work it would do while keeping
-nothing — one code for both causes, told apart by the store's message;
+past M5's `MAX_PLACED_RUNS` = 65536 runs, its one cause: the runs a
+request places are all it counts. A copy's spec reaches its span by a
+descent of its source's arrangement, whatever the source holds, so a
+spec aimed past its source's arranged end places nothing and is never
+refused for the source's fragmentation;
 permanent, a copy or a reinstate past it is split by its caller, a
 set_arrangement composed into fewer runs — its frame's own cap, the same
 65536 runs over all its changes, is the parse's, ahead of this one; a
@@ -2231,15 +2231,14 @@ whose span is no content I-span — its start no content-subspace element
 position, or its width no ordinal displacement — `site.slot` the slot in
 declared order and `site.index` the span, by request arithmetic alone;
 §Links (writes)),
-`slot_too_large` (a slot past either of M7's two per-slot budgets: more
+`slot_too_large` (a slot past M7's per-slot budget, its one cause: more
 than `MAX_SLOT_SPANS` = 4096 spans, in any of the three forms — the three
 slots of a make-link, the to- and type-slots of an emit, and the successor slots of
-an edit-link, the last naming the slot in `site.slot` — or, for a
-make-link slot in the V-spec form, specs commanding more than
-`MAX_SLOT_RESOLVE_STEPS` = 262144 run-list steps, each spec charged its
-source's whole run count ahead of its walk, so a spec aimed past its
-source's arranged end is refused for the work it would do while keeping
-no span; one code for both causes, told apart by the store's message;
+an edit-link, the last naming the slot in `site.slot`. The spans a slot
+keeps are all it counts: a V-spec reaches its span by a descent of its
+source's arrangement, whatever the source holds, so a spec aimed past
+its source's arranged end keeps no span and is never refused for the
+source's fragmentation;
 permanent — no retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
@@ -2251,7 +2250,7 @@ answers for a listed position outside the content subspace),
 `malformed_span`, and M6's
 four budget refusals — `too_many_blocks` (a compare operand passes
 `MAX_COMPARE_OPERAND_BLOCKS` = 4096 on either of its two counts: more
-spans handed to the arrangement, one resolution walk apiece whatever it
+spans handed to the arrangement, one resolution apiece whatever it
 yields, or more blocks resolved; refused as the operand resolves, ρ₁
 first, and before the join runs), `too_many_pairs` (the report would
 exceed `MAX_COMPARE_PAIRS` = 65536 correspondences), `too_much_coverage`
@@ -2263,17 +2262,14 @@ exceed `MAX_DELIVERY_ITEMS` = 131072 items — one per delivered position,
 one per withheld run; refused as the delivery is produced, a delivered
 run's positions admitted as one batch, so a single spec naming a document
 whose extent transclusion has multiplied is refused rather than built).
-Each of the three operations also answers its own code — the compare
-operand's `too_many_blocks`, the find request's `too_much_coverage`, the
-retrieve-v spec-set's `too_many_items` — when the run-list walk its spans
-may ask of the arrangement is priced past `MAX_COMPARE_OPERAND_BLOCKS`² =
-16777216 steps: each span is priced, before the first is walked, at an
-upper bound on its walk — up to the document's whole run count, for a
-span opening past the arranged end, whatever it yields, and that whole
-count for a span the arrangement's span reader declines (a
-depth-incompatible one), though it resolves to nothing; so a request of
-spans that each degrade to nothing can still be refused for its size.
-A fourth is held to the same number: a line read answers `too_many_items`
+None of the three operations is refused for the way to its spans: the
+arrangement reaches a span by a descent, whatever the document holds
+left of it, and reads from there the runs the span yields, so a request
+of spans that each resolve to nothing — one opening past the arranged
+end, a depth-incompatible one — is answered, empty, however fragmented
+the documents it names. One read is priced by its document's
+fragmentation, at `MAX_COMPARE_OPERAND_BLOCKS`² = 16777216 runs: a line
+read answers `too_many_items`
 where its document holds more content runs than that. It walks them once,
 whatever its two lists hold, so its price is the document's run count and
 no narrower request passes — the act is a version of fewer runs.
@@ -2292,14 +2288,14 @@ answered is begun again from its first page), `image_too_large` (a
 read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product
 its own join is held to — each read counting the runs its own work
 multiplies: on the region family — find-links-v, count-v, window-v,
-retrieve-endsets — and on the image read, the run-list walk the region
-asks of the arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, held
-ahead of the first pull; on the region family, the runs its spans
+retrieve-endsets — the runs its spans
 resolve, summed across the spans and counted as M5's lazy resolution
 pulls them — the run past the budget refused as it is pulled, before the
 next is built, so no region materializes a fragmented surface whole —
 past 4096, where the image read, never refused for those runs, ends its
-page and names where the rest begins (§Link discovery reads); on the
+page and names where the rest begins (§Link discovery reads), and
+neither is refused for how far along its document a region lies, the
+arrangement reaching each span by a descent; on the
 project read, the reading surface's content runs past 4096,
 or the coverage × run product — the answer's pre-normalization size —
 past `MAX_ANSWER_SPANS` = 65536; on the discoverable-from read, the
@@ -2470,7 +2466,8 @@ change: a one-run change into a document of five thousand runs is the
 same bytes as into one of a thousand, where the whole form journals a
 run's bytes for every run of the document. The member's arrangement is
 built from its base's when the record is folded, every stretch replaced
-in one walk of the base's list. And the board stores NO SPAN OF A
+in one build that reads the base's list at the stretches alone and
+shares the rest of it with the base. And the board stores NO SPAN OF A
 MEMBER's PROVENANCE: a published member's arrangement only grows — an
 edit of it is refused and a deposit lands at fresh positions past its
 arranged extent — so what a member ever contained is what it arranges,

@@ -44,8 +44,8 @@ pub trait Codec {
     /// to M7's span budget before it is encoded, and RETRIEVEI's `spans`,
     /// whose widths are summed against the delivery budget before the first
     /// address is expanded; beyond them M10 measures only the successor slots
-    /// it resolves for itself, against M7's two per-slot budgets — the spans a
-    /// slot keeps and the run-list steps its resolution walks. So this parser
+    /// it resolves for itself, against M7's per-slot budget, the spans a
+    /// slot keeps. So this parser
     /// is the only bound on how large a request may be, and a costed frame — a
     /// maximal COMPARE, an `insert` whose values outrun the transaction budget
     /// — reaches the store exactly as it arrives.
@@ -88,8 +88,9 @@ pub trait Codec {
     /// a single spec naming one document names a delivery no field of the
     /// frame prices. M6 holds it: the delivery is refused past
     /// `skep_retrieval::MAX_DELIVERY_ITEMS` items as it is produced, before
-    /// the first address past the budget is expanded, and the spec-set's
-    /// run-list walk is priced ahead of it (`RejectCode::TooManyItems`). What
+    /// the first address past the budget is expanded
+    /// (`RejectCode::TooManyItems`); reaching a spec's span is a descent of
+    /// its document's run-list, which no budget prices. What
     /// that leaves this layer is what the items render to — each content
     /// item's bytes, which one large value placed at many positions multiplies
     /// — and the delivery it renders arrives bounded and whole, so a
@@ -139,8 +140,8 @@ pub trait Codec {
     /// transport's, not M10 policy: a transport with a different frame budget
     /// owes its own.
     ///
-    /// **And the component cap prices what M7 stores.** M7's per-slot budgets
-    /// are counts — spans kept, steps walked — while a span's live size is set
+    /// **And the component cap prices what M7 stores.** M7's per-slot budget
+    /// is a count — spans kept — while a span's live size is set
     /// by its two tumblers' component counts: order half a kilobyte at eight
     /// components, ~16–20 KB at 256. A slot M7 accepts is stored, so this
     /// parser's cap on one tumbler's components multiplies the permanent cost

@@ -8,12 +8,10 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{deposit_class_types, Deposit, HasM5, M5Rec, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    Attestation, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError,
-    WorldState,
+    Attestation, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState,
 };
 use skep_links::{
-    EditLinkError, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM,
-    MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
+    HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM, MAX_SLOT_SPANS,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
@@ -924,96 +922,39 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
     }
 }
 
-/// §4, the successor slot's WORK budget, and what an unjudged slot over it is
-/// built to be. A spec opening past its source's arranged end keeps no span
-/// while walking every run, so no span count sees the slot; only the charge
-/// taken before each walk bounds it. Where the door judged, the slot is
-/// refused as the charge crosses, naming the slot. Where it deferred, nothing
-/// here refuses it and the slot is left one span past the span budget, padded
-/// with a fill one component deep however deep the crossing source — M7
-/// refuses on the count and never reads it. So where the store's own gate
-/// passes after all, in the window the deferral leaves between the door's
-/// snapshot and the commit, M7 refuses the slot rather than deposit a
-/// successor short of what was asked. One walk fewer is the budget exactly,
-/// an ordinary slot under both.
+/// §4, a successor slot whose specs keep nothing. A spec opening past its
+/// source's arranged end reaches that end by the run-list's own sums and
+/// reads no run, so a slot of such specs costs a lookup a spec whatever the
+/// source's fragmentation, and no budget prices a walk to the span: the slot
+/// is built empty, whoever answers the budget and however many specs it
+/// holds — over a source of 2,048 runs, a count whose product with those
+/// runs passes a quarter of a million, and the most a request's list
+/// carries. The span budget stays the slot's one budget.
 #[test]
-fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_refuse() {
+fn a_successor_slot_of_specs_that_keep_nothing_is_built_empty_whatever_its_source_holds() {
     let febe = surface();
     let doc = fragmented_draft(&febe, 10);
-    let owner = febe.open_session(DRAFT_OWNER);
-    let link_op = Op::MakeLink {
-        home: doc.clone(),
-        from: SlotArg::Addrs(vec![]),
-        to: SlotArg::Addrs(vec![]),
-        ty: SlotArg::Addrs(vec![doc.clone()]),
-        replaces: None,
-    };
-    let original = match febe.execute(owner, Request::from(link_op)) {
-        Response::AckAddr { addr, .. } => addr,
-        other => panic!("the owner links its draft: {other:?}"),
-    };
     let snap = febe.stores.kernel().snapshot();
     let (m3, m5) = (snap.world().m3(), snap.world().m5());
     let run_count = m5.content_run_count(&doc);
-    assert_eq!(run_count, 2048, "premise: one walk over this source passes 2048 runs");
+    assert_eq!(run_count, 2048, "premise: the source holds 2048 runs");
     let past_the_end = || VSpec {
         source: doc.clone(),
         span: Span::new(tum(&[1, 2049]), tum(&[0, 1]))
             .unwrap_or_else(|_| panic!("well-formed test span")),
     };
     assert!(m5.resolve(&doc, &past_the_end().span).is_empty(), "premise: each spec keeps nothing");
-    let at_budget = MAX_SLOT_RESOLVE_STEPS / run_count;
-    assert_eq!(at_budget * run_count, MAX_SLOT_RESOLVE_STEPS, "premise: the budget is whole walks");
     let successor = |specs: usize| SuccessorSpec {
         from: vec![past_the_end(); specs].into(),
         to: vec![].into(),
         ty: SlotArg::Addrs(vec![doc.clone()]),
     };
-
-    // One walk past the budget.
-    let over = successor(at_budget + 1);
-    let refused = successor_link(m3, m5, &over, Judgment::Judged)
-        .expect_err("a judged build refuses as the charge crosses");
-    assert_eq!(refused.code, RejectCode::SlotTooLarge);
-    let site = refused.site.expect("the slot is named");
-    assert_eq!(site.slot, Some(FROM));
-    assert!(site.index.is_none(), "the slot is at fault, not one spec in it");
-    let built_to_fail = successor_link(m3, m5, &over, Judgment::Unjudged)
-        .expect("an unjudged build refuses nothing a source decides");
-    assert_eq!(
-        built_to_fail.from_slot().len(),
-        MAX_SLOT_SPANS + 1,
-        "one span past the span budget"
-    );
-    assert!(doc.tumbler().len() > 1, "premise: the crossing source is deeper than one component");
-    assert!(
-        built_to_fail.from_slot().spans().all(|s| s.start().len() == 1 && s.width().len() == 1),
-        "the fill is one component deep, whatever the crossing source's depth"
-    );
-
-    // The window the deferral leaves: the store's own gate passes after all.
-    // M7 refuses the slot there, and nothing is deposited.
-    let before = febe.log_position();
-    let visibility = |_: &World, _: &Address| true;
-    let attempt = febe.stores.linkstore(&visibility).editlink(
-        Caller::Principal(DRAFT_OWNER),
-        &original,
-        built_to_fail,
-        &doc,
-        &doc,
-    );
-    assert!(matches!(attempt, Err(TxnError::Rejected(EditLinkError::SlotTooLarge))), "{attempt:?}");
-    assert_eq!(
-        febe.log_position(),
-        before,
-        "a successor short of what was asked is never deposited"
-    );
-
-    // The budget exactly: an ordinary slot, whoever answers the budget.
-    for judgment in [Judgment::Judged, Judgment::Unjudged] {
-        let link =
-            successor_link(m3, m5, &successor(at_budget), judgment).expect("a walk at the budget");
-        assert!(link.from_slot().is_empty(), "{judgment:?}");
+    for specs in [129, MAX_SLOT_SPANS + 1] {
+        assert!(specs * run_count > 1 << 18, "premise: the specs' count times the source's runs");
+        for judgment in [Judgment::Judged, Judgment::Unjudged] {
+            let link = successor_link(m3, m5, &successor(specs), judgment).expect("a slot of specs that keep nothing");
+            assert!(link.from_slot().is_empty(), "{specs} specs, {judgment:?}");
+        }
     }
 }
 

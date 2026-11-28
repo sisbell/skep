@@ -260,23 +260,26 @@ fn every_query_asks_m5_only_its_lazy_reads() {
     }
 }
 
-/// Each budgeted query admits a walk's price for each walk it pulls.
+/// The line read admits its walk's price, and no span's resolution is
+/// priced.
 ///
-/// RETRIEVEV, the line read, COMPARE and FINDDOCSCONTAINING hold the walk
-/// their spans ask of M5 to the walk budget: each admits `walk_price` of a
-/// span against its count before `iter_resolve` pulls that span. A suite
-/// prices a request of each of three past the budget. The line read's price
-/// is its surface's run count, which no fixture takes there, so no
-/// behavioural test tells a line read that prices its walk from one that
-/// does not, and the pairing is held here: each of the three files admits
-/// one price for each `iter_resolve` it calls. `query/origin.rs` pulls
-/// SHOWORIGIN's walk, which carries no budget, and is not among them.
+/// The line read holds the walk it asks of M5 — every content run of its
+/// surface — to the walk budget: it admits `walk_price` against its count
+/// before `iter_resolve` pulls the first run. Its price is its surface's run
+/// count, which no fixture takes to the budget, so no behavioural test
+/// tells a line read that prices its walk from one that does not, and the
+/// pairing is held here: `query/retrieve.rs` pulls two walks, RETRIEVEV's
+/// spans and the line read's extent, and admits one price. RETRIEVEV,
+/// COMPARE and FINDDOCSCONTAINING resolve spans, which M5 reaches by a
+/// descent, and admit none: their own budgets count what a resolution
+/// yields. `query/origin.rs` pulls SHOWORIGIN's walk, which carries no
+/// budget, and is not among them.
 #[test]
-fn each_budgeted_query_admits_a_walks_price_for_each_walk_it_pulls() {
-    for (file, walks) in [
-        ("query/compare.rs", 1),
-        ("query/find.rs", 1),
-        ("query/retrieve.rs", 2),
+fn the_line_read_admits_its_walks_price_and_no_spans_resolution_is_priced() {
+    for (file, walks, priced) in [
+        ("query/compare.rs", 1, 0),
+        ("query/find.rs", 1, 0),
+        ("query/retrieve.rs", 2, 1),
     ] {
         let in_file = |pred: &dyn Fn(&str) -> bool| {
             scan(pred)
@@ -291,8 +294,8 @@ fn each_budgeted_query_admits_a_walks_price_for_each_walk_it_pulls() {
         );
         assert_eq!(
             in_file(&|code| code.contains(".admit(walk_price(")),
-            walks,
-            "{file} admits one walk's price against the walk budget for each walk it pulls"
+            priced,
+            "{file} admits {priced} walk price(s) against the walk budget"
         );
     }
 }

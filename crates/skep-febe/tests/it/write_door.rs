@@ -27,7 +27,6 @@ use skep_febe::{
     PublishTarget, RejectCode, Rejection, Run, Seq, SessionId, Shot, ShotRun, SlotArg,
     SuccessorSpec, VSpec, Val, MAX_SLOT_SPANS,
 };
-use skep_links::MAX_SLOT_RESOLVE_STEPS;
 
 /// The content I-span of `width` positions from `doc`'s content I-ordinal
 /// `start`, as the wire's `{"spans"}` form carries one.
@@ -451,17 +450,15 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
     assert_eq!(fx.febe.log_position(), before, "a refused edit commits nothing");
 }
 
-/// The same deferral on the successor slot's WORK budget: an edit into a
-/// destination the caller may not write is answered alike however long an
-/// unconsulted source is to WALK. A spec opening past a source's arranged end
-/// keeps nothing and walks every run, so a slot of such specs over a heavily
-/// fragmented private draft crosses M10's work budget where the same specs
-/// over a contiguous one never do. Where the door deferred, the crossing must
-/// not speak ahead of the store's `not_owner`, or the answer counts the runs
-/// of a document the caller may not read — nor silence a later spec's own
-/// fault, which speaks alike wherever an unread source crossed the budget.
+/// The same deferral where the specs keep nothing: an edit into a
+/// destination the caller may not write is answered alike however many runs
+/// an unconsulted source holds. A spec opening past a source's arranged end
+/// keeps nothing over a heavily fragmented private draft and over a
+/// contiguous one alike, and reads no run of either, so nothing the build
+/// does counts the runs of a document the caller may not read: the store's
+/// `not_owner` speaks, and a later spec's own fault speaks alike over both.
 #[test]
-fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_source_is_to_walk() {
+fn an_edit_refused_its_destination_answers_alike_however_many_runs_its_unreadable_source_holds() {
     let (fx, unreadable) = setup_with_unreadable();
     // USER's: readable to the stranger, and not the stranger's to write.
     let (user_draft, original) = linked_doc(&fx);
@@ -471,13 +468,12 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     insert3(&fx, &contiguous);
     unreadable.lock().expect("no poisoning").extend([fragmented.clone(), contiguous.clone()]);
     let (other, _their_draft) = stranger(&fx);
-    // One walk past the budget over the fragmented source, one run a spec over
-    // the contiguous one; each spec opens past both arranged ends, so it keeps
-    // nothing either way. `fault` appends a spec the request itself gets
-    // wrong.
+    // More specs than a quarter of a million divided by the fragmented
+    // source's runs; each opens past both arranged ends, so it keeps nothing
+    // either way. `fault` appends a spec the request itself gets wrong.
     let edit = |source: &Address, fault: Option<VSpec>| {
         let past_the_end = VSpec { source: source.clone(), span: vspan(1, run_count + 1, 1) };
-        let mut from = vec![past_the_end; MAX_SLOT_RESOLVE_STEPS / run_count as usize + 1];
+        let mut from = vec![past_the_end; 129];
         from.extend(fault);
         Op::EditLink {
             original: original.clone(),
@@ -490,11 +486,6 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
             d_a: user_draft.clone(),
         }
     };
-    assert_eq!(
-        rejected(ex(&fx.febe, fx.user, edit(&fragmented, None))).code,
-        RejectCode::SlotTooLarge,
-        "premise: the owner, whose edit the door judges, is refused the fragmented walk"
-    );
 
     let before = fx.febe.log_position();
     let over_fragmented = rejected(ex(&fx.febe, other, edit(&fragmented, None)));
@@ -507,7 +498,7 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     assert_eq!(
         over_fragmented,
         rejected(ex(&fx.febe, other, edit(&contiguous, None))),
-        "one answer, however long an unreadable source is to walk"
+        "one answer, however many runs an unreadable source holds"
     );
 
     let ill_formed = || Some(VSpec { source: user_draft.clone(), span: vspan(2, 1, 1) });
@@ -516,7 +507,7 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
     assert_eq!(
         at_fault,
         rejected(ex(&fx.febe, other, edit(&contiguous, ill_formed()))),
-        "a later spec's fault answers alike, wherever an unread source crossed the budget"
+        "a later spec's fault answers alike, whatever an unread source holds"
     );
     assert_eq!(fx.febe.log_position(), before, "a refused edit commits nothing");
 }

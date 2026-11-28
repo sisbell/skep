@@ -18,14 +18,14 @@
 //! [`content_vspan`]/`check_region` — the module that judges a region is the
 //! module that publishes how to build one.
 
-use num_traits::{One, ToPrimitive};
+use num_traits::One;
 use skep_address::{Address, Level, Nat, Span};
 use skep_arrangement::{
     as_ordinal_vspan, ordinal_vspan, published_target, reading_surface, trunk_of, Run, VPos,
 };
 use skep_kernel::Snapshot;
 
-use crate::budget::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::budget::MAX_IMAGE_RUNS;
 use crate::types::{GoOn, ImagePage, QueryError};
 use crate::DiscoveryWorld;
 
@@ -67,24 +67,6 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// How many runs M5's `iter_resolve` walks past for the spans of `region`,
-/// over a run-list `run_count` runs long, summed, saturating — every run left
-/// of a span's opening ordinal, as M5's card on `iter_resolve` states, and
-/// then the runs it yields. It walks each span's list from the first run and
-/// stops at the first run starting at or past the ordinal of the span's
-/// REACH, `e` — M1's `reach`, which for an ordinal V-span is
-/// `ordinal + count` — and every run is at least one position wide, so one
-/// span passes at most `min(run_count, e − 1)`. A REACH ORDINAL that does not
-/// fit a `usize` prices at `run_count` — the most any walk passes, never zero.
-fn run_list_walk(region: &[Span], run_count: usize) -> usize {
-    region.iter().fold(0usize, |steps, span| {
-        let passed = as_ordinal_vspan(span)
-            .and_then(|v| (v.ordinal + v.count).to_usize())
-            .map_or(run_count, |e| e.saturating_sub(1).min(run_count));
-        steps.saturating_add(passed)
-    })
-}
-
 /// V→I resolution of `region` through `d`'s READING SURFACE (ASN-0127's
 /// image read there: `W ∩ dom M(reading_surface(d))`, which is `W ∩ dom M(d)`
 /// itself wherever `d` is its own reading surface — unarranged positions
@@ -93,11 +75,11 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` — the document-existence gate
 /// is the first act, M5 conflating registered-empty with unallocated — then
-/// the region gate (`BadRegion`), then the run budget and its square
-/// (`ImageTooLarge`) — the square holding the walk the region asks of M5, the
-/// budget the runs it resolves — which come third because each is priced on
-/// what the region does to `d`'s reading surface, and so cannot be asked
-/// until both gates have admitted the request. A registered `d` whose reading
+/// the region gate (`BadRegion`), then the run budget (`ImageTooLarge`),
+/// held over the runs the region resolves, which comes third because it is
+/// priced on what the region does to `d`'s reading surface, and so cannot be
+/// asked until both gates have admitted the request. A registered `d` whose
+/// reading
 /// surface arranges no content yields a defined `Ok(vec![])` — a bare
 /// published `d` that has a member answers from its trunk head, whatever its
 /// own arrangement holds.
@@ -115,15 +97,13 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// spans yield overlapping runs (not an address-disjoint partition —
 /// coalescing would need the run-level span algebra M8 deliberately avoids).
 ///
-/// Refuses with `ImageTooLarge` when the RUN-LIST WALK is past the square of
-/// [`MAX_IMAGE_RUNS`], before the first pull: M5 reaches each span by walking
-/// the surface's content run-list from its first run (M5 states that walk on
-/// `iter_resolve`'s card), so a span reaching `e` passes at most
-/// `min(#runs, e − 1)` runs whatever it returns, and the sum over the region
-/// is what is priced — in RUNS, so a span reaching far into a long document
-/// that holds few runs is never refused for its reach.
+/// What reaching a span costs is not priced: M5 reaches each span by a
+/// descent of the surface's content run-list — a node a level of its tree,
+/// whatever the surface holds left of the span (M5 states it on
+/// `iter_resolve`'s card) — and a span opening past the arranged end reads
+/// no run, so the runs a region returns are what its resolution reads.
 ///
-/// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
+/// Refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
 /// runs the region RESOLVES — summed across its spans, each of them answered
 /// — as they are PULLED from M5's lazy `iter_resolve`, the form M5
 /// publishes for a consumer that carries a budget of its own. The run past the
@@ -133,10 +113,10 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// truncation: a truncated image drops links from every read-out composed on
 /// it, silently.
 ///
-/// So the accepted set is the image's: a region is answered when its walk is
-/// within the square and its spans resolve at most [`MAX_IMAGE_RUNS`] runs,
-/// whatever positions they name. A single position is refused only over a
-/// reading surface of more than `MAX_IMAGE_RUNS²` content runs, so a region
+/// So the accepted set is the image's: a region is answered when its spans
+/// resolve at most [`MAX_IMAGE_RUNS`] runs, whatever positions they name and
+/// however many runs the surface holds. A single position resolves one run
+/// and is never refused, so a region
 /// past the budget can be asked in parts — the recourse [`QueryError`] states.
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
@@ -220,9 +200,10 @@ pub fn image_on<W: DiscoveryWorld>(
 ///    does not begin at `cur.at`.
 /// 4. For a continuation, [`QueryError::PageMoved`] where `cur.surface`
 ///    takes in-place edits and its `arranged_at` is not `cur.arranged_at`.
-/// 5. [`QueryError::ImageTooLarge`] where the run-list walk the region asks
-///    of the arrangement read is past the square of [`MAX_IMAGE_RUNS`] —
-///    never for the runs the region resolves.
+///
+/// It never answers [`QueryError::ImageTooLarge`]: the runs its region
+/// resolves past the budget end the page, and reaching a span costs a
+/// descent, which no budget prices.
 pub fn image_page_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -326,16 +307,15 @@ struct Resolved {
 /// It is the gates and the resolution every image runs: the document gate,
 /// then the region gate, then `surface` asked — after both gates, so it is
 /// asked of a registered document and a well-shaped region alone (PUB-6.37)
-/// — then the run budget's square and the budget over what that arrangement
+/// — then the run budget over what that arrangement
 /// holds, `past` saying what a run past the budget does. One body, so the
 /// images cannot come apart in what they refuse or in which order.
 ///
 /// # Errors
 ///
 /// [`QueryError::DocNotRegistered`], then [`QueryError::BadRegion`], then
-/// `surface`'s own refusal, then [`QueryError::ImageTooLarge`] for a walk
-/// past the square, and for runs past the budget under
-/// [`PastBudget::Refused`].
+/// `surface`'s own refusal, then [`QueryError::ImageTooLarge`] for runs past
+/// the budget under [`PastBudget::Refused`].
 fn image_of<W: DiscoveryWorld>(
     w: &W,
     d: &Address,
@@ -348,13 +328,6 @@ fn image_of<W: DiscoveryWorld>(
     }
     check_region(region)?;
     let surface = surface(w)?;
-    // The surface's run count, off M5's own `#runs` — one map lookup, reading
-    // no run — because the walk is priced against it: M5's card on
-    // `iter_resolve` names `#runs` that walk's ceiling.
-    let run_count = w.m5().content_run_count(&surface);
-    if run_list_walk(region, run_count) > MAX_JOIN_STEPS {
-        return Err(QueryError::ImageTooLarge);
-    }
     let mut runs: Vec<Run> = Vec::new();
     for span in region {
         // The V-ordinal the next run pulled sits at: M5 clips a span to the

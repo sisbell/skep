@@ -1,6 +1,6 @@
-//! The two per-slot budgets over a real kernel (InMemory): the span budget at
-//! its exact boundary on every op and slot form that carries one, beside the
-//! resolve-work budget that bounds what the span count cannot.
+//! The per-slot budget over a real kernel (InMemory): the span budget at
+//! its exact boundary on every op and slot form that carries one, and a
+//! `Resolve` slot held to it alone, whatever its specs number.
 
 use crate::common;
 
@@ -83,54 +83,69 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
 }
 
 #[test]
-fn a_resolve_slot_is_refused_on_the_work_it_commands_not_only_the_spans_it_keeps() {
-    // The span budget counts what a slot KEEPS, and the work is not the
-    // result: a spec opening PAST a fragmented source's last arranged ordinal
-    // keeps nothing and walks the whole run list to find that out (M5 states
-    // the cost at its one clip — `Θ(#runs left of the opening ordinal)`). So a
-    // slot of such specs is unbounded in work at ZERO span count, and every
-    // step of it runs inside the transact under M2's applier lock, where it
-    // stalls every writer in the engine rather than only the caller.
+fn a_resolve_slot_is_held_to_the_spans_it_keeps_whatever_its_specs_number() {
+    // The span budget counts what a slot KEEPS, and it is the slot's one
+    // budget: a spec reaches its span by a descent of its source's run-list
+    // and reads from there the runs it yields, so a spec opening PAST a
+    // fragmented source's last arranged ordinal keeps nothing and reads no
+    // run. A slot of thousands of such specs — more than four thousand over
+    // a 64-run source, a product past a quarter of a million — is built and
+    // admitted, empty; and the spans a slot does keep are counted as they
+    // are pulled, whatever specs yielding none stand among them.
     let k = kernel();
     let runs = 64u32;
     fragment_content(&k, &doc1(), runs); // 64 runs, none I-contiguous
     let w = writer(&k);
-    // Opens at ordinal 1000 over a 64-position document: binds nothing, walks
-    // all 64. The budget is charged per slot, so the spec count that crosses
-    // it is `MAX_SLOT_RESOLVE_STEPS / runs` plus one.
+    // Opens at ordinal 1000 over a 64-position document: binds nothing.
     let past_the_end = || spec(&doc1(), 1, 1_000, 1);
-    let charges = skep_links::MAX_SLOT_RESOLVE_STEPS / runs as usize;
+    let many = skep_links::MAX_SLOT_SPANS + 1;
+    assert!(many * runs as usize > 1 << 18, "premise: the specs' count times the source's runs");
 
-    let before = k.current_seq();
-    assert!(matches!(
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Resolve(vec![past_the_end(); charges + 1]),
-            SlotArg::Addrs(vec![]),
-            SlotArg::Addrs(vec![unregistered_ta(10)])
-        ),
-        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
-    ));
-    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
-
-    // The control, one charge short: admitted, and the slot it builds is
-    // EMPTY — so the refusal above is the work budget and not the span
-    // budget, which sees both calls as a slot of no spans at all.
     let (l, _) = w
         .makelink(
             P1,
             &doc1(),
-            SlotArg::Resolve(vec![past_the_end(); charges]),
+            SlotArg::Resolve(vec![past_the_end(); many]),
             SlotArg::Addrs(vec![]),
             SlotArg::Addrs(vec![unregistered_ta(10)]),
         )
-        .expect("one charge short is admitted");
-    let snap = k.snapshot();
-    assert!(
-        snap.world().links().readlink(&l).expect("resident").from_slot().is_empty(),
-        "the admitted slot kept nothing, which is what the span budget would have seen"
-    );
+        .expect("a slot of specs that keep nothing is admitted");
+    {
+        let snap = k.snapshot();
+        assert!(
+            snap.world().links().readlink(&l).expect("resident").from_slot().is_empty(),
+            "the admitted slot kept nothing"
+        );
+    }
+
+    // Among them, specs that do yield: each of the source's 64 runs once,
+    // 64 times over — the budget's spans exactly — is admitted, and one
+    // span more is refused, the specs that keep nothing counting for
+    // nothing either way.
+    let whole = || spec(&doc1(), 1, 1, runs);
+    let fill = skep_links::MAX_SLOT_SPANS / runs as usize;
+    let mixed = |yielding: usize, one_more: bool| -> SlotArg {
+        let mut specs = vec![past_the_end(); many];
+        specs.extend(std::iter::repeat_with(whole).take(yielding));
+        if one_more {
+            specs.push(spec(&doc1(), 1, 1, 1));
+        }
+        specs.extend(vec![past_the_end(); many]);
+        SlotArg::Resolve(specs)
+    };
+    let (at_budget, _) = w
+        .makelink(P1, &doc1(), mixed(fill, false), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![unregistered_ta(11)]))
+        .expect("exactly the span budget is admitted");
+    {
+        let snap = k.snapshot();
+        assert_eq!(snap.world().links().readlink(&at_budget).expect("resident").from_slot().len(), skep_links::MAX_SLOT_SPANS);
+    }
+    let before = k.current_seq();
+    assert!(matches!(
+        w.makelink(P1, &doc1(), mixed(fill, true), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![unregistered_ta(12)])),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
 }
 
 #[test]

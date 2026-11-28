@@ -373,7 +373,7 @@ pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
 /// doc1 = `[a, b, c]`; doc2 = 8192 one-position runs, every one holding ca1 —
 /// two COPY commits of 4096 specs, the wire's per-array cap. They never
 /// coalesce (each reaches ca2, and the next opens at ca1), so doc2 is the
-/// fragmented surface a walk over its runs is priced against, built from one
+/// fragmented surface the size cells resolve spans over, built from one
 /// stored value.
 pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = insert3(k);

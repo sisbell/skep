@@ -3,7 +3,7 @@
 //! `Content` item, the seams between them kept, a run whose I-extent holds a
 //! key off its chain delivered whole — each stored atom delivered itself and
 //! never a copy of its bytes, R6's silent degradations, the whole-request
-//! gate, the delivery and walk budgets, the masked form's per-origin consult,
+//! gate, the delivery budget, the masked form's per-origin consult,
 //! asked once per run, and the withheld item a run whose origin is not
 //! registered takes, asking nothing.
 
@@ -641,48 +641,39 @@ fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
 }
 
 #[test]
-fn retrieve_v_refuses_a_spec_set_whose_spans_would_walk_past_the_walk_budget() {
-    // The walk budget: M5 reaches a span by walking the run list from its
-    // first run, so a spec opening past the end of a fragmented document walks
-    // every run and delivers nothing — a cost the item count never sees. The
-    // walk budget is the operand budget's square, so over doc2's 8192 runs one
-    // spec more than `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such specs is past
-    // it, and the spec-set is refused before any spec is walked.
+fn retrieve_v_answers_a_spec_set_of_specs_past_the_end_of_a_fragmented_document() {
+    // What reaching a span costs is no budget's: M5 reaches a span by a
+    // descent of the run list, so a spec opening past the end of a fragmented
+    // document reads no run and delivers nothing. Over doc2's 8192 runs one
+    // spec more than `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such specs, a
+    // product past that budget's square, is answered with the empty delivery.
     let k = mem_kernel();
     fragmented_doc2(&k); // doc2 = 8192 one-position runs
     let s = k.snapshot();
     let q = Query::new(&s);
     let run_count = s.world().m5().content_run_count(&doc2());
     assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
-    assert_eq!(
-        err_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 8193, 1)); past_budget])),
-        RetrieveError::TooManyItems
-    );
-    // The control: a spec at doc2's first position walks two runs, so the
-    // wire's whole 4096 are priced well inside the budget and delivered.
-    assert_eq!(
-        ok_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 1, 1)); 4096])).len(),
-        4096
-    );
-    // The spec-set is priced WHOLE before its first spec is walked, so a
-    // request refused for its walk consults the predicate of nothing — not
-    // even of a first spec whose run it would have reached
-    // (`retrieve_v_masked`'s card).
+    let many = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
+    assert!(ok_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 8193, 1)); many])).is_empty());
+    // Specs that do resolve are delivered wherever along doc2 they reach:
+    // the wire's whole 4096 at its first position, and at its last.
+    for at in [1u32, 8192] {
+        assert_eq!(
+            ok_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, at, 1)); 4096])).len(),
+            4096,
+            "at position {at}"
+        );
+    }
+    // The predicate is consulted of the runs resolved and of nothing else:
+    // a first spec whose one run is reached, then the specs past the end,
+    // ask it once, of that run's origin.
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     let recording = |d: &Address| {
         asked.borrow_mut().push(d.clone());
         true
     };
     let mut specs = vec![spec(doc2(), vspan(1, 1, 1))];
-    specs.extend(vec![spec(doc2(), vspan(1, 8193, 1)); past_budget]);
-    assert_eq!(
-        err_of(q.retrieve_v_masked(&specs, &recording)),
-        RetrieveError::TooManyItems
-    );
-    assert!(
-        asked.borrow().is_empty(),
-        "priced whole, before any spec is walked: {:?}",
-        asked.borrow()
-    );
+    specs.extend(vec![spec(doc2(), vspan(1, 8193, 1)); many]);
+    assert_eq!(ok_of(q.retrieve_v_masked(&specs, &recording)).len(), 1);
+    assert_eq!(*asked.borrow(), vec![doc1()], "one run resolved, one origin asked");
 }

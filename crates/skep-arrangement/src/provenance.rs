@@ -9,6 +9,7 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 
 use crate::decode::{element_by_element, entry_by_entry};
 use crate::run::Run;
+use crate::run_list::table::{Decoded, Keyed, Root, Writer};
 use crate::run_list::RunList;
 
 /// R, keyed by placing document: every content span a document ever contained.
@@ -29,7 +30,7 @@ use crate::run_list::RunList;
 /// **Two parts**, per placing document. `appended` holds a span for each
 /// run a placement or an edit put into the document, in placement order.
 /// `named` holds, for a document a snapshot minted, the run-list it was
-/// born sharing as that list stood at the mint — one handle on the vector
+/// born sharing as that list stood at the mint — one handle on the tree
 /// its source held then, so naming costs the fold no run, and the list is
 /// kept as it stood however the document or its source move afterwards.
 /// What a document ever contained is the two together
@@ -51,9 +52,16 @@ use crate::run_list::RunList;
 /// leave standing on checkpoint integrity when the type can hold it instead.
 ///
 /// Two maps, each keyed by the placing document's `Address` — which orders
-/// and serializes as its bare tumbler, and re-validates on the way back in:
-/// the checkpoint writes the appended spans' map and then the named lists',
-/// each list as a run-list writes itself.
+/// and serializes as its bare tumbler, and re-validates on the way back in.
+///
+/// **Two serde forms.** The one derived here writes the appended spans' map
+/// and then the named lists', each list as its runs in V-order: the form a
+/// rendering of the slice by its run sequences takes. A checkpoint writes
+/// the other ([`rooted`](Provenance::rooted)): the same two maps, each
+/// named list the id of its root in the slice's node table, so a named
+/// list is written once with whatever arrangement still shares its nodes —
+/// and written at all, a named list being reached from R alone once its
+/// source has moved on.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ProvenanceShadow")]
 pub(crate) struct Provenance {
@@ -96,6 +104,65 @@ struct ProvenanceShadow {
     named: im::OrdMap<Address, RunList>,
 }
 
+/// R in the table form, as a checkpoint writes it.
+///
+/// The appended spans' map as it stands, then the named lists' map with
+/// each list the [`Root`] the slice's node table answered for it.
+#[derive(Serialize)]
+#[serde(rename = "Provenance")]
+pub(crate) struct Rooted<'l> {
+    appended: &'l im::OrdMap<Address, im::Vector<Span>>,
+    named: Keyed<'l, Address, RunList, Root>,
+}
+
+/// R in the table form, as the decode door reads it: [`Rooted`]'s shadow.
+///
+/// Both maps are decoded entry by entry and each document's spans element
+/// by element, as [`ProvenanceShadow`] decodes them; the named lists are
+/// ids until [`resolved`](RootedShadow::resolved) takes them off the table.
+#[derive(Deserialize)]
+#[serde(rename = "Provenance")]
+pub(crate) struct RootedShadow {
+    #[serde(deserialize_with = "entry_by_entry")]
+    appended: im::OrdMap<Address, EverContainedShadow>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    named: im::OrdMap<Address, Root>,
+}
+
+impl RootedShadow {
+    /// Returns the relation decoded, its named lists taken off `table`.
+    ///
+    /// # Errors
+    ///
+    /// The span-shape clause [`ProvenanceShadow`] holds, in its words, and
+    /// the table's own refusal of a root (`Decoded::list`).
+    pub(crate) fn resolved<E: serde::de::Error>(self, table: &mut Decoded) -> Result<Provenance, E> {
+        let appended = level_uniform(self.appended).map_err(E::custom)?;
+        let mut named = im::OrdMap::new();
+        for (doc, root) in self.named {
+            named.insert(doc, table.list(root).map_err(E::custom)?);
+        }
+        Ok(Provenance { appended, named })
+    }
+}
+
+/// Returns the appended spans as decoded, held to the span-shape clause.
+///
+/// # Errors
+///
+/// Names the clause where a recorded span is not level-uniform.
+fn level_uniform(
+    decoded: im::OrdMap<Address, EverContainedShadow>,
+) -> Result<im::OrdMap<Address, im::Vector<Span>>, &'static str> {
+    let appended: im::OrdMap<Address, im::Vector<Span>> =
+        decoded.into_iter().map(|(doc, EverContainedShadow(spans))| (doc, spans)).collect();
+    if appended.values().flatten().all(Span::is_level_uniform) {
+        Ok(appended)
+    } else {
+        Err("provenance: every recorded span is a run I-extent (level-uniform)")
+    }
+}
+
 /// One document's R↾doc as [`ProvenanceShadow`] decodes it.
 ///
 /// Its recorded spans are read element by element ([`element_by_element`]),
@@ -108,20 +175,21 @@ struct EverContainedShadow(#[serde(deserialize_with = "element_by_element")] im:
 impl TryFrom<ProvenanceShadow> for Provenance {
     type Error = &'static str;
     fn try_from(s: ProvenanceShadow) -> Result<Provenance, &'static str> {
-        let appended: im::OrdMap<Address, im::Vector<Span>> = s
-            .appended
-            .into_iter()
-            .map(|(doc, EverContainedShadow(spans))| (doc, spans))
-            .collect();
-        if appended.values().flatten().all(Span::is_level_uniform) {
-            Ok(Provenance { appended, named: s.named })
-        } else {
-            Err("provenance: every recorded span is a run I-extent (level-uniform)")
-        }
+        Ok(Provenance { appended: level_uniform(s.appended)?, named: s.named })
     }
 }
 
 impl Provenance {
+    /// Returns R in the table form, each named list taken as a root of
+    /// `table`.
+    ///
+    /// The lists are taken in address order, the order the form writes
+    /// them, so the table's walk meets them in the order the bytes name
+    /// them.
+    pub(crate) fn rooted<'l>(&'l self, table: &mut Writer<'l>) -> Rooted<'l> {
+        Rooted { appended: &self.appended, named: Keyed::of(&self.named, |list| table.root(list)) }
+    }
+
     /// Returns R with the I-extents of `runs` appended to R↾doc.
     ///
     /// It is persistent — the receiver is untouched. Called from the placing
@@ -146,7 +214,7 @@ impl Provenance {
     /// Returns R with `list` named as what `doc` contained at its mint.
     ///
     /// It is the snapshot's record: the run-list `doc` was born sharing, as
-    /// it stood — handed over as one more handle on the vector its source
+    /// it stood — handed over as one more handle on the tree its source
     /// holds, so nothing is read and no span is built — in place of a span
     /// a run. Persistent, as [`append`](Provenance::append) is. A document
     /// is minted once, so its list is named once; naming one again replaces
@@ -193,6 +261,22 @@ impl Provenance {
         self.appended.contains_key(doc) || self.named.contains_key(doc)
     }
 
+    /// Returns the list a snapshot named for `doc`, where one did.
+    ///
+    /// For the tests that hold a named list to the tree it shares.
+    #[cfg(test)]
+    pub(crate) fn named_list(&self, doc: &Address) -> Option<&RunList> {
+        self.named.get(doc)
+    }
+
+    /// Returns every list a snapshot named, in address order.
+    ///
+    /// For the tests that count the nodes a slice's lists hold between them.
+    #[cfg(test)]
+    pub(crate) fn named_lists(&self) -> impl Iterator<Item = &RunList> + '_ {
+        self.named.values()
+    }
+
     /// Returns how many spans are appended for `doc`, its named list apart.
     ///
     /// For the tests that pin what a record appends and what it only names.
@@ -221,7 +305,7 @@ impl Provenance {
     /// document's walk stops at its first match — each deriving both
     /// operands' endpoints, and R only ever grows (P2). A named list is
     /// walked once for each document it is named for, whichever documents
-    /// share its vector.
+    /// share its nodes.
     /// [`M5State::docs_ever_containing`](crate::M5State::docs_ever_containing)
     /// states what this answer means to a caller, and who owns that bound.
     pub(crate) fn docs_ever_containing(&self, coverage: &SpanSet) -> std::collections::BTreeSet<Address> {

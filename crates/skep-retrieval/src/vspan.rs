@@ -9,9 +9,9 @@
 
 use std::sync::LazyLock;
 
-use num_traits::{One, ToPrimitive};
+use num_traits::One;
 use skep_address::{action_point, content_subspace, link_subspace, zeros, Address, Nat, Span};
-use skep_arrangement::{as_ordinal_vspan, M5State, Runs, VPos};
+use skep_arrangement::{M5State, Runs, VPos};
 
 use crate::error::SpanFault;
 
@@ -148,7 +148,7 @@ impl Subspace {
     /// `#runs` of this subspace's run list in `doc` — how many runs
     /// [`Subspace::runs`] would hand back, without handing them back: M5's
     /// own count, one map lookup reading no run, selected as `count` and
-    /// `runs` are. The quantity a resolution's walk is priced in, and private
+    /// `runs` are. The quantity the line read's walk is priced in, and private
     /// to this file so that a walk is priced in [`walk_price`] and nowhere
     /// else.
     fn run_count(self, m5: &M5State, doc: &Address) -> usize {
@@ -159,37 +159,17 @@ impl Subspace {
     }
 }
 
-/// A span's WALK PRICE: an upper bound on the run-list steps M5's resolution
-/// of `span` against `doc` can take, read before the walk from M5's O(1) run
-/// counts — what the span is admitted at against the walk budget
-/// (`MAX_WALK_STEPS`).
+/// A line read's WALK PRICE: how many runs its one walk of `doc` pulls,
+/// read before the walk from M5's O(1) run count — what the read is
+/// admitted at against the walk budget (`MAX_WALK_STEPS`).
 ///
-/// M5 reaches a span by walking the selected run list from its first run, and
-/// stops at the first run opening at or past the span's reach ordinal `e`
-/// (`ordinal + count`). Every run is at least one position wide, so at most
-/// `e − 1` runs open before `e`, and the walk examines those and the one that
-/// stops it: `min(#runs, e)` steps, `#runs` for a span opening past the
-/// arranged end.
-///
-/// UPPER BOUNDS WHERE THE READING CANNOT SAY MORE. A start in neither subspace
-/// is priced at both lists, and a span M5's reader declines, or whose reach
-/// does not fit a `usize`, at the whole of its list: read off M6's own
-/// classification and M5's own reader, never off a restatement of which spans
-/// M5 folds to nothing, so the price errs only toward refusing. A start in
-/// neither subspace and a span the reader declines both resolve to nothing,
-/// so their request pays for a walk M5 never makes; the crate doc's *What M6
-/// refuses for size* is where a caller is told.
-pub(crate) fn walk_price(m5: &M5State, doc: &Address, span: &Span) -> usize {
-    let run_count = match Subspace::of_span(span) {
-        Some(sub) => sub.run_count(m5, doc),
-        None => Subspace::ALL
-            .into_iter()
-            .map(|sub| sub.run_count(m5, doc))
-            .fold(0, usize::saturating_add),
-    };
-    as_ordinal_vspan(span)
-        .and_then(|shape| (shape.ordinal + shape.count).to_usize())
-        .map_or(run_count, |reach| reach.min(run_count))
+/// The read walks `doc`'s whole content extent, from its first arranged
+/// position to its last, and M5 hands it each content run once: the price is
+/// the content run count, none where `doc` arranges no content. Reaching the
+/// extent's first position costs a descent of the run-list, which the price
+/// does not count.
+pub(crate) fn walk_price(m5: &M5State, doc: &Address) -> usize {
+    Subspace::Content.run_count(m5, doc)
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,

@@ -153,7 +153,7 @@
 //! link store stages the shot, its correspondence records in each named
 //! draft and each named draft's re-window at its kept places under one
 //! transaction: the re-window is [`stage_substitute`], the identity-checked
-//! substitution, which checks every kept place of a draft on one walk of
+//! substitution, which checks every kept place of a draft on one cursor of
 //! its run-list and stages them as one record. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
@@ -231,10 +231,11 @@ mod run;
 // tumbler order, so that whether it holds every address of a run is one
 // search.
 mod run_union;
-// The implicit-position run-list: splice, contract, reorder, the one-walk
-// splice of several changes, the one-walk check of several places by
-// identity, the merge condition and its one accumulator, the mapping
-// blocks, the lazy walks.
+// The implicit-position run-list, held as a counted tree its versions
+// share: splice, contract, reorder, the splice of several changes, the
+// check of several places by identity, the merge condition and its one
+// accumulator, the mapping blocks, the lazy walks, and the node table a
+// checkpoint writes the lists as.
 mod run_list;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
@@ -282,8 +283,7 @@ pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
     stage_reinstate_at, stage_substitute, AsOf, Change, Edit, Edited, MintedRun, Pairing, Placed,
     PublishWorld, ReinsertWorld, ReinsertedUnits, Replacement, SetMerge, Substitution, UnitParts,
-    UnitTally, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_UNITS,
-    MAX_REINSERTED_VALUES,
+    UnitTally, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_UNITS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

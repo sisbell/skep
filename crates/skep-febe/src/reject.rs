@@ -663,9 +663,9 @@ pub enum RejectCode {
     //    refusals — two for COMPARE, whose join squares in the request, one
     //    for FINDDOCSCONTAINING, whose coverage is the multiplier it applies
     //    to two world-sized scans, and one for RETRIEVEV, whose delivery is
-    //    sized by a virtual extent no request field prices; every one but
-    //    `TooManyPairs` also refuses its operation's run-list walk past M6's
-    //    walk budget, and `TooManyItems` is the line read's walk refusal as
+    //    sized by a virtual extent no request field prices; none refuses
+    //    the way to a span, a descent of the run-list, and `TooManyItems`
+    //    is the line read's walk refusal as
     //    well. The line read's two position faults are `NotContentSubspace`
     //    and `RangeNotPresent`, by index. This crate raises `TooManyItems`
     //    for RETRIEVEI too, on its spans' widths) ──
@@ -717,9 +717,8 @@ pub enum RejectCode {
     PageMoved,
     /// A read would materialize or join more arrangement runs than its budget.
     ///
-    /// Never an `image`'s for the runs its region resolves, which it
-    /// answers in pages: there it is the run-list walk past the budget's
-    /// square alone.
+    /// Never an `image`'s, which answers the runs its region resolves in
+    /// pages and reaches each span by a descent of the run-list.
     ImageTooLarge,
     /// A RETRIEVEENDSETS answer would carry more spans than its budget.
     EndsetsTooLarge,

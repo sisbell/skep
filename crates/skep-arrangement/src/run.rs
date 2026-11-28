@@ -147,7 +147,8 @@ impl Error for RunError {}
 ///
 /// It reads exactly what a `Run` writes: the same two fields in the same
 /// order, and `Serialize` is derived on `Run` itself, so the shadow costs the
-/// encoding nothing.
+/// encoding nothing. The width enters the constructor re-made
+/// ([`held_as_built`]), so a decoded run holds what a built one holds.
 #[derive(Deserialize)]
 struct RunShadow {
     i_start: Address,
@@ -157,7 +158,24 @@ struct RunShadow {
 impl TryFrom<RunShadow> for Run {
     type Error = RunError;
     fn try_from(s: RunShadow) -> Result<Run, RunError> {
-        Run::new(s.i_start, s.width)
+        Run::new(s.i_start, held_as_built(s.width))
+    }
+}
+
+/// Returns a decoded count holding what a built one of its value holds.
+///
+/// A [`Nat`] decoded from its digits keeps the vector the decoder sized to
+/// them, a heap block of eight bytes for a count of one machine word, where
+/// a count built from a word holds its digit inside itself. A count of one
+/// word is built again from the word, which frees the block; a wider one
+/// stands as decoded. M1's `Tumbler` door does the same for every component
+/// of a decoded address; this is the door for the counts this slice decodes
+/// outside one: a run's width, and the counts its state keeps.
+pub(crate) fn held_as_built(count: Nat) -> Nat {
+    if count.bits() <= u64::from(u64::BITS) {
+        Nat::from(count.iter_u64_digits().next().unwrap_or(0))
+    } else {
+        count
     }
 }
 
@@ -249,10 +267,10 @@ impl Run {
     /// list, or the invariants are re-examined. The propagating sites build by
     /// struct literal from a start that already is a full element position —
     /// another run's start, or an in-crate ordinal shift of one, which keeps
-    /// the element field's two components: the run-list's split
-    /// (`split_runs`, both halves of a boundary run), its one clip
-    /// (`RunList::clipped_runs`, under every range walk: `resolve`, the
-    /// address form read at the member), and a
+    /// the element field's two components: the run-list's one part
+    /// (`part_of`: either piece of a run a cut of the tree builder's `keep`
+    /// falls inside, and the clip `RunList::clipped_runs` makes under every
+    /// range walk: `resolve`, the address form read at the member), and a
     /// run union's merged pieces (`UnionPiece::to_run`). The originating sites
     /// establish it at their own door, and they are J0's two allocation steps,
     /// which the shot's re-insert shares with INSERT:

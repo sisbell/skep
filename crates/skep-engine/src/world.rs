@@ -243,7 +243,7 @@ impl fmt::Debug for World {
 /// bytes whole fails below that level: M4's map and M5's slice, each message
 /// naming this card's debt, and the identity slice's encodings (AUTH-1.40).
 ///
-/// `1` names fourteen layouts, each the one before it with one change: the
+/// `1` names fifteen layouts, each the one before it with one change: the
 /// first carries M3's publication bit; the second appends M5's birth memo to
 /// its slice, and the third the shot terms after it; the fourth appends the
 /// identity slice after M7's (AUTH-2.79); the fifth holds each of M4's
@@ -263,17 +263,27 @@ impl fmt::Debug for World {
 /// level again: each member's shot terms gain the shot's stretch list and
 /// the depth of its chain of bases after the base, and the provenance
 /// relation is two maps where one stood — the spans appended, then the
-/// run-lists named for the documents a snapshot minted.
+/// run-lists named for the documents a snapshot minted. The fifteenth
+/// leads the arrangement slice with a table of the nodes its run-lists are
+/// held as, each shared node once, and writes every list — a document's
+/// content and link lists, and each list the provenance relation names —
+/// as the id of its root in that table, where the fourteenth wrote each
+/// list as its runs.
 ///
 /// No base any build wrote in the first reaches this word through a header
 /// this build loads: every one carries an M2 stamp older than this build's,
 /// which M2 refuses at load by name, with the no-migration remedy (PUB-1.2).
-/// A body in a later layout but the fourteenth, under a current header, does
+/// A body in a later layout but the fifteenth, under a current header, does
 /// reach the decoder and is not refused at this word, and each change it
-/// predates meets it further in. One written before the fourteenth meets
-/// the provenance relation's second map where its birth extents begin, and
-/// each shot-terms entry short of its last two fields; no test here holds
-/// its refusal to one shape. A body whose content entries are bare
+/// predates meets it further in. One written before the fifteenth meets
+/// the node table where its arrangement map begins, so that map's count is
+/// read as the table's and its first key as a node, whose kind no address
+/// spells (`a_base_written_before_the_node_table_fails_to_decode` holds it
+/// on a slice that holds a list and on one that holds none); one written
+/// before the fourteenth as well would meet the provenance relation's
+/// second map where its birth extents begin, and each shot-terms entry
+/// short of its last two fields; no test here holds that refusal to one
+/// shape. A body whose content entries are bare
 /// values fails at its first such entry, whose value's length prefix reads as
 /// an entry tag no variant or an overlong stretch (skep-content's suite pins
 /// both shapes); one that passes its content map — an empty one, or one of

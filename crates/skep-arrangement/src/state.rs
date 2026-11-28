@@ -10,15 +10,50 @@
 use std::sync::LazyLock;
 
 use num_traits::One;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 use skep_kernel::Seq;
 
 use crate::chain::is_birth_version;
 use crate::decode::entry_by_entry;
-use crate::provenance::Provenance;
-use crate::run::Run;
+use crate::provenance::{Provenance, Rooted, RootedShadow};
+use crate::run::{held_as_built, Run};
+use crate::run_list::table::{Decoded, Keyed, Root, Writer};
 use crate::run_list::{RunList, Splice};
+
+/// Decodes a count holding what a built one of its value holds.
+///
+/// It is the door of every count this file's types decode outside an
+/// address and a run (`held_as_built` says why).
+///
+/// # Errors
+///
+/// Returns `D::Error` where the count does not decode.
+fn count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Nat, D::Error> {
+    Nat::deserialize(deserializer).map(held_as_built)
+}
+
+/// Decodes an optional count as [`count`] decodes one.
+///
+/// # Errors
+///
+/// Returns `D::Error` where the option does not decode.
+fn count_if_any<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Nat>, D::Error> {
+    Option::<Nat>::deserialize(deserializer).map(|count| count.map(held_as_built))
+}
+
+/// Decodes a map of counts entry by entry, each count as [`count`] decodes
+/// one.
+///
+/// # Errors
+///
+/// Returns `D::Error` where a key or a count does not decode, including
+/// where the input runs out before the count its bytes declare.
+fn counts<'de, D: Deserializer<'de>>(deserializer: D) -> Result<im::OrdMap<Address, Nat>, D::Error> {
+    let decoded: im::OrdMap<Address, Nat> = entry_by_entry(deserializer)?;
+    Ok(decoded.into_iter().map(|(doc, count)| (doc, held_as_built(count))).collect())
+}
 
 /// One document's POOM: the content and link run-lists (§Core data model).
 ///
@@ -28,10 +63,24 @@ use crate::run_list::{RunList, Splice};
 /// to this module: a read reaches one through `list` or through
 /// [`M5State::content_list`]/[`M5State::link_list`], and only the fold
 /// replaces one.
+///
+/// Its serde form here is its two lists, each as its runs in V-order: what
+/// a rendering of the slice by its run sequences writes for a document
+/// ([`M5State::as_run_sequences`]). A checkpoint writes [`ArrangementRoots`]
+/// in its place.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DocArrangement {
     content: RunList,
     link: RunList,
+}
+
+/// One document's arrangement as a checkpoint writes it: each of its two
+/// lists the id of its root in the slice's node table.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename = "DocArrangement")]
+struct ArrangementRoots {
+    content: Root,
+    link: Root,
 }
 
 impl DocArrangement {
@@ -238,7 +287,8 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   cover, so the image is stable under both. On the decode path P4★ is
 ///   M2's integrity, not the type's: a checkpoint carries the fields whole
 ///   and no door re-establishes their relation — unlike R's span shape and
-///   the run-list's maximal merge, whose serde doors do — because
+///   the run-list's maximal merge, which R's shadow and the node table's
+///   door do — because
 ///   containment costs a per-class set difference over every document's
 ///   R↾doc at every load. A decoded state violating it faults nothing: it
 ///   answers `docs_ever_containing` with false negatives at once, and
@@ -436,7 +486,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// prescribes; and an `Address` re-validates on the way in (M1's `try_from`
 /// shadow), so a key that is not T4-valid is a decode failure M2 reports as
 /// corruption rather than a value some later read has to assert about.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct M5State {
     // Private but for `provenance`, which the reads R answers reach, and
     // `fork_sources`, `draft_bases` and `source_copied` (below): only this
@@ -444,16 +494,11 @@ pub struct M5State {
     // fold's output — and every other module reaches the arrangement map
     // through `arrangement_of` (ARCHITECTURE.md §The arrangement, "One
     // fold").
-    // Each map decodes entry by entry (`decode`), never through `im`'s own
-    // visitor, which reserves room for the count a checkpoint body declares;
-    // `provenance` and each document's run-lists decode the same way, behind
-    // their own shadows.
-    #[serde(deserialize_with = "entry_by_entry")]
+    // The slice's serde forms are written out below the type (`TableForm`,
+    // `RunSequences`), each field under the rule stated here.
     arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
-    #[serde(deserialize_with = "entry_by_entry")]
     birth_extents: im::OrdMap<Address, Nat>,
-    #[serde(deserialize_with = "entry_by_entry")]
     shot_terms: im::OrdMap<Address, ShotTerms>,
     // Each `version`-minted document → the source it was born sharing
     // (SOURCE★). `pub(crate)` for the one read `reads.rs` holds; written by
@@ -461,7 +506,6 @@ pub struct M5State {
     // without this field must fail to decode and hand the open to the
     // journal, which recomputes the map — never decode as "no source" and
     // answer `None` for a fork.
-    #[serde(deserialize_with = "entry_by_entry")]
     pub(crate) fork_sources: im::OrdMap<Address, Address>,
     // Each document whose content arrangement a record has changed → the
     // position of the last such record (MOVED★); written by the fold alone,
@@ -470,7 +514,6 @@ pub struct M5State {
     // written without this field must fail to decode and hand the open to
     // the journal, which recomputes the map — never decode as "never
     // arranged" and admit every stale edit.
-    #[serde(deserialize_with = "entry_by_entry")]
     arranged_at: im::OrdMap<Address, Seq>,
     // Each draft the staging operation made → its base, the extent the copy
     // took and its source (BASE★). `pub(crate)` for the one read `reads.rs`
@@ -478,7 +521,6 @@ pub struct M5State {
     // the same no-default rule: a checkpoint written without this field
     // must fail to decode and hand the open to the journal, which recomputes
     // the map — never decode as "no base" for every staged draft.
-    #[serde(deserialize_with = "entry_by_entry")]
     pub(crate) draft_bases: im::OrdMap<Address, DraftBase>,
     // Each document a `VersionSnapshot` minted → the count of its source the
     // copy took (SOURCE★). `pub(crate)` for the one read `reads.rs` holds;
@@ -486,8 +528,188 @@ pub struct M5State {
     // the same no-default rule: a checkpoint written without this field
     // must fail to decode and hand the open to the journal, which recomputes
     // the map — never decode as "no count" for every fork.
-    #[serde(deserialize_with = "entry_by_entry")]
     pub(crate) source_copied: im::OrdMap<Address, Nat>,
+}
+
+/// The slice as a checkpoint writes it: one node table, then the fields.
+///
+/// `nodes` is the table ([`Writer`]): every run-list the slice holds — both
+/// lists of every document, and every list R names for a snapshot — as a
+/// root of it, each node the lists share written once. The fields follow in
+/// the slice's own order, each list in them the id of its root: a
+/// document's arrangement two ids ([`ArrangementRoots`]), R its appended
+/// spans' map as it stands and then its named lists' ids ([`Rooted`]), and
+/// the six maps after R exactly as the slice holds them.
+///
+/// **The roots are taken in the order the fields name them**: each
+/// document's content list and then its link list, the documents in address
+/// order, and then R's named lists in address order. That order, the
+/// table's own rule for a node's place and the tree's shape — which follows
+/// the fold's records alone — are everything the bytes are a function of,
+/// which is what M2's canonical-body obligation asks of this slice. R's
+/// named lists are roots in their own right: a named list outlives its
+/// source's next edit, reached from R alone, so a walk from the
+/// arrangements' roots would not write it.
+///
+/// **What writing it costs** is the distinct nodes, and for each leaf its
+/// runs: a node two lists share is opened once, so a slice of many versions
+/// of one document writes the document once and each version's cut paths.
+#[derive(Serialize)]
+#[serde(rename = "M5State")]
+struct TableForm<'w, 'l> {
+    nodes: &'w Writer<'l>,
+    arrangements: Keyed<'l, Address, DocArrangement, ArrangementRoots>,
+    provenance: Rooted<'l>,
+    birth_extents: &'l im::OrdMap<Address, Nat>,
+    shot_terms: &'l im::OrdMap<Address, ShotTerms>,
+    fork_sources: &'l im::OrdMap<Address, Address>,
+    arranged_at: &'l im::OrdMap<Address, Seq>,
+    draft_bases: &'l im::OrdMap<Address, DraftBase>,
+    source_copied: &'l im::OrdMap<Address, Nat>,
+}
+
+/// The slice as the checkpoint's decode door reads it: [`TableForm`]'s
+/// shadow.
+///
+/// The table is read first, a node at a time ([`Decoded`]), and each map
+/// entry by entry (`decode`), never through `im`'s own visitor, which
+/// reserves room for the count a checkpoint body declares; R's two maps
+/// decode the same way behind their own shadow. No field carries a default:
+/// a body written without one fails to decode and hands the open to the
+/// journal.
+#[derive(Deserialize)]
+#[serde(rename = "M5State")]
+struct TableShadow {
+    nodes: Decoded,
+    #[serde(deserialize_with = "entry_by_entry")]
+    arrangements: im::OrdMap<Address, ArrangementRoots>,
+    provenance: RootedShadow,
+    #[serde(deserialize_with = "counts")]
+    birth_extents: im::OrdMap<Address, Nat>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    shot_terms: im::OrdMap<Address, ShotTerms>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    fork_sources: im::OrdMap<Address, Address>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    arranged_at: im::OrdMap<Address, Seq>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    draft_bases: im::OrdMap<Address, DraftBase>,
+    #[serde(deserialize_with = "counts")]
+    source_copied: im::OrdMap<Address, Nat>,
+}
+
+/// Writes the slice in its checkpoint form (`TableForm`).
+impl Serialize for M5State {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut nodes = Writer::new();
+        let arrangements = Keyed::of(&self.arrangements, |arrangement| ArrangementRoots {
+            content: nodes.root(&arrangement.content),
+            link: nodes.root(&arrangement.link),
+        });
+        let provenance = self.provenance.rooted(&mut nodes);
+        TableForm {
+            nodes: &nodes,
+            arrangements,
+            provenance,
+            birth_extents: &self.birth_extents,
+            shot_terms: &self.shot_terms,
+            fork_sources: &self.fork_sources,
+            arranged_at: &self.arranged_at,
+            draft_bases: &self.draft_bases,
+            source_copied: &self.source_copied,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// Reads the slice from its checkpoint form (`TableShadow`).
+///
+/// Every list is taken off the decoded table by its root, shared with every
+/// other list that names the same nodes, and the table is then held to the
+/// balance rule, which needs every root named first.
+///
+/// # Errors
+///
+/// A field that does not decode, the table's own refusals (`table`'s
+/// `Refused`) and R's span-shape clause, each as the decoder's error, which
+/// M2 reads as a base that will not decode.
+impl<'de> Deserialize<'de> for M5State {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<M5State, D::Error> {
+        let TableShadow {
+            mut nodes,
+            arrangements: rooted,
+            provenance,
+            birth_extents,
+            shot_terms,
+            fork_sources,
+            arranged_at,
+            draft_bases,
+            source_copied,
+        } = TableShadow::deserialize(deserializer)?;
+        let mut arrangements = im::OrdMap::new();
+        for (doc, roots) in rooted {
+            let content = nodes.list(roots.content).map_err(D::Error::custom)?;
+            let link = nodes.list(roots.link).map_err(D::Error::custom)?;
+            arrangements.insert(doc, DocArrangement { content, link });
+        }
+        let provenance = provenance.resolved(&mut nodes)?;
+        nodes.balanced().map_err(D::Error::custom)?;
+        Ok(M5State {
+            arrangements,
+            provenance,
+            birth_extents,
+            shot_terms,
+            fork_sources,
+            arranged_at,
+            draft_bases,
+            source_copied,
+        })
+    }
+}
+
+/// The slice with every run-list as its runs in V-order: what
+/// [`M5State::as_run_sequences`] writes.
+///
+/// The slice's eight fields in their order, a document's arrangement its
+/// two run sequences and R's named lists a run sequence each. It is a
+/// function of the slice's run sequences alone — equal slices write equal
+/// forms whatever shapes their lists' trees have — where the checkpoint
+/// form writes those shapes.
+#[derive(Serialize)]
+#[serde(rename = "M5State")]
+struct RunSequences<'l> {
+    arrangements: &'l im::OrdMap<Address, DocArrangement>,
+    provenance: &'l Provenance,
+    birth_extents: &'l im::OrdMap<Address, Nat>,
+    shot_terms: &'l im::OrdMap<Address, ShotTerms>,
+    fork_sources: &'l im::OrdMap<Address, Address>,
+    arranged_at: &'l im::OrdMap<Address, Seq>,
+    draft_bases: &'l im::OrdMap<Address, DraftBase>,
+    source_copied: &'l im::OrdMap<Address, Nat>,
+}
+
+/// [`RunSequences`]' shadow: what [`M5State::from_run_sequences`] reads.
+///
+/// Each map decodes entry by entry and each list run by run, through the
+/// run-list's own door, which merges what it reads.
+#[derive(Deserialize)]
+#[serde(rename = "M5State")]
+struct RunSequencesShadow {
+    #[serde(deserialize_with = "entry_by_entry")]
+    arrangements: im::OrdMap<Address, DocArrangement>,
+    provenance: Provenance,
+    #[serde(deserialize_with = "counts")]
+    birth_extents: im::OrdMap<Address, Nat>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    shot_terms: im::OrdMap<Address, ShotTerms>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    fork_sources: im::OrdMap<Address, Address>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    arranged_at: im::OrdMap<Address, Seq>,
+    #[serde(deserialize_with = "entry_by_entry")]
+    draft_bases: im::OrdMap<Address, DraftBase>,
+    #[serde(deserialize_with = "counts")]
+    source_copied: im::OrdMap<Address, Nat>,
 }
 
 /// Where a staged draft began and where its next publication lands (B3-S10),
@@ -529,6 +751,7 @@ pub struct DraftBase {
     /// is never past `base`'s count, at the commit that set it or after,
     /// since a published document's count never falls (PUB-2.43); and it is
     /// the `base_extent` a shot off this base carries.
+    #[serde(deserialize_with = "count")]
     pub extent: Nat,
     /// The surface the draft was copied from.
     ///
@@ -592,6 +815,7 @@ pub struct Marker {
     /// The head the merge was composed on.
     pub head: Address,
     /// The head's content count as read at the compose.
+    #[serde(deserialize_with = "count")]
     pub head_copied: Nat,
     /// The position the marker was put on this document.
     pub at: Seq,
@@ -609,6 +833,7 @@ pub struct Merge {
     /// The head the merge was composed on.
     pub head: Address,
     /// The head's content count as read at the compose.
+    #[serde(deserialize_with = "count")]
     pub head_copied: Nat,
 }
 
@@ -654,10 +879,13 @@ pub struct Stretch {
     ///
     /// Where `width` is zero it is the base position the stretch's runs are
     /// placed before, the boundary past the base's extent among them.
+    #[serde(deserialize_with = "count")]
     pub start: Nat,
     /// How many positions of the base the stretch replaces.
+    #[serde(deserialize_with = "count")]
     pub width: Nat,
     /// How many positions of the shot's runs replace them.
+    #[serde(deserialize_with = "count")]
     pub placed: Nat,
 }
 
@@ -680,6 +908,7 @@ pub struct ShotTerms {
     /// tail, and a head member's later deposits land after it. For a shot
     /// with a list it is the sum of the stretches' `placed`, and the
     /// positions lie where [`images`](ShotTerms::images) says.
+    #[serde(deserialize_with = "count")]
     pub placed: Nat,
     /// The base's extent the staged copy took; `None` in the birth shape.
     ///
@@ -690,6 +919,7 @@ pub struct ShotTerms {
     /// its memberless document as its base carries `Some` of the extent that
     /// copy took, and a `placed` short of its birth extent by the tail it
     /// carried.
+    #[serde(deserialize_with = "count_if_any")]
     pub base_extent: Option<Nat>,
     /// The member or memberless document the shot was made against.
     ///
@@ -986,7 +1216,8 @@ pub enum M5Rec {
     /// ([`Vstream::edit`](crate::Vstream::edit), or
     /// [`stage_substitute`](crate::stage_substitute) for a publication's
     /// kept places). The fold splices every one
-    /// in one walk of the list, R-appends each placed run's iextent (J1★;
+    /// in one build of the list, which shares every node no change reaches,
+    /// R-appends each placed run's iextent (J1★;
     /// P4★), and moves `doc`'s arranged-at entry to its commit whatever the
     /// list holds, an EMPTY list included (MOVED★): the record of a landing
     /// that changed no position — its base and marker in the base record
@@ -1030,6 +1261,70 @@ impl M5State {
     /// byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
+    }
+
+    /// Returns the slice in the form that writes every run-list as its runs
+    /// in V-order.
+    ///
+    /// The slice's own `Serialize` is its checkpoint form: one table of the
+    /// nodes its lists are held as, each list a root of it. That form
+    /// writes how each list's tree is grouped, which follows the records
+    /// the list was folded from and not its run sequence alone, so two
+    /// equal slices reached two ways write two tables. This form writes
+    /// none of it: the eight fields in their order, a document's
+    /// arrangement its content runs and then its link runs, R's named lists
+    /// a run sequence each. It is a function of the slice's value, which is
+    /// what a rendering compared across histories needs — the engine's
+    /// world dump renders the slice through it.
+    pub fn as_run_sequences(&self) -> impl Serialize + '_ {
+        RunSequences {
+            arrangements: &self.arrangements,
+            provenance: &self.provenance,
+            birth_extents: &self.birth_extents,
+            shot_terms: &self.shot_terms,
+            fork_sources: &self.fork_sources,
+            arranged_at: &self.arranged_at,
+            draft_bases: &self.draft_bases,
+            source_copied: &self.source_copied,
+        }
+    }
+
+    /// Reads a slice from the form [`as_run_sequences`] writes.
+    ///
+    /// Each map is decoded entry by entry and each list run by run, every
+    /// address, run and span through its own door; a list's runs are merged
+    /// as they are read, so the slice holds the maximal merge whatever the
+    /// form presented, and each list's tree comes out as a bulk build
+    /// shapes it. The lists share no node with one another: this form
+    /// writes each whole.
+    ///
+    /// [`as_run_sequences`]: M5State::as_run_sequences
+    ///
+    /// # Errors
+    ///
+    /// Returns `D::Error` where a field does not decode, R's span-shape
+    /// clause among the refusals.
+    pub fn from_run_sequences<'de, D: Deserializer<'de>>(deserializer: D) -> Result<M5State, D::Error> {
+        let RunSequencesShadow {
+            arrangements,
+            provenance,
+            birth_extents,
+            shot_terms,
+            fork_sources,
+            arranged_at,
+            draft_bases,
+            source_copied,
+        } = RunSequencesShadow::deserialize(deserializer)?;
+        Ok(M5State {
+            arrangements,
+            provenance,
+            birth_extents,
+            shot_terms,
+            fork_sources,
+            arranged_at,
+            draft_bases,
+            source_copied,
+        })
     }
 
     /// Returns `doc`'s arrangement, or the empty one when `doc` is absent.
@@ -1230,9 +1525,10 @@ impl M5State {
         // arrangement installs, and the `LinkSeat` arm alone does not.
         let moved = |doc: &Address| self.arranged_at.update(doc.clone(), at);
         match r {
-            // §3/§5 fold: splice + eager coalesce, and append each placed
-            // run's iextent to R in the same fold — one new M5State, one M2
-            // root install, so a reader never observes M-updated-without-R
+            // §3/§5 fold: splice, merged at its two seams, and append each
+            // placed run's iextent to R in the same fold — one new M5State,
+            // one M2 root install, so a reader never observes
+            // M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             //
             // No birth extent is noted here: a placement mints nothing, and a
@@ -1254,8 +1550,10 @@ impl M5State {
             },
             // The shot's placement (signed-ops D25): the member's list built
             // from its base's, read at this record's own slot, with every
-            // stretch replaced by its runs in ONE walk (`shot_member_list`),
-            // and the member's terms noted beside its birth extent. Nothing
+            // stretch replaced by its runs (`shot_member_list`) — the base's
+            // tree read at the stretches' ends alone and shared wherever no
+            // stretch reaches — and the member's terms noted beside its
+            // birth extent. Nothing
             // is appended to R: a published member's arrangement only grows,
             // so R↾member is read off the arrangement itself (P4★). The birth
             // extent is noted here for a birth version (BIRTH★): this record
@@ -1321,8 +1619,9 @@ impl M5State {
                     source_copied: self.source_copied.clone(),
                 }
             }
-            // §4 fold: split at `from` and `from + width`, drop the middle,
-            // concat + eager coalesce. C and R untouched (NonDestruction is
+            // §4 fold: cut at `from` and `from + width`, drop the middle,
+            // join the two sides, merged at their one seam. C and R untouched
+            // (NonDestruction is
             // structural — M5 has no content-reclamation path; P2 keeps every
             // R pair). A text delete never touches the link run-list (P4).
             M5Rec::ContentRemove { doc, from, width } => M5State {
@@ -1380,9 +1679,10 @@ impl M5State {
                 source_copied: self.source_copied.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
-            // `new` (structural im share — O(1)) and NAME that list in R as
-            // what `new` contained at its mint (`Provenance::named`): the
-            // same list, shared a second time, and no span appended. This
+            // `new` (one more handle on its tree's root — O(1)) and NAME
+            // that list in R as what `new` contained at its mint
+            // (`Provenance::named`): the same root, shared a second time,
+            // and no span appended. This
             // copies the V→I map, not the I-range (ASN-0123 V2): the share
             // preserves multiplicity, so within-document transclusion
             // duplicates survive into the fork. When the source content
@@ -1393,14 +1693,15 @@ impl M5State {
             // copy-on-write (V11).
             //
             // Both halves are O(1) at the fold, whatever the source holds:
-            // the arrangement and R↾new's named list are two handles on the
-            // one vector the source holds, and replay pays the same. What
-            // the naming costs it costs later and by the run: once `new` —
-            // or a source that still moves, a trunk's head or a draft —
-            // rebuilds its own list, the named one is the only handle on the
-            // list as it stood, kept for as long as `new` is; and a
-            // checkpoint writes a named list whole, a run a run, beside the
-            // arrangement it was shared from, and decodes them apart.
+            // the source's list, the new document's and R↾new's named list
+            // are three handles on one tree, and replay pays the same. What
+            // the naming keeps it keeps by the node: once `new` — or a
+            // source that still moves, a trunk's head or a draft — changes
+            // its own list, the named one holds alone the nodes that change
+            // made anew in the other, the cut paths, and shares the rest
+            // with it for as long as `new` is kept; a checkpoint writes the
+            // three as roots of one node table, each shared node once, and
+            // decodes them sharing as they stood.
             //
             // The birth extent is noted on this arm too (BIRTH★): an owned
             // VERSION of a memberless published document mints its birth
@@ -1419,9 +1720,9 @@ impl M5State {
             // the record carries it: the surface the op resolved, a member or
             // a bare document, and never a reading of it made here. Beside it
             // the count the copy took, on both branches too: the width of the
-            // list shared, zero for an empty surface, summed once here and
-            // read by the birth extent as well — the fold's one walk of the
-            // list it shares.
+            // list shared, zero for an empty surface, read once here off
+            // the list's root and by the birth extent as well — no run of
+            // the list it shares is read.
             //
             // The arranged-at entry is noted for `new` on both branches too
             // (MOVED★): the mint is the first change to the arrangement `new`
@@ -1525,8 +1826,9 @@ impl M5State {
                 ),
                 source_copied: self.source_copied.clone(),
             },
-            // The edit's fold: every change spliced in ONE walk of the list
-            // (`RunList::spliced`), and each placed run's iextent appended
+            // The edit's fold: every change spliced in one pass over the
+            // changes (`RunList::spliced`), the list read at their cuts
+            // alone, and each placed run's iextent appended
             // to R in the same fold, as the placement's arm appends them
             // (J1★ ⇒ P4★) — the values a text edit minted, the runs a
             // landing placed by identity and the published runs a
@@ -1565,19 +1867,26 @@ impl M5State {
 
     /// Returns the arrangement a shot's placing record leaves its member
     /// holding: its base's content run-list with every stretch replaced by
-    /// its runs, in one walk.
+    /// its runs.
     ///
     /// The base is `terms.base`'s list as this state holds it — the empty
     /// list in the birth shape — and the changes are the record's partition
     /// (`shot_splices`): each stretch of the base and the runs that replace
     /// it, ascending and apart, made together by [`RunList::spliced`]. So a
-    /// record of `k` stretches reads each run of the base once, whatever
-    /// `k`, and the run-list's seams merge what two neighbouring stretches,
-    /// or a stretch and the base beside it, hold I-adjacent.
+    /// record of `k` stretches reads the base's tree at its stretches' ends
+    /// alone, the member shares every node of its base no stretch reaches,
+    /// and the run-list's seams merge what two neighbouring stretches, or a
+    /// stretch and the base beside it, hold I-adjacent. A record with no
+    /// stretch list is one change over the base's whole extent: it opens no
+    /// node of the base, reads none of its runs and shares none of its
+    /// nodes, its member being the bulk build of the runs the record
+    /// carries — with the base's tail past the extent kept after them,
+    /// where a deposit grew the base since the copy.
     ///
-    /// `steps` is `spliced`'s: one for every run of the base the walk reads,
-    /// one for every stretch and one for every run placed. The fold hands it
-    /// a count that compiles away.
+    /// `steps` is `spliced`'s: one for every stretch, one for every run
+    /// placed, one for every node of the base's tree opened and one for
+    /// every run of an opened leaf read. The fold hands it a count that
+    /// compiles away.
     pub(crate) fn shot_member_list(&self, runs: &[Run], terms: &ShotTerms, steps: &mut impl FnMut(u64)) -> RunList {
         let changes = shot_splices(runs, terms);
         match &terms.base {

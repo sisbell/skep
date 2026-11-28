@@ -10,9 +10,9 @@
 //!
 //! COMPARE is the one M6 operation whose cost is SUPERLINEAR in its request —
 //! `|P|·|Q|` over two block lists a caller sizes independently — and that is
-//! what its two budgets of its own price: [`MAX_COMPARE_OPERAND_BLOCKS`] per
+//! what its two budgets price: [`MAX_COMPARE_OPERAND_BLOCKS`] per
 //! operand and [`MAX_COMPARE_PAIRS`] per report, each a refusal rather than a
-//! truncation, beside the walk budget each operand's spans are priced against.
+//! truncation.
 
 use std::cmp;
 
@@ -24,11 +24,11 @@ use skep_namespace::M3State;
 
 use super::{Query, RetrievalWorld};
 use crate::budget::{
-    Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_WALK_STEPS,
+    Count, OverBudget, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS,
 };
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareRegion, CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, walk_price, Subspace};
+use crate::vspan::{gate_vspan, Subspace};
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
@@ -63,7 +63,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// `(operand, region, span-index)`. A well-formed depth-incompatible span
     /// passes and contributes nothing to its operand's region
     /// (consulting-state — success, X12), though it counts toward its
-    /// operand's span count and walk price like any span;
+    /// operand's span count like any span;
     /// overlapping/repeated windows within one operand are redundant, not
     /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
     /// stable sort keeps the listed order deterministic).
@@ -85,11 +85,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// resolution apiece whatever it yields, and on the blocks it resolves to
     /// (`TooManyBlocks`: the spans refused before the operand's first span is
     /// walked, the blocks as it resolves, both before the join runs, ρ₁
-    /// resolved first) — and the walks those resolutions make, each up to
-    /// `#runs(doc)` steps whatever it yields, to the walk budget
-    /// (`TooManyBlocks` too, priced over the operand before its first span is
-    /// walked, a depth-incompatible span priced at its whole run list; crate
-    /// doc, *What M6 refuses for size*); and the report to the pair budget,
+    /// resolved first) — which is the whole of what its resolutions read,
+    /// each reaching its span by a descent of the run-list and reading from
+    /// there the runs it yields (crate doc, *What M6 refuses for size*); and
+    /// the report to the pair budget,
     /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
     /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
     /// than being built and then measured).
@@ -112,8 +111,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// join and presentation, in the same order — save one thing: a region
     /// whose [`CompareRegion::own`] is set resolves against the arrangement of
     /// the address it names rather than its reading surface (the type's card
-    /// says where the two part). Both of the operand's passes ask it, so the
-    /// region's walk is priced against the arrangement it walks, and its
+    /// says where the two part), and its
     /// blocks are that arrangement's runs. An unset region reads exactly as
     /// `compare` reads it. The gate runs on the address named either way, so
     /// a flagged region of an unregistered document is refused as an
@@ -174,10 +172,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
 ///
 /// A [`RegionSpec`] reads its document's reading surface, as every region of
 /// [`Query::compare`] does; a [`CompareRegion`] reads that, or the address
-/// named where its `own` is set. Both passes of [`resolve_blocks`] ask
-/// [`OperandRegion::surface`] of the region they consume, so a region is
-/// priced against the arrangement it is walked over, and the choice between
-/// the two is made in this one place.
+/// named where its `own` is set. [`resolve_blocks`] asks
+/// [`OperandRegion::surface`] of each region it consumes, so the choice
+/// between the two is made in this one place.
 trait OperandRegion {
     /// Returns the region named: its document and its spans.
     fn named(&self) -> &RegionSpec;
@@ -339,8 +336,7 @@ impl<'a> Block<'a> {
 /// spans to their I-run blocks, reconstructing each run's V-start by
 /// accumulation. `Err(OverBudget)` in two passes, each count a [`Count`]:
 /// before the operand's first span is walked, when it names more spans than
-/// [`MAX_COMPARE_OPERAND_BLOCKS`] or its spans are priced past
-/// [`MAX_WALK_STEPS`], each at its [`walk_price`]; and as `iter_resolve`
+/// [`MAX_COMPARE_OPERAND_BLOCKS`]; and as `iter_resolve`
 /// produces each run, when its blocks would exceed
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]. The budget's card says why spans are
 /// counted beside blocks; `Count`'s says where the boundary falls.
@@ -379,26 +375,17 @@ impl<'a> Block<'a> {
 /// come from, so a region can be paired with no arrangement but its own: a
 /// block whose `doc` is one document and whose runs are another's — feet
 /// naming one document with positions from another, the X12 R1 failure — is
-/// not a thing this walk can build. And the price pass asks each region the
-/// same surface the walk pass resolves, so no region is priced against one
-/// arrangement and walked over another.
+/// not a thing this walk can build.
 fn resolve_blocks<'a, R: OperandRegion>(
     m3: &M3State,
     m5: &M5State,
     regions: &'a [R],
 ) -> Result<Vec<Block<'a>>, OverBudget> {
     // What the operand NAMES, refused before its first span is walked: its
-    // spans, one resolution apiece (MAX_COMPARE_OPERAND_BLOCKS' card), and
-    // their walks' price against each region's surface — the arrangement the
-    // walk below resolves (MAX_WALK_STEPS' card).
+    // spans, one resolution apiece (MAX_COMPARE_OPERAND_BLOCKS' card).
     let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
-    let mut steps_priced = Count::against(MAX_WALK_STEPS);
     for region in regions {
-        let surface = region.surface(m3);
-        for span in &region.named().spans {
-            spans_handed.admit(1)?;
-            steps_priced.admit(walk_price(m5, &surface, span))?;
-        }
+        spans_handed.admit(region.named().spans.len())?;
     }
     // What the walk PRODUCES, counted as it is produced.
     let mut out = Vec::new();

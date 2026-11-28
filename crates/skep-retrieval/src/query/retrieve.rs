@@ -69,8 +69,8 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// precondition); gaps / depth-incompatible (`#start ≥ 3`) / foreign or
     /// empty subspaces degrade to silent empty contributions and are never
     /// refused for what they name (R6 — M5's defensive resolution yields
-    /// fewer-or-zero runs); like every spec they are priced against the walk
-    /// budget below, so a spec-set of them can still be refused for its size.
+    /// fewer-or-zero runs), and a spec-set of them is answered whatever its
+    /// size, a spec that yields nothing reading no run.
     /// Empty spec-set ⇒ `Ok(empty)`. Delivery is one `Content` item per
     /// atom position and one `Bytes` item per maximal run of single-byte
     /// positions of every DELIVERED run (R3 exactness position for position,
@@ -91,7 +91,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// specs `0..i` being registered documents with well-formed spans, and
     /// repair a batch from the offending spec onward rather than re-checking
     /// it whole.
-    /// And it completes over the whole spec-set before any spec is priced or
+    /// And it completes over the whole spec-set before any spec is
     /// walked, so a gate fault always outranks `TooManyItems`.
     ///
     /// COST IS THE ANSWER'S SIZE, AND THE ANSWER'S SIZE IS SET BY STORED STATE
@@ -104,11 +104,11 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// values. So the delivery is held to the delivery budget,
     /// [`MAX_DELIVERY_ITEMS`] (`TooManyItems`, refused AS THE DELIVERY IS
     /// PRODUCED: a withheld run as one item, a delivered run's positions as one
-    /// batch before the first is expanded), and the spec-set's resolution to
-    /// the walk budget (`TooManyItems` too, priced over the whole spec-set
-    /// before its first spec is walked, each spec at an upper bound on its
-    /// walk — one that degrades to nothing under R6 included; crate doc,
-    /// *What M6 refuses for size*). Both are REFUSALS, never truncations: R3
+    /// batch before the first is expanded). That is the whole of what the
+    /// spec-set's resolution reads: each spec reaches its span by a descent of
+    /// the run-list and reads from there the runs it yields, every one an
+    /// item or more of the delivery (crate doc, *What M6 refuses for size*).
+    /// It is a REFUSAL, never a truncation: R3
     /// forbids delivering fewer, R5 reordering into something cheaper and R8
     /// collapsing the repeats, and a refused request gets no delivery at all,
     /// so all three hold verbatim for every delivery answered. A caller
@@ -144,8 +144,8 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// that is not a registered document — reachable as RES-162's unheld
     /// origin, the mirror that never held the draft a published window names
     /// — takes the withheld arm directly, the predicate unconsulted. The
-    /// predicate is consulted only after the gate and the walk budget have
-    /// passed the whole request — a request refused at either consults it of
+    /// predicate is consulted only after the gate has
+    /// passed the whole request — a request refused at it consults it of
     /// nothing, and one refused for the size of its delivery has consulted it
     /// of every run resolved up to AND INCLUDING the one that crossed the
     /// budget, each asked before it is counted — once per resolved run with a
@@ -172,17 +172,6 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 .map_err(|fault| RetrieveError::MalformedSpec { index, fault })?;
         }
         let over = |OverBudget| RetrieveError::TooManyItems;
-        // What the spec-set NAMES, refused before its first spec is walked:
-        // its walks' price, each spec at an upper bound on its walk against
-        // its reading surface — the arrangement the delivery below resolves
-        // (MAX_WALK_STEPS' card).
-        let mut steps_priced = Count::against(MAX_WALK_STEPS);
-        for spec in specs {
-            let surface = reading_surface(m3, &spec.doc);
-            steps_priced
-                .admit(walk_price(m5, &surface, &spec.span))
-                .map_err(over)?;
-        }
         let mut out = Vec::new();
         // The delivery budget, counted as the delivery is produced
         // (MAX_DELIVERY_ITEMS' card).
@@ -308,7 +297,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// origin.
     ///
     /// **Cost** (SP-23). The gate reads the surface's content count, which
-    /// M5 sums over its runs. The walk then pulls each content run once from
+    /// M5 reads off its run-list's root. The walk then pulls each content run once from
     /// M5's lazy resolution, whatever the lists hold, and asks M4 two counts
     /// of each run it may read, one more for each listed position and each
     /// listed line, and one for the document's last position. The lists are
@@ -364,14 +353,10 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         // `None` where the surface holds no content, which walks nothing.
         let extent = ordinal_vspan(Subspace::Content.anchor(), count);
         // One walk, priced before its first run is pulled: the extent
-        // reaches past every run, so its price is the surface's run count
+        // holds every content run, so its price is the surface's run count
         // (MAX_WALK_STEPS' card).
-        let mut steps_priced = Count::against(MAX_WALK_STEPS);
-        if let Some(extent) = &extent {
-            steps_priced
-                .admit(walk_price(m5, &surface, extent))
-                .map_err(|OverBudget| LinesError::TooManyItems)?;
-        }
+        let mut runs_priced = Count::against(MAX_WALK_STEPS);
+        runs_priced.admit(walk_price(m5, &surface)).map_err(|OverBudget| LinesError::TooManyItems)?;
 
         // Each list in the order the walk meets what it asks, answered into
         // its request-order slot as the walk passes it.

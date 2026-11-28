@@ -1,7 +1,7 @@
 //! §E FINDDOCSCONTAINING (ASN-0124): present-tense containers, at chosen
 //! requests and as a law over every window; the union of a region's spans;
-//! the container filter and its consult; the gate; and the coverage and walk
-//! budgets.
+//! the container filter and its consult; the gate; and the coverage
+//! budget.
 
 use std::cell::RefCell;
 
@@ -386,8 +386,7 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
     // whether or not it yields coverage — a span opening past the arranged
     // extent yields none — so a coverage count alone would admit any number
     // of empty-resolving spans, from a nested region×span request the body
-    // cap alone sizes. Over doc1's one run the walk budget prices each such
-    // span at a single step and admits them all, so the SPAN count is what
+    // cap alone sizes. So the SPAN count is what
     // refuses it, before phase 1 resolves past the budget.
     let k = mem_kernel();
     insert3(&k); // doc1 holds three positions
@@ -454,35 +453,36 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
 }
 
 #[test]
-fn find_docs_containing_refuses_a_request_whose_spans_would_walk_past_the_walk_budget() {
-    // The walk budget: M5 reaches a span by walking the run list from its
-    // first run, so a span opening past the end of a fragmented document walks
-    // every run and covers nothing — and with no coverage the candidate scan
-    // is free, so the walk is the request's whole bill. The walk budget is the
-    // operand budget's square, so over doc2's 8192 runs one span more than
-    // `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such spans is past it, and the
-    // request is refused before any span is walked.
+fn find_docs_containing_answers_a_request_of_spans_past_the_end_of_a_fragmented_document() {
+    // What reaching a span costs is no budget's: M5 reaches a span by a
+    // descent of the run list, so a span opening past the end of a fragmented
+    // document reads no run and covers nothing — and with no coverage the
+    // candidate scan is free. Over doc2's 8192 runs one span more than
+    // `MAX_COMPARE_OPERAND_BLOCKS² / 8192` such spans, a product past the
+    // budget's square, is inside the coverage budget's span count and is
+    // answered with no document.
     let k = mem_kernel();
     fragmented_doc2(&k); // doc2 = 8192 one-position runs, every one ca1
     let s = k.snapshot();
     let q = Query::new(&s);
     let run_count = s.world().m5().content_run_count(&doc2());
     assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
+    let many = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
     assert_eq!(
-        err_of(
-            q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])])
-        ),
-        FindError::TooMuchCoverage
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 8193, 1); many])])),
+        Vec::<Address>::new()
     );
-    // The control: a span at doc2's first position walks two runs and is
-    // answered — kept to a few, since the candidate scan behind it runs the
+    // Spans that do resolve are answered wherever along doc2 they reach —
+    // kept to a few, since the candidate scan behind them runs the
     // coverage against all of R, which holds a span for every run this
     // fixture placed.
-    assert_eq!(
-        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1); 16])])),
-        vec![doc1(), doc2()]
-    );
+    for at in [1u32, 8192] {
+        assert_eq!(
+            ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, at, 1); 16])])),
+            vec![doc1(), doc2()],
+            "at position {at}"
+        );
+    }
 }
 
 #[test]

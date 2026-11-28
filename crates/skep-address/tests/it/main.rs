@@ -5,6 +5,7 @@
 mod arithmetic;
 mod common;
 mod errors;
+mod heap;
 mod hostile_shapes;
 mod laws;
 mod serde_boundary;
